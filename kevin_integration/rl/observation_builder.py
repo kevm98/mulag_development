@@ -80,3 +80,22 @@ def build_id_input(q: torch.Tensor, qdot: torch.Tensor, action_4d: torch.Tensor,
 def build_fd_input(q: torch.Tensor, qdot: torch.Tensor, dP: torch.Tensor, valve_cmd: torch.Tensor) -> torch.Tensor:
     _check_dims((("q", q, 5), ("qdot", qdot, 5), ("dP", dP, 4), ("valve_cmd", valve_cmd, 4)))
     return torch.cat([q, qdot, dP, valve_cmd], dim=-1)
+
+
+def build_sd_input(
+    q: torch.Tensor,
+    qdot: torch.Tensor,
+    dP: torch.Tensor,
+    fnet: torch.Tensor,
+    valve_cmd: torch.Tensor,
+) -> torch.Tensor:
+    _check_dims(
+        (
+            ("q", q, 5),
+            ("qdot", qdot, 5),
+            ("dP", dP, 4),
+            ("fnet", fnet, 4),
+            ("valve_cmd", valve_cmd, 4),
+        )
+    )
+    return torch.cat([q, qdot, dP, fnet, valve_cmd], dim=-1)

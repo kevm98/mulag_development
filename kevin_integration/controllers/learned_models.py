@@ -378,7 +378,7 @@ class SystemDynamicsModel:
     - z_arm: (B, 24)
 
     Returns:
-    - delta_state: (B, 18)
+    - state prediction or state delta: (B, 18), depending on the checkpoint training convention
     """
 
     def __init__(

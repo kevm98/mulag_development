@@ -16,7 +16,7 @@ _MODELS_DIR = str(Path(__file__).resolve().parents[1] / "models")
 
 @configclass
 class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
-    decimation = 2
+    decimation = 1
     episode_length_s = 5.0
     action_scale = 1.0
     action_space = 4
@@ -31,6 +31,9 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     fallback_window = 10
     max_abs_valve = 1.0
     max_abs_torque = 5000.0
+    max_abs_pressure_delta = 1.0e7
+    max_abs_fnet = 1.0e7
+    sd_output_mode = "state"
     pressure_noise_std = 0.0
 
     state_joint_names = [

@@ -60,9 +60,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     for _ in range(args_cli.steps):
         with torch.inference_mode():
             actions = policy(obs)
-        obs, _, dones, _ = env.step(actions)
-        if dones.any():
-            obs, _ = env.get_observations()
+        obs, _, _, _ = env.step(actions)
 
     env.close()
 

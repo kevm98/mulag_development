@@ -36,6 +36,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 fallback_window=self.cfg.fallback_window,
                 max_abs_valve=self.cfg.max_abs_valve,
                 max_abs_torque=self.cfg.max_abs_torque,
+                max_abs_pressure_delta=self.cfg.max_abs_pressure_delta,
+                max_abs_fnet=self.cfg.max_abs_fnet,
+                sd_output_mode=self.cfg.sd_output_mode,
             )
         )
         self._reward_weights = JointReachRewardWeights(
@@ -51,6 +54,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._q_ref = torch.zeros((self.num_envs, 5), dtype=torch.float32, device=self.device)
         self._qdot_ref = torch.zeros((self.num_envs, 5), dtype=torch.float32, device=self.device)
         self._dP = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        self._fnet = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._prev_action = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._current_action = torch.zeros_like(self._prev_action)
         self._action_delta = torch.zeros_like(self._prev_action)
@@ -63,6 +67,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self.robot = Articulation(self.cfg.robot_cfg)
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
         self.scene.clone_environments(copy_from_source=False)
+        if self.device == "cpu":
+            self.scene.filter_collisions(global_prim_paths=[])
         self.scene.articulations["robot"] = self.robot
         light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -92,16 +98,19 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         q, qdot = self._read_joint_state()
         dP = self._read_pressure_delta()
-        torque, valve_cmd, z_arm_hat = self._controller.apply_action(
+        control_out = self._controller.apply_action(
             q,
             qdot,
             dP,
+            self._fnet,
             self._current_action,
             z_arm_hat=self._z_arm_hat,
         )
-        self._current_torque = torque
-        self._current_valve_cmd = valve_cmd
-        self._z_arm_hat = z_arm_hat
+        self._current_torque = control_out.torque
+        self._current_valve_cmd = control_out.valve_cmd
+        self._z_arm_hat = control_out.z_arm_hat
+        self._dP = control_out.dP_next
+        self._fnet = control_out.fnet_next
 
     def _apply_action(self) -> None:
         self.robot.set_joint_effort_target(self._current_torque, joint_ids=self._command_joint_ids)
@@ -160,13 +169,14 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
         joint_vel = self.robot.data.default_joint_vel[env_ids].clone()
-        root_state = self.robot.data.default_root_state[env_ids].clone()
-        root_state[:, :3] += self.scene.env_origins[env_ids]
+        default_root_pose, default_root_velocity = self._default_root_state(env_ids)
+        default_root_pose[:, :3] += self.scene.env_origins[env_ids]
 
         self._sample_joint_targets(env_ids)
         self._qdot_ref[env_ids] = 0.0
 
         self._dP[env_ids] = 0.0
+        self._fnet[env_ids] = 0.0
         self._prev_action[env_ids] = 0.0
         self._current_action[env_ids] = 0.0
         self._action_delta[env_ids] = 0.0
@@ -176,9 +186,18 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._z_arm_hat[env_ids] = 0.0
         self._controller.reset(env_ids)
 
-        self.robot.write_root_pose_to_sim(root_state[:, :7], env_ids)
-        self.robot.write_root_velocity_to_sim(root_state[:, 7:], env_ids)
+        self.robot.write_root_pose_to_sim(default_root_pose, env_ids)
+        self.robot.write_root_velocity_to_sim(default_root_velocity, env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+    def _default_root_state(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if hasattr(self.robot.data, "default_root_pose") and hasattr(self.robot.data, "default_root_vel"):
+            root_pose = self.robot.data.default_root_pose[env_ids].clone()
+            root_velocity = self.robot.data.default_root_vel[env_ids].clone()
+            return root_pose, root_velocity
+
+        root_state = self.robot.data.default_root_state[env_ids].clone()
+        return root_state[:, :7], root_state[:, 7:]
 
     def _sample_joint_targets(self, env_ids: torch.Tensor) -> None:
         default_q = self.robot.data.default_joint_pos[env_ids][:, self._state_joint_ids]

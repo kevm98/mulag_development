@@ -1,6 +1,6 @@
 # Kevin Integration
 
-This folder contains the integration of the trained AAM, inverse dynamics, and learned forward-dynamics torque model into the existing RRLAB Isaac Lab Mulag environment.
+This folder contains the integration of the trained AAM, inverse dynamics, system dynamics, and learned forward-dynamics torque model into the existing RRLAB Isaac Lab Mulag environment.
 
 ## Goal
 
@@ -8,8 +8,9 @@ Use the existing RRLAB Mulag environment and integrate:
 
 1. Arm Adaptation Module
 2. Learned inverse dynamics model
-3. Learned forward dynamics model for torque prediction
-4. Final learned control pipeline
+3. Learned system dynamics model for internal `dP`/`Fnet` estimation
+4. Learned forward dynamics model for torque prediction
+5. Final learned control pipeline
 
 ## Development rule
 
@@ -21,6 +22,7 @@ Do not modify the original RRLAB task until the integration works separately.
 The trained checkpoints live in `kevin_integration/models/`:
 - `aam.pth` (AAM): history -> `z_arm_hat` (24-d)
 - `id.pth` (ID): history + `z_arm_hat` -> `valve_cmd` (4-d)
+- `sd.pth` (SD): history + `z_arm_hat` -> estimated `[q, qdot, dP, Fnet]` state
 - `fd.pth` + `fd_scaler.pth` (FD): history -> `torque` (4-d)
 
 The code scaffold to *load and run* these models is in:
@@ -86,9 +88,9 @@ Optional:
 
 These vectors must be assembled in the **same feature order as used during training**.
 
-The current IsaacLab runner estimates `qddot` by finite differencing `qdot`. It initializes `dP` to zeros
-because those hydraulic signals are not currently exposed by `MULAG_CFG`; replace them with real, estimated,
-or simulated hydraulic signals before judging physical performance.
+The standalone IsaacLab runner estimates `qddot` by finite differencing `qdot`. The adaptive RL task uses SD
+as a frozen internal hydraulic-state observer: SD receives `[q, qdot, dP, Fnet, valve_cmd]` and updates the
+estimated `dP` and `Fnet` used by AAM, ID, and FD on the next step.
 
 Default state joints:
 - `Drehzapfen_joint`
@@ -118,9 +120,10 @@ q, qdot, dP, previous valve -> AAM -> z_arm_hat
 q, qdot, reference, error, previous action, previous valve, z_arm_hat -> PPO policy -> a_t
 q, qdot, [a_t, 0.0], dP + z_arm_hat -> ID -> valve_cmd
 q, qdot, dP, valve_cmd -> FD -> torque -> Isaac Lab
+q, qdot, dP, Fnet, valve_cmd + z_arm_hat -> SD -> next dP, next Fnet
 ```
 
-Only the PPO policy learns. AAM, ID, and FD are loaded in eval mode with gradients disabled.
+Only the PPO policy learns. AAM, ID, SD, and FD are loaded in eval mode with gradients disabled.
 
 Train a small first pass:
 
