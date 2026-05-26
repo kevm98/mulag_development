@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .learned_models import AAMModel, ForwardDynamicsModel, InverseDynamicsModel, SystemDynamicsModel, _require_torch
+from .learned_models import AAMModel, ForwardDynamicsModel, InverseDynamicsModel, _require_torch
 from .sequence_buffer import SequenceBuffer, SequenceSpec
 
 
@@ -20,13 +20,11 @@ class PipelineConfig:
 
     aam_window: Optional[int] = None
     id_window: Optional[int] = None
-    sd_window: Optional[int] = None
     fd_window: Optional[int] = None
     fallback_window: int = 10
 
     aam_dim: int = 18
     id_dim: int = 19
-    sd_dim: int = 22
     fd_dim: int = 18
 
     activation: str = "relu"
@@ -35,7 +33,7 @@ class PipelineConfig:
 
 
 class LearnedControlPipeline:
-    """Implements the learned-model portion of the diagram (AAM -> ID/SD/FD).
+    """Implements the learned-model portion of the diagram (AAM -> ID -> FD).
 
     This is intentionally independent of IsaacLab task code and only operates on numeric vectors.
     """
@@ -62,13 +60,6 @@ class LearnedControlPipeline:
             map_location="cpu",
             device=str(self._device),
         )
-        self.sd = SystemDynamicsModel(
-            checkpoint_path=models_dir / "sd.pth",
-            activation=cfg.activation,
-            dropout=cfg.dropout,
-            map_location="cpu",
-            device=str(self._device),
-        )
         self.fd = ForwardDynamicsModel(
             checkpoint_path=models_dir / "fd.pth",
             scaler_path=models_dir / "fd_scaler.pth",
@@ -80,18 +71,15 @@ class LearnedControlPipeline:
 
         aam_window = cfg.aam_window or self.aam.window_size or cfg.fallback_window
         id_window = cfg.id_window or self.id.window_size or cfg.fallback_window
-        sd_window = cfg.sd_window or self.sd.window_size or cfg.fallback_window
         fd_window = cfg.fd_window or self.fd.window_size or cfg.fallback_window
 
         self._aam_buf = SequenceBuffer(SequenceSpec(aam_window, cfg.aam_dim))
         self._id_buf = SequenceBuffer(SequenceSpec(id_window, cfg.id_dim))
-        self._sd_buf = SequenceBuffer(SequenceSpec(sd_window, cfg.sd_dim))
         self._fd_buf = SequenceBuffer(SequenceSpec(fd_window, cfg.fd_dim))
 
     def reset(self) -> None:
         self._aam_buf.reset()
         self._id_buf.reset()
-        self._sd_buf.reset()
         self._fd_buf.reset()
 
     def step(
@@ -99,7 +87,6 @@ class LearnedControlPipeline:
         *,
         aam_x_t: np.ndarray,
         id_x_t: np.ndarray,
-        sd_x_t: Optional[np.ndarray] = None,
         fd_x_t: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """Advance one control step.
@@ -109,14 +96,11 @@ class LearnedControlPipeline:
         - id_x_t: (19,) = [q(5), qdot(5), qddot(5), dP(4)]
 
         Optional:
-        - sd_x_t: (22,) = [q(5), qdot(5), dP(4), Fnet(4), valve_cmd(4)]
         - fd_x_t: (18,) = [q(5), qdot(5), dP(4), valve_cmd(4)]
         """
 
         self._aam_buf.append(aam_x_t)
         self._id_buf.append(id_x_t)
-        if sd_x_t is not None:
-            self._sd_buf.append(sd_x_t)
         if fd_x_t is not None:
             self._fd_buf.append(fd_x_t)
 
@@ -136,12 +120,6 @@ class LearnedControlPipeline:
             "valve_cmd": valve_cmd.squeeze(0).detach().cpu().numpy(),
         }
 
-        if sd_x_t is not None:
-            sd_seq = self._sd_buf.as_array(pad=True)
-            sd_seq_t = torch.as_tensor(sd_seq, dtype=torch.float32, device=self._device).unsqueeze(0)
-            delta_state = self.sd(sd_seq_t, z_arm_hat)  # (1, 18)
-            out["delta_state"] = delta_state.squeeze(0).detach().cpu().numpy()
-
         if fd_x_t is not None:
             fd_seq = self._fd_buf.as_array(pad=True)
             fd_seq_t = torch.as_tensor(fd_seq, dtype=torch.float32, device=self._device).unsqueeze(0)
@@ -157,12 +135,3 @@ class LearnedControlPipeline:
         fd_seq_t = self._torch.as_tensor(fd_seq, dtype=self._torch.float32, device=self._device).unsqueeze(0)
         torque = self.fd(fd_seq_t)
         return torque.squeeze(0).detach().cpu().numpy()
-
-    def predict_state_delta(self, sd_x_t: np.ndarray, z_arm_hat: np.ndarray) -> np.ndarray:
-        """Run SD on `[q(5), qdot(5), dP(4), Fnet(4), valve_cmd(4)]` with current `z_arm_hat`."""
-        self._sd_buf.append(sd_x_t)
-        sd_seq = self._sd_buf.as_array(pad=True)
-        sd_seq_t = self._torch.as_tensor(sd_seq, dtype=self._torch.float32, device=self._device).unsqueeze(0)
-        z_t = self._torch.as_tensor(z_arm_hat, dtype=self._torch.float32, device=self._device).reshape(1, -1)
-        delta_state = self.sd(sd_seq_t, z_t)
-        return delta_state.squeeze(0).detach().cpu().numpy()

@@ -51,7 +51,6 @@ parser.add_argument("--velocity_scale", type=float, default=0.2, help="Velocity 
 parser.add_argument("--effort_scale", type=float, default=1.0, help="Multiplier for FD-predicted effort.")
 parser.add_argument("--max_abs_effort", type=float, default=5000.0, help="Clamp for effort commands.")
 parser.add_argument("--max_abs_valve", type=float, default=1.0, help="Clamp for valve command before applying.")
-parser.add_argument("--predict_sd", action="store_true", help="Also run SD prediction with current valve command.")
 parser.add_argument("--print_interval", type=int, default=100, help="Print debug status every N sim steps.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -105,10 +104,6 @@ def build_aam_features(q: np.ndarray, qd: np.ndarray, dp: np.ndarray, valve_cmd:
 
 def build_id_features(q: np.ndarray, qd: np.ndarray, qdd: np.ndarray, dp: np.ndarray) -> np.ndarray:
     return np.concatenate([q, qd, qdd, dp]).astype(np.float32)
-
-
-def build_sd_features(q: np.ndarray, qd: np.ndarray, dp: np.ndarray, fnet: np.ndarray, valve_cmd: np.ndarray) -> np.ndarray:
-    return np.concatenate([q, qd, dp, fnet, valve_cmd]).astype(np.float32)
 
 
 def build_fd_features(q: np.ndarray, qd: np.ndarray, dp: np.ndarray, valve_cmd: np.ndarray) -> np.ndarray:
@@ -209,7 +204,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, arg
     )
 
     dp = np.zeros(4, dtype=np.float32)
-    fnet = np.zeros(4, dtype=np.float32)
     prev_valve_cmd = np.zeros(4, dtype=np.float32)
     prev_qd = to_numpy(robot.data.joint_vel[0, state_joint_ids])
 
@@ -228,12 +222,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, arg
         valve_cmd = np.asarray(policy_out["valve_cmd"], dtype=np.float32)
         valve_cmd = np.nan_to_num(valve_cmd, nan=0.0, posinf=args.max_abs_valve, neginf=-args.max_abs_valve)
 
-        delta_state = None
-        if args.predict_sd:
-            sd_x_t = build_sd_features(q, qd, dp, fnet, valve_cmd)
-            delta_state = policy.predict_state_delta(sd_x_t, policy_out["z_arm_hat"])
-            delta_state = np.nan_to_num(delta_state, nan=0.0, posinf=0.0, neginf=0.0)
-
         torque = None
         if args.control_mode == "effort":
             fd_x_t = build_fd_features(q, qd, dp, valve_cmd)
@@ -251,8 +239,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, arg
             )
             if torque is not None:
                 print(f"           torque={np.round(torque, 3)}")
-            if delta_state is not None:
-                print(f"           sd_delta_norm={np.linalg.norm(delta_state):.4f}")
 
         scene.write_data_to_sim()
         sim.step()

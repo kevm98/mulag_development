@@ -1,6 +1,6 @@
 # Kevin Integration
 
-This folder contains the integration of the trained AAM, inverse dynamics, system dynamics, and future hydraulic reduced-order model into the existing RRLAB Isaac Lab Mulag environment.
+This folder contains the integration of the trained AAM, inverse dynamics, and learned forward-dynamics torque model into the existing RRLAB Isaac Lab Mulag environment.
 
 ## Goal
 
@@ -8,9 +8,8 @@ Use the existing RRLAB Mulag environment and integrate:
 
 1. Arm Adaptation Module
 2. Learned inverse dynamics model
-3. Learned system dynamics model
-4. Reduced-order hydraulic actuator model
-5. Final learned control pipeline
+3. Learned forward dynamics model for torque prediction
+4. Final learned control pipeline
 
 ## Development rule
 
@@ -22,7 +21,6 @@ Do not modify the original RRLAB task until the integration works separately.
 The trained checkpoints live in `kevin_integration/models/`:
 - `aam.pth` (AAM): history -> `z_arm_hat` (24-d)
 - `id.pth` (ID): history + `z_arm_hat` -> `valve_cmd` (4-d)
-- `sd.pth` (SD): history + `z_arm_hat` -> `delta_state` (18-d)
 - `fd.pth` + `fd_scaler.pth` (FD): history -> `torque` (4-d)
 
 The code scaffold to *load and run* these models is in:
@@ -35,11 +33,13 @@ metadata, `PipelineConfig.fallback_window` is used.
 
 ### Usage (smoke test)
 
-This repo does not include the feature assembly logic (ordering must match training).
-The script below just runs a dummy step with zeros to confirm the pipeline loads:
+This only verifies that the frozen learned-model chain loads and produces finite inference outputs:
 
 ```bash
-./rrlab.sh -p kevin_integration/scripts/run_control_policy.py --debug --device cpu
+./rrlab.sh -p kevin_integration/scripts/run_control_policy.py \
+  --device cpu \
+  --steps 5 \
+  --debug
 ```
 
 ### Usage (IsaacLab Mulag runner)
@@ -76,29 +76,19 @@ FD torque mode:
 In effort mode, FD outputs 4 actuator torques. The runner expands this to a 5-joint Isaac effort vector with:
 `[tau_act1, tau_act2, tau_act3, tau_act4, 0.0]`, then applies it on the 5 `state_joints`.
 
-Optional SD prediction:
-
-```bash
-./rrlab.sh -p kevin_integration/scripts/run_mulag_learned_controller.py \
-  --num_envs 1 \
-  --duration 10 \
-  --predict_sd
-```
-
 ### Integration contract (important)
 
 `ControlPolicy.compute_action(observation)` expects a dict with:
 - `aam_x_t`: shape `(18,)` = `[q(5), qdot(5), dP(4), valve_cmd(4)]`
 - `id_x_t`: shape `(19,)` = `[q(5), qdot(5), qddot(5), dP(4)]`
 Optional:
-- `sd_x_t`: shape `(22,)` = `[q(5), qdot(5), dP(4), Fnet(4), valve_cmd(4)]`
 - `fd_x_t`: shape `(18,)` = `[q(5), qdot(5), dP(4), valve_cmd(4)]`
 
 These vectors must be assembled in the **same feature order as used during training**.
 
-The current IsaacLab runner estimates `qddot` by finite differencing `qdot`. It initializes `dP` and `Fnet`
-to zeros because those hydraulic signals are not currently exposed by `MULAG_CFG`; replace them with real,
-estimated, or simulated hydraulic signals before judging physical performance.
+The current IsaacLab runner estimates `qddot` by finite differencing `qdot`. It initializes `dP` to zeros
+because those hydraulic signals are not currently exposed by `MULAG_CFG`; replace them with real, estimated,
+or simulated hydraulic signals before judging physical performance.
 
 Default state joints:
 - `Drehzapfen_joint`
@@ -112,3 +102,40 @@ Default command joints:
 - `Ausleger_I_joint`
 - `Ausleger_II_joint`
 - `Messerkopf_Schwenk_joint`
+
+## Adaptive RL task
+
+The first real RL task is registered as:
+
+```text
+Kevin-Mulag-AdaptiveRL-JointReach-v0
+```
+
+The control chain is:
+
+```text
+q, qdot, dP, previous valve -> AAM -> z_arm_hat
+q, qdot, reference, error, previous action, previous valve, z_arm_hat -> PPO policy -> a_t
+q, qdot, [a_t, 0.0], dP + z_arm_hat -> ID -> valve_cmd
+q, qdot, dP, valve_cmd -> FD -> torque -> Isaac Lab
+```
+
+Only the PPO policy learns. AAM, ID, and FD are loaded in eval mode with gradients disabled.
+
+Train a small first pass:
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-AdaptiveRL-JointReach-v0 \
+  --num_envs 8 \
+  --headless
+```
+
+Play a checkpoint:
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-AdaptiveRL-JointReach-v0 \
+  --checkpoint /path/to/model.pt \
+  --num_envs 1
+```

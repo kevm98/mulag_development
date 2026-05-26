@@ -11,13 +11,12 @@ from kevin_integration.controllers import LearnedControlPipeline, PipelineConfig
 class ControlPolicy:
     """Learned-model-based control policy for the Kevin integration branch.
 
-    This policy wraps the learned-model pipeline (AAM -> ID [+ optional SD/FD predictions]).
+    This policy wraps the learned-model pipeline (AAM -> ID -> optional FD prediction).
 
     Expected `observation` input format:
     - `aam_x_t`: (18,) = [q(5), qdot(5), dP(4), valve_cmd(4)]
     - `id_x_t`:  (19,) = [q(5), qdot(5), qddot(5), dP(4)]
     Optional:
-    - `sd_x_t`:  (22,) = [q(5), qdot(5), dP(4), Fnet(4), valve_cmd(4)]
     - `fd_x_t`:  (18,) = [q(5), qdot(5), dP(4), valve_cmd(4)]
 
     The feature ordering must match whatever you used during model training.
@@ -45,23 +44,15 @@ class ControlPolicy:
         aam_x_t = np.asarray(observation["aam_x_t"], dtype=np.float32).reshape(-1)
         id_x_t = np.asarray(observation["id_x_t"], dtype=np.float32).reshape(-1)
 
-        sd_x_t = observation.get("sd_x_t", None)
         fd_x_t = observation.get("fd_x_t", None)
 
-        if sd_x_t is not None:
-            sd_x_t = np.asarray(sd_x_t, dtype=np.float32).reshape(-1)
         if fd_x_t is not None:
             fd_x_t = np.asarray(fd_x_t, dtype=np.float32).reshape(-1)
 
-        out = self._pipeline.step(aam_x_t=aam_x_t, id_x_t=id_x_t, sd_x_t=sd_x_t, fd_x_t=fd_x_t)
+        out = self._pipeline.step(aam_x_t=aam_x_t, id_x_t=id_x_t, fd_x_t=fd_x_t)
 
         return out if self._return_debug else out["valve_cmd"]
 
     def predict_torque(self, fd_x_t):
         fd_x_t = np.asarray(fd_x_t, dtype=np.float32).reshape(-1)
         return self._pipeline.predict_torque(fd_x_t)
-
-    def predict_state_delta(self, sd_x_t, z_arm_hat):
-        sd_x_t = np.asarray(sd_x_t, dtype=np.float32).reshape(-1)
-        z_arm_hat = np.asarray(z_arm_hat, dtype=np.float32).reshape(-1)
-        return self._pipeline.predict_state_delta(sd_x_t, z_arm_hat)
