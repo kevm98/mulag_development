@@ -8,6 +8,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 from rrlab_assets import MULAG_CFG
 
 
@@ -34,7 +35,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     log_full_pipeline_debug = True
     debug_reward_terms = True
 
-    sim: SimulationCfg = SimulationCfg(dt=1 / 100, render_interval=decimation)
+    sim: SimulationCfg = SimulationCfg(dt=1 / 100, render_interval=2)
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=20.0, replicate_physics=False)
     robot_cfg: ArticulationCfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
@@ -86,10 +87,14 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rew_alive = 0.1
     rew_termination = 5.0
 
+    def __post_init__(self):
+        apply_kevin_sim_memory_optimizations(self.sim)
+
 
 @configclass
 class MulagAdaptiveRLJointReachEnvCfg_PLAY(MulagAdaptiveRLJointReachEnvCfg):
     def __post_init__(self):
+        super().__post_init__()
         self.scene.num_envs = 1
 
 

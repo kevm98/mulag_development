@@ -37,6 +37,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import kevin_integration.tasks  # noqa: F401
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -46,25 +47,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.sim.device = args_cli.device
         agent_cfg.device = args_cli.device
 
+    apply_kevin_sim_memory_optimizations(env_cfg.sim, verbose=True)
+
     env = gym.make(args_cli.task, cfg=env_cfg)
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
+    try:
+        if isinstance(env.unwrapped, DirectMARLEnv):
+            env = multi_agent_to_single_agent(env)
 
-    env = RslRlVecEnvWrapper(env)
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    print(f"[INFO] Loading checkpoint: {args_cli.checkpoint}")
-    runner.load(args_cli.checkpoint)
-    policy = runner.get_inference_policy(device=agent_cfg.device)
+        env = RslRlVecEnvWrapper(env)
+        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        print(f"[INFO] Loading checkpoint: {args_cli.checkpoint}")
+        runner.load(args_cli.checkpoint)
+        policy = runner.get_inference_policy(device=agent_cfg.device)
 
-    obs, _ = env.get_observations()
-    for _ in range(args_cli.steps):
-        with torch.inference_mode():
-            actions = policy(obs)
-        obs, _, _, _ = env.step(actions)
-
-    env.close()
+        obs, _ = env.get_observations()
+        for _ in range(args_cli.steps):
+            with torch.inference_mode():
+                actions = policy(obs)
+            obs, _, _, _ = env.step(actions)
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    try:
+        main()  # type: ignore
+    finally:
+        simulation_app.close()

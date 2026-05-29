@@ -87,6 +87,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import kevin_integration.tasks  # noqa: F401
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 
 
 def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
@@ -142,6 +143,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     os.makedirs(os.path.join(log_dir, "params"), exist_ok=True)
 
     env_cfg.log_dir = log_dir
+    apply_kevin_sim_memory_optimizations(env_cfg.sim, verbose=True)
 
     env = gym.make(
         args_cli.task,

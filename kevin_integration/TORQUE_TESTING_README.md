@@ -82,7 +82,9 @@ Run FD online, clamp the torque, and apply only the safe clamped effort:
   --headless
 ```
 
-Remove `--headless` if you want to watch the robot.
+Remove `--headless` if you want to watch the robot. The Kevin integration scripts apply the same low-memory
+PhysX GPU-buffer settings as the working standalone keyboard controller before creating the simulator, which
+helps non-headless runs avoid CUDA out-of-memory failures.
 
 ## Outputs
 

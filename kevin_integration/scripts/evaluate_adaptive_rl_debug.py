@@ -92,6 +92,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import kevin_integration.tasks  # noqa: F401
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 
 
 def _tensor_to_float(value: torch.Tensor | float | int) -> float:
@@ -306,6 +307,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
         agent_cfg.device = args_cli.device
+
+    apply_kevin_sim_memory_optimizations(env_cfg.sim, verbose=True)
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     try:

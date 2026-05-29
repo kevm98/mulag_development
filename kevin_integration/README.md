@@ -303,6 +303,13 @@ Visualize a trained low-torque full-pipeline policy without headless:
   --max_abs_torque 5
 ```
 
+Non-headless runs use the same low-memory PhysX settings as
+`standalone/tutorials/controllers/kepboard_control_unimog.py`: `render_interval=2`,
+`gpu_max_rigid_contact_count=2**16`, `gpu_found_lost_pairs_capacity=2**16`,
+`gpu_total_aggregate_pairs_capacity=2**16`, `gpu_collision_stack_size=2**20`,
+`gpu_heap_capacity=2**22`, and `gpu_temp_buffer_capacity=2**20`.
+These are applied by the adaptive RL task config and by the Kevin standalone scripts before simulation creation.
+
 Safety checks for effort mode:
 
 - Start with `max_abs_torque=5`.

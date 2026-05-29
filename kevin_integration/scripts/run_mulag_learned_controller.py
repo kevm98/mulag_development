@@ -65,6 +65,7 @@ from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils import configclass
 
 from kevin_integration.control_policy import ControlPolicy
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 from rrlab_assets import MULAG_CFG
 
 
@@ -248,19 +249,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, arg
 
 def main() -> None:
     sim_cfg = sim_utils.SimulationCfg(dt=0.01, device=args_cli.device, render_interval=2)
-    physx = sim_cfg.physx
-
-    settings = {
-        "gpu_max_rigid_contact_count": 2**16,
-        "gpu_found_lost_pairs_capacity": 2**16,
-        "gpu_total_aggregate_pairs_capacity": 2**16,
-        "gpu_collision_stack_size": 2**20,
-        "gpu_heap_capacity": 2**22,
-        "gpu_temp_buffer_capacity": 2**20,
-    }
-    for name, value in settings.items():
-        if hasattr(physx, name):
-            setattr(physx, name, value)
+    apply_kevin_sim_memory_optimizations(sim_cfg, verbose=True)
 
     sim = sim_utils.SimulationContext(sim_cfg)
     sim.set_camera_view([11, 8, 1.3], [0.0, 0.0, 0.0])
