@@ -70,11 +70,14 @@ def build_rl_obs(
     )
 
 
-def build_id_input(q: torch.Tensor, qdot: torch.Tensor, action_4d: torch.Tensor, dP: torch.Tensor) -> torch.Tensor:
-    _check_dims((("q", q, 5), ("qdot", qdot, 5), ("action_4d", action_4d, 4), ("dP", dP, 4)))
-    zero_tool_joint = torch.zeros_like(action_4d[..., :1])
-    action_5d = torch.cat([action_4d, zero_tool_joint], dim=-1)
-    return torch.cat([q, qdot, action_5d, dP], dim=-1)
+def build_id_input(q: torch.Tensor, qdot: torch.Tensor, qddot_cmd: torch.Tensor, dP: torch.Tensor) -> torch.Tensor:
+    _check_dims((("q", q, 5), ("qdot", qdot, 5), ("dP", dP, 4)))
+    if qddot_cmd.shape[-1] == 4:
+        zero_tool_joint = torch.zeros_like(qddot_cmd[..., :1])
+        qddot_cmd = torch.cat([qddot_cmd, zero_tool_joint], dim=-1)
+    elif qddot_cmd.shape[-1] != 5:
+        raise ValueError(f"qddot_cmd must have last dimension 4 or 5, got {qddot_cmd.shape[-1]}")
+    return torch.cat([q, qdot, qddot_cmd, dP], dim=-1)
 
 
 def build_fd_input(q: torch.Tensor, qdot: torch.Tensor, dP: torch.Tensor, valve_cmd: torch.Tensor) -> torch.Tensor:

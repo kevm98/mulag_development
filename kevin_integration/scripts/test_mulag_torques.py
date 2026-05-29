@@ -15,6 +15,19 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from kevin_integration.rl.torque_adapter import (  # noqa: E402
+    DEFAULT_TORQUE_ADAPTER_PRESET,
+    DEFAULT_TORQUE_ADAPTER_BIAS,
+    TORQUE_ADAPTER_MODES,
+    TORQUE_ADAPTER_PRESETS,
+    adapt_fd_to_isaac_torque,
+    apply_fd_residual_authority,
+    effective_torque_adapter_scale,
+    lowpass_torque,
+    rate_limit_torque,
+    resolve_torque_adapter_scale,
+)
+
 
 STATE_JOINT_NAMES = [
     "Drehzapfen_joint",
@@ -63,6 +76,42 @@ parser.add_argument("--hold_steps", type=int, default=100, help="Steps to hold e
 parser.add_argument("--max_abs_torque", type=float, default=5.0, help="Clamp applied effort to this absolute value.")
 parser.add_argument("--print_interval", type=int, default=50, help="Print diagnostics every N sim steps.")
 parser.add_argument(
+    "--torque_adapter_mode",
+    choices=TORQUE_ADAPTER_MODES,
+    default="scale_bias",
+    help="Map FD Simscape output to Isaac effort with this adapter.",
+)
+parser.add_argument(
+    "--torque_adapter_preset",
+    choices=TORQUE_ADAPTER_PRESETS,
+    default=DEFAULT_TORQUE_ADAPTER_PRESET,
+    help="Named scale preset for the scale_bias/residual_pd adapter.",
+)
+parser.add_argument(
+    "--torque_adapter_scale",
+    type=str,
+    default=None,
+    help='Optional comma-separated per-joint scale, e.g. "0.0001,0.001,0.0005,0.0001".',
+)
+parser.add_argument(
+    "--torque_adapter_bias",
+    type=float,
+    nargs=4,
+    default=DEFAULT_TORQUE_ADAPTER_BIAS,
+    metavar=("B0", "B1", "B2", "B3"),
+    help="Per-joint bias for scale_bias/residual_pd adapter modes.",
+)
+parser.add_argument("--fd_torque_scale", type=float, default=1.0e6, help="FD scale for tanh_squash mode.")
+parser.add_argument(
+    "--use_fd_residual_alpha",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Enable deterministic residual authority scaling after the torque adapter.",
+)
+parser.add_argument("--fd_residual_alpha", type=float, default=0.002, help="FD residual authority gain.")
+parser.add_argument("--torque_rate_limit", type=float, default=1.0, help="Per-step torque rate limit.")
+parser.add_argument("--torque_lowpass_alpha", type=float, default=0.2, help="Torque low-pass alpha.")
+parser.add_argument(
     "--models_dir",
     type=str,
     default=str(ROOT / "kevin_integration" / "models"),
@@ -71,6 +120,10 @@ parser.add_argument(
 parser.add_argument("--no_csv", action="store_true", help="Disable CSV logging under logs/torque_testing.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+args_cli.torque_adapter_scale = resolve_torque_adapter_scale(
+    args_cli.torque_adapter_preset,
+    args_cli.torque_adapter_scale,
+)
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -140,6 +193,20 @@ class CsvLogger:
                 "torque_clamped_mean",
                 "torque_clamped_max",
                 "torque_clamp_fraction",
+                "torque_adapter_mode",
+                "torque_adapter_preset",
+                "torque_adapter_scale",
+                "use_fd_residual_alpha",
+                "fd_residual_alpha",
+                "effective_torque_adapter_scale",
+                "fd_simscape_output",
+                "tau_fd_adapted",
+                "tau_applied_raw",
+                "tau_isaac_filtered",
+                "tau_isaac_clamped",
+                "applied_torque",
+                "computed_torque",
+                "joint_effort",
                 "fd_case",
                 "fd_input_raw_mean",
                 "fd_input_raw_min",
@@ -288,18 +355,28 @@ def log_state(
     command_joint_ids: list[int],
     target_joint: str = "",
     command_effort: float = 0.0,
-    torque_raw: torch.Tensor | None = None,
-    torque_clamped: torch.Tensor | None = None,
+    fd_simscape_output: torch.Tensor | None = None,
+    tau_fd_adapted: torch.Tensor | None = None,
+    tau_applied_raw: torch.Tensor | None = None,
+    tau_isaac_filtered: torch.Tensor | None = None,
+    tau_isaac_clamped: torch.Tensor | None = None,
     torque_clamp_fraction: torch.Tensor | None = None,
+    torque_adapter_mode: str = "",
 ) -> None:
     q = robot.data.joint_pos[:, state_joint_ids].detach()
     qdot = robot.data.joint_vel[:, state_joint_ids].detach()
     effort_fields = read_effort_fields(robot, command_joint_ids)
     applied_summary = "; ".join(f"{name}={tensor_list(value[0])}" for name, value in effort_fields.items())
-    torque_raw_mean = torque_raw.abs().mean().item() if torque_raw is not None else 0.0
-    torque_raw_max = torque_raw.abs().max().item() if torque_raw is not None else 0.0
-    torque_clamped_mean = torque_clamped.abs().mean().item() if torque_clamped is not None else 0.0
-    torque_clamped_max = torque_clamped.abs().max().item() if torque_clamped is not None else 0.0
+    fd_mean = fd_simscape_output.abs().mean().item() if fd_simscape_output is not None else 0.0
+    fd_max = fd_simscape_output.abs().max().item() if fd_simscape_output is not None else 0.0
+    tau_adapted_mean = tau_fd_adapted.abs().mean().item() if tau_fd_adapted is not None else 0.0
+    tau_adapted_max = tau_fd_adapted.abs().max().item() if tau_fd_adapted is not None else 0.0
+    tau_applied_mean = tau_applied_raw.abs().mean().item() if tau_applied_raw is not None else 0.0
+    tau_applied_max = tau_applied_raw.abs().max().item() if tau_applied_raw is not None else 0.0
+    tau_filtered_mean = tau_isaac_filtered.abs().mean().item() if tau_isaac_filtered is not None else 0.0
+    tau_filtered_max = tau_isaac_filtered.abs().max().item() if tau_isaac_filtered is not None else 0.0
+    tau_clamped_mean = tau_isaac_clamped.abs().mean().item() if tau_isaac_clamped is not None else 0.0
+    tau_clamped_max = tau_isaac_clamped.abs().max().item() if tau_isaac_clamped is not None else 0.0
     clamp_fraction = torque_clamp_fraction.mean().item() if torque_clamp_fraction is not None else 0.0
 
     print(
@@ -308,11 +385,26 @@ def log_state(
     )
     if applied_summary:
         print(f"           {applied_summary}")
-    if torque_raw is not None and torque_clamped is not None:
+    if fd_simscape_output is not None and tau_fd_adapted is not None and tau_isaac_clamped is not None:
         print(
-            f"           torque_raw_mean={torque_raw_mean:.4e} torque_raw_max={torque_raw_max:.4e} "
-            f"torque_clamped_mean={torque_clamped_mean:.4e} torque_clamped_max={torque_clamped_max:.4e} "
+            f"           torque_adapter_mode={torque_adapter_mode or args_cli.torque_adapter_mode} "
+            f"torque_adapter_preset={args_cli.torque_adapter_preset} "
+            f"use_fd_residual_alpha={args_cli.use_fd_residual_alpha} "
+            f"fd_residual_alpha={args_cli.fd_residual_alpha:.4e} "
+            f"effective_torque_adapter_scale={effective_torque_adapter_scale(args_cli.torque_adapter_scale, args_cli.fd_residual_alpha, args_cli.use_fd_residual_alpha)} "
+            f"fd_simscape_mean={fd_mean:.4e} fd_simscape_max={fd_max:.4e} "
+            f"tau_fd_adapted_mean={tau_adapted_mean:.4e} tau_fd_adapted_max={tau_adapted_max:.4e} "
+            f"tau_applied_raw_mean={tau_applied_mean:.4e} tau_applied_raw_max={tau_applied_max:.4e} "
+            f"tau_isaac_filtered_mean={tau_filtered_mean:.4e} tau_isaac_filtered_max={tau_filtered_max:.4e} "
+            f"tau_isaac_clamped_mean={tau_clamped_mean:.4e} tau_isaac_clamped_max={tau_clamped_max:.4e} "
             f"torque_clamp_fraction={clamp_fraction:.3f}"
+        )
+        print(
+            f"           fd_simscape_output={tensor_list(fd_simscape_output[0])} "
+            f"tau_fd_adapted={tensor_list(tau_fd_adapted[0])} "
+            f"tau_applied_raw={tensor_list(tau_applied_raw[0]) if tau_applied_raw is not None else '[]'} "
+            f"tau_isaac_filtered={tensor_list(tau_isaac_filtered[0]) if tau_isaac_filtered is not None else '[]'} "
+            f"tau_isaac_clamped={tensor_list(tau_isaac_clamped[0])}"
         )
 
     logger.write(
@@ -325,11 +417,50 @@ def log_state(
             "q": tensor_list(q[0], precision=6),
             "qdot": tensor_list(qdot[0], precision=6),
             "applied_fields": applied_summary,
-            "torque_raw_mean": f"{torque_raw_mean:.6e}",
-            "torque_raw_max": f"{torque_raw_max:.6e}",
-            "torque_clamped_mean": f"{torque_clamped_mean:.6e}",
-            "torque_clamped_max": f"{torque_clamped_max:.6e}",
+            "torque_raw_mean": f"{fd_mean:.6e}",
+            "torque_raw_max": f"{fd_max:.6e}",
+            "torque_clamped_mean": f"{tau_clamped_mean:.6e}",
+            "torque_clamped_max": f"{tau_clamped_max:.6e}",
             "torque_clamp_fraction": f"{clamp_fraction:.6f}",
+            "torque_adapter_mode": torque_adapter_mode or args_cli.torque_adapter_mode,
+            "torque_adapter_preset": args_cli.torque_adapter_preset,
+            "torque_adapter_scale": tensor_list(torch.as_tensor(args_cli.torque_adapter_scale), precision=8),
+            "use_fd_residual_alpha": str(args_cli.use_fd_residual_alpha),
+            "fd_residual_alpha": f"{args_cli.fd_residual_alpha:.6e}",
+            "effective_torque_adapter_scale": tensor_list(
+                torch.as_tensor(
+                    effective_torque_adapter_scale(
+                        args_cli.torque_adapter_scale,
+                        args_cli.fd_residual_alpha,
+                        args_cli.use_fd_residual_alpha,
+                    )
+                ),
+                precision=10,
+            ),
+            "fd_simscape_output": tensor_list(fd_simscape_output[0], precision=8)
+            if fd_simscape_output is not None
+            else "",
+            "tau_fd_adapted": tensor_list(tau_fd_adapted[0], precision=8)
+            if tau_fd_adapted is not None
+            else "",
+            "tau_applied_raw": tensor_list(tau_applied_raw[0], precision=8)
+            if tau_applied_raw is not None
+            else "",
+            "tau_isaac_filtered": tensor_list(tau_isaac_filtered[0], precision=8)
+            if tau_isaac_filtered is not None
+            else "",
+            "tau_isaac_clamped": tensor_list(tau_isaac_clamped[0], precision=8)
+            if tau_isaac_clamped is not None
+            else "",
+            "applied_torque": tensor_list(effort_fields["applied_torque"][0], precision=8)
+            if "applied_torque" in effort_fields
+            else "",
+            "computed_torque": tensor_list(effort_fields["computed_torque"][0], precision=8)
+            if "computed_torque" in effort_fields
+            else "",
+            "joint_effort": tensor_list(effort_fields["joint_effort"][0], precision=8)
+            if "joint_effort" in effort_fields
+            else "",
         }
     )
 
@@ -504,10 +635,24 @@ def run_compare_fd_vs_applied(
     print_effort_fields_once(robot, command_joint_ids)
     device = robot.data.joint_pos.device
     fd = load_fd_model(str(device))
-    fd_buffer = SequenceBuffer(num_envs=args_cli.num_envs, window_size=fd.window_size or 10, feature_dim=18, device=device)
+    print(
+        "[INFO] compare_fd_vs_applied uses adapter "
+        f"mode={args_cli.torque_adapter_mode} preset={args_cli.torque_adapter_preset} "
+        f"scale={args_cli.torque_adapter_scale} "
+        f"bias={args_cli.torque_adapter_bias} "
+        f"use_fd_residual_alpha={args_cli.use_fd_residual_alpha} "
+        f"fd_residual_alpha={args_cli.fd_residual_alpha}; raw FD is never applied directly."
+    )
+    fd_buffer = SequenceBuffer(
+        num_envs=args_cli.num_envs,
+        window_size=fd.window_size or 10,
+        feature_dim=18,
+        device=device,
+    )
     sim_dt = sim.get_physics_dt()
     max_steps = int(args_cli.duration / sim_dt) if args_cli.duration > 0 else math.inf
     step = 0
+    prev_tau_isaac = torch.zeros((args_cli.num_envs, len(command_joint_ids)), dtype=torch.float32, device=device)
     phases = torch.linspace(0.0, math.pi, len(command_joint_ids), dtype=torch.float32, device=device).reshape(1, -1)
     try:
         while simulation_app.is_running() and step < max_steps:
@@ -517,10 +662,34 @@ def run_compare_fd_vs_applied(
             valve_cmd = 0.1 * torch.sin(2.0 * math.pi * 0.2 * (step * sim_dt) + phases)
             fd_input_raw = safe_tensor(build_fd_input(q, qdot, dP, valve_cmd), None)
             fd_seq = fd_buffer.append(fd_input_raw)
-            torque_raw = safe_tensor(fd(fd_seq), None)
-            torque_clamped = safe_tensor(torque_raw, args_cli.max_abs_torque)
+            fd_simscape_output = safe_tensor(fd(fd_seq), None)
+            tau_fd_adapted = adapt_fd_to_isaac_torque(
+                fd_simscape_output,
+                mode=args_cli.torque_adapter_mode,
+                scale=args_cli.torque_adapter_scale,
+                bias=args_cli.torque_adapter_bias,
+                fd_torque_scale=args_cli.fd_torque_scale,
+                fd_residual_alpha=args_cli.fd_residual_alpha,
+                max_abs_torque=args_cli.max_abs_torque,
+                q=q,
+                qdot=qdot,
+            )
+            tau_applied_raw = apply_fd_residual_authority(
+                tau_fd_adapted,
+                fd_residual_alpha=args_cli.fd_residual_alpha,
+                use_fd_residual_alpha=args_cli.use_fd_residual_alpha,
+            )
+            tau_isaac_filtered = lowpass_torque(tau_applied_raw, prev_tau_isaac, args_cli.torque_lowpass_alpha)
+            tau_isaac_filtered, torque_rate_limited_fraction = rate_limit_torque(
+                tau_isaac_filtered,
+                prev_tau_isaac,
+                args_cli.torque_rate_limit,
+            )
+            tau_isaac_filtered = safe_tensor(tau_isaac_filtered, None)
+            torque_clamped = safe_tensor(tau_isaac_filtered, args_cli.max_abs_torque)
+            prev_tau_isaac = torque_clamped.detach().clone()
             torque_limit = max(float(args_cli.max_abs_torque), 1.0e-8)
-            torque_clamp_fraction = torch.mean((torch.abs(torque_raw) > torque_limit).float(), dim=-1)
+            torque_clamp_fraction = torch.mean((torch.abs(tau_isaac_filtered) > torque_limit).float(), dim=-1)
             robot.set_joint_effort_target(torque_clamped, joint_ids=command_joint_ids)
 
             if args_cli.print_interval > 0 and step % args_cli.print_interval == 0:
@@ -534,10 +703,23 @@ def run_compare_fd_vs_applied(
                     command_joint_ids=command_joint_ids,
                     target_joint="fd_online",
                     command_effort=float(torque_clamped.abs().max().item()),
-                    torque_raw=torque_raw,
-                    torque_clamped=torque_clamped,
+                    fd_simscape_output=fd_simscape_output,
+                    tau_fd_adapted=tau_fd_adapted,
+                    tau_applied_raw=tau_applied_raw,
+                    tau_isaac_filtered=tau_isaac_filtered,
+                    tau_isaac_clamped=torque_clamped,
                     torque_clamp_fraction=torque_clamp_fraction,
+                    torque_adapter_mode=args_cli.torque_adapter_mode,
                 )
+                if float(torque_clamp_fraction.mean().item()) > 0.5:
+                    print("[WARN] final torque still too clamped")
+                if float(torque_rate_limited_fraction.mean().item()) > 0.8:
+                    print("[WARN] torque still rate-limited")
+                tau_applied_raw_max = float(tau_applied_raw.abs().max().item())
+                if tau_applied_raw_max > 2.0 * float(args_cli.max_abs_torque):
+                    print("[WARN] residual alpha still too high")
+                if tau_applied_raw_max < 0.1:
+                    print("[WARN] residual alpha may be too low")
             write_sim_step(sim, scene)
             step += 1
     finally:
