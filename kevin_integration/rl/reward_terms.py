@@ -7,10 +7,17 @@ import torch
 
 @dataclass(frozen=True)
 class JointReachRewardWeights:
-    q_tracking: float = 8.0
+    q_tracking: float = 3.0
     qdot: float = 0.25
-    progress: float = 1.0
-    action_smoothness: float = 0.05
+    progress: float = 2.0
+    action_smoothness: float = 0.0
+    action_rate: float = 0.05
+    action_magnitude: float = 0.02
+    action_saturation: float = 0.5
+    action_saturation_threshold: float = 0.90
+    settle_tracking: float = 2.0
+    joint1_settle_tracking: float = 3.0
+    joint1_settle_error_deadband: float = 0.005
     valve_effort: float = 0.01
     torque_effort: float = 1.0e-6
     alive: float = 0.1
@@ -47,23 +54,62 @@ def _joint_reach_reward_components(
     terminated: torch.Tensor,
     weights: JointReachRewardWeights,
     *,
+    action: torch.Tensor | None = None,
     prev_q_error_mean: torch.Tensor | None = None,
     torque_effort_weight: float | None = None,
     q_tracking_joint_weights: torch.Tensor | list[float] | tuple[float, ...] | None = None,
+    is_settle_phase: torch.Tensor | None = None,
+    use_settle_tracking_reward: bool = False,
+    use_joint1_settle_tracking_reward: bool = False,
 ) -> dict[str, torch.Tensor]:
     q_error = q_ref - q
-    joint_weights = _as_joint_weights(q_error, q_tracking_joint_weights)
+    joint_weights = _as_joint_weights(q_error, q_tracking_joint_weights).expand_as(q_error)
     q_error_abs = torch.abs(q_error)
+    q_error_weighted_per_joint = joint_weights * q_error_abs
+    q_error_squared_per_joint = torch.square(q_error)
     q_error_mean_unweighted = torch.mean(q_error_abs, dim=-1)
     q_error_mean_weighted = torch.sum(joint_weights * q_error_abs, dim=-1) / torch.clamp(
         torch.sum(joint_weights, dim=-1), min=1.0e-8
     )
-    q_tracking = -weights.q_tracking * torch.sum(joint_weights * torch.square(q_error), dim=-1)
+    q_tracking_reward_per_joint = -weights.q_tracking * joint_weights * q_error_squared_per_joint
+    q_tracking = torch.sum(q_tracking_reward_per_joint, dim=-1)
     qdot_penalty = -weights.qdot * squared_norm(qdot)
     progress_reward = torch.zeros_like(q_tracking)
     if prev_q_error_mean is not None:
         progress_reward = weights.progress * (prev_q_error_mean - q_error_mean_weighted)
-    action_smoothness_penalty = -weights.action_smoothness * squared_norm(action_delta)
+    if is_settle_phase is None:
+        is_settle_phase_float = torch.zeros_like(q_tracking)
+    else:
+        is_settle_phase_float = is_settle_phase.float().reshape(-1)
+    weighted_squared_q_error_mean = torch.sum(joint_weights * q_error_squared_per_joint, dim=-1) / torch.clamp(
+        torch.sum(joint_weights, dim=-1), min=1.0e-8
+    )
+    settle_tracking_reward = torch.zeros_like(q_tracking)
+    if use_settle_tracking_reward:
+        settle_tracking_reward = -weights.settle_tracking * weighted_squared_q_error_mean * is_settle_phase_float
+    joint1_error_excess = torch.clamp(q_error_abs[:, 0] - weights.joint1_settle_error_deadband, min=0.0)
+    joint1_settle_tracking_reward = torch.zeros_like(q_tracking)
+    if use_joint1_settle_tracking_reward:
+        joint1_settle_tracking_reward = (
+            -weights.joint1_settle_tracking * torch.square(joint1_error_excess) * is_settle_phase_float
+        )
+    action_rate_penalty = -weights.action_rate * torch.mean(torch.square(action_delta), dim=-1)
+    action_smoothness_penalty = action_rate_penalty
+    if weights.action_smoothness != 0.0:
+        action_smoothness_penalty = -weights.action_smoothness * torch.mean(torch.square(action_delta), dim=-1)
+        action_rate_penalty = action_smoothness_penalty
+    if action is None:
+        action_abs = torch.zeros_like(action_delta)
+    else:
+        action_abs = torch.abs(action)
+    action_saturation_excess = torch.clamp(action_abs - weights.action_saturation_threshold, min=0.0)
+    action_saturation_penalty = -weights.action_saturation * torch.mean(
+        torch.square(action_saturation_excess), dim=-1
+    )
+    action_magnitude_penalty = -weights.action_magnitude * torch.mean(torch.square(action_abs), dim=-1)
+    action_saturation_fraction = torch.mean(
+        (action_abs > weights.action_saturation_threshold).float(), dim=-1
+    )
     valve_effort_penalty = -weights.valve_effort * squared_norm(valve_cmd)
     effective_torque_effort = weights.torque_effort if torque_effort_weight is None else torque_effort_weight
     torque_effort_penalty = -effective_torque_effort * squared_norm(torque)
@@ -73,7 +119,11 @@ def _joint_reach_reward_components(
         q_tracking
         + qdot_penalty
         + progress_reward
-        + action_smoothness_penalty
+        + settle_tracking_reward
+        + joint1_settle_tracking_reward
+        + action_rate_penalty
+        + action_magnitude_penalty
+        + action_saturation_penalty
         + valve_effort_penalty
         + torque_effort_penalty
         + alive
@@ -82,11 +132,31 @@ def _joint_reach_reward_components(
     return {
         "reward_total": reward_total,
         "q_tracking": q_tracking,
+        "q_tracking_reward_total": q_tracking,
+        "q_tracking_reward_per_joint": q_tracking_reward_per_joint,
+        "q_tracking_reward_joint_weights": joint_weights,
         "q_error_mean_unweighted": q_error_mean_unweighted,
         "q_error_mean_weighted": q_error_mean_weighted,
+        "q_error_weighted_per_joint": q_error_weighted_per_joint,
+        "joint1_q_error_abs": q_error_abs[:, 0],
+        "joint1_q_tracking_contribution": q_tracking_reward_per_joint[:, 0],
+        "joint1_action_abs": action_abs[:, 0] if action_abs.shape[-1] > 0 else torch.zeros_like(q_tracking),
         "qdot_penalty": qdot_penalty,
         "progress_reward": progress_reward,
+        "is_settle_phase": is_settle_phase_float,
+        "settle_tracking_reward": settle_tracking_reward,
+        "joint1_settle_tracking_reward": joint1_settle_tracking_reward,
+        "joint1_error_excess": joint1_error_excess,
+        "joint1_settle_error_deadband": torch.full_like(q_tracking, float(weights.joint1_settle_error_deadband)),
+        "rew_settle_tracking": torch.full_like(q_tracking, float(weights.settle_tracking)),
+        "rew_joint1_settle_tracking": torch.full_like(q_tracking, float(weights.joint1_settle_tracking)),
         "action_smoothness_penalty": action_smoothness_penalty,
+        "action_rate_penalty": action_rate_penalty,
+        "action_magnitude_penalty": action_magnitude_penalty,
+        "action_saturation_penalty": action_saturation_penalty,
+        "action_saturation_fraction": action_saturation_fraction,
+        "action_abs_mean": torch.mean(action_abs, dim=-1),
+        "action_abs_max": torch.max(action_abs, dim=-1).values,
         "valve_effort_penalty": valve_effort_penalty,
         "torque_effort_penalty": torque_effort_penalty,
         "alive": alive,
@@ -104,9 +174,13 @@ def joint_reach_reward(
     terminated: torch.Tensor,
     weights: JointReachRewardWeights,
     *,
+    action: torch.Tensor | None = None,
     prev_q_error_mean: torch.Tensor | None = None,
     torque_effort_weight: float | None = None,
     q_tracking_joint_weights: torch.Tensor | list[float] | tuple[float, ...] | None = None,
+    is_settle_phase: torch.Tensor | None = None,
+    use_settle_tracking_reward: bool = False,
+    use_joint1_settle_tracking_reward: bool = False,
 ) -> torch.Tensor:
     return _joint_reach_reward_components(
         q,
@@ -117,9 +191,13 @@ def joint_reach_reward(
         torque,
         terminated,
         weights,
+        action=action,
         prev_q_error_mean=prev_q_error_mean,
         torque_effort_weight=torque_effort_weight,
         q_tracking_joint_weights=q_tracking_joint_weights,
+        is_settle_phase=is_settle_phase,
+        use_settle_tracking_reward=use_settle_tracking_reward,
+        use_joint1_settle_tracking_reward=use_joint1_settle_tracking_reward,
     )["reward_total"]
 
 
@@ -137,6 +215,9 @@ def joint_reach_reward_debug(
     prev_q_error_mean: torch.Tensor | None = None,
     torque_effort_weight: float | None = None,
     q_tracking_joint_weights: torch.Tensor | list[float] | tuple[float, ...] | None = None,
+    is_settle_phase: torch.Tensor | None = None,
+    use_settle_tracking_reward: bool = False,
+    use_joint1_settle_tracking_reward: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     terms = _joint_reach_reward_components(
         q,
@@ -147,15 +228,20 @@ def joint_reach_reward_debug(
         torque,
         terminated,
         weights,
+        action=action,
         prev_q_error_mean=prev_q_error_mean,
         torque_effort_weight=torque_effort_weight,
         q_tracking_joint_weights=q_tracking_joint_weights,
+        is_settle_phase=is_settle_phase,
+        use_settle_tracking_reward=use_settle_tracking_reward,
+        use_joint1_settle_tracking_reward=use_joint1_settle_tracking_reward,
     )
     q_error_abs = torch.abs(q - q_ref)
     diagnostics = {
         "q_error_mean": terms["q_error_mean_weighted"],
         "q_error_abs_per_joint": q_error_abs,
         "qdot_mean": torch.mean(torch.abs(qdot), dim=-1),
+        "qdot_abs_max": torch.max(torch.abs(qdot), dim=-1).values,
         "action_delta_mean": torch.mean(torch.abs(action_delta), dim=-1),
         "valve_mean": torch.mean(torch.abs(valve_cmd), dim=-1),
         "torque_mean": torch.mean(torch.abs(torque), dim=-1),
