@@ -70,6 +70,20 @@ class AdaptiveRLLearnedControllerCfg:
     max_abs_pressure_delta: float = 1.0e7
     max_abs_fnet: float = 1.0e7
     sd_output_mode: str = "state"
+    sd_nan_guard: bool = True
+    sd_clamp_outputs: bool = True
+
+
+@dataclass(frozen=True)
+class SDObserverOutput:
+    state_pred: torch.Tensor
+    q_next_pred: torch.Tensor
+    qdot_next_pred: torch.Tensor
+    dP_next_pred: torch.Tensor
+    fnet_next_pred: torch.Tensor
+    output_nan_or_inf: torch.Tensor
+    output_clamped_fraction: torch.Tensor
+    debug: dict[str, torch.Tensor]
 
 
 @dataclass(frozen=True)
@@ -93,6 +107,7 @@ class AdaptiveRLControlOutput:
     dP_next: torch.Tensor
     fnet_next: torch.Tensor
     sd_state: torch.Tensor
+    sd_debug: dict[str, torch.Tensor]
 
 
 class AdaptiveRLLearnedController:
@@ -243,6 +258,7 @@ class AdaptiveRLLearnedController:
         dP_next = torch.zeros_like(dP)
         fnet_next = torch.zeros_like(valve_cmd)
         sd_state = torch.zeros((q.shape[0], 18), dtype=torch.float32, device=self.device)
+        sd_debug = self._zero_sd_debug(q.shape[0])
         return AdaptiveRLControlOutput(
             torque=torque,
             fd_simscape_output=torque,
@@ -263,6 +279,7 @@ class AdaptiveRLLearnedController:
             dP_next=dP_next,
             fnet_next=fnet_next,
             sd_state=sd_state,
+            sd_debug=sd_debug,
         )
 
     def apply_action_full_pipeline(
@@ -340,14 +357,16 @@ class AdaptiveRLLearnedController:
         self._prev_tau_isaac[: q.shape[0]] = tau_isaac_clamped.detach()
 
         if use_sd_feedback:
-            sd_x_t = build_sd_input(q, qdot, dP, fnet, valve_cmd)
-            sd_seq = self._sd_history.append(sd_x_t)
-            sd_state = clamp_and_sanitize(self.sd(sd_seq, z_arm_hat), None)
-            dP_next, fnet_next = self._extract_hydraulic_state(q, qdot, dP, fnet, sd_state)
+            sd_observer = self.run_sd_observer(q, qdot, dP, fnet, valve_cmd, z_arm_hat)
+            sd_state = sd_observer.state_pred
+            dP_next = sd_observer.dP_next_pred
+            fnet_next = sd_observer.fnet_next_pred
+            sd_debug = sd_observer.debug
         else:
             sd_state = torch.zeros((q.shape[0], 18), dtype=torch.float32, device=self.device)
             dP_next = torch.zeros_like(dP)
             fnet_next = torch.zeros_like(fnet)
+            sd_debug = self._zero_sd_debug(q.shape[0])
 
         return AdaptiveRLControlOutput(
             torque=tau_isaac_clamped,
@@ -369,7 +388,129 @@ class AdaptiveRLLearnedController:
             dP_next=dP_next,
             fnet_next=fnet_next,
             sd_state=sd_state,
+            sd_debug=sd_debug,
         )
+
+    def run_sd_observer(
+        self,
+        q: torch.Tensor,
+        qdot: torch.Tensor,
+        dP: torch.Tensor,
+        fnet: torch.Tensor,
+        valve_cmd: torch.Tensor,
+        z_arm_hat: torch.Tensor,
+    ) -> SDObserverOutput:
+        q = q.to(self.device)
+        qdot = qdot.to(self.device)
+        dP = dP.to(self.device)
+        fnet = fnet.to(self.device)
+        valve_cmd = valve_cmd.to(self.device)
+        z_arm_hat = clamp_and_sanitize(z_arm_hat.to(self.device), None)
+
+        sd_x_t = build_sd_input(q, qdot, dP, fnet, valve_cmd)
+        sd_seq = self._sd_history.append(sd_x_t)
+        sd_raw = self.sd(sd_seq, z_arm_hat)
+        if sd_raw.shape[-1] != 18:
+            raise RuntimeError(f"SD output must have last dimension 18, got {sd_raw.shape[-1]}")
+
+        raw_nan_or_inf = (~torch.isfinite(sd_raw).all(dim=-1)).float()
+        if self.cfg.sd_nan_guard:
+            sd_raw = torch.nan_to_num(sd_raw, nan=0.0, posinf=0.0, neginf=0.0)
+
+        state_pred = self._decode_sd_state(q, qdot, dP, fnet, sd_raw)
+        decoded_nan_or_inf = (~torch.isfinite(state_pred).all(dim=-1)).float()
+        output_nan_or_inf = torch.maximum(raw_nan_or_inf, decoded_nan_or_inf)
+        if self.cfg.sd_nan_guard:
+            state_pred = torch.nan_to_num(state_pred, nan=0.0, posinf=0.0, neginf=0.0)
+            invalid = output_nan_or_inf.bool().reshape(-1, 1)
+            state_pred = torch.where(invalid, torch.zeros_like(state_pred), state_pred)
+
+        state_pred, clamped_fraction = self._clamp_sd_state(state_pred)
+        q_next_pred = state_pred[..., 0:5]
+        qdot_next_pred = state_pred[..., 5:10]
+        dP_next_pred = state_pred[..., 10:14]
+        fnet_next_pred = state_pred[..., 14:18]
+        debug = {
+            "sd_q_next_pred": q_next_pred.detach(),
+            "sd_qdot_next_pred": qdot_next_pred.detach(),
+            "sd_dP_next_pred": dP_next_pred.detach(),
+            "sd_fnet_next_pred": fnet_next_pred.detach(),
+            "sd_dP_mean": torch.mean(torch.abs(dP_next_pred.detach()), dim=-1),
+            "sd_dP_abs_max": torch.max(torch.abs(dP_next_pred.detach()), dim=-1).values,
+            "sd_fnet_mean": torch.mean(torch.abs(fnet_next_pred.detach()), dim=-1),
+            "sd_fnet_abs_max": torch.max(torch.abs(fnet_next_pred.detach()), dim=-1).values,
+            "sd_output_nan_or_inf": output_nan_or_inf.detach(),
+            "sd_output_clamped_fraction": clamped_fraction.detach(),
+        }
+        return SDObserverOutput(
+            state_pred=state_pred,
+            q_next_pred=q_next_pred,
+            qdot_next_pred=qdot_next_pred,
+            dP_next_pred=dP_next_pred,
+            fnet_next_pred=fnet_next_pred,
+            output_nan_or_inf=output_nan_or_inf,
+            output_clamped_fraction=clamped_fraction,
+            debug=debug,
+        )
+
+    def _zero_sd_debug(self, batch_size: int) -> dict[str, torch.Tensor]:
+        return {
+            "sd_q_next_pred": torch.zeros((batch_size, 5), dtype=torch.float32, device=self.device),
+            "sd_qdot_next_pred": torch.zeros((batch_size, 5), dtype=torch.float32, device=self.device),
+            "sd_dP_next_pred": torch.zeros((batch_size, 4), dtype=torch.float32, device=self.device),
+            "sd_fnet_next_pred": torch.zeros((batch_size, 4), dtype=torch.float32, device=self.device),
+            "sd_dP_mean": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+            "sd_dP_abs_max": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+            "sd_fnet_mean": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+            "sd_fnet_abs_max": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+            "sd_output_nan_or_inf": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+            "sd_output_clamped_fraction": torch.zeros((batch_size,), dtype=torch.float32, device=self.device),
+        }
+
+    def _decode_sd_state(
+        self,
+        q: torch.Tensor,
+        qdot: torch.Tensor,
+        dP: torch.Tensor,
+        fnet: torch.Tensor,
+        sd_output: torch.Tensor,
+    ) -> torch.Tensor:
+        current_state = torch.cat([q, qdot, dP, fnet], dim=-1)
+        target_mode = getattr(self.sd, "target_mode", "")
+        if target_mode in ("delta_normalized", "normalized_delta"):
+            return current_state + self.sd.denormalize_delta(sd_output)
+        if target_mode in ("delta", "state_delta"):
+            return current_state + sd_output
+        if target_mode in ("state", "absolute_state", "next_state"):
+            return sd_output
+        if target_mode not in ("", "none"):
+            raise ValueError(f"Unsupported SD target_mode in checkpoint metadata: {target_mode!r}")
+
+        if self.cfg.sd_output_mode == "delta":
+            return current_state + sd_output
+        if self.cfg.sd_output_mode == "state":
+            return sd_output
+        raise ValueError("sd_output_mode must be 'delta' or 'state'")
+
+    def _clamp_sd_state(self, state_pred: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if state_pred.shape[-1] != 18:
+            raise RuntimeError(f"SD state prediction must have last dimension 18, got {state_pred.shape[-1]}")
+        if not self.cfg.sd_clamp_outputs:
+            fraction = torch.zeros((state_pred.shape[0],), dtype=torch.float32, device=self.device)
+            return state_pred, fraction
+
+        dP_pred = state_pred[..., 10:14]
+        fnet_pred = state_pred[..., 14:18]
+        dP_limit = max(float(self.cfg.max_abs_pressure_delta), 1.0e-8)
+        fnet_limit = max(float(self.cfg.max_abs_fnet), 1.0e-8)
+        dP_clamped_mask = torch.abs(dP_pred) > dP_limit
+        fnet_clamped_mask = torch.abs(fnet_pred) > fnet_limit
+        clamped_fraction = torch.mean(torch.cat([dP_clamped_mask, fnet_clamped_mask], dim=-1).float(), dim=-1)
+
+        state_clamped = state_pred.clone()
+        state_clamped[..., 10:14] = clamp_and_sanitize(dP_pred, self.cfg.max_abs_pressure_delta)
+        state_clamped[..., 14:18] = clamp_and_sanitize(fnet_pred, self.cfg.max_abs_fnet)
+        return state_clamped, clamped_fraction
 
     def _extract_hydraulic_state(
         self,
@@ -382,12 +523,9 @@ class AdaptiveRLLearnedController:
         if sd_state.shape[-1] != 18:
             raise RuntimeError(f"SD output must have last dimension 18, got {sd_state.shape[-1]}")
 
-        if self.cfg.sd_output_mode == "delta":
-            current_state = torch.cat([q, qdot, dP, fnet], dim=-1)
-            sd_state = current_state + sd_state
-        elif self.cfg.sd_output_mode != "state":
-            raise ValueError("sd_output_mode must be 'delta' or 'state'")
+        sd_state = self._decode_sd_state(q, qdot, dP, fnet, sd_state)
+        sd_state, _ = self._clamp_sd_state(sd_state)
 
-        dP_next = clamp_and_sanitize(sd_state[..., 10:14], self.cfg.max_abs_pressure_delta)
-        fnet_next = clamp_and_sanitize(sd_state[..., 14:18], self.cfg.max_abs_fnet)
+        dP_next = sd_state[..., 10:14]
+        fnet_next = sd_state[..., 14:18]
         return dP_next, fnet_next

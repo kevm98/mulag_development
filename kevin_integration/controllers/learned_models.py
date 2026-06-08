@@ -424,6 +424,9 @@ class SystemDynamicsModel:
 
         self.feature_mean = ckpt.meta.get("feat_mean", None)
         self.feature_std = ckpt.meta.get("feat_std", None)
+        self.target_mode = str(ckpt.meta.get("target_mode", "") or "").lower()
+        self.y_delta_mean = ckpt.meta.get("y_delta_mean", None)
+        self.y_delta_std = ckpt.meta.get("y_delta_std", None)
 
         # SD runtime uses only dynamic features.
         # Some checkpoints store normalizers for:
@@ -501,6 +504,36 @@ class SystemDynamicsModel:
             h_last = out[:, -1, :]
             fused = torch.cat([h_last, z_arm], dim=-1)
             return self.model.regressor(fused)
+
+    def denormalize_delta(self, y):
+        torch = _require_torch()
+
+        if self.y_delta_mean is None or self.y_delta_std is None:
+            raise RuntimeError(
+                "[ERROR][SD] Checkpoint target_mode requires y_delta_mean/y_delta_std, "
+                "but one or both are missing."
+            )
+
+        mean = torch.as_tensor(
+            self.y_delta_mean,
+            dtype=torch.float32,
+            device=y.device,
+        ).reshape(1, -1)
+
+        std = torch.as_tensor(
+            self.y_delta_std,
+            dtype=torch.float32,
+            device=y.device,
+        ).reshape(1, -1)
+
+        if y.shape[-1] != mean.shape[-1]:
+            raise RuntimeError(
+                f"[ERROR][SD] Runtime output dimension is {y.shape[-1]}, "
+                f"but y_delta_mean dimension is {mean.shape[-1]}. "
+                f"Check SD checkpoint metadata."
+            )
+
+        return y * (std + 1e-8) + mean
 
 
 class ForwardDynamicsModel:
