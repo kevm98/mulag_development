@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-JointTracking-v0"
+DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-TaskSpace-v0"
 
 parser = argparse.ArgumentParser(description="Play the Kevin/Mulag hydraulic ROM joint-tracking task.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of Isaac Lab environments.")
