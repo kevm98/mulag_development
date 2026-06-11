@@ -132,11 +132,19 @@ def _read_int_meta(meta: Mapping[str, Any], *keys: str) -> Optional[int]:
     return None
 
 
-def _fix_feature_normalizer(vec, *, expected_dim: int, model_name: str, normalizer_name: str):
-    """Fix checkpoint normalizer size when metadata stores dynamic + context features.
+def _select_dynamic_feature_normalizer(
+    vec,
+    *,
+    expected_dim: int,
+    checkpoint_dynamic_dim: int | None,
+    model_name: str,
+    normalizer_name: str,
+):
+    """Select the runtime dynamic normalizer from checkpoint metadata.
 
-    Runtime ZArm models receive only dynamic features.
-    The context part is replaced by z_arm_hat.
+    Some Kevin checkpoints store `[dynamic features, context features]` scaler
+    vectors. Runtime inference supplies the context separately through
+    `z_arm_hat`, so only the metadata-declared dynamic feature block is valid.
     """
     if vec is None:
         return None
@@ -146,17 +154,18 @@ def _fix_feature_normalizer(vec, *, expected_dim: int, model_name: str, normaliz
     if vec_len == expected_dim:
         return vec
 
-    if vec_len > expected_dim:
+    if checkpoint_dynamic_dim == expected_dim and vec_len > expected_dim:
         print(
             f"[WARN][{model_name}] {normalizer_name} has {vec_len} values, "
-            f"but {model_name} model expects {expected_dim}. "
-            f"Slicing first {expected_dim} dynamic features."
+            f"checkpoint dynamic_dim={checkpoint_dynamic_dim}, and runtime "
+            f"uses the first {expected_dim} metadata-declared dynamic features."
         )
         return vec[:expected_dim]
 
     raise ValueError(
         f"[ERROR][{model_name}] {normalizer_name} has {vec_len} values, "
-        f"but {model_name} model expects {expected_dim}."
+        f"but {model_name} runtime expects {expected_dim} dynamic features and "
+        f"checkpoint dynamic_dim={checkpoint_dynamic_dim}."
     )
 
 
@@ -289,22 +298,25 @@ class InverseDynamicsModel:
 
         self.feature_mean = ckpt.meta.get("feat_mean", None)
         self.feature_std = ckpt.meta.get("feat_std", None)
+        self.dynamic_dim = _read_int_meta(ckpt.meta, "dynamic_dim")
 
         # ID runtime uses only dynamic features.
         # Some checkpoints store normalizers for:
         # 53 = 19 dynamic features + 34 context features.
         expected_dim = in_dim
 
-        self.feature_mean = _fix_feature_normalizer(
+        self.feature_mean = _select_dynamic_feature_normalizer(
             self.feature_mean,
             expected_dim=expected_dim,
+            checkpoint_dynamic_dim=self.dynamic_dim,
             model_name="ID",
             normalizer_name="feat_mean",
         )
 
-        self.feature_std = _fix_feature_normalizer(
+        self.feature_std = _select_dynamic_feature_normalizer(
             self.feature_std,
             expected_dim=expected_dim,
+            checkpoint_dynamic_dim=self.dynamic_dim,
             model_name="ID",
             normalizer_name="feat_std",
         )
@@ -424,6 +436,7 @@ class SystemDynamicsModel:
 
         self.feature_mean = ckpt.meta.get("feat_mean", None)
         self.feature_std = ckpt.meta.get("feat_std", None)
+        self.dynamic_dim = _read_int_meta(ckpt.meta, "dynamic_dim")
         self.target_mode = str(ckpt.meta.get("target_mode", "") or "").lower()
         self.y_delta_mean = ckpt.meta.get("y_delta_mean", None)
         self.y_delta_std = ckpt.meta.get("y_delta_std", None)
@@ -433,16 +446,18 @@ class SystemDynamicsModel:
         # 56 = 22 dynamic features + 34 context features.
         expected_dim = in_dim
 
-        self.feature_mean = _fix_feature_normalizer(
+        self.feature_mean = _select_dynamic_feature_normalizer(
             self.feature_mean,
             expected_dim=expected_dim,
+            checkpoint_dynamic_dim=self.dynamic_dim,
             model_name="SD",
             normalizer_name="feat_mean",
         )
 
-        self.feature_std = _fix_feature_normalizer(
+        self.feature_std = _select_dynamic_feature_normalizer(
             self.feature_std,
             expected_dim=expected_dim,
+            checkpoint_dynamic_dim=self.dynamic_dim,
             model_name="SD",
             normalizer_name="feat_std",
         )
