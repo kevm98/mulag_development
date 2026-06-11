@@ -8,6 +8,16 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from kevin_integration.tasks.rrlab_reference_conventions import (
+    OBSTACLE_ARM_JOINT_NAMES,
+    OBSTACLE_DRIVING_SPEED_RANGE_KMH,
+    OBSTACLE_DRIVING_SPEED_RESAMPLE_STEP_THRESHOLD,
+    OBSTACLE_DRIVING_SPEED_UPDATE_INTERVAL_S,
+    OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES,
+    OBSTACLE_WHEEL_JOINT_NAMES,
+    OBSTACLE_WHEEL_RADIUS_M,
+)
+from kevin_integration.tasks.task_space_reference import TASK_SPACE_OBSERVATION_DIM
 from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 from rrlab_assets import MULAG_CFG
 
@@ -23,10 +33,11 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     action_scale = 1.0
     action_space = 4
     observation_space = 62
+    task_space_observation_space = TASK_SPACE_OBSERVATION_DIM
     state_space = 0
     # Legacy low-level values ("position_delta", "effort") are still accepted by
     # MulagAdaptiveRLEnv. The hydraulic ROM task below uses this field for its
-    # end-to-end mode: "scripted_reference_demo" or "rl_policy".
+    # end-to-end mode: "joint_space_validation" or "rl_task_space_tracking".
     control_mode = "position_delta"
     low_level_control_mode = "position_delta"
     position_delta_source = "id_valve"
@@ -37,6 +48,15 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     use_sd_feedback_blend = True
     use_sd_feedback_rate_limit = True
     use_fd_effort = False
+    use_fd_model = True
+    use_fd_as_observer = True
+    use_fd_in_policy_observation = True
+    use_fd_safety_limits = True
+    use_fd_auxiliary_reward = True
+    use_fd_effort_actuation = False
+    fd_torque_soft_limit = "fd_output_std"
+    fd_torque_hard_limit = "fd_output_3std"
+    rew_fd_load = 0.01
     position_scale = 0.005
     action_to_qddot_scale = 0.5
     qddot_cmd_clip = 5.0
@@ -119,19 +139,22 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rom_velocity_gain = [0.02, 0.02, 0.02, 0.02]
     rom_force_scale = [1000.0, 1000.0, 1000.0, 1000.0]
 
-    state_joint_names = [
-        "Drehzapfen_joint",
-        "Ausleger_I_joint",
-        "Ausleger_II_joint",
-        "Messerkopf_Schwenk_joint",
-        "Messerkopf_joint",
-    ]
-    command_joint_names = [
-        "Drehzapfen_joint",
-        "Ausleger_I_joint",
-        "Ausleger_II_joint",
-        "Messerkopf_Schwenk_joint",
-    ]
+    state_joint_names = list(OBSTACLE_ARM_JOINT_NAMES)
+    command_joint_names = list(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
+
+    # Mirrors RRLAB-Obstacle-Avoidance-Mulag-v0: vehicle motion is scripted by
+    # wheel velocity targets, separate from PPO/ID/ROM arm control.
+    enable_scripted_vehicle_motion = True
+    vehicle_speed_min_kmh = OBSTACLE_DRIVING_SPEED_RANGE_KMH[0]
+    vehicle_speed_max_kmh = OBSTACLE_DRIVING_SPEED_RANGE_KMH[1]
+    vehicle_command_mode = "rrlab_obstacle_scripted_wheel_velocity"
+    vehicle_wheel_joint_names = list(OBSTACLE_WHEEL_JOINT_NAMES)
+    vehicle_speed_range_kmh = list(OBSTACLE_DRIVING_SPEED_RANGE_KMH)
+    vehicle_wheel_radius_m = OBSTACLE_WHEEL_RADIUS_M
+    vehicle_speed_update_interval_s = OBSTACLE_DRIVING_SPEED_UPDATE_INTERVAL_S
+    vehicle_speed_resample_step_threshold = OBSTACLE_DRIVING_SPEED_RESAMPLE_STEP_THRESHOLD
+    reference_mode = "joint_space_validation"
+    task_space_ee_body_name = "Messerkopf"
     target_joint_range = [0.35, 0.35, 0.35, 0.30, 0.25]
     use_q_ref_ramp = True
     q_ref_ramp_time_s = 2.0
@@ -153,7 +176,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     target_change_threshold = 1.0e-5
     q_ref_jump_warning_threshold = 0.02
 
-    reference_marker_debug_vis = True
+    reference_marker_debug_vis = False
     reference_marker_base_offset = [4.0, 1.5, 2.0]
     reference_marker_joint_scale = [4.0, 4.0, 4.0]
 
@@ -250,7 +273,7 @@ class MulagAdaptiveRLPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class MulagHydraulicROMJointTrackingEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
-    control_mode = "scripted_reference_demo"
+    control_mode = "joint_space_validation"
     low_level_control_mode = "position_delta"
     position_delta_source = "id_valve"
     use_reduced_hydraulic_rom = False

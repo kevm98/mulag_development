@@ -23,6 +23,18 @@ parser.add_argument(
     help="Optional RSL-RL checkpoint path. Omit it for the scripted visible reference demo.",
 )
 parser.add_argument("--steps", type=int, default=-1, help="Number of policy steps to run. Use -1 to run until closed.")
+parser.add_argument(
+    "--play_mode",
+    choices=["joint_space_validation", "rl_task_space_tracking"],
+    default=None,
+    help="Optional override. Task-space tracking requires --checkpoint.",
+)
+parser.add_argument(
+    "--enable_vehicle_motion",
+    action="store_true",
+    default=False,
+    help="Enable RRLAB-style scripted vehicle motion for task-space play.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -198,12 +210,19 @@ def _print_live_telemetry(raw_env, step: int, *, root0: torch.Tensor | None) -> 
         f"err={_as_list(debug.get('q_error'))} "
         f"qdot_des={_as_list(debug.get('qdot_ref'))} "
         f"qddot_des={_as_list(debug.get('qddot_cmd'))} "
+        f"ee_des={_as_list(debug.get('ee_pose_command'))} "
+        f"ee={_as_list(debug.get('current_ee_pose'))} "
+        f"ee_err={_as_list(debug.get('ee_position_error'))} "
+        f"ee_rot_err={_scalar(debug.get('ee_orientation_error')):.4f} "
         f"qddot_fb={_as_list(debug.get('scripted_qddot_feedback'))} "
         f"qddot_ff={_as_list(debug.get('scripted_qddot_feedforward'))} "
         f"action={_as_list(debug.get('action'))} "
         f"id_norm_minmax=({_scalar(debug.get('id_input_normalized_min')):.3f},{_scalar(debug.get('id_input_normalized_max')):.3f}) "
         f"z_arm_norm={_scalar(debug.get('z_arm_norm')):.3f} "
         f"ValveCmd={_as_list(debug.get('valve_cmd'))} "
+        f"FD_tau={_as_list(debug.get('fd_tau_hat'))} "
+        f"FD_norm={_as_list(debug.get('fd_tau_hat_normalized'))} "
+        f"FD_load=({_scalar(debug.get('fd_soft_limit_fraction')):.3f},{_scalar(debug.get('fd_hard_limit_fraction')):.3f},{_scalar(debug.get('fd_normalized_abs_max')):.3f}) "
         f"ValveStats=({valve_mean:.3f},{valve_std:.3f},{valve_min:.3f},{valve_max:.3f},sat={valve_sat:.2f}) "
         f"ROM_norm_minmax=({_scalar(debug.get('final_rom_input_normalized_min')):.3f},{_scalar(debug.get('final_rom_input_normalized_max')):.3f}) "
         f"ROM_kin={_as_list(debug.get('final_rom_delta_extension_kinematic_50ms'), 6)} "
@@ -217,6 +236,7 @@ def _print_live_telemetry(raw_env, step: int, *, root0: torch.Tensor | None) -> 
         f"measured_motion={_as_list(debug.get('rom_cylinder_cumulative_measured_motion'), 5)} "
         f"tracking_ratio={_as_list(debug.get('rom_cylinder_tracking_ratio'), 3)} "
         f"root_z={root_z:.4f} root_vz={root_vel_z:.4f} roll={roll:.4f} pitch={pitch:.4f} "
+        f"vehicle_kmh={_scalar(debug.get('vehicle_speed_kmh')):.3f} "
         f"base_move={base_move:.5f} "
         f"clamp={float(debug.get('rom_target_clamp_fraction', torch.tensor(float('nan')))):.4f}",
         flush=True,
@@ -227,7 +247,28 @@ def _print_live_telemetry(raw_env, step: int, *, root0: torch.Tensor | None) -> 
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     env_cfg.scene.num_envs = args_cli.num_envs
     if args_cli.task == DEFAULT_HYDRAULIC_ROM_TASK:
-        env_cfg.control_mode = "rl_policy" if args_cli.checkpoint is not None else "scripted_reference_demo"
+        play_mode = args_cli.play_mode
+        if play_mode is None:
+            play_mode = "rl_task_space_tracking" if args_cli.checkpoint is not None else "joint_space_validation"
+        if play_mode == "rl_task_space_tracking" and args_cli.checkpoint is None:
+            raise RuntimeError(
+                "Task-space tracking requires a trained PPO checkpoint because the reference RRLAB task uses "
+                "the policy, not IK, to map ee_pose commands to arm actions."
+            )
+
+        env_cfg.reference_mode = play_mode
+        env_cfg.control_mode = play_mode
+        if play_mode == "rl_task_space_tracking":
+            env_cfg.observation_space = env_cfg.task_space_observation_space
+        env_cfg.enable_scripted_vehicle_motion = (
+            bool(args_cli.enable_vehicle_motion) if play_mode == "joint_space_validation" else True
+        )
+        print(
+            "[INFO] Kevin play mode: "
+            f"{play_mode} reference_mode={env_cfg.reference_mode} "
+            f"enable_scripted_vehicle_motion={env_cfg.enable_scripted_vehicle_motion}",
+            flush=True,
+        )
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
         agent_cfg.device = args_cli.device
@@ -239,6 +280,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if isinstance(env.unwrapped, DirectMARLEnv):
             env = multi_agent_to_single_agent(env)
         raw_env = env.unwrapped
+        if getattr(raw_env.cfg, "control_mode", "") == "rl_task_space_tracking" and hasattr(raw_env, "run_task_space_bridge_preflight"):
+            task_space_result = raw_env.run_task_space_bridge_preflight()
+            print(f"[PREFLIGHT] task_space_bridge={task_space_result}", flush=True)
+            if not bool(task_space_result.get("passed", False)):
+                raise RuntimeError(
+                    "Task-space play mode is blocked before playback: "
+                    f"{task_space_result.get('preflight_decision', 'BLOCKED_TASKSPACE_REFERENCE')}"
+                )
 
         env = RslRlVecEnvWrapper(env)
         policy = None
@@ -248,7 +297,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             runner.load(args_cli.checkpoint)
             policy = runner.get_inference_policy(device=agent_cfg.device)
         else:
-            print("[INFO] Running scripted_reference_demo with zero external actions.")
+            print("[INFO] Running joint_space_validation with zero external actions.")
 
         obs = env.get_observations()
         if isinstance(obs, tuple):

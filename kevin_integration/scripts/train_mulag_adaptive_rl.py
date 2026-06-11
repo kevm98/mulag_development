@@ -44,9 +44,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "--control_mode",
-    choices=["scripted_reference_demo", "rl_policy", "position_delta", "effort"],
+    choices=["joint_space_validation", "rl_task_space_tracking", "scripted_reference_demo", "rl_policy", "position_delta", "effort"],
     default=None,
-    help="Override env control mode. The hydraulic ROM task uses scripted_reference_demo/rl_policy.",
+    help="Override env control mode. The hydraulic ROM task uses joint_space_validation/rl_task_space_tracking.",
 )
 parser.add_argument(
     "--position_delta_source",
@@ -107,6 +107,14 @@ parser.add_argument("--q_ref_target_scale_initial", type=float, default=None, he
 parser.add_argument("--q_ref_target_scale_final", type=float, default=None, help="Final q_ref curriculum scale.")
 parser.add_argument("--q_ref_curriculum_steps", type=int, default=None, help="Steps over which q_ref scale increases.")
 parser.add_argument("--episode_length_s", type=float, default=None, help="Override episode duration.")
+parser.add_argument(
+    "--enable_scripted_vehicle_motion",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help="Enable or disable RRLAB-style scripted vehicle motion.",
+)
+parser.add_argument("--vehicle_speed_min_kmh", type=float, default=None, help="Minimum scripted vehicle speed.")
+parser.add_argument("--vehicle_speed_max_kmh", type=float, default=None, help="Maximum scripted vehicle speed.")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -166,10 +174,21 @@ from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizati
 
 def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
     if args_cli.task == DEFAULT_HYDRAULIC_ROM_TASK and args_cli.control_mode is None:
-        env_cfg.control_mode = "rl_policy"
+        env_cfg.control_mode = "rl_task_space_tracking"
+        env_cfg.reference_mode = "rl_task_space_tracking"
+        env_cfg.enable_scripted_vehicle_motion = True
+        env_cfg.observation_space = env_cfg.task_space_observation_space
     if args_cli.control_mode is not None:
-        if args_cli.control_mode in {"scripted_reference_demo", "rl_policy"}:
+        if args_cli.control_mode in {"scripted_reference_demo", "rl_policy", "joint_space_validation", "rl_task_space_tracking"}:
             env_cfg.control_mode = args_cli.control_mode
+            if args_cli.control_mode == "rl_task_space_tracking":
+                env_cfg.reference_mode = "rl_task_space_tracking"
+                env_cfg.enable_scripted_vehicle_motion = True
+                env_cfg.observation_space = env_cfg.task_space_observation_space
+            elif args_cli.control_mode == "joint_space_validation":
+                env_cfg.reference_mode = "joint_space_validation"
+                env_cfg.enable_scripted_vehicle_motion = False
+                env_cfg.observation_space = 62
         elif getattr(env_cfg, "control_mode", None) in {"scripted_reference_demo", "rl_policy"}:
             env_cfg.low_level_control_mode = args_cli.control_mode
         else:
@@ -240,6 +259,12 @@ def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | Direct
         env_cfg.q_ref_curriculum_steps = args_cli.q_ref_curriculum_steps
     if args_cli.episode_length_s is not None:
         env_cfg.episode_length_s = args_cli.episode_length_s
+    if args_cli.enable_scripted_vehicle_motion is not None:
+        env_cfg.enable_scripted_vehicle_motion = args_cli.enable_scripted_vehicle_motion
+    if args_cli.vehicle_speed_min_kmh is not None:
+        env_cfg.vehicle_speed_min_kmh = args_cli.vehicle_speed_min_kmh
+    if args_cli.vehicle_speed_max_kmh is not None:
+        env_cfg.vehicle_speed_max_kmh = args_cli.vehicle_speed_max_kmh
 
 
 def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
@@ -337,6 +362,15 @@ def _run_motion_preflights(env, *, preflight_only: bool = False) -> None:
             "Motion preflight failed before PPO: "
             f"{learned_result.get('failure_category', 'learned_pipeline_failed')}"
         )
+
+    if hasattr(raw_env, "run_task_space_bridge_preflight"):
+        task_space_result = raw_env.run_task_space_bridge_preflight()
+        print(f"[PREFLIGHT] task_space_bridge={task_space_result}", flush=True)
+        if not bool(task_space_result.get("passed", False)):
+            raise RuntimeError(
+                "Task-space preflight blocked before PPO: "
+                f"{task_space_result.get('preflight_decision', 'BLOCKED_TASKSPACE_REFERENCE')}"
+            )
     raw_env.reset()
 
 

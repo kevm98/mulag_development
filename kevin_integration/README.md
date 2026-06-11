@@ -22,10 +22,19 @@ Use the normal IsaacLab/RRLAB launcher environment for this repository:
 conda activate env_isaaclab
 ```
 
-Visible scripted full-pipeline demo, no checkpoint:
+Default play mode, no checkpoint. This runs honest `joint_space_validation`:
+stationary vehicle, scripted mechanical reference, AAM/ID/ROM active, and FD
+observer active. It does not claim task-space tracking.
 
 ```bash
 ./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py
+```
+
+Task-space playback requires a trained PPO checkpoint:
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
+  --checkpoint logs/rsl_rl/kevin_hydraulic_rom_joint_tracking/<run_name>/model_<iteration>.pt
 ```
 
 The demo uses a 300 s episode, settles under gravity before learned control,
@@ -64,12 +73,13 @@ Gym task:
 Kevin-Mulag-HydraulicROM-JointTracking-v0
 ```
 
-The default play command runs `control_mode=scripted_reference_demo`. With a
-checkpoint, play switches to `control_mode=rl_policy`.
+The default play command runs `control_mode=joint_space_validation`. With a
+checkpoint, play switches to `control_mode=rl_task_space_tracking`.
 
-The train script defaults to `control_mode=rl_policy` and aborts before PPO if
-the asset transmission preflight or learned-pipeline preflight fails. Use
-`--skip_motion_preflight` only for deliberate debugging.
+The train script defaults to `control_mode=rl_task_space_tracking`, enables
+scripted vehicle motion, and aborts before PPO if asset transmission,
+learned-pipeline, task-space observation/reward, FD observer, or wheel-command
+preflight fails. Use `--skip_motion_preflight` only for deliberate debugging.
 
 ## Active Architecture
 
@@ -99,6 +109,17 @@ families. Runtime converts action `[-1, 1]` to physical `qddot_cmd[0:4]` using
 the ID checkpoint qddot feature standard deviations. PPO does not output valves
 directly.
 
+Kevin now mirrors the working RRLAB Mulag obstacle task's vehicle convention:
+wheel velocity is scripted separately from PPO/ID/ROM, sampled from 3 to
+8 km/h, converted with the 0.575 m wheel radius, and written to the four wheel
+joints when they are present in the active articulation.
+
+The traced RRLAB target is task-space `ee_pose` for `Messerkopf` in robot-base
+frame, ordered `[x, y, z, qw, qx, qy, qz]`. There is no IK bridge in the
+reference task: PPO learns the map from `ee_pose` and measured state to
+`Action[4]`. Kevin keeps that contract. PPO does not control the truck or write
+ValveCmd directly.
+
 ## Runtime Reports
 
 Static and runtime contract reports are under `kevin_integration/results/`:
@@ -108,6 +129,12 @@ Static and runtime contract reports are under `kevin_integration/results/`:
 - `runtime_rom_motion_contract.md`
 - `prismatic_drive_authority.md`
 - `full_pipeline_preflight_contract.md`
+
+Source audits for the RRLAB obstacle vehicle/reference convention:
+
+- `RRLAB_VEHICLE_AND_REFERENCE_AUDIT.md`
+- `RRLAB_TASKSPACE_REFERENCE_TRACE.md`
+- `PPO_ACTION_REFERENCE_ALIGNMENT.md`
 
 ## Active Files
 
@@ -134,6 +161,8 @@ Main runtime files:
   been removed from the runtime checkout.
 - The cylinder coordinate mapping is sign verified and nominal-reference based,
   but not second-pose validated.
+- Task-space tracking requires PPO training/checkpoint playback because the
+  policy is the `ee_pose -> Action[4]` bridge.
 - SD feedback is disabled for the active task.
 - dP uses the final ROM training mean until a verified environment pressure
   source is available.

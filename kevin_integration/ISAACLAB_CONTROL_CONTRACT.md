@@ -30,6 +30,18 @@ qddot_des = kp_ref * (q_target - q) + kd_ref * (qdot_target - qdot) + qddot_feed
 The feedback term, feedforward term, raw qddot, clipped action, and final
 `qddot_cmd` are logged separately.
 
+Task-space mode uses PPO as the bridge:
+
+```text
+Messerkopf ee_pose [x, y, z, qw, qx, qy, qz] in robot-base frame
+-> PPO observation/reward
+-> Action[4]
+-> ID
+```
+
+The traced RRLAB obstacle task does not contain IK. It observes/rewards
+`ee_pose`, and PPO learns the mapping to arm action.
+
 ## Runtime Feature Order
 
 AAM input:
@@ -43,6 +55,22 @@ ID input:
 ```text
 q[5], qdot[5], qddot_cmd[5], dP[4]
 ```
+
+FD observer input:
+
+```text
+q[5], qdot[5], dP[4], ValveCmd[4]
+```
+
+FD output:
+
+```text
+fd_tau_hat[4]
+```
+
+FD output is denormalized by `fd_scaler.pth` and used for observations,
+load telemetry, safety fractions, and auxiliary reward. In ROM position-target
+mode FD effort actuation is disabled.
 
 Final ROM input, fixed 26-feature order:
 
@@ -170,6 +198,10 @@ Scripted demo behavior:
 Reset telemetry logs `reset_count`, `reset_reason`, `episode_step`, `timeout`,
 `unsafe_termination`, and `target_reached_termination`.
 
+Vehicle motion, when enabled, is scripted separately from PPO. The task writes
+the same positive wheel angular target to the four wheel joints using the RRLAB
+conversion `(speed_kmh / 3.6) / 0.575`, with speed sampled from 3 to 8 km/h.
+
 ## Preflights
 
 Asset preflight:
@@ -186,3 +218,15 @@ Learned-pipeline preflight:
   mapping -> prismatic target accumulation;
 - checks ValveCmd, ROM delta, target motion, measured cylinder motion, linkage
   motion, finite values, and clamp fraction.
+
+Task-space bridge preflight:
+
+- verifies the `Messerkopf` body resolves;
+- verifies a finite task-space command/error tensor exists;
+- verifies the task-space observation contract;
+- verifies FD observer-only mode has no actuator conflict;
+- verifies FD input/output contract readiness and finite `fd_tau_hat`;
+- verifies wheel command resolution when scripted vehicle motion is enabled;
+- reports `BLOCKED_FD_INPUT_CONTRACT`, `BLOCKED_FD_OUTPUT_NONFINITE`,
+  `BLOCKED_FD_ACTUATOR_CONFLICT`, `BLOCKED_TASKSPACE_OBSERVATION`,
+  `BLOCKED_TASKSPACE_REWARD`, `BLOCKED_VEHICLE_COMMAND`, or `READY_FOR_PPO`.

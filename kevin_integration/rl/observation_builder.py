@@ -70,6 +70,58 @@ def build_rl_obs(
     )
 
 
+def build_task_space_rl_obs(
+    ee_pose_command: torch.Tensor,
+    current_ee_pose: torch.Tensor,
+    ee_position_error: torch.Tensor,
+    ee_orientation_error: torch.Tensor,
+    mechanical_q: torch.Tensor,
+    mechanical_qdot: torch.Tensor,
+    cylinder_q: torch.Tensor,
+    cylinder_qdot: torch.Tensor,
+    prev_action: torch.Tensor,
+    prev_valve_cmd: torch.Tensor,
+    z_arm_hat: torch.Tensor,
+    fd_tau_hat: torch.Tensor,
+    vehicle_speed_kmh: torch.Tensor,
+) -> torch.Tensor:
+    _check_dims(
+        (
+            ("ee_pose_command", ee_pose_command, 7),
+            ("current_ee_pose", current_ee_pose, 7),
+            ("ee_position_error", ee_position_error, 3),
+            ("ee_orientation_error", ee_orientation_error, 1),
+            ("mechanical_q", mechanical_q, 5),
+            ("mechanical_qdot", mechanical_qdot, 5),
+            ("cylinder_q", cylinder_q, 4),
+            ("cylinder_qdot", cylinder_qdot, 4),
+            ("prev_action", prev_action, 4),
+            ("prev_valve_cmd", prev_valve_cmd, 4),
+            ("z_arm_hat", z_arm_hat, 24),
+            ("fd_tau_hat", fd_tau_hat, 4),
+            ("vehicle_speed_kmh", vehicle_speed_kmh, 1),
+        )
+    )
+    return torch.cat(
+        [
+            ee_pose_command,
+            current_ee_pose,
+            ee_position_error,
+            ee_orientation_error,
+            mechanical_q,
+            mechanical_qdot,
+            cylinder_q,
+            cylinder_qdot,
+            prev_action,
+            prev_valve_cmd,
+            z_arm_hat,
+            fd_tau_hat,
+            vehicle_speed_kmh,
+        ],
+        dim=-1,
+    )
+
+
 def build_id_input(q: torch.Tensor, qdot: torch.Tensor, qddot_cmd: torch.Tensor, dP: torch.Tensor) -> torch.Tensor:
     _check_dims((("q", q, 5), ("qdot", qdot, 5), ("dP", dP, 4)))
     if qddot_cmd.shape[-1] == 4:

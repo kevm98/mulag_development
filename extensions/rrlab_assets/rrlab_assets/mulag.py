@@ -11,7 +11,7 @@ from rrlab_assets import RRLAB_ASSETS_DATA_DIR
 
 MULAG_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{RRLAB_ASSETS_DATA_DIR}/Robots/Unimog_Mulag_FME500/unimog_mulag_fme500_cylinder_as_actuator.usd",
+        usd_path=f"{RRLAB_ASSETS_DATA_DIR}/Robots/unimog_mulag_fme500_cylinder_as_actuator.usd",
         
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -44,7 +44,17 @@ MULAG_CFG = ArticulationCfg(
     actuators={
         "all_joints": ImplicitActuatorCfg(
             joint_names_expr=[
-                ".*",
+                "Drehzapfen_joint",
+                "Ausleger_I_joint",
+                "Ausleger_II_joint",
+                "Messerkopf_Schwenk_joint",
+                "Messerkopf_joint",
+                "Wheel_Front_Left_joint",
+                "Wheel_Front_Right_joint",
+                "Wheel_Rear_Left_joint",
+                "Wheel_Rear_Right_joint",
+                "Wheel_Front_Left_Steering_joint",
+                "Wheel_Front_Right_Steering_joint",
             ],
             stiffness=None,
             damping=None,
