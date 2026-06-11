@@ -311,3 +311,42 @@ class MulagHydraulicROMJointTrackingEnvCfg_PLAY(MulagHydraulicROMJointTrackingEn
 class MulagHydraulicROMJointTrackingPPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
     experiment_name = "kevin_hydraulic_rom_joint_tracking"
     max_iterations = 1000
+
+
+@configclass
+class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
+    control_mode = "rl_task_space_tracking"
+    low_level_control_mode = "position_delta"
+    position_delta_source = "id_valve"
+    use_reduced_hydraulic_rom = False
+    use_final_causal_cylinder_rom = True
+    use_sd_observer = False
+    use_sd_feedback = False
+    rom_use_id_valve_cmd = True
+    rom_use_sd_feedback = False
+    rom_dt = 0.01
+    episode_length_s = 45.0
+    action_to_qddot_scale = "id_qddot_std"
+    qddot_cmd_clip = "id_qddot_std"
+    reference_mode = "rl_task_space_tracking"
+    enable_scripted_vehicle_motion = True
+    observation_space = TASK_SPACE_OBSERVATION_DIM
+    allow_provisional_nominal_reference = True
+    rew_q_tracking = 0.0
+    rew_joint1_settle_tracking = 0.0
+    use_joint1_settle_tracking_reward = False
+    use_settle_tracking_reward = False
+    rew_torque_effort = 0.0
+
+
+@configclass
+class MulagHydraulicROMTaskSpaceEnvCfg_PLAY(MulagHydraulicROMTaskSpaceEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class MulagHydraulicROMTaskSpacePPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
+    experiment_name = "kevin_hydraulic_rom_task_space"
+    max_iterations = 1000
