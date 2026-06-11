@@ -14,6 +14,7 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+from isaaclab.utils.math import quat_error_magnitude, subtract_frame_transforms
 
 from kevin_integration.controllers.reduced_hydraulic_actuator import (
     ReducedHydraulicActuatorROM,
@@ -27,7 +28,7 @@ from kevin_integration.rom_cylinders.cylinder_coordinate_adapter import (
 from kevin_integration.rom_cylinders.multirate_rom_wrapper import MultirateROMConfig, MultirateROMWrapper
 from kevin_integration.rom_cylinders.rom_data_contract import CORE_INPUT_FEATURE_NAMES, HISTORY_LENGTH
 from kevin_integration.rom_cylinders.valve_conditioned_causal_rom import ValveConditionedROMInference
-from kevin_integration.rl import AdaptiveRLLearnedController, AdaptiveRLLearnedControllerCfg, build_rl_obs
+from kevin_integration.rl import AdaptiveRLLearnedController, AdaptiveRLLearnedControllerCfg, build_rl_obs, build_task_space_rl_obs
 from kevin_integration.rl.action_adapter import clamp_and_sanitize
 from kevin_integration.rl.reward_terms import (
     JointReachRewardWeights,
@@ -42,6 +43,23 @@ from kevin_integration.tasks.asset_preflight_classifier import (
 )
 from kevin_integration.tasks.mechanical_constraint_resolver import resolve_mechanical_constraint_family_ids
 from kevin_integration.tasks.mulag_adaptive_rl_env_cfg import MulagAdaptiveRLJointReachEnvCfg
+from kevin_integration.tasks.task_space_reference import (
+    BLOCKED_EE_BODY_RESOLUTION,
+    BLOCKED_FD_ACTUATOR_CONFLICT,
+    BLOCKED_FD_INPUT_CONTRACT,
+    BLOCKED_FD_OUTPUT_NONFINITE,
+    BLOCKED_TASKSPACE_COMMAND,
+    BLOCKED_TASKSPACE_OBSERVATION,
+    BLOCKED_TASKSPACE_REWARD,
+    BLOCKED_VEHICLE_COMMAND,
+    READY_FOR_PPO,
+    TASK_SPACE_EE_BODY,
+    TASK_SPACE_FRAME,
+    TASK_SPACE_OBSERVATION_DIM,
+    TASK_SPACE_POSE_ORDER,
+    TASK_SPACE_QUATERNION_ORDER,
+    validate_task_space_observation_contract,
+)
 
 
 class MulagAdaptiveRLEnv(DirectRLEnv):
@@ -53,10 +71,13 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         self._state_joint_ids = self._find_joint_ids(self.cfg.state_joint_names)
         self._command_joint_ids = self._find_joint_ids(self.cfg.command_joint_names)
+        self._vehicle_wheel_joint_ids = self._find_optional_joint_ids(self.cfg.vehicle_wheel_joint_names)
+        self._ee_body_id = self._find_optional_body_id(getattr(self.cfg, "task_space_ee_body_name", TASK_SPACE_EE_BODY))
         if len(self._state_joint_ids) != 5:
             raise RuntimeError(f"Expected 5 state joints, got {len(self._state_joint_ids)}")
         if len(self._command_joint_ids) != 4:
             raise RuntimeError(f"Expected 4 command joints, got {len(self._command_joint_ids)}")
+        self._assert_single_actuator_writer()
         self._q_tracking_reward_joint_weights = torch.as_tensor(
             getattr(self.cfg, "q_tracking_reward_joint_weights", self.cfg.q_tracking_joint_weights),
             dtype=torch.float32,
@@ -131,6 +152,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_causal_rom_training_mean_dp = torch.zeros((4,), dtype=torch.float32, device=self.device)
         self._cylinder_coordinate_mapping: CylinderCoordinateMapping | None = None
         self._scripted_reference_phase_offset = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
+        self._vehicle_commanded_speed_kmh = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._vehicle_wheel_velocity_target = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        self._vehicle_command_warned_missing_joints = False
         self._preflight_direct_target: torch.Tensor | None = None
         self._preflight_disable_ordinary_resets = False
         self._validate_control_mode()
@@ -242,6 +266,17 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_output_zeroed_fraction = torch.zeros_like(self._rom_target_clamp_fraction)
         self._rom_actuator_pos_error_mean = torch.zeros_like(self._rom_target_clamp_fraction)
         self._rom_actuator_pos_error_abs_max = torch.zeros_like(self._rom_target_clamp_fraction)
+        self._ee_pose_command = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=self.device)
+        self._ee_pose_command[:, 3] = 1.0
+        self._current_ee_pose = torch.zeros_like(self._ee_pose_command)
+        self._current_ee_pose[:, 3] = 1.0
+        self._ee_position_error = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self._ee_orientation_error = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
+        self._fd_tau_hat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        self._fd_tau_hat_normalized = torch.zeros_like(self._fd_tau_hat)
+        self._fd_soft_limit_fraction = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._fd_hard_limit_fraction = torch.zeros_like(self._fd_soft_limit_fraction)
+        self._fd_normalized_abs_max = torch.zeros_like(self._fd_soft_limit_fraction)
         self._sd_q_next_pred = torch.zeros((self.num_envs, 5), dtype=torch.float32, device=self.device)
         self._sd_qdot_next_pred = torch.zeros_like(self._sd_q_next_pred)
         self._sd_dP_next_pred = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
@@ -287,6 +322,47 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             ids.append(joint_ids[0])
         return ids
 
+    def _find_optional_joint_ids(self, joint_names: Sequence[str]) -> list[int]:
+        ids: list[int] = []
+        missing: list[str] = []
+        for joint_name in joint_names:
+            joint_ids, _ = self.robot.find_joints(joint_name)
+            if len(joint_ids) == 0:
+                missing.append(joint_name)
+            else:
+                ids.append(joint_ids[0])
+        if missing:
+            print(
+                "[WARN] Kevin RRLAB vehicle command disabled for missing optional wheel joints: "
+                + ", ".join(missing),
+                flush=True,
+            )
+            return []
+        return ids
+
+    def _find_optional_body_id(self, body_name: str) -> int | None:
+        try:
+            body_ids, _ = self.robot.find_bodies(body_name)
+        except Exception:
+            return None
+        if len(body_ids) == 0:
+            print(f"[WARN] Could not resolve optional end-effector body: {body_name}", flush=True)
+            return None
+        return int(body_ids[0])
+
+    def _assert_single_actuator_writer(self) -> None:
+        use_rom_position_targets = bool(self.cfg.use_final_causal_cylinder_rom or self.cfg.use_reduced_hydraulic_rom)
+        if use_rom_position_targets and bool(getattr(self.cfg, "use_fd_effort_actuation", False)):
+            raise RuntimeError(
+                "ROM position-target actuation and FD effort actuation "
+                "cannot command the same hydraulic joints simultaneously."
+            )
+        if use_rom_position_targets and bool(getattr(self.cfg, "use_fd_effort", False)):
+            raise RuntimeError(
+                "ROM position-target actuation and FD effort actuation "
+                "cannot command the same hydraulic joints simultaneously."
+            )
+
     def _robot_joint_names(self) -> list[str]:
         names = getattr(self.robot, "joint_names", None)
         if names is None:
@@ -319,7 +395,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         )
 
     def _task_control_mode(self) -> str:
-        if self.cfg.control_mode in {"scripted_reference_demo", "rl_policy"}:
+        if self.cfg.control_mode in {"scripted_reference_demo", "rl_policy", "joint_space_validation", "rl_task_space_tracking"}:
             return str(self.cfg.control_mode)
         return str(getattr(self.cfg, "task_control_mode", "rl_policy"))
 
@@ -331,9 +407,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
     def _validate_control_mode(self) -> None:
         task_mode = self._task_control_mode()
         low_level_mode = self._low_level_control_mode()
-        if task_mode not in {"scripted_reference_demo", "rl_policy"}:
+        if task_mode not in {"scripted_reference_demo", "rl_policy", "joint_space_validation", "rl_task_space_tracking"}:
             raise ValueError(
-                "control_mode must be one of 'scripted_reference_demo' or 'rl_policy' "
+                "control_mode must be one of 'joint_space_validation', 'rl_task_space_tracking', "
+                "'scripted_reference_demo', or 'rl_policy' "
                 f"for the hydraulic ROM task, got {self.cfg.control_mode!r}."
             )
         if low_level_mode not in {"position_delta", "effort"}:
@@ -425,12 +502,21 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             ("AAM", f"{contract.get('aam_input')} -> {contract.get('aam_output')} window={contract.get('aam_window')}"),
             ("ID", f"{contract.get('id_input')} -> {contract.get('id_output')} window={contract.get('id_window')}"),
             ("ID_qddot_std", str(contract.get("id_qddot_std"))),
+            ("FD", f"{contract.get('fd_input')} -> {contract.get('fd_output')} window={contract.get('fd_window')}"),
+            ("FD_output_units", str(contract.get("fd_output_units"))),
+            ("FD_effort_writer", str(contract.get("fd_effort_actuation"))),
             ("SD", "disabled in active hydraulic ROM task" if not self.cfg.use_sd_observer else "passive observer enabled"),
             ("ROM", f"{len(CORE_INPUT_FEATURE_NAMES)} features, dt={self.cfg.final_causal_rom_update_period}s, ratio={self.cfg.final_causal_rom_multirate_ratio}"),
             (
                 "ROM_command_coupling",
                 "deployed valve-conditioned causal ROM explicitly uses ValveCmd, ValveCmd*abs(ValveCmd), and ValveCmd*dP",
             ),
+            (
+                "vehicle_command",
+                f"{self.cfg.vehicle_command_mode}: {self.cfg.vehicle_speed_range_kmh} km/h "
+                f"on {tuple(self.cfg.vehicle_wheel_joint_names)}",
+            ),
+            ("vehicle_joint_ids", str(self._vehicle_wheel_joint_ids)),
             ("dP_source", str(self.cfg.final_causal_rom_pressure_source)),
             ("coordinate_mapping", str(self.cfg.cylinder_coordinate_mapping_mode)),
             ("writer", "set_joint_position_target on four prismatic cylinder joints"),
@@ -438,10 +524,117 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         for key, value in rows:
             print(f"[INFO]   {key:18s} {value}", flush=True)
 
+    def run_task_space_bridge_preflight(self) -> dict[str, object]:
+        """Report PPO task-space readiness; PPO is the ee_pose-to-action bridge."""
+        validate_task_space_observation_contract()
+        ee_resolved = self._ee_body_id is not None
+        wheels_resolved = (not bool(getattr(self.cfg, "enable_scripted_vehicle_motion", True))) or (
+            len(self._vehicle_wheel_joint_ids) == len(self.cfg.vehicle_wheel_joint_names)
+        )
+        fd_conflict = bool(
+            (self.cfg.use_final_causal_cylinder_rom or self.cfg.use_reduced_hydraulic_rom)
+            and (getattr(self.cfg, "use_fd_effort_actuation", False) or getattr(self.cfg, "use_fd_effort", False))
+        )
+        obs_ok = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM)) == TASK_SPACE_OBSERVATION_DIM
+        reward_ok = float(getattr(self.cfg, "rew_fd_load", 0.0)) >= 0.0
+        fd_input_contract_ok = "fd_input" in getattr(self._controller, "runtime_contract", {})
+        fd_output_finite = bool(
+            (torch.isfinite(self._fd_tau_hat).all() & torch.isfinite(self._fd_tau_hat_normalized).all()).item()
+        )
+        command_ok = tuple(self._ee_pose_command.shape) == (self.num_envs, 7) and bool(
+            (
+                torch.isfinite(self._ee_pose_command).all()
+                & torch.isfinite(self._ee_position_error).all()
+                & torch.isfinite(self._ee_orientation_error).all()
+            ).item()
+        )
+        if fd_conflict:
+            decision = BLOCKED_FD_ACTUATOR_CONFLICT
+        elif not fd_input_contract_ok:
+            decision = BLOCKED_FD_INPUT_CONTRACT
+        elif not fd_output_finite:
+            decision = BLOCKED_FD_OUTPUT_NONFINITE
+        elif not ee_resolved:
+            decision = BLOCKED_EE_BODY_RESOLUTION
+        elif not command_ok:
+            decision = BLOCKED_TASKSPACE_COMMAND
+        elif not obs_ok:
+            decision = BLOCKED_TASKSPACE_OBSERVATION
+        elif not reward_ok:
+            decision = BLOCKED_TASKSPACE_REWARD
+        elif not wheels_resolved:
+            decision = BLOCKED_VEHICLE_COMMAND
+        else:
+            decision = READY_FOR_PPO
+        passed = decision == READY_FOR_PPO
+        return {
+            "name": "task_space_bridge_preflight",
+            "passed": passed,
+            "preflight_stage": "Stage 3: PPO task-space observation/reward bridge",
+            "preflight_decision": decision,
+            "ee_body": TASK_SPACE_EE_BODY,
+            "ee_body_id": self._ee_body_id,
+            "reference_frame": TASK_SPACE_FRAME,
+            "pose_order": TASK_SPACE_POSE_ORDER,
+            "quaternion_order": TASK_SPACE_QUATERNION_ORDER,
+            "mechanical_state_joint_order": tuple(self.cfg.state_joint_names),
+            "cylinder_command_joint_order": tuple(self.cfg.command_joint_names),
+            "task_space_observation_dim": int(getattr(self.cfg, "task_space_observation_space", -1)),
+            "task_space_command_finite": command_ok,
+            "fd_observer_enabled": bool(getattr(self.cfg, "use_fd_as_observer", True)),
+            "fd_input_contract_ready": bool(fd_input_contract_ok),
+            "fd_output_finite": fd_output_finite,
+            "fd_effort_actuation_enabled": bool(getattr(self.cfg, "use_fd_effort_actuation", False) or getattr(self.cfg, "use_fd_effort", False)),
+            "vehicle_stage_ready": wheels_resolved,
+            "vehicle_wheel_joint_ids": tuple(self._vehicle_wheel_joint_ids),
+            "blocker": "" if passed else decision,
+        }
+
     def _read_joint_state(self) -> tuple[torch.Tensor, torch.Tensor]:
         q = self.robot.data.joint_pos[:, self._state_joint_ids]
         qdot = self.robot.data.joint_vel[:, self._state_joint_ids]
         return q, qdot
+
+    def _read_cylinder_state(self) -> tuple[torch.Tensor, torch.Tensor]:
+        cylinder_q = self.robot.data.joint_pos[:, self._command_joint_ids]
+        cylinder_qdot = self.robot.data.joint_vel[:, self._command_joint_ids]
+        return cylinder_q, cylinder_qdot
+
+    def _sample_task_space_command(self, env_ids: torch.Tensor) -> None:
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        n = env_ids.numel()
+        if n == 0:
+            return
+        x = torch.empty((n,), dtype=torch.float32, device=self.device).uniform_(6.5, 7.5)
+        y = torch.empty((n,), dtype=torch.float32, device=self.device).uniform_(0.7, 2.2)
+        z = torch.full((n,), 0.5, dtype=torch.float32, device=self.device)
+        self._ee_pose_command[env_ids, 0] = x
+        self._ee_pose_command[env_ids, 1] = y
+        self._ee_pose_command[env_ids, 2] = z
+        self._ee_pose_command[env_ids, 3:] = torch.as_tensor(
+            [0.0, 0.0, 1.0, 0.0], dtype=torch.float32, device=self.device
+        ).reshape(1, 4)
+
+    def _update_task_space_state(self) -> None:
+        if self._ee_body_id is None:
+            self._current_ee_pose[:, :3] = 0.0
+            self._current_ee_pose[:, 3:] = torch.as_tensor(
+                [1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=self.device
+            ).reshape(1, 4)
+            self._ee_position_error.zero_()
+            self._ee_orientation_error.zero_()
+            return
+        ee_pos_w = self.robot.data.body_link_state_w[:, self._ee_body_id, :3]
+        ee_quat_w = self.robot.data.body_link_state_w[:, self._ee_body_id, 3:7]
+        root_pos_w = self.robot.data.root_link_state_w[:, :3]
+        root_quat_w = self.robot.data.root_link_state_w[:, 3:7]
+        ee_pos_b, ee_quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, ee_pos_w, ee_quat_w)
+        self._current_ee_pose[:, :3] = ee_pos_b.detach()
+        self._current_ee_pose[:, 3:] = ee_quat_b.detach()
+        self._ee_position_error = (self._ee_pose_command[:, :3] - ee_pos_b).detach()
+        self._ee_orientation_error = quat_error_magnitude(
+            ee_quat_b, self._ee_pose_command[:, 3:]
+        ).reshape(-1, 1).detach()
 
     def get_debug_state(self, env_id: int = 0) -> dict[str, torch.Tensor | dict[str, torch.Tensor | str] | tuple[str, ...]]:
         """Return detached joint/controller state for live diagnostics."""
@@ -484,6 +677,15 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             "qdot": qdot[env_id].detach().clone(),
             "qdot_ref": self._qdot_ref[env_id].detach().clone(),
             "qddot_ref": self._qddot_ref[env_id].detach().clone(),
+            "ee_pose_command": self._ee_pose_command[env_id].detach().clone(),
+            "current_ee_pose": self._current_ee_pose[env_id].detach().clone(),
+            "ee_position_error": self._ee_position_error[env_id].detach().clone(),
+            "ee_orientation_error": self._ee_orientation_error[env_id].detach().clone(),
+            "vehicle_command_mode": str(self.cfg.vehicle_command_mode),
+            "vehicle_wheel_joint_names": tuple(self.cfg.vehicle_wheel_joint_names),
+            "vehicle_wheel_joint_ids": tuple(self._vehicle_wheel_joint_ids),
+            "vehicle_speed_kmh": self._vehicle_commanded_speed_kmh[env_id].detach().clone(),
+            "vehicle_wheel_velocity_target": self._vehicle_wheel_velocity_target[env_id].detach().clone(),
             "root_pos_w": self.robot.data.root_pos_w[env_id].detach().clone(),
             "root_quat_w": self.robot.data.root_quat_w[env_id].detach().clone(),
             "root_lin_vel_w": self.robot.data.root_lin_vel_w[env_id].detach().clone(),
@@ -584,6 +786,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             "dP": self._dP[env_id].detach().clone(),
             "fnet": self._fnet[env_id].detach().clone(),
             "fd_tau_raw": self._current_fd_simscape_output[env_id].detach().clone(),
+            "fd_tau_hat": self._fd_tau_hat[env_id].detach().clone(),
+            "fd_tau_hat_normalized": self._fd_tau_hat_normalized[env_id].detach().clone(),
+            "fd_soft_limit_fraction": self._fd_soft_limit_fraction[env_id].detach().clone(),
+            "fd_hard_limit_fraction": self._fd_hard_limit_fraction[env_id].detach().clone(),
+            "fd_normalized_abs_max": self._fd_normalized_abs_max[env_id].detach().clone(),
             "tau_fd_adapted": self._current_tau_fd_adapted[env_id].detach().clone(),
             "tau_applied_raw": self._current_tau_applied_raw[env_id].detach().clone(),
             "tau_isaac_filtered": self._current_tau_isaac_filtered[env_id].detach().clone(),
@@ -673,7 +880,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
     def _prepare_high_level_action(self, actions: torch.Tensor, q: torch.Tensor, qdot: torch.Tensor) -> None:
         task_mode = self._task_control_mode()
-        if task_mode == "scripted_reference_demo":
+        if task_mode in {"scripted_reference_demo", "joint_space_validation"}:
             elapsed = self._scripted_demo_elapsed()
             settling = elapsed < float(self.cfg.scripted_demo_settle_time_s)
             if bool(settling.any()):
@@ -687,7 +894,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._scripted_control_ramp = ramp.detach().clone()
             action = action * ramp.reshape(-1, 1)
             action = torch.where(settling.reshape(-1, 1), torch.zeros_like(action), action)
-        elif task_mode == "rl_policy":
+        elif task_mode in {"rl_policy", "rl_task_space_tracking"}:
+            if task_mode == "rl_task_space_tracking":
+                self._update_task_space_state()
             self._update_q_ref_commanded()
             action = clamp_and_sanitize(actions, 1.0)
         else:
@@ -717,6 +926,39 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         orientations = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         orientations[:, 0] = 1.0
         marker.visualize(positions, orientations)
+
+    def _apply_rrlab_vehicle_command(self) -> None:
+        mode = str(getattr(self.cfg, "vehicle_command_mode", "disabled"))
+        if not bool(getattr(self.cfg, "enable_scripted_vehicle_motion", True)):
+            self._vehicle_commanded_speed_kmh.zero_()
+            self._vehicle_wheel_velocity_target.zero_()
+            return
+        if mode in {"", "disabled", "none"}:
+            return
+        if mode != "rrlab_obstacle_scripted_wheel_velocity":
+            raise ValueError(f"Unsupported vehicle_command_mode: {mode!r}")
+        if len(self._vehicle_wheel_joint_ids) == 0:
+            if not self._vehicle_command_warned_missing_joints:
+                print("[WARN] Skipping RRLAB vehicle command because no wheel joint IDs were resolved.", flush=True)
+                self._vehicle_command_warned_missing_joints = True
+            return
+
+        resample_mask = self._vehicle_commanded_speed_kmh <= 0.0
+        if bool(resample_mask.any()):
+            env_ids = torch.nonzero(resample_mask, as_tuple=False).reshape(-1)
+            lower = float(getattr(self.cfg, "vehicle_speed_min_kmh", self.cfg.vehicle_speed_range_kmh[0]))
+            upper = float(getattr(self.cfg, "vehicle_speed_max_kmh", self.cfg.vehicle_speed_range_kmh[1]))
+            sampled_speed_kmh = lower + (upper - lower) * torch.rand((env_ids.numel(),), device=self.device)
+            omega = (sampled_speed_kmh / 3.6) / float(self.cfg.vehicle_wheel_radius_m)
+            self._vehicle_commanded_speed_kmh[env_ids] = sampled_speed_kmh
+            self._vehicle_wheel_velocity_target[env_ids] = omega.reshape(-1, 1).expand(
+                -1, len(self._vehicle_wheel_joint_ids)
+            )
+
+        self.robot.write_joint_velocity_to_sim(
+            self._vehicle_wheel_velocity_target,
+            joint_ids=self._vehicle_wheel_joint_ids,
+        )
 
     def _update_scripted_reference(self) -> None:
         previous_commanded = self._q_ref_commanded.detach().clone()
@@ -779,6 +1021,45 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._scripted_qddot_raw = qddot_cmd.detach().clone()
         self._scripted_action_preclip = action.detach().clone()
         return clamp_and_sanitize(action, float(self.cfg.scripted_reference_action_clip))
+
+    def _resolve_fd_limit(self, value: float | str, normalizer: torch.Tensor, multiplier: float) -> torch.Tensor:
+        if isinstance(value, str):
+            if value == "fd_output_std":
+                return normalizer
+            if value == "fd_output_3std":
+                return 3.0 * normalizer
+            raise ValueError(f"Unsupported FD torque limit spec: {value!r}")
+        return torch.full_like(normalizer, max(float(value), 1.0e-8) * multiplier)
+
+    def _run_fd_observer_only(self, q: torch.Tensor, qdot: torch.Tensor, dP: torch.Tensor, valve_cmd: torch.Tensor) -> None:
+        if not bool(getattr(self.cfg, "use_fd_model", True)) or not bool(getattr(self.cfg, "use_fd_as_observer", True)):
+            self._current_fd_simscape_output.zero_()
+            self._current_tau_fd_adapted.zero_()
+            self._fd_tau_hat.zero_()
+            self._fd_tau_hat_normalized.zero_()
+            self._fd_soft_limit_fraction.zero_()
+            self._fd_hard_limit_fraction.zero_()
+            self._fd_normalized_abs_max.zero_()
+            return
+        fd_tau = self._controller.run_fd_observer(q, qdot, dP, valve_cmd)
+        normalizer = self._controller.fd_output_normalizer(like=fd_tau)
+        normalized = fd_tau / normalizer
+        soft_limit = self._resolve_fd_limit(self.cfg.fd_torque_soft_limit, normalizer, 1.0)
+        hard_limit = self._resolve_fd_limit(self.cfg.fd_torque_hard_limit, normalizer, 1.0)
+        self._current_fd_simscape_output = fd_tau.detach().clone()
+        self._current_tau_fd_adapted = fd_tau.detach().clone()
+        self._fd_tau_hat = fd_tau.detach().clone()
+        self._fd_tau_hat_normalized = normalized.detach().clone()
+        self._fd_soft_limit_fraction = torch.mean((torch.abs(fd_tau) > soft_limit).float(), dim=-1)
+        self._fd_hard_limit_fraction = torch.mean((torch.abs(fd_tau) > hard_limit).float(), dim=-1)
+        self._fd_normalized_abs_max = torch.max(torch.abs(normalized), dim=-1).values.detach().clone()
+        self._current_torque.zero_()
+        self._current_tau_applied_raw.zero_()
+        self._current_tau_isaac_filtered.zero_()
+        self._current_tau_isaac_clamped.zero_()
+        self._torque_clamp_fraction.zero_()
+        self._torque_adapter_clamp_fraction.zero_()
+        self._torque_rate_limited_fraction.zero_()
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         if self._preflight_direct_target is not None:
@@ -927,7 +1208,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._z_arm_hat = control_out.z_arm_hat
         else:
             self._current_valve_cmd = clamp_and_sanitize(self._current_action, self.cfg.max_abs_valve)
-        self._zero_torque_state()
+        self._run_fd_observer_only(q, qdot, dP, self._current_valve_cmd)
 
         run_sd_observer = self.cfg.use_sd_observer or self.cfg.use_sd_feedback or self.cfg.rom_use_sd_feedback
         if run_sd_observer:
@@ -1167,7 +1448,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._z_arm_hat = control_out.z_arm_hat
         else:
             self._current_valve_cmd = clamp_and_sanitize(self._current_action, self.cfg.max_abs_valve)
-        self._zero_torque_state()
+        self._run_fd_observer_only(q, qdot, dP, self._current_valve_cmd)
 
         run_sd_observer = self.cfg.use_sd_observer or self.cfg.use_sd_feedback or self.cfg.rom_use_sd_feedback
         if run_sd_observer:
@@ -1246,6 +1527,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self.robot.set_joint_position_target(self._preflight_direct_target, joint_ids=self._command_joint_ids)
             return
 
+        self._apply_rrlab_vehicle_command()
+
         if self.cfg.use_final_causal_cylinder_rom:
             self.robot.set_joint_position_target(self._rom_cylinder_pos_target, joint_ids=self._command_joint_ids)
             return
@@ -1278,20 +1561,91 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         q, qdot = self._read_joint_state()
+        cylinder_q, cylinder_qdot = self._read_cylinder_state()
         dP = self._read_pressure_delta()
         self._maybe_initialize_learned_control(q, qdot, dP)
         self._z_arm_hat = self._controller.compute_z_arm(q, qdot, dP, self._prev_valve_cmd)
-        obs = build_rl_obs(
-            q, qdot, self._q_ref_commanded, self._qdot_ref, self._prev_action, self._prev_valve_cmd, self._z_arm_hat
-        )
-        if obs.shape[-1] != self.cfg.observation_space:
+        if self._task_control_mode() == "rl_task_space_tracking":
+            self._update_task_space_state()
+            obs = build_task_space_rl_obs(
+                self._ee_pose_command,
+                self._current_ee_pose,
+                self._ee_position_error,
+                self._ee_orientation_error,
+                q,
+                qdot,
+                cylinder_q,
+                cylinder_qdot,
+                self._prev_action,
+                self._prev_valve_cmd,
+                self._z_arm_hat,
+                self._fd_tau_hat if bool(getattr(self.cfg, "use_fd_in_policy_observation", True)) else torch.zeros_like(self._fd_tau_hat),
+                self._vehicle_commanded_speed_kmh.reshape(-1, 1),
+            )
+            expected_obs = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM))
+        else:
+            obs = build_rl_obs(
+                q, qdot, self._q_ref_commanded, self._qdot_ref, self._prev_action, self._prev_valve_cmd, self._z_arm_hat
+            )
+            expected_obs = int(self.cfg.observation_space)
+        if obs.shape[-1] != expected_obs:
             raise RuntimeError(
-                f"Observation size mismatch: got {obs.shape[-1]}, expected {self.cfg.observation_space}"
+                f"Observation size mismatch: got {obs.shape[-1]}, expected {expected_obs}"
             )
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
         q, qdot = self._read_joint_state()
+        if self._task_control_mode() == "rl_task_space_tracking":
+            self._update_task_space_state()
+            pos_error_norm = torch.linalg.norm(self._ee_position_error, dim=-1)
+            orient_error = self._ee_orientation_error.reshape(-1)
+            pos_tracking = torch.exp(-4.0 * pos_error_norm)
+            orient_tracking = 0.25 * torch.exp(-2.0 * orient_error)
+            action_rate_penalty = -float(self.cfg.rew_action_rate) * torch.mean(torch.square(self._action_delta), dim=-1)
+            action_mag_penalty = -float(self.cfg.rew_action_magnitude) * torch.mean(torch.square(self._current_action), dim=-1)
+            valve_sat = torch.mean((torch.abs(self._current_valve_cmd) > float(self.cfg.action_saturation_threshold)).float(), dim=-1)
+            valve_sat_penalty = -float(self.cfg.rew_action_saturation) * valve_sat
+            clamp_penalty = -torch.nan_to_num(self._rom_target_clamp_fraction, nan=1.0)
+            fd_excess = torch.clamp(torch.abs(self._fd_tau_hat_normalized) - 1.0, min=0.0)
+            fd_load_penalty = -float(getattr(self.cfg, "rew_fd_load", 0.0)) * torch.mean(torch.square(fd_excess), dim=-1)
+            unsafe_penalty = -float(self.cfg.rew_termination) * self.reset_terminated.float()
+            reward = (
+                pos_tracking
+                + orient_tracking
+                + action_rate_penalty
+                + action_mag_penalty
+                + valve_sat_penalty
+                + clamp_penalty
+                + fd_load_penalty
+                + unsafe_penalty
+            )
+            if self.cfg.debug_reward_terms:
+                self._reward_debug = {
+                    "reward_mode": "rl_task_space_tracking",
+                    "ee_position_error_norm": torch.mean(pos_error_norm.detach()),
+                    "ee_orientation_error": torch.mean(orient_error.detach()),
+                    "ee_position_tracking_reward": torch.mean(pos_tracking.detach()),
+                    "ee_orientation_tracking_reward": torch.mean(orient_tracking.detach()),
+                    "action_rate_penalty": torch.mean(action_rate_penalty.detach()),
+                    "action_magnitude_penalty": torch.mean(action_mag_penalty.detach()),
+                    "valve_saturation_penalty": torch.mean(valve_sat_penalty.detach()),
+                    "rom_clamp_penalty": torch.mean(clamp_penalty.detach()),
+                    "fd_load_penalty": torch.mean(fd_load_penalty.detach()),
+                    "fd_soft_limit_fraction": torch.mean(self._fd_soft_limit_fraction.detach()),
+                    "fd_hard_limit_fraction": torch.mean(self._fd_hard_limit_fraction.detach()),
+                    "fd_normalized_abs_max": torch.mean(self._fd_normalized_abs_max.detach()),
+                    "unsafe_penalty": torch.mean(unsafe_penalty.detach()),
+                }
+                self._add_reference_reset_debug(self._reward_debug, q)
+                if self.cfg.log_full_pipeline_debug:
+                    self._add_full_pipeline_debug(self._reward_debug)
+            else:
+                self._reward_debug = {}
+            self._prev_q_error_mean = self._weighted_q_error_mean(q, self._q_ref_commanded).detach()
+            self._prev_action = self._current_action.detach().clone()
+            self._prev_valve_cmd = self._current_valve_cmd.detach().clone()
+            return reward
         current_q_error_mean = self._weighted_q_error_mean(q, self._q_ref_commanded)
         reward_weights = self._reward_weights_for_control_mode()
         is_settle_phase = self._q_ref_ramp_progress > float(self.cfg.settle_ramp_progress_threshold)
@@ -1528,6 +1882,17 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         debug["q_ref_target_scale"] = torch.mean(self._q_ref_target_scale.detach())
         debug["q_ref_ramp_time_s"] = torch.tensor(float(self.cfg.q_ref_ramp_time_s), device=self.device)
         debug["q_ref_curriculum_progress"] = torch.mean(self._q_ref_curriculum_progress.detach())
+        debug["vehicle_command_mode"] = str(self.cfg.vehicle_command_mode)
+        debug["enable_scripted_vehicle_motion"] = str(getattr(self.cfg, "enable_scripted_vehicle_motion", True))
+        debug["vehicle_speed_kmh"] = torch.mean(self._vehicle_commanded_speed_kmh.detach())
+        debug["vehicle_wheel_velocity_target"] = torch.mean(self._vehicle_wheel_velocity_target.detach(), dim=0)
+        debug["vehicle_speed_range_kmh"] = str(self.cfg.vehicle_speed_range_kmh)
+        debug["vehicle_wheel_joint_ids"] = str(self._vehicle_wheel_joint_ids)
+        debug["fd_tau_hat"] = torch.mean(self._fd_tau_hat.detach(), dim=0)
+        debug["fd_tau_hat_normalized"] = torch.mean(self._fd_tau_hat_normalized.detach(), dim=0)
+        debug["fd_soft_limit_fraction"] = torch.mean(self._fd_soft_limit_fraction.detach())
+        debug["fd_hard_limit_fraction"] = torch.mean(self._fd_hard_limit_fraction.detach())
+        debug["fd_normalized_abs_max"] = torch.mean(self._fd_normalized_abs_max.detach())
         debug["joint1_q_actual"] = torch.mean(q_actual[:, 0])
         debug["joint1_q_ref"] = torch.mean(q_ref[:, 0])
         debug["joint1_q_error_signed"] = torch.mean(q_error_signed[:, 0])
@@ -1578,6 +1943,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._current_torque.zero_()
         self._current_fd_simscape_output.zero_()
         self._current_tau_fd_adapted.zero_()
+        self._fd_tau_hat.zero_()
+        self._fd_tau_hat_normalized.zero_()
+        self._fd_soft_limit_fraction.zero_()
+        self._fd_hard_limit_fraction.zero_()
+        self._fd_normalized_abs_max.zero_()
         self._current_tau_applied_raw.zero_()
         self._current_tau_isaac_filtered.zero_()
         self._current_tau_isaac_clamped.zero_()
@@ -1793,6 +2163,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         debug["scripted_qddot_raw"] = torch.mean(self._scripted_qddot_raw.detach(), dim=0)
         debug["scripted_action_preclip"] = torch.mean(self._scripted_action_preclip.detach(), dim=0)
         debug["scripted_control_ramp"] = torch.mean(self._scripted_control_ramp.detach())
+        debug["vehicle_speed_kmh"] = torch.mean(self._vehicle_commanded_speed_kmh.detach())
+        debug["vehicle_wheel_velocity_target"] = torch.mean(self._vehicle_wheel_velocity_target.detach(), dim=0)
         debug["joint1_qddot_cmd_abs"] = torch.mean(torch.abs(self._current_qddot_cmd.detach()[:, 0]))
         debug["joint1_valve_cmd_abs"] = torch.mean(torch.abs(self._current_valve_cmd.detach()[:, 0]))
         debug["joint1_fd_tau_raw_abs"] = torch.mean(torch.abs(self._current_fd_simscape_output.detach()[:, 0]))
@@ -1804,6 +2176,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         debug["valve_max"] = torch.max(torch.abs(self._current_valve_cmd.detach()))
         debug["fd_simscape_mean"] = torch.mean(torch.abs(self._current_fd_simscape_output.detach()))
         debug["fd_simscape_max"] = torch.max(torch.abs(self._current_fd_simscape_output.detach()))
+        debug["fd_tau_hat"] = torch.mean(self._fd_tau_hat.detach(), dim=0)
+        debug["fd_tau_hat_normalized"] = torch.mean(self._fd_tau_hat_normalized.detach(), dim=0)
+        debug["fd_soft_limit_fraction"] = torch.mean(self._fd_soft_limit_fraction.detach())
+        debug["fd_hard_limit_fraction"] = torch.mean(self._fd_hard_limit_fraction.detach())
+        debug["fd_normalized_abs_max"] = torch.mean(self._fd_normalized_abs_max.detach())
         debug["tau_fd_adapted_mean"] = torch.mean(torch.abs(self._current_tau_fd_adapted.detach()))
         debug["tau_fd_adapted_max"] = torch.max(torch.abs(self._current_tau_fd_adapted.detach()))
         debug["tau_applied_raw_mean"] = torch.mean(torch.abs(self._current_tau_applied_raw.detach()))
@@ -1993,6 +2370,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             torch.isfinite(self._current_torque).all(dim=-1)
             & torch.isfinite(self._current_fd_simscape_output).all(dim=-1)
             & torch.isfinite(self._current_tau_fd_adapted).all(dim=-1)
+            & torch.isfinite(self._fd_tau_hat).all(dim=-1)
+            & torch.isfinite(self._fd_tau_hat_normalized).all(dim=-1)
+            & torch.isfinite(self._fd_soft_limit_fraction)
+            & torch.isfinite(self._fd_hard_limit_fraction)
+            & torch.isfinite(self._fd_normalized_abs_max)
             & torch.isfinite(self._current_tau_applied_raw).all(dim=-1)
             & torch.isfinite(self._current_tau_isaac_filtered).all(dim=-1)
             & torch.isfinite(self._current_tau_isaac_clamped).all(dim=-1)
@@ -2086,12 +2468,15 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._q_ref_target_observed[env_ids] = self._q_ref_target[env_ids].detach().clone()
         self._q_ref_ramp_progress[env_ids] = 0.0 if self.cfg.use_q_ref_ramp else 1.0
         self._qdot_ref[env_ids] = 0.0
+        self._sample_task_space_command(env_ids)
 
         self._dP[env_ids] = 0.0
         self._fnet[env_ids] = 0.0
         self._prev_action[env_ids] = 0.0
         self._current_action[env_ids] = 0.0
         self._action_delta[env_ids] = 0.0
+        self._vehicle_commanded_speed_kmh[env_ids] = 0.0
+        self._vehicle_wheel_velocity_target[env_ids] = 0.0
         self._current_qddot_cmd[env_ids] = 0.0
         self._scripted_qddot_feedback[env_ids] = 0.0
         self._scripted_qddot_feedforward[env_ids] = 0.0
@@ -2139,6 +2524,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_output_zeroed_fraction[env_ids] = 0.0
         self._rom_actuator_pos_error_mean[env_ids] = 0.0
         self._rom_actuator_pos_error_abs_max[env_ids] = 0.0
+        self._fd_tau_hat[env_ids] = 0.0
+        self._fd_tau_hat_normalized[env_ids] = 0.0
+        self._fd_soft_limit_fraction[env_ids] = 0.0
+        self._fd_hard_limit_fraction[env_ids] = 0.0
+        self._fd_normalized_abs_max[env_ids] = 0.0
         self._sd_q_next_pred[env_ids] = 0.0
         self._sd_qdot_next_pred[env_ids] = 0.0
         self._sd_dP_next_pred[env_ids] = 0.0

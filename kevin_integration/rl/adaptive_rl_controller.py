@@ -200,8 +200,12 @@ class AdaptiveRLLearnedController:
             "id_window": id_window,
             "id_output": "ValveCmd[4]",
             "id_qddot_std": self._id_qddot_std.detach().cpu().tolist(),
-            "sd_window": sd_window,
+            "fd_input": "[q5, qdot5, dP4, ValveCmd4]",
             "fd_window": fd_window,
+            "fd_output": "TauHat[4] Simscape-domain torque/load estimate",
+            "fd_output_units": "checkpoint/scaler denormalized Simscape torque units",
+            "fd_effort_actuation": "disabled in ROM position-target mode",
+            "sd_window": sd_window,
         }
 
     @staticmethod
@@ -265,6 +269,30 @@ class AdaptiveRLLearnedController:
         aam_x_t = build_aam_input(q, qdot, dP, prev_valve_cmd).to(self.device)
         aam_seq = self._aam_history.append(aam_x_t) if update_history else self._aam_history.data
         return clamp_and_sanitize(self.aam(aam_seq), None)
+
+    def run_fd_observer(
+        self,
+        q: torch.Tensor,
+        qdot: torch.Tensor,
+        dP: torch.Tensor,
+        valve_cmd: torch.Tensor,
+    ) -> torch.Tensor:
+        q = q.to(self.device)
+        qdot = qdot.to(self.device)
+        dP = dP.to(self.device)
+        valve_cmd = valve_cmd.to(self.device)
+        fd_x_t = build_fd_input(q, qdot, dP, valve_cmd)
+        fd_seq = self._fd_history.append(fd_x_t)
+        return clamp_and_sanitize(self.fd(fd_seq), None)
+
+    def fd_output_normalizer(self, *, like: torch.Tensor) -> torch.Tensor:
+        std = getattr(self.fd, "y_std", None)
+        if std is None:
+            return torch.ones((1, 4), dtype=like.dtype, device=like.device)
+        std_tensor = torch.as_tensor(std, dtype=like.dtype, device=like.device).reshape(1, -1)
+        if std_tensor.shape[-1] != 4:
+            raise RuntimeError(f"FD y_std must have four outputs, got {std_tensor.shape[-1]}.")
+        return torch.clamp(std_tensor, min=1.0e-8)
 
     def _record_id_debug(self, id_x_t: torch.Tensor, z_arm_hat: torch.Tensor) -> None:
         raw = id_x_t.detach().to(device=self.device, dtype=torch.float32)
