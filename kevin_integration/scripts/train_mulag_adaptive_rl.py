@@ -24,11 +24,30 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of recorded videos in steps.")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of vectorized Isaac Lab environments.")
-parser.add_argument("--task", type=str, default="Kevin-Mulag-AdaptiveRL-JointReach-v0", help="Gym task name.")
+DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-JointTracking-v0"
+
+parser.add_argument("--task", type=str, default=DEFAULT_HYDRAULIC_ROM_TASK, help="Gym task name.")
 parser.add_argument("--seed", type=int, default=None, help="Training seed. Use -1 for a random seed.")
 parser.add_argument("--max_iterations", type=int, default=None, help="Override PPO training iterations.")
+parser.add_argument(
+    "--preflight_only",
+    action="store_true",
+    default=False,
+    help="Run the built-in motion preflights and exit before creating the PPO runner.",
+)
 parser.add_argument("--checkpoint", type=str, default=None, help="RSL-RL checkpoint path to resume from.")
-parser.add_argument("--control_mode", choices=["position_delta", "effort"], default=None, help="Override env control mode.")
+parser.add_argument(
+    "--skip_motion_preflight",
+    action="store_true",
+    default=False,
+    help="Skip asset and learned-pipeline motion preflights before PPO.",
+)
+parser.add_argument(
+    "--control_mode",
+    choices=["scripted_reference_demo", "rl_policy", "position_delta", "effort"],
+    default=None,
+    help="Override env control mode. The hydraulic ROM task uses scripted_reference_demo/rl_policy.",
+)
 parser.add_argument(
     "--position_delta_source",
     choices=["direct_action", "id_valve"],
@@ -95,6 +114,9 @@ args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video:
     args_cli.enable_cameras = True
 
+if args_cli.checkpoint is not None and not Path(args_cli.checkpoint).is_file():
+    raise FileNotFoundError(f"Checkpoint does not exist: {args_cli.checkpoint}")
+
 sys.argv = [sys.argv[0], *hydra_args]
 
 app_launcher = AppLauncher(args_cli)
@@ -143,8 +165,15 @@ from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizati
 
 
 def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
+    if args_cli.task == DEFAULT_HYDRAULIC_ROM_TASK and args_cli.control_mode is None:
+        env_cfg.control_mode = "rl_policy"
     if args_cli.control_mode is not None:
-        env_cfg.control_mode = args_cli.control_mode
+        if args_cli.control_mode in {"scripted_reference_demo", "rl_policy"}:
+            env_cfg.control_mode = args_cli.control_mode
+        elif getattr(env_cfg, "control_mode", None) in {"scripted_reference_demo", "rl_policy"}:
+            env_cfg.low_level_control_mode = args_cli.control_mode
+        else:
+            env_cfg.control_mode = args_cli.control_mode
     if args_cli.position_delta_source is not None:
         env_cfg.position_delta_source = args_cli.position_delta_source
     if args_cli.use_fd_effort:
@@ -217,6 +246,7 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
     print(
         "[INFO] Adaptive control config: "
         f"control_mode={env_cfg.control_mode} "
+        f"low_level_control_mode={getattr(env_cfg, 'low_level_control_mode', env_cfg.control_mode)} "
         f"use_fd_effort={env_cfg.use_fd_effort} "
         f"max_abs_torque={env_cfg.max_abs_torque} "
         f"fd_residual_alpha={env_cfg.fd_residual_alpha} "
@@ -226,6 +256,10 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
         f"sd_dP_rate_limit={env_cfg.sd_dP_rate_limit} "
         f"sd_fnet_rate_limit={env_cfg.sd_fnet_rate_limit} "
         f"use_reduced_hydraulic_rom={env_cfg.use_reduced_hydraulic_rom} "
+        f"use_final_causal_cylinder_rom={getattr(env_cfg, 'use_final_causal_cylinder_rom', False)} "
+        f"final_causal_rom_export_dir={getattr(env_cfg, 'final_causal_rom_export_dir', '')} "
+        f"cylinder_coordinate_mapping_mode={getattr(env_cfg, 'cylinder_coordinate_mapping_mode', '')} "
+        f"allow_provisional_nominal_reference={getattr(env_cfg, 'allow_provisional_nominal_reference', False)} "
         f"rom_output_mode={env_cfg.rom_output_mode} "
         f"rom_use_sd_feedback={env_cfg.rom_use_sd_feedback} "
         f"rom_use_id_valve_cmd={env_cfg.rom_use_id_valve_cmd} "
@@ -267,6 +301,43 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
         f"torque_adapter_mode={env_cfg.torque_adapter_mode}",
         flush=True,
     )
+
+
+def _validate_env_dimensions(env, env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
+    num_actions = int(getattr(env.unwrapped, "num_actions", getattr(env_cfg, "action_space", -1)))
+    expected_actions = int(getattr(env_cfg, "action_space", -1))
+    if expected_actions > 0 and num_actions != expected_actions:
+        raise RuntimeError(f"Action dimension mismatch: env has {num_actions}, cfg expects {expected_actions}.")
+    expected_obs = int(getattr(env_cfg, "observation_space", -1))
+    obs = env.unwrapped.get_observations() if hasattr(env.unwrapped, "get_observations") else None
+    if isinstance(obs, dict) and "policy" in obs and expected_obs > 0:
+        actual_obs = int(obs["policy"].shape[-1])
+        if actual_obs != expected_obs:
+            raise RuntimeError(f"Observation dimension mismatch: env has {actual_obs}, cfg expects {expected_obs}.")
+    print(f"[INFO] Dimension check passed: actions={num_actions}, observations={expected_obs}", flush=True)
+
+
+def _run_motion_preflights(env, *, preflight_only: bool = False) -> None:
+    raw_env = env.unwrapped
+    if not hasattr(raw_env, "run_asset_transmission_preflight") or not hasattr(raw_env, "run_learned_pipeline_preflight"):
+        raise RuntimeError("Motion preflight methods are not available on this task.")
+
+    asset_result = raw_env.run_asset_transmission_preflight(disable_ordinary_resets=preflight_only)
+    print(f"[PREFLIGHT] asset_transmission={asset_result}", flush=True)
+    if not bool(asset_result.get("passed", False)):
+        raise RuntimeError(
+            "Motion preflight failed before PPO: "
+            f"{asset_result.get('failure_category', 'asset_transmission_failed')}"
+        )
+
+    learned_result = raw_env.run_learned_pipeline_preflight()
+    print(f"[PREFLIGHT] learned_pipeline={learned_result}", flush=True)
+    if not bool(learned_result.get("passed", False)):
+        raise RuntimeError(
+            "Motion preflight failed before PPO: "
+            f"{learned_result.get('failure_category', 'learned_pipeline_failed')}"
+        )
+    raw_env.reset()
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -311,6 +382,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
 
     try:
+        _validate_env_dimensions(env, env_cfg)
+        if args_cli.skip_motion_preflight:
+            print("[WARN] Skipping motion preflights by explicit CLI request.", flush=True)
+        else:
+            _run_motion_preflights(env, preflight_only=bool(args_cli.preflight_only))
+        if args_cli.preflight_only or int(agent_cfg.max_iterations) == 0:
+            print("[INFO] Preflight-only run complete; exiting before PPO runner creation.", flush=True)
+            return
+
         if args_cli.video:
             video_kwargs = {
                 "video_folder": os.path.join(log_dir, "videos", "train"),

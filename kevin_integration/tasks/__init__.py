@@ -22,3 +22,13 @@ gym.register(
         "rsl_rl_cfg_entry_point": "kevin_integration.tasks.mulag_adaptive_rl_env_cfg:MulagAdaptiveRLPPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Kevin-Mulag-HydraulicROM-JointTracking-v0",
+    entry_point="kevin_integration.tasks.mulag_adaptive_rl_env:MulagAdaptiveRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "kevin_integration.tasks.mulag_adaptive_rl_env_cfg:MulagHydraulicROMJointTrackingEnvCfg",
+        "rsl_rl_cfg_entry_point": "kevin_integration.tasks.mulag_adaptive_rl_env_cfg:MulagHydraulicROMJointTrackingPPORunnerCfg",
+    },
+)

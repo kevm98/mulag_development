@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -44,6 +45,20 @@ class TorchSequenceBuffer:
             self.data.zero_()
             return
         self.data[env_ids] = 0.0
+
+    def fill(self, value: torch.Tensor, env_ids: Optional[torch.Tensor] = None) -> None:
+        if value.shape[-1] != self.data.shape[-1]:
+            raise ValueError(f"Expected fill value dim {self.data.shape[-1]}, got {value.shape[-1]}")
+        value = value.detach().to(device=self.data.device, dtype=self.data.dtype)
+        if env_ids is None:
+            if value.shape[0] != self.data.shape[0]:
+                raise ValueError(f"Expected {self.data.shape[0]} fill rows, got {value.shape[0]}")
+            self.data[:] = value.reshape(value.shape[0], 1, value.shape[-1])
+            return
+        env_ids = env_ids.to(device=self.data.device, dtype=torch.long)
+        if value.shape[0] != env_ids.numel():
+            raise ValueError(f"Expected {env_ids.numel()} fill rows, got {value.shape[0]}")
+        self.data[env_ids] = value.reshape(value.shape[0], 1, value.shape[-1])
 
 
 @dataclass(frozen=True)
@@ -168,6 +183,26 @@ class AdaptiveRLLearnedController:
             num_envs=cfg.num_envs, window_size=sd_window, feature_dim=22, device=self.device
         )
         self._prev_tau_isaac = torch.zeros((cfg.num_envs, 4), dtype=torch.float32, device=self.device)
+        self._last_id_input_raw = torch.zeros((cfg.num_envs, 19), dtype=torch.float32, device=self.device)
+        self._last_id_input_normalized = torch.zeros_like(self._last_id_input_raw)
+        self._last_z_arm_hat = torch.zeros((cfg.num_envs, 24), dtype=torch.float32, device=self.device)
+        self._id_qddot_std = self._extract_id_qddot_std()
+        if self.aam.window_size is None and self.id.window_size is not None and aam_window != self.id.window_size:
+            self._aam_history = TorchSequenceBuffer(
+                num_envs=cfg.num_envs, window_size=self.id.window_size, feature_dim=18, device=self.device
+            )
+            aam_window = self.id.window_size
+        self.runtime_contract = {
+            "aam_input": "[q5, qdot5, dP4, prev_valve4]",
+            "aam_window": aam_window,
+            "aam_output": "z_arm_hat[24]",
+            "id_input": "[q5, qdot5, qddot_cmd5, dP4]",
+            "id_window": id_window,
+            "id_output": "ValveCmd[4]",
+            "id_qddot_std": self._id_qddot_std.detach().cpu().tolist(),
+            "sd_window": sd_window,
+            "fd_window": fd_window,
+        }
 
     @staticmethod
     def _freeze_model(wrapper) -> None:
@@ -184,6 +219,40 @@ class AdaptiveRLLearnedController:
         else:
             self._prev_tau_isaac[env_ids] = 0.0
 
+    def warm_start_histories(
+        self,
+        q: torch.Tensor,
+        qdot: torch.Tensor,
+        dP: torch.Tensor,
+        prev_valve_cmd: torch.Tensor,
+        *,
+        qddot_cmd: torch.Tensor | None = None,
+        fnet: torch.Tensor | None = None,
+        env_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        q = q.to(self.device)
+        qdot = qdot.to(self.device)
+        dP = dP.to(self.device)
+        prev_valve_cmd = prev_valve_cmd.to(self.device)
+        if qddot_cmd is None:
+            qddot_cmd = torch.zeros((q.shape[0], 5), dtype=torch.float32, device=self.device)
+        else:
+            qddot_cmd = qddot_cmd.to(self.device)
+        if fnet is None:
+            fnet = torch.zeros_like(dP)
+        else:
+            fnet = fnet.to(self.device)
+
+        aam_x_t = build_aam_input(q, qdot, dP, prev_valve_cmd)
+        id_x_t = build_id_input(q, qdot, qddot_cmd, dP)
+        fd_x_t = build_fd_input(q, qdot, dP, prev_valve_cmd)
+        sd_x_t = build_sd_input(q, qdot, dP, fnet, prev_valve_cmd)
+        self._aam_history.fill(aam_x_t, env_ids)
+        self._id_history.fill(id_x_t, env_ids)
+        self._fd_history.fill(fd_x_t, env_ids)
+        self._sd_history.fill(sd_x_t, env_ids)
+        return clamp_and_sanitize(self.aam(self._aam_history.data if env_ids is None else self._aam_history.data[env_ids]), None)
+
     def compute_z_arm(
         self,
         q: torch.Tensor,
@@ -197,11 +266,86 @@ class AdaptiveRLLearnedController:
         aam_seq = self._aam_history.append(aam_x_t) if update_history else self._aam_history.data
         return clamp_and_sanitize(self.aam(aam_seq), None)
 
-    def build_qddot_cmd(self, action: torch.Tensor, scale: float, clip: float) -> torch.Tensor:
+    def _record_id_debug(self, id_x_t: torch.Tensor, z_arm_hat: torch.Tensor) -> None:
+        raw = id_x_t.detach().to(device=self.device, dtype=torch.float32)
+        self._last_id_input_raw[: raw.shape[0]] = raw
+        if getattr(self.id, "feature_mean", None) is not None and getattr(self.id, "feature_std", None) is not None:
+            normalized = self.id.normalize_features(raw)
+        else:
+            normalized = raw
+        self._last_id_input_normalized[: raw.shape[0]] = normalized.detach().to(device=self.device, dtype=torch.float32)
+        self._last_z_arm_hat[: z_arm_hat.shape[0]] = z_arm_hat.detach().to(device=self.device, dtype=torch.float32)
+
+    def debug_state(self) -> dict[str, torch.Tensor]:
+        return {
+            "id_input_raw": self._last_id_input_raw.detach().clone(),
+            "id_input_normalized": self._last_id_input_normalized.detach().clone(),
+            "id_input_normalized_min": torch.min(self._last_id_input_normalized.detach(), dim=-1).values,
+            "id_input_normalized_max": torch.max(self._last_id_input_normalized.detach(), dim=-1).values,
+            "id_input_normalized_abs_max": torch.max(torch.abs(self._last_id_input_normalized.detach()), dim=-1).values,
+            "z_arm_norm": torch.linalg.norm(self._last_z_arm_hat.detach(), dim=-1),
+            "z_arm_std": torch.std(self._last_z_arm_hat.detach(), dim=-1, unbiased=False),
+        }
+
+    def _extract_id_qddot_std(self) -> torch.Tensor:
+        std = getattr(self.id, "feature_std", None)
+        if std is None:
+            return torch.ones((4,), dtype=torch.float32, device=self.device)
+        std_tensor = torch.as_tensor(std, dtype=torch.float32, device=self.device).reshape(-1)
+        if std_tensor.numel() < 15:
+            raise RuntimeError("ID feature_std must contain qddot feature entries 10:15.")
+        qddot_std = torch.clamp(std_tensor[10:14], min=1.0e-6)
+        if not torch.isfinite(qddot_std).all():
+            raise RuntimeError("ID qddot feature std contains NaN/Inf.")
+        return qddot_std
+
+    def _resolve_qddot_vector(
+        self,
+        value: float | str | Sequence[float],
+        *,
+        name: str,
+        like: torch.Tensor,
+    ) -> torch.Tensor:
+        if isinstance(value, str):
+            if value != "id_qddot_std":
+                raise ValueError(f"{name} string value must be 'id_qddot_std', got {value!r}.")
+            return self._id_qddot_std.to(device=like.device, dtype=like.dtype).reshape(1, 4)
+        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+            tensor = torch.as_tensor(value, dtype=like.dtype, device=like.device).reshape(-1)
+            if tensor.numel() == 5:
+                tensor = tensor[:4]
+            if tensor.numel() != 4:
+                raise ValueError(f"{name} sequence must contain four values, got {tensor.numel()}.")
+            if not torch.isfinite(tensor).all():
+                raise ValueError(f"{name} contains NaN/Inf.")
+            return torch.clamp(tensor, min=1.0e-8).reshape(1, 4)
+        scalar = float(value)
+        if not torch.isfinite(torch.tensor(scalar)):
+            raise ValueError(f"{name} must be finite.")
+        return torch.full((1, 4), max(abs(scalar), 1.0e-8), dtype=like.dtype, device=like.device)
+
+    def action_scale_vector(self, scale: float | str | Sequence[float], *, like: torch.Tensor) -> torch.Tensor:
+        return self._resolve_qddot_vector(scale, name="action_to_qddot_scale", like=like)
+
+    def qddot_to_action(self, qddot_cmd_4d: torch.Tensor, scale: float | str | Sequence[float]) -> torch.Tensor:
+        qddot_cmd_4d = qddot_cmd_4d.to(self.device)
+        if qddot_cmd_4d.shape[-1] != 4:
+            raise ValueError(f"qddot_cmd_4d must have last dimension 4, got {qddot_cmd_4d.shape[-1]}")
+        scale_vec = self.action_scale_vector(scale, like=qddot_cmd_4d)
+        return clamp_and_sanitize(qddot_cmd_4d / scale_vec, None)
+
+    def build_qddot_cmd(
+        self,
+        action: torch.Tensor,
+        scale: float | str | Sequence[float],
+        clip: float | str | Sequence[float],
+    ) -> torch.Tensor:
         action = action.to(self.device)
         if action.shape[-1] != 4:
             raise ValueError(f"action must have last dimension 4, got {action.shape[-1]}")
-        qddot_cmd_4d = clamp_and_sanitize(scale * action, clip)
+        scale_vec = self._resolve_qddot_vector(scale, name="action_to_qddot_scale", like=action)
+        clip_vec = self._resolve_qddot_vector(clip, name="qddot_cmd_clip", like=action)
+        qddot_cmd_4d = torch.clamp(clamp_and_sanitize(scale_vec * action, None), -clip_vec, clip_vec)
         zero_tool_joint = torch.zeros_like(qddot_cmd_4d[..., :1])
         return torch.cat([qddot_cmd_4d, zero_tool_joint], dim=-1)
 
@@ -250,6 +394,7 @@ class AdaptiveRLLearnedController:
             z_arm_hat = clamp_and_sanitize(z_arm_hat.to(self.device), None)
 
         id_x_t = build_id_input(q, qdot, qddot_cmd, dP)
+        self._record_id_debug(id_x_t, z_arm_hat)
         id_seq = self._id_history.append(id_x_t)
         valve_cmd = clamp_and_sanitize(self.id(id_seq, z_arm_hat), self.cfg.max_abs_valve)
 
@@ -310,6 +455,7 @@ class AdaptiveRLLearnedController:
             z_arm_hat = clamp_and_sanitize(z_arm_hat.to(self.device), None)
 
         id_x_t = build_id_input(q, qdot, qddot_cmd, dP)
+        self._record_id_debug(id_x_t, z_arm_hat)
         id_seq = self._id_history.append(id_x_t)
         valve_cmd = clamp_and_sanitize(self.id(id_seq, z_arm_hat), self.cfg.max_abs_valve)
 

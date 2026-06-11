@@ -13,6 +13,7 @@ from rrlab_assets import MULAG_CFG
 
 
 _MODELS_DIR = str(Path(__file__).resolve().parents[1] / "models")
+_ROM_DIR = Path(__file__).resolve().parents[1] / "rom_cylinders"
 
 
 @configclass
@@ -23,7 +24,11 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     action_space = 4
     observation_space = 62
     state_space = 0
+    # Legacy low-level values ("position_delta", "effort") are still accepted by
+    # MulagAdaptiveRLEnv. The hydraulic ROM task below uses this field for its
+    # end-to-end mode: "scripted_reference_demo" or "rl_policy".
     control_mode = "position_delta"
+    low_level_control_mode = "position_delta"
     position_delta_source = "id_valve"
     use_sd_observer = True
     use_sd_feedback = False
@@ -39,6 +44,10 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     torque_safety_scale = 1.0
     log_full_pipeline_debug = True
     debug_reward_terms = True
+    asset_preflight_settle_steps = 300
+    asset_preflight_max_pulse_root_z_motion_m = 0.02
+    asset_preflight_max_pulse_roll_pitch_motion_rad = 0.03490658503988659
+    asset_preflight_max_pre_pulse_root_vertical_velocity_mps = 0.05
 
     sim: SimulationCfg = SimulationCfg(dt=1 / 100, render_interval=2)
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=20.0, replicate_physics=False)
@@ -69,6 +78,22 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     pressure_noise_std = 0.0
 
     use_reduced_hydraulic_rom = False
+    use_final_causal_cylinder_rom = False
+    final_causal_rom_export_dir = str(_ROM_DIR / "exported_valve_conditioned_causal_rom")
+    final_causal_rom_checkpoint = str(_ROM_DIR / "exported_valve_conditioned_causal_rom" / "best_valve_conditioned_causal_rom.pth")
+    final_causal_rom_scaler = str(_ROM_DIR / "exported_valve_conditioned_causal_rom" / "best_valve_conditioned_causal_rom_scaler.pth")
+    final_causal_rom_metadata = str(_ROM_DIR / "exported_valve_conditioned_causal_rom" / "best_valve_conditioned_causal_rom_metadata.json")
+    final_causal_rom_update_period = 0.05
+    final_causal_rom_multirate_ratio = 5
+    final_causal_rom_target_clamp = True
+    final_causal_rom_debug = True
+    final_causal_rom_extension_delta_clamp = 0.04
+    final_causal_rom_applied_delta_clamp = 0.008
+    final_causal_rom_pressure_source = "training_mean"
+    cylinder_coordinate_mapping = str(_ROM_DIR / "cylinder_coordinate_mapping.json")
+    cylinder_coordinate_mapping_mode = "nominal_sign_offset"
+    allow_provisional_range_mapping = False
+    allow_provisional_nominal_reference = False
     rom_output_mode = "velocity_to_position_target"
     rom_use_sd_feedback = False
     rom_use_id_valve_cmd = True
@@ -128,6 +153,22 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     target_change_threshold = 1.0e-5
     q_ref_jump_warning_threshold = 0.02
 
+    reference_marker_debug_vis = True
+    reference_marker_base_offset = [4.0, 1.5, 2.0]
+    reference_marker_joint_scale = [4.0, 4.0, 4.0]
+
+    scripted_reference_amplitude = [0.08, 0.075, 0.07, 0.045, 0.0]
+    scripted_reference_frequency_hz = [0.105, 0.091, 0.112, 0.137, 0.137]
+    scripted_reference_phase_rad = [0.0, 1.1, 2.2, 0.6, 0.6]
+    scripted_reference_kp = [30.0, 22.0, 85.0, 160.0]
+    scripted_reference_kd = [8.0, 7.0, 18.0, 24.0]
+    scripted_reference_action_clip = 0.85
+    scripted_reference_reset_phase_randomization = True
+    scripted_demo_settle_time_s = 1.0
+    scripted_demo_control_ramp_time_s = 2.0
+    scripted_demo_disable_safety_termination = True
+    print_reset_telemetry = True
+
     joint_limit_margin = 0.02
     max_abs_joint_velocity = 6.0
 
@@ -152,6 +193,8 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rew_termination = 5.0
 
     def __post_init__(self):
+        self.robot_cfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+        self.robot_cfg.init_state.pos = (-25.4, 4.3, 0.0)
         apply_kevin_sim_memory_optimizations(self.sim)
 
 
@@ -203,3 +246,45 @@ class MulagAdaptiveRLPPORunnerCfg(RslRlOnPolicyRunnerCfg):
             for attr_name in ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"):
                 if attr_name in getattr(model_cfg, "__dict__", {}):
                     delattr(model_cfg, attr_name)
+
+
+@configclass
+class MulagHydraulicROMJointTrackingEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
+    control_mode = "scripted_reference_demo"
+    low_level_control_mode = "position_delta"
+    position_delta_source = "id_valve"
+    use_reduced_hydraulic_rom = False
+    use_final_causal_cylinder_rom = True
+    use_sd_observer = False
+    use_sd_feedback = False
+    rom_use_id_valve_cmd = True
+    rom_use_sd_feedback = False
+    rom_dt = 0.01
+    episode_length_s = 300.0
+    action_to_qddot_scale = "id_qddot_std"
+    qddot_cmd_clip = "id_qddot_std"
+    q_ref_target_amplitude = [0.10, 0.09, 0.09, 0.055, 0.0]
+    q_ref_target_scale_initial = 0.5
+    q_ref_target_scale_final = 1.0
+    rew_q_tracking = 4.0
+    rew_progress = 1.0
+    rew_action_rate = 0.02
+    rew_valve_effort = 0.02
+    rew_torque_effort = 0.0
+    # The current mapping JSON is nominal/sign-verified but not second-pose
+    # validated. Keeping this as an explicit serialized task default avoids a
+    # diagnostic CLI flag while making the remaining validation debt visible.
+    allow_provisional_nominal_reference = True
+
+
+@configclass
+class MulagHydraulicROMJointTrackingEnvCfg_PLAY(MulagHydraulicROMJointTrackingEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class MulagHydraulicROMJointTrackingPPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
+    experiment_name = "kevin_hydraulic_rom_joint_tracking"
+    max_iterations = 1000
