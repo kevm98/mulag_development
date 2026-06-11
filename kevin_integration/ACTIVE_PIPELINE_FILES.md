@@ -31,3 +31,4 @@
 | RRLAB task-space trace | `kevin_integration/RRLAB_TASKSPACE_REFERENCE_TRACE.md` |
 | PPO/reference alignment note | `kevin_integration/PPO_ACTION_REFERENCE_ALIGNMENT.md` |
 | Debug cleanup report | `kevin_integration/DEBUG_CLEANUP_REPORT.md` |
+| Curriculum/learnability repair tests | `kevin_integration/tasks/test_curriculum_learnability_repair.py` |

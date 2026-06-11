@@ -230,3 +230,152 @@ Task-space bridge preflight:
 - reports `BLOCKED_FD_INPUT_CONTRACT`, `BLOCKED_FD_OUTPUT_NONFINITE`,
   `BLOCKED_FD_ACTUATOR_CONFLICT`, `BLOCKED_TASKSPACE_OBSERVATION`,
   `BLOCKED_TASKSPACE_REWARD`, `BLOCKED_VEHICLE_COMMAND`, or `READY_FOR_PPO`.
+
+## Curriculum (Learnability Repair)
+
+Four-stage curriculum active in `rl_task_space_tracking` mode:
+
+| Stage | Steps         | Episode Length   | Action Authority | Vehicle    | Command Range         | Orientation |
+|-------|---------------|------------------|------------------|------------|-----------------------|-------------|
+| S1    | 0 – 50k       | 1500 st / 15 s   | 0.25×            | stationary | tight near nominal    | disabled    |
+| S2    | 50k – 150k    | 1500 st / 15 s   | 0.50×            | stationary | moderate              | disabled    |
+| S3    | 150k – 300k   | 3000 st / 30 s   | 0.75×            | stationary | wide                  | enabled     |
+| S4    | 300k+         | 4500 st / 45 s   | 1.00×            | 3–8 km/h   | full                  | enabled     |
+
+### Stage Detection
+
+`_curriculum_stage()` compares `self.common_step_counter` (total env steps
+across all environments) against `self.cfg.curriculum_stage_steps` (tuple of
+upper bounds). Returns `1`, `2`, `3`, or `4`.
+
+### Config Fields
+
+All defined on `MulagAdaptiveRLJointReachEnvCfg`, overridden by
+`MulagHydraulicROMTaskSpaceEnvCfg`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `curriculum_stage_steps` | `tuple[int, int, int]` | upper stage bounds `(50_000, 150_000, 300_000)` |
+| `curriculum_episode_length_s` | `tuple[float, float, float, float]` | per-stage episode length in seconds |
+| `curriculum_action_authority` | `tuple[float, float, float, float]` | per-stage action multiplier `(0.25, 0.50, 0.75, 1.00)` |
+| `curriculum_vehicle_speed_min_kmh` | `tuple[float, float, float, float]` | per-stage min vehicle speed |
+| `curriculum_vehicle_speed_max_kmh` | `tuple[float, float, float, float]` | per-stage max vehicle speed |
+| `curriculum_vehicle_stationary_stages` | `int` | maximum stage index where vehicle is stationary (`3`) |
+| `curriculum_command_x_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` x command range |
+| `curriculum_command_y_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` y command range |
+| `curriculum_command_z_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` z command range |
+| `curriculum_orientation_enabled` | `tuple[bool, bool, bool, bool]` | per-stage orientation reward gate |
+
+### Action Authority
+
+In `_prepare_high_level_action()`, after action scaling:
+
+```python
+self._current_action = self._current_action * self._action_authority_multiplier
+```
+
+The multiplier is read from `curriculum_action_authority[stage-1]` during
+`_update_curriculum_state()`. This reduces PPO action magnitude before qddot
+conversion, preventing early-stage valve saturation and joint limit violations.
+
+### Command Ranges
+
+`_sample_task_space_command()` selects x/y/z ranges from stage-indexed
+tuples. S1 x-range is `(-0.03, 0.03)`; S4 x-range is `(-0.30, 0.30)`. Z is
+drawn as a constant from the range minimum.
+
+Orientation quaternion:
+- S1–S2: flat-facing `[0, 0, 1, 0]` (identity-like orientation, no orientation
+  reward)
+- S3–S4: identity `[1, 0, 0, 0]` (orientation reward active)
+
+### Episode Length
+
+`_get_dones()` computes stage-aware timeout:
+
+```python
+steps_per_episode = int(self.cfg.curriculum_episode_length_s[stage-1] / self.dt)
+timeout = self.episode_length_buf >= steps_per_episode - 1
+```
+
+This gives shorter episodes in early stages (more resets per wall-clock hour
+when the policy has not yet stabilised).
+
+### Vehicle Speed
+
+`_apply_rrlab_vehicle_command()` early-returns when
+`stage <= curriculum_vehicle_stationary_stages` (S1–S3), zeroing both
+`_vehicle_commanded_speed_kmh` and `_vehicle_wheel_velocity_target`. S4 samples
+speed from `curriculum_vehicle_speed_min_kmh[3]` to
+`curriculum_vehicle_speed_max_kmh[3]` (3–8 km/h).
+
+## Termination Diagnostics
+
+Per-episode booleans (reset on `_reset_idx()`):
+
+```python
+self._termination_joint_nonfinite[env_ids] = False
+self._termination_lower_limit[env_ids] = False
+self._termination_upper_limit[env_ids] = False
+self._termination_velocity[env_ids] = False
+self._termination_control_nonfinite[env_ids] = False
+```
+
+Offending joint/channel (reset to -1):
+
+```python
+self._termination_offending_joint[env_ids] = -1
+self._termination_offending_channel[env_ids] = -1
+```
+
+Cross-episode accumulators (NOT reset — lifetime diagnostics):
+
+```python
+self._termination_count_joint_nonfinite += fired
+self._termination_count_lower_limit += fired
+self._termination_count_upper_limit += fired
+self._termination_count_velocity += fired
+self._termination_count_control_nonfinite += fired
+self._termination_count_total += terminated
+```
+
+Logged to `extras["log"]` via `_populate_extras_log()`.
+
+## Reward Composition
+
+Task-space reward computed in `_get_task_space_rewards()`:
+
+```python
+pos_error = measured_ee_pos - commanded_ee_pos
+pos_tracking = torch.exp(-4.0 * torch.norm(pos_error, dim=1))        # bounded [0,1]
+progress = prev_pos_error_norm - current_pos_error_norm               # improving → positive
+progress_clamped = progress.clamp(-rew_task_progress_clip, rew_task_progress_clip)
+orient_enabled = curriculum_orientation_enabled[stage-1]
+orient_reward = orient_enabled * rew_task_orient_tracking * torch.exp(-2.0 * orient_error)
+```
+
+Default weight values:
+
+| Component | Weight |
+|-----------|--------|
+| `rew_task_pos_tracking` | 1.00 |
+| `rew_task_orient_tracking` | 0.25 |
+| `rew_task_progress` | 0.50 |
+| `rew_task_progress_clip` | 0.20 |
+
+Other penalties (action rate, action magnitude, valve saturation, clamp, FD
+load, unsafe) are unchanged from the original `joint_reach_reward()`.
+Episode sums for all 9 reward components are tracked and logged under
+`extras["log"]["episode/..."]`.
+
+## Contract Assertions
+
+`_validate_control_mode()` for `rl_task_space_tracking` raises `RuntimeError`
+if any contract is violated:
+
+- `len(self._command_joint_ids) != 4` — must command exactly 4 cylinders
+- Observation dimension != `TASK_SPACE_OBSERVATION_DIM` (73)
+- `use_sd_observer = True` — SD observer must be disabled
+- `use_sd_feedback = True` — SD feedback must be disabled
+- `position_delta_source != "id_valve"` — must use ID valve source
+- `use_fd_effort = True` — FD effort actuation must be disabled

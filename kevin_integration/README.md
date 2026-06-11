@@ -171,3 +171,52 @@ Main runtime files:
 - Do not claim full runtime success until the scripted demo has visibly shown
   cylinder motion, linkage transmission, and acceptable vehicle/base behavior in
   Isaac.
+
+## Curriculum (Learnability Repair)
+
+`rl_task_space_tracking` mode uses a four-stage curriculum to improve early PPO
+training stability:
+
+| Stage | Steps       | Episode Length | Action Authority | Vehicle  | Position Range  | Orientation |
+|-------|-------------|----------------|------------------|----------|-----------------|-------------|
+| S1    | 0–50k       | 1500 st (15s)  | 0.25×            | off      | tight           | disabled    |
+| S2    | 50k–150k    | 1500 st (15s)  | 0.50×            | off      | moderate        | disabled    |
+| S3    | 150k–300k   | 3000 st (30s)  | 0.75×            | off      | wide            | enabled     |
+| S4    | 300k+       | 4500 st (45s)  | 1.00×            | 3–8 km/h | full            | enabled     |
+
+PPO action is scaled by the stage-dependent authority multiplier before qddot
+conversion. Command ranges expand from tight volumes near nominal to the full
+workspace. Vehicle remains stationary in S1–S3 and moves at 3–8 km/h in S4.
+Orientation tracking reward is gated off in S1–S2.
+
+### PPO Config Notes
+
+`MulagHydraulicROMTaskSpacePPORunnerCfg` overrides:
+
+- `num_steps_per_env = 128` (was 24 in `MulagAdaptiveRLPPORunnerCfg`)
+- `init_std = 0.20` (higher initial policy entropy for exploration)
+- `num_mini_batches = 4` → 32 samples per minibatch with 1 env
+
+Do not remove `empirical_normalization`; it is required for stable training.
+
+### Running Tests
+
+Standalone curriculum unit tests (no IsaacLab dependency):
+
+```bash
+python kevin_integration/tasks/test_curriculum_learnability_repair.py
+```
+
+43 tests covering stage boundaries, command ranges, action authority, episode
+lengths, orientation gating, vehicle speed, reward formulae, observation/action
+dimensions, termination diagnostics, config field integrity, reset semantics,
+and boundary conditions.
+
+Pre-existing pipeline tests:
+
+```bash
+python kevin_integration/tasks/test_preflight_observation_contract.py
+python kevin_integration/rom_cylinders/test_valve_conditioned_runtime.py
+python kevin_integration/rom_cylinders/test_multirate_rom_wrapper.py
+python kevin_integration/rom_cylinders/test_cylinder_coordinate_adapter.py
+```
