@@ -90,3 +90,24 @@ wheel_velocity_rad_s = (speed_kmh / 3.6) / 0.575
 
 Kevin samples the speed once per environment reset and all four wheel joints
 receive the same positive velocity target. PPO never controls wheel velocity.
+
+## Curriculum (Learnability Repair)
+
+Four-stage curriculum based on total environment steps:
+
+| Stage | Steps         | Ep. Length (steps) | Action Authority | Vehicle          | Position Range          | Orientation |
+|-------|---------------|---------------------|------------------|------------------|--------------------------|-------------|
+| S1    | 0 – 50k       | 1500 (15 s)         | 0.25             | stationary       | tight around nominal     | disabled    |
+| S2    | 50k – 150k    | 1500 (15 s)         | 0.50             | stationary       | moderate                 | disabled    |
+| S3    | 150k – 300k   | 3000 (30 s)         | 0.75             | stationary       | wide                     | enabled     |
+| S4    | 300k+         | 4500 (45 s)         | 1.00             | 3 – 8 km/h       | full                     | enabled     |
+
+**Action authority**: PPO action is multiplied by the stage-dependent scalar before qddot conversion in `_prepare_high_level_action()`. This reduces effective action magnitude in early stages, preventing unstable early exploration from saturating valves or violating joint limits.
+
+**Command ranges** (`_sample_task_space_command()`): x/y/z command sampling uses `curriculum_command_{x,y,z}_range[stage-1]`. S1 starts with tiny volumes near nominal; S4 expands to the full reachable workspace.
+
+**Orientation**: S1–S2 set a flat-facing identity-like quaternion `[0,0,1,0]` (no orientation reward). S3–S4 set the identity quaternion `[1,0,0,0]` and enable orientation tracking reward.
+
+**Vehicle**: S1–S3 wheel velocity is zeroed (stationary). S4 samples `speed_kmh ~ Uniform(3, 8)` matching the original uncurriculed behavior.
+
+**Episode length**: Stage-aware timeout via `_get_dones()` multiplies `curriculum_episode_length_s[stage-1] / dt`. Early stages are shorter to collect more reset events per wall-clock hour and avoid wasted simulation on a policy that has not yet stabilised.

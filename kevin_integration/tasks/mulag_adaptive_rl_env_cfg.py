@@ -139,6 +139,34 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rom_velocity_gain = [0.02, 0.02, 0.02, 0.02]
     rom_force_scale = [1000.0, 1000.0, 1000.0, 1000.0]
 
+    # ── Curriculum configuration (task-space tracking stages) ──────────────────────
+    # Stage boundaries in cumulative env steps: S1: 0-50k, S2: 50k-150k,
+    # S3: 150k-300k, S4: >300k.
+    curriculum_stage_steps = [0, 50000, 150000, 300000]
+    # Stage-aware episode durations (seconds).
+    curriculum_episode_length_s = [15.0, 15.0, 30.0, 45.0]
+    # Action-authority multiplier applied before qddot conversion.
+    curriculum_action_authority = [0.25, 0.50, 0.75, 1.0]
+    # Vehicle speed ranges per stage [min_kmh, max_kmh]. First N stages
+    # (curriculum_vehicle_stationary_stages) force 0 km/h regardless.
+    curriculum_vehicle_speed_min_kmh = [0.0, 0.0, 0.0, 3.0]
+    curriculum_vehicle_speed_max_kmh = [0.0, 0.0, 0.0, 8.0]
+    curriculum_vehicle_stationary_stages = 3  # S1, S2, S3 are stationary
+
+    # Task-space command ranges per stage [[x_min, x_max], ...].
+    # S1: tight centred on nominal rest pose; S2–S4 progressively expand.
+    curriculum_command_x_range = [[6.8, 7.2], [6.6, 7.4], [6.5, 7.5], [6.5, 7.5]]
+    curriculum_command_y_range = [[1.2, 1.8], [1.0, 2.0], [0.8, 2.2], [0.7, 2.2]]
+    curriculum_command_z_range = [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.5, 0.5]]
+    # Orientation reward enabled per stage.
+    curriculum_orientation_enabled = [False, False, True, True]
+
+    # Task-space reward weights (stage-independent base values).
+    rew_task_pos_tracking = 1.0       # bounded [0,1] exponential position tracking reward
+    rew_task_orient_tracking = 0.25   # orientation tracking (only added in S3/S4)
+    rew_task_progress = 0.5           # progress reward = Δposition_error, clamped
+    rew_task_progress_clip = 0.2      # max absolute progress-reward contribution
+
     state_joint_names = list(OBSTACLE_ARM_JOINT_NAMES)
     command_joint_names = list(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
 
@@ -325,6 +353,8 @@ class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
     rom_use_id_valve_cmd = True
     rom_use_sd_feedback = False
     rom_dt = 0.01
+    # Base episode length = S4 maximum (45 s). Stage-aware override in
+    # _get_dones uses curriculum_episode_length_s for S1–S3.
     episode_length_s = 45.0
     action_to_qddot_scale = "id_qddot_std"
     qddot_cmd_clip = "id_qddot_std"
@@ -332,11 +362,31 @@ class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
     enable_scripted_vehicle_motion = True
     observation_space = TASK_SPACE_OBSERVATION_DIM
     allow_provisional_nominal_reference = True
+    # Joint-space reward terms are unused in task-space mode.
     rew_q_tracking = 0.0
     rew_joint1_settle_tracking = 0.0
     use_joint1_settle_tracking_reward = False
     use_settle_tracking_reward = False
     rew_torque_effort = 0.0
+    # Task-space curriculum defaults (can be overridden per run).
+    curriculum_stage_steps = [0, 50000, 150000, 300000]
+    curriculum_episode_length_s = [15.0, 15.0, 30.0, 45.0]
+    curriculum_action_authority = [0.25, 0.50, 0.75, 1.0]
+    curriculum_vehicle_speed_min_kmh = [0.0, 0.0, 0.0, 3.0]
+    curriculum_vehicle_speed_max_kmh = [0.0, 0.0, 0.0, 8.0]
+    curriculum_vehicle_stationary_stages = 3
+    curriculum_command_x_range = [[6.8, 7.2], [6.6, 7.4], [6.5, 7.5], [6.5, 7.5]]
+    curriculum_command_y_range = [[1.2, 1.8], [1.0, 2.0], [0.8, 2.2], [0.7, 2.2]]
+    curriculum_command_z_range = [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.5, 0.5]]
+    curriculum_orientation_enabled = [False, False, True, True]
+    rew_task_pos_tracking = 1.0
+    rew_task_orient_tracking = 0.25
+    rew_task_progress = 0.5
+    rew_task_progress_clip = 0.2
+    # FD load penalty weight (auxiliary load from observer-only FD).
+    rew_fd_load = 0.01
+    # Unsafe termination penalty weight (5.0, NOT hardcoded 100).
+    taskspace_unsafe_penalty_weight = 5.0
 
 
 @configclass
@@ -350,3 +400,29 @@ class MulagHydraulicROMTaskSpaceEnvCfg_PLAY(MulagHydraulicROMTaskSpaceEnvCfg):
 class MulagHydraulicROMTaskSpacePPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
     experiment_name = "kevin_hydraulic_rom_task_space"
     max_iterations = 1000
+    num_steps_per_env = 128
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=True,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.20),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=True,
+    )
