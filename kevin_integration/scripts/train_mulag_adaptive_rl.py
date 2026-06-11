@@ -24,7 +24,7 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of recorded videos in steps.")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of vectorized Isaac Lab environments.")
-DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-JointTracking-v0"
+DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-TaskSpace-v0"
 
 parser.add_argument("--task", type=str, default=DEFAULT_HYDRAULIC_ROM_TASK, help="Gym task name.")
 parser.add_argument("--seed", type=int, default=None, help="Training seed. Use -1 for a random seed.")
