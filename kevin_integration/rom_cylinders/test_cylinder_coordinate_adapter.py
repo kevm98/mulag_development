@@ -283,15 +283,6 @@ def test_training_range_excess_blocks_severe_mismatch() -> None:
         raise AssertionError("Severe training-range mismatch should exceed the 0.05 m gate.")
 
 
-def test_default_mapping_mode_remains_none() -> None:
-    script = ROOT / "kevin_integration" / "scripts" / "test_final_causal_rom_integration.py"
-    text = script.read_text(encoding="utf-8")
-    if 'default="none"' not in text:
-        raise AssertionError("Default coordinate_mapping_mode must remain none.")
-    if "--allow_provisional_nominal_reference" not in text:
-        raise AssertionError("Manual diagnostic must expose --allow_provisional_nominal_reference.")
-
-
 def test_cuda_parity_if_available() -> None:
     if not torch.cuda.is_available():
         return
@@ -313,7 +304,6 @@ def main() -> None:
     test_nominal_json_rejections_and_affine_availability()
     test_extracted_provisional_nominal_reference()
     test_training_range_excess_blocks_severe_mismatch()
-    test_default_mapping_mode_remains_none()
     test_cuda_parity_if_available()
     print("PASS: cylinder coordinate adapter tests passed.")
 

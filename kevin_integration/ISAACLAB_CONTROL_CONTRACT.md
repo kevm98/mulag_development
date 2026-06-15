@@ -47,8 +47,66 @@ The traced RRLAB obstacle task does not contain IK. It observes/rewards
 AAM input:
 
 ```text
-q[5], qdot[5], dP[4], prev_ValveCmd[4]
+q[5], qdot[5], dP[4], previous applied ValveCmd[4]
 ```
+
+The active AAM checkpoint is `kevin_integration/models/aam.pth`. It expects
+history shape `(num_envs, 100, 18)` and returns `z_arm_hat[num_envs, 24]`.
+Because `aam.pth` does not serialize its history length, runtime preserves the
+existing production contract by using the accepted ID checkpoint's explicit
+`window_size = 100`.
+
+The complete adaptation branch is:
+
+```text
+q[5], qdot[5], dP[4], previous applied ValveCmd[4]
+        |
+        v
+one authoritative AAM history
+        |
+        v
+frozen online AAM
+        |
+        v
+z_arm_hat[24]
+      /             \
+     v               v
+PPO observation     ID conditioning
+```
+
+`_prev_valve_cmd` is the production field for previous applied ValveCmd. At
+the end of each control step it is copied from `_current_valve_cmd`, the same
+command already supplied to FD and the hydraulic ROM. AAM history is updated
+once in `_get_observations`; ID is required to consume the stored latent and
+cannot recompute AAM.
+
+The task-space observation remains exactly:
+
+```text
+0:7    final target EE pose
+7:14   current EE pose
+14:17  position error
+17:18  orientation error
+18:23  q[5]
+23:28  qdot[5]
+28:32  cylinder position[4]
+32:36  cylinder velocity[4]
+36:40  previous action[4]
+40:44  previous applied ValveCmd[4]
+44:68  z_arm_hat[24]
+68:72  normalized FD observer output[4]
+72:73  vehicle speed[1]
+```
+
+The AAM is frozen, in `eval()` mode, and invoked under
+`torch.inference_mode()`. Shape and finiteness are checked before storage.
+Per-environment version tensors verify that the latent inserted into a PPO
+observation is the same stored latent supplied to ID for the matching action.
+Partial reset clears only selected history, latent, and version rows.
+
+AAM has no direct write path to ValveCmd, torque, ROM state, cylinder targets,
+rewards, final-pose targets, or success. The System Factor Encoder is used
+offline only.
 
 ID input:
 
@@ -106,6 +164,22 @@ AAM has no stored runtime normalizer in the checkpoint wrapper. Its checkpoint
 lacks a stored window length, so runtime uses the ID checkpoint window as the
 AAM fallback because ID is the only accepted checkpoint with an explicit
 temporal contract.
+
+Runtime telemetry is emitted through `extras["log"]`:
+
+```text
+adaptation/z_arm_hat_mean
+adaptation/z_arm_hat_std
+adaptation/z_arm_hat_abs_max
+adaptation/z_arm_hat_finite_fraction
+adaptation/history_abs_mean
+adaptation/history_valve_abs_mean
+adaptation/aam_active
+adaptation/aam_frozen
+```
+
+These reductions remain on the active Torch device and are not appended to the
+73D observation.
 
 ## dP Source
 
@@ -195,8 +269,9 @@ Scripted demo behavior:
 - success/failure-style safety resets are suppressed in demo mode except for
   non-finite control values.
 
-Reset telemetry logs `reset_count`, `reset_reason`, `episode_step`, `timeout`,
-`unsafe_termination`, and `target_reached_termination`.
+Reset telemetry distinguishes `final_pose_success`, `unsafe_termination`, and
+`timeout`. Final pose, measured speed, hold counter, episode length, and
+termination reason are snapshotted before physical reset.
 
 Vehicle motion, when enabled, is scripted separately from PPO. The task writes
 the same positive wheel angular target to the four wheel joints using the RRLAB
@@ -223,6 +298,8 @@ Task-space bridge preflight:
 
 - verifies the `Messerkopf` body resolves;
 - verifies a finite task-space command/error tensor exists;
+- verifies target and measured `[qw, qx, qy, qz]` quaternions are finite and
+  have norm greater than `1e-8`;
 - verifies the task-space observation contract;
 - verifies FD observer-only mode has no actuator conflict;
 - verifies FD input/output contract readiness and finite `fd_tau_hat`;
@@ -231,83 +308,62 @@ Task-space bridge preflight:
   `BLOCKED_FD_ACTUATOR_CONFLICT`, `BLOCKED_TASKSPACE_OBSERVATION`,
   `BLOCKED_TASKSPACE_REWARD`, `BLOCKED_VEHICLE_COMMAND`, or `READY_FOR_PPO`.
 
-## Curriculum (Learnability Repair)
+## Fixed Final-Pose Task
 
-Four-stage curriculum active in `rl_task_space_tracking` mode:
+The canonical task-space configuration uses:
 
-| Stage | Steps         | Episode Length   | Action Authority | Vehicle    | Command Range         | Orientation |
-|-------|---------------|------------------|------------------|------------|-----------------------|-------------|
-| S1    | 0 – 50k       | 1500 st / 15 s   | 0.25×            | stationary | tight near nominal    | disabled    |
-| S2    | 50k – 150k    | 1500 st / 15 s   | 0.50×            | stationary | moderate              | disabled    |
-| S3    | 150k – 300k   | 3000 st / 30 s   | 0.75×            | stationary | wide                  | enabled     |
-| S4    | 300k+         | 4500 st / 45 s   | 1.00×            | 3–8 km/h   | full                  | enabled     |
-
-### Stage Detection
-
-`_curriculum_stage()` compares `self.common_step_counter` (total env steps
-across all environments) against `self.cfg.curriculum_stage_steps` (tuple of
-upper bounds). Returns `1`, `2`, `3`, or `4`.
-
-### Config Fields
-
-All defined on `MulagAdaptiveRLJointReachEnvCfg`, overridden by
-`MulagHydraulicROMTaskSpaceEnvCfg`:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `curriculum_stage_steps` | `tuple[int, int, int]` | upper stage bounds `(50_000, 150_000, 300_000)` |
-| `curriculum_episode_length_s` | `tuple[float, float, float, float]` | per-stage episode length in seconds |
-| `curriculum_action_authority` | `tuple[float, float, float, float]` | per-stage action multiplier `(0.25, 0.50, 0.75, 1.00)` |
-| `curriculum_vehicle_speed_min_kmh` | `tuple[float, float, float, float]` | per-stage min vehicle speed |
-| `curriculum_vehicle_speed_max_kmh` | `tuple[float, float, float, float]` | per-stage max vehicle speed |
-| `curriculum_vehicle_stationary_stages` | `int` | maximum stage index where vehicle is stationary (`3`) |
-| `curriculum_command_x_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` x command range |
-| `curriculum_command_y_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` y command range |
-| `curriculum_command_z_range` | `tuple[tuple[float,float], ...]` | per-stage `[min, max]` z command range |
-| `curriculum_orientation_enabled` | `tuple[bool, bool, bool, bool]` | per-stage orientation reward gate |
-
-### Action Authority
-
-In `_prepare_high_level_action()`, after action scaling:
-
-```python
-self._current_action = self._current_action * self._action_authority_multiplier
+```text
+enable_automatic_curriculum = False
+stage = 1
+action authority = 0.25
+episode length = 15 s
 ```
 
-The multiplier is read from `curriculum_action_authority[stage-1]` during
-`_update_curriculum_state()`. This reduces PPO action magnitude before qddot
-conversion, preventing early-stage valve saturation and joint limit violations.
+The existing four-stage implementation is retained, but `_update_curriculum_state()`
+forces Stage 1 and `_evaluate_stage_advancement()` returns without advancing
+while automatic progression is disabled.
 
-### Command Ranges
+`_ee_pose_command` is the single authoritative target:
 
-`_sample_task_space_command()` selects x/y/z ranges from stage-indexed
-tuples. S1 x-range is `(-0.03, 0.03)`; S4 x-range is `(-0.30, 0.30)`. Z is
-drawn as a constant from the range minimum.
-
-Orientation quaternion:
-- S1–S2: flat-facing `[0, 0, 1, 0]` (identity-like orientation, no orientation
-  reward)
-- S3–S4: identity `[1, 0, 0, 0]` (orientation reward active)
-
-### Episode Length
-
-`_get_dones()` computes stage-aware timeout:
-
-```python
-steps_per_episode = int(self.cfg.curriculum_episode_length_s[stage-1] / self.dt)
-timeout = self.episode_length_buf >= steps_per_episode - 1
+```text
+shape: (num_envs, 7)
+order: [x, y, z, qw, qx, qy, qz]
+frame: robot_base
 ```
 
-This gives shorter episodes in early stages (more resets per wall-clock hour
-when the policy has not yet stabilised).
+`_sample_task_space_command(env_ids)` is called only by `_reset_idx(env_ids)`.
+A partial reset samples only the selected rows and copies them to
+`_final_pose_target_at_episode_start`. Observation and reward updates read this
+target but never resample or govern it.
 
-### Vehicle Speed
+Measured EE pose is transformed from world to `robot_base` with
+`subtract_frame_transforms`. Measured link linear and angular velocities are
+converted to relative robot-base velocities before speed norms are computed.
+IsaacLab quaternions remain in `[qw, qx, qy, qz]` order.
 
-`_apply_rrlab_vehicle_command()` early-returns when
-`stage <= curriculum_vehicle_stationary_stages` (S1–S3), zeroing both
-`_vehicle_commanded_speed_kmh` and `_vehicle_wheel_velocity_target`. S4 samples
-speed from `curriculum_vehicle_speed_min_kmh[3]` to
-`curriculum_vehicle_speed_max_kmh[3]` (3–8 km/h).
+Target and measured quaternions are checked during preflight for finite values
+and norm greater than `1e-8`, then normalized. Orientation error is the
+sign-invariant quaternion geodesic:
+
+```python
+dot_abs = torch.abs(torch.sum(target_quat * current_quat, dim=-1)).clamp(0.0, 1.0)
+orientation_error = 2.0 * torch.acos(dot_abs)
+```
+
+The dense unweighted orientation reward is:
+
+```python
+torch.exp(-torch.square(orientation_error / 0.0872664626))
+```
+
+Its fixed weight is `0.25`. Position tracking remains
+`1.0 * exp(-4.0 * position_error_norm)`.
+
+Final-pose success requires position error `<= 0.05 m`, orientation error
+`<= 0.0872664626 rad`, measured EE linear speed `<= 0.05 m/s`, and measured EE
+angular speed `<= 0.10 rad/s` for 50 consecutive control steps. Success is a
+separate termination, produces a one-time `10.0` bonus, is excluded from timeout
+and unsafe masks, and receives no unsafe penalty.
 
 ## Termination Diagnostics
 
@@ -319,6 +375,7 @@ self._termination_lower_limit[env_ids] = False
 self._termination_upper_limit[env_ids] = False
 self._termination_velocity[env_ids] = False
 self._termination_control_nonfinite[env_ids] = False
+self._termination_success[env_ids] = False
 ```
 
 Offending joint/channel (reset to -1):
@@ -343,16 +400,9 @@ Logged to `extras["log"]` via `_populate_extras_log()`.
 
 ## Reward Composition
 
-Task-space reward computed in `_get_task_space_rewards()`:
-
-```python
-pos_error = measured_ee_pos - commanded_ee_pos
-pos_tracking = torch.exp(-4.0 * torch.norm(pos_error, dim=1))        # bounded [0,1]
-progress = prev_pos_error_norm - current_pos_error_norm               # improving → positive
-progress_clamped = progress.clamp(-rew_task_progress_clip, rew_task_progress_clip)
-orient_enabled = curriculum_orientation_enabled[stage-1]
-orient_reward = orient_enabled * rew_task_orient_tracking * torch.exp(-2.0 * orient_error)
-```
+Task-space reward uses the authoritative target for both position and
+quaternion-geodesic orientation tracking. Orientation tracking is active in the
+fixed Stage 1 experiment.
 
 Default weight values:
 
@@ -365,8 +415,11 @@ Default weight values:
 
 Other penalties (action rate, action magnitude, valve saturation, clamp, FD
 load, unsafe) are unchanged from the original `joint_reach_reward()`.
-Episode sums for all 9 reward components are tracked and logged under
-`extras["log"]["episode/..."]`.
+Terminal final-pose values are captured before `super()._reset_idx()` clears
+episode state. Runtime metrics include target-change fraction, pose errors,
+measured EE speeds, hold counter, success fraction, terminal success and
+time-to-success, and separate accumulated success/velocity/timeout counts.
+These metrics are not added to the PPO observation.
 
 ## Contract Assertions
 
