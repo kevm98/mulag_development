@@ -18,7 +18,6 @@
 | Active final ROM checkpoint package | `kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom/` |
 | Play/demo entrypoint | `kevin_integration/scripts/play_mulag_adaptive_rl.py` |
 | Train entrypoint | `kevin_integration/scripts/train_mulag_adaptive_rl.py` |
-| Static/runtime reports | `kevin_integration/results/` |
 | ROM unit tests | `kevin_integration/rom_cylinders/test_*.py` |
 | Task-space/FD contract tests | `kevin_integration/tasks/test_task_space_reference.py` |
 | RRLAB convention tests | `kevin_integration/tasks/test_rrlab_reference_conventions.py` |
@@ -27,8 +26,28 @@
 | ROM data contract | `kevin_integration/rom_cylinders/ROM_DATA_CONTRACT.md` |
 | Active control contract | `kevin_integration/ISAACLAB_CONTROL_CONTRACT.md` |
 | Full hydraulic pipeline | `kevin_integration/FULL_HYDRAULIC_PIPELINE.md` |
-| Vehicle/reference audit | `kevin_integration/RRLAB_VEHICLE_AND_REFERENCE_AUDIT.md` |
-| RRLAB task-space trace | `kevin_integration/RRLAB_TASKSPACE_REFERENCE_TRACE.md` |
-| PPO/reference alignment note | `kevin_integration/PPO_ACTION_REFERENCE_ALIGNMENT.md` |
-| Debug cleanup report | `kevin_integration/DEBUG_CLEANUP_REPORT.md` |
 | Curriculum/learnability repair tests | `kevin_integration/tasks/test_curriculum_learnability_repair.py` |
+| Fixed final-pose contracts | `kevin_integration/tasks/test_fixed_final_pose_task.py` |
+| Live AAM runtime wiring contracts | `kevin_integration/tasks/test_aam_runtime_wiring_contract.py` |
+| Control architecture image | `kevin_integration/Control_Pipeline.png` |
+| Editable control architecture | `kevin_integration/Control_Pipeline.svg` |
+
+The canonical task-space configuration samples one fixed robot-base
+`[x, y, z, qw, qx, qy, qz]` target per episode, uses quaternion-geodesic
+orientation tracking, requires 50 settled control steps for success, and keeps
+automatic curriculum advancement disabled. Isaac runtime validation remains
+pending.
+
+The active online adaptation branch is:
+
+```text
+q[5], qdot[5], dP[4], previous applied ValveCmd[4]
+-> one 100-step AAM history
+-> frozen aam.pth
+-> z_arm_hat[24]
+   |-> PPO observation[44:68]
+   `-> matching ID conditioning input
+```
+
+`_prev_valve_cmd` is the established previous applied command field. AAM is
+context-only and the offline System Factor Encoder is not used at runtime.

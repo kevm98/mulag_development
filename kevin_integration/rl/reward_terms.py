@@ -28,6 +28,90 @@ def squared_norm(value: torch.Tensor) -> torch.Tensor:
     return torch.sum(torch.square(value), dim=-1)
 
 
+def normalize_quaternion_wxyz(
+    quaternion: torch.Tensor,
+    *,
+    name: str,
+    validate: bool = True,
+) -> torch.Tensor:
+    """Normalize a quaternion tensor whose final dimension is ``[w, x, y, z]``."""
+    if quaternion.shape[-1] != 4:
+        raise RuntimeError(f"{name} must have last dimension 4, got {quaternion.shape[-1]}")
+    quaternion_norm = torch.linalg.vector_norm(quaternion, dim=-1, keepdim=True)
+    if validate:
+        if not bool(torch.isfinite(quaternion).all()):
+            raise RuntimeError(f"{name} contains a non-finite quaternion")
+        if bool(torch.any(quaternion_norm <= 1.0e-8)):
+            raise RuntimeError(f"{name} contains a quaternion with norm <= 1e-8")
+    return quaternion / quaternion_norm.clamp_min(1.0e-8)
+
+
+def quaternion_geodesic_error(
+    target_quaternion: torch.Tensor,
+    current_quaternion: torch.Tensor,
+    *,
+    validate: bool = True,
+) -> torch.Tensor:
+    """Return sign-invariant quaternion geodesic distance in radians."""
+    target_normalized = normalize_quaternion_wxyz(
+        target_quaternion,
+        name="target_quaternion",
+        validate=validate,
+    )
+    current_normalized = normalize_quaternion_wxyz(
+        current_quaternion,
+        name="current_quaternion",
+        validate=validate,
+    )
+    quaternion_dot = torch.sum(target_normalized * current_normalized, dim=-1)
+    quaternion_dot_abs = torch.abs(quaternion_dot).clamp(min=0.0, max=1.0)
+    return 2.0 * torch.acos(quaternion_dot_abs)
+
+
+def final_pose_orientation_reward(
+    orientation_error: torch.Tensor,
+    orientation_tolerance_rad: float,
+) -> torch.Tensor:
+    """Dense orientation reward before application of its configured weight."""
+    if orientation_tolerance_rad <= 0.0:
+        raise ValueError("orientation_tolerance_rad must be positive")
+    return torch.exp(
+        -torch.square(orientation_error / float(orientation_tolerance_rad))
+    )
+
+
+def final_pose_within_tolerance(
+    position_error_norm: torch.Tensor,
+    orientation_error: torch.Tensor,
+    ee_linear_speed: torch.Tensor,
+    ee_angular_speed: torch.Tensor,
+    *,
+    position_tolerance_m: float,
+    orientation_tolerance_rad: float,
+    linear_speed_tolerance_mps: float,
+    angular_speed_tolerance_radps: float,
+) -> torch.Tensor:
+    """Return the per-environment final-pose accuracy and settling predicate."""
+    return (
+        (position_error_norm <= position_tolerance_m)
+        & (orientation_error <= orientation_tolerance_rad)
+        & (ee_linear_speed <= linear_speed_tolerance_mps)
+        & (ee_angular_speed <= angular_speed_tolerance_radps)
+    )
+
+
+def update_consecutive_success_counter(
+    success_counter: torch.Tensor,
+    within_final_pose: torch.Tensor,
+) -> torch.Tensor:
+    """Increment consecutive valid steps and reset immediately on any failure."""
+    return torch.where(
+        within_final_pose,
+        success_counter + 1,
+        torch.zeros_like(success_counter),
+    )
+
+
 def _as_joint_weights(
     q_error: torch.Tensor,
     q_tracking_joint_weights: torch.Tensor | list[float] | tuple[float, ...] | None,

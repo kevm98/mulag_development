@@ -138,8 +138,12 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rom_udz_neg = [0.0, 0.0, 0.0, 0.0]
     rom_velocity_gain = [0.02, 0.02, 0.02, 0.02]
     rom_force_scale = [1000.0, 1000.0, 1000.0, 1000.0]
+    channel4_velocity_damping_gain = 0.0
 
     # ── Curriculum configuration (task-space tracking stages) ──────────────────────
+    # The canonical fixed-final-pose experiment remains at Stage 1. The
+    # curriculum implementation is retained for explicit future experiments.
+    enable_automatic_curriculum = False
     # Stage boundaries in cumulative env steps: S1: 0-50k, S2: 50k-150k,
     # S3: 150k-300k, S4: >300k.
     curriculum_stage_steps = [0, 50000, 150000, 300000]
@@ -161,11 +165,32 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     # Orientation reward enabled per stage.
     curriculum_orientation_enabled = [False, False, True, True]
 
+    # ── Curriculum performance gates (for stage advancement) ───────────────────
+    # Minimum completed episodes per environment before stage advancement.
+    curriculum_min_completed_episodes_per_env = 5.0
+    # Maximum mean position error (m) for stage advancement.
+    curriculum_max_mean_position_error = 0.50
+    # Maximum velocity-termination rate for stage advancement.
+    curriculum_max_velocity_termination_rate = 0.10
+    # Maximum other unsafe termination rate (lower_limit, upper_limit, nonfinite).
+    curriculum_max_other_unsafe_rate = 0.01
+    # Minimum timeout (successful completion) rate for stage advancement.
+    curriculum_min_timeout_rate = 0.80
+    # Unsafe terminal penalty (negative value applied on unsafe termination).
+    # Set to -taskspace_unsafe_penalty_weight by default in MulagHydraulicROMTaskSpaceEnvCfg.
+    unsafe_terminal_penalty = -5.0
+
     # Task-space reward weights (stage-independent base values).
     rew_task_pos_tracking = 1.0       # bounded [0,1] exponential position tracking reward
-    rew_task_orient_tracking = 0.25   # orientation tracking (only added in S3/S4)
+    rew_task_orient_tracking = 0.25   # dense quaternion-geodesic orientation tracking
     rew_task_progress = 0.5           # progress reward = Δposition_error, clamped
     rew_task_progress_clip = 0.2      # max absolute progress-reward contribution
+    final_pose_position_tolerance_m = 0.05
+    final_pose_orientation_tolerance_rad = 0.0872664626
+    final_pose_linear_speed_tolerance_mps = 0.05
+    final_pose_angular_speed_tolerance_radps = 0.10
+    final_pose_success_hold_steps = 50
+    final_pose_success_bonus_value = 10.0
 
     state_joint_names = list(OBSTACLE_ARM_JOINT_NAMES)
     command_joint_names = list(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
@@ -369,6 +394,7 @@ class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
     use_settle_tracking_reward = False
     rew_torque_effort = 0.0
     # Task-space curriculum defaults (can be overridden per run).
+    enable_automatic_curriculum = False
     curriculum_stage_steps = [0, 50000, 150000, 300000]
     curriculum_episode_length_s = [15.0, 15.0, 30.0, 45.0]
     curriculum_action_authority = [0.25, 0.50, 0.75, 1.0]

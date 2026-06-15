@@ -1,222 +1,268 @@
-# Kevin Mulag Hydraulic ROM Integration
+# Kevin Mulag Fixed Final-Pose Control
 
-This directory contains the active IsaacLab integration for the accepted Kevin
-learned-control chain on the RRLAB Mulag asset.
+This directory contains the canonical Kevin Mulag workflow:
 
-The trained model architectures and checkpoints are treated as fixed. The active
-work is runtime integration: feature assembly, checkpoint normalization,
-high-level command convention, ROM interpretation, prismatic target writing,
-preflight validation, and PPO lifecycle.
+```text
+fixed robot-base EE target
+-> 73D task-space observation
+-> PPO Action[4]
+-> qddot_cmd[5], qddot_cmd[:, 4] = 0
+-> frozen ID conditioned by z_arm_hat[24]
+-> ValveCmd[4]
+-> frozen FD observer + valve-conditioned hydraulic ROM
+-> four cylinder position targets
+-> IsaacLab Mulag mechanism
+```
 
-## Quick Start
+![Current control architecture](Control_Pipeline.png)
 
-Run from the repository root:
+The active Gym task is:
+
+```text
+Kevin-Mulag-HydraulicROM-TaskSpace-v0
+```
+
+The final-pose target is sampled once for each selected environment at reset,
+uses `[x, y, z, qw, qx, qy, qz]` in the `robot_base` frame, and remains fixed
+for the episode. PPO is the task-space-to-action bridge; there is no runtime IK.
+
+## Environment
+
+Run commands from the repository root:
 
 ```bash
 cd /home/rrlab/rrlab_mulag
-```
-
-Use the normal IsaacLab/RRLAB launcher environment for this repository:
-
-```bash
 conda activate env_isaaclab
 ```
 
-Default play mode, no checkpoint. This runs honest `joint_space_validation`:
-stationary vehicle, scripted mechanical reference, AAM/ID/ROM active, and FD
-observer active. It does not claim task-space tracking.
+## Run The Simulation
 
-```bash
-./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py
-```
+### 1. Visible scripted pipeline validation
 
-Task-space playback requires a trained PPO checkpoint:
+This opens IsaacLab with one environment and exercises the learned/hydraulic
+pipeline without claiming PPO task-space tracking:
 
 ```bash
 ./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
-  --checkpoint logs/rsl_rl/kevin_hydraulic_rom_joint_tracking/<run_name>/model_<iteration>.pt
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 1 \
+  --play_mode joint_space_validation
 ```
 
-The demo uses a 300 s episode, settles under gravity before learned control,
-warm-starts histories from the settled state, ramps in the learned command, and
-prints one-second signal-chain telemetry plus shutdown max/RMS summaries.
+### 2. Fixed final-pose PPO playback
 
-Runtime diagnostic preflight only:
+Use an existing PPO checkpoint:
+
+```bash
+CHECKPOINT=/absolute/path/to/model_250.pt
+
+./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 1 \
+  --checkpoint "$CHECKPOINT" \
+  --play_mode rl_task_space_tracking
+```
+
+Add `--headless` for non-visual playback.
+
+On the current development machine, an example local checkpoint is
+`kevin_integration/results/stage1_500env_13p9M_run/model_250.pt`. PPO `.pt`
+artifacts are ignored by Git and are therefore not published with the source.
+
+### 3. Runtime preflight only
+
+This starts IsaacLab, runs the built-in asset and learned-pipeline motion
+preflights, and exits before creating the PPO runner:
 
 ```bash
 ./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
   --num_envs 1 \
   --max_iterations 0 \
-  --preflight_only
+  --preflight_only \
+  --headless
 ```
 
-20-iteration PPO smoke training. This runs motion preflights before PPO:
+### 4. PPO training
+
+Small validation run:
 
 ```bash
 ./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
-  --num_envs 1 \
-  --max_iterations 20
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 16 \
+  --max_iterations 30 \
+  --headless
 ```
 
-Checkpoint playback:
+Larger run after the one- and sixteen-environment gates pass:
 
 ```bash
-./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
-  --checkpoint logs/rsl_rl/kevin_hydraulic_rom_joint_tracking/<run_name>/model_<iteration>.pt
+./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 600 \
+  --max_iterations 100 \
+  --headless
 ```
 
-## Active Task
-
-Gym task:
-
-```text
-Kevin-Mulag-HydraulicROM-JointTracking-v0
-```
-
-The default play command runs `control_mode=joint_space_validation`. With a
-checkpoint, play switches to `control_mode=rl_task_space_tracking`.
-
-The train script defaults to `control_mode=rl_task_space_tracking`, enables
-scripted vehicle motion, and aborts before PPO if asset transmission,
-learned-pipeline, task-space observation/reward, FD observer, or wheel-command
-preflight fails. Use `--skip_motion_preflight` only for deliberate debugging.
-
-## Active Architecture
-
-```text
-runtime history
--> AAM
--> z_arm_hat
-
-PPO/scripted qddot action + runtime state + z_arm_hat
--> ID
--> ValveCmd[4]
-
-ValveCmd[4] + training-mean dP + cylinder/mechanical state
--> valve-conditioned causal cylinder ROM
--> DeltaExtension_simscape[4]
-
-DeltaExtension_simscape[4]
--> nominal-sign coordinate adapter
--> DeltaJoint_isaac[4] / five 10 ms control steps
--> accumulated prismatic position targets
--> USD linkage constraints
--> arm motion
-```
-
-The PPO action is four normalized desired accelerations for the four hydraulic
-families. Runtime converts action `[-1, 1]` to physical `qddot_cmd[0:4]` using
-the ID checkpoint qddot feature standard deviations. PPO does not output valves
-directly.
-
-Kevin now mirrors the working RRLAB Mulag obstacle task's vehicle convention:
-wheel velocity is scripted separately from PPO/ID/ROM, sampled from 3 to
-8 km/h, converted with the 0.575 m wheel radius, and written to the four wheel
-joints when they are present in the active articulation.
-
-The traced RRLAB target is task-space `ee_pose` for `Messerkopf` in robot-base
-frame, ordered `[x, y, z, qw, qx, qy, qz]`. There is no IK bridge in the
-reference task: PPO learns the map from `ee_pose` and measured state to
-`Action[4]`. Kevin keeps that contract. PPO does not control the truck or write
-ValveCmd directly.
-
-## Runtime Reports
-
-Static and runtime contract reports are under `kevin_integration/results/`:
-
-- `static_signal_chain_audit.md`
-- `runtime_valve_command_contract.md`
-- `runtime_rom_motion_contract.md`
-- `prismatic_drive_authority.md`
-- `full_pipeline_preflight_contract.md`
-
-Source audits for the RRLAB obstacle vehicle/reference convention:
-
-- `RRLAB_VEHICLE_AND_REFERENCE_AUDIT.md`
-- `RRLAB_TASKSPACE_REFERENCE_TRACE.md`
-- `PPO_ACTION_REFERENCE_ALIGNMENT.md`
-
-## Active Files
-
-See [ACTIVE_PIPELINE_FILES.md](ACTIVE_PIPELINE_FILES.md) for the file map and
-[ISAACLAB_CONTROL_CONTRACT.md](ISAACLAB_CONTROL_CONTRACT.md) for the runtime
-contract.
-
-Main runtime files:
-
-- `kevin_integration/tasks/mulag_adaptive_rl_env.py`
-- `kevin_integration/tasks/mulag_adaptive_rl_env_cfg.py`
-- `kevin_integration/rl/adaptive_rl_controller.py`
-- `kevin_integration/rl/observation_builder.py`
-- `kevin_integration/rom_cylinders/valve_conditioned_causal_rom.py`
-- `kevin_integration/rom_cylinders/multirate_rom_wrapper.py`
-- `kevin_integration/rom_cylinders/cylinder_coordinate_adapter.py`
-- `kevin_integration/scripts/play_mulag_adaptive_rl.py`
-- `kevin_integration/scripts/train_mulag_adaptive_rl.py`
-
-## Known Limitations
-
-- The active `exported_valve_conditioned_causal_rom/` package uses the causal
-  ValveCmd-conditioned model export. The old ROM training/evaluation tree has
-  been removed from the runtime checkout.
-- The cylinder coordinate mapping is sign verified and nominal-reference based,
-  but not second-pose validated.
-- Task-space tracking requires PPO training/checkpoint playback because the
-  policy is the `ee_pose -> Action[4]` bridge.
-- SD feedback is disabled for the active task.
-- dP uses the final ROM training mean until a verified environment pressure
-  source is available.
-- USD-authored joint axes, masses, inertias, and drive APIs still require
-  Isaac/USD introspection in an environment with `pxr` or Isaac runtime tools.
-- Do not claim full runtime success until the scripted demo has visibly shown
-  cylinder motion, linkage transmission, and acceptable vehicle/base behavior in
-  Isaac.
-
-## Curriculum (Learnability Repair)
-
-`rl_task_space_tracking` mode uses a four-stage curriculum to improve early PPO
-training stability:
-
-| Stage | Steps       | Episode Length | Action Authority | Vehicle  | Position Range  | Orientation |
-|-------|-------------|----------------|------------------|----------|-----------------|-------------|
-| S1    | 0–50k       | 1500 st (15s)  | 0.25×            | off      | tight           | disabled    |
-| S2    | 50k–150k    | 1500 st (15s)  | 0.50×            | off      | moderate        | disabled    |
-| S3    | 150k–300k   | 3000 st (30s)  | 0.75×            | off      | wide            | enabled     |
-| S4    | 300k+       | 4500 st (45s)  | 1.00×            | 3–8 km/h | full            | enabled     |
-
-PPO action is scaled by the stage-dependent authority multiplier before qddot
-conversion. Command ranges expand from tight volumes near nominal to the full
-workspace. Vehicle remains stationary in S1–S3 and moves at 3–8 km/h in S4.
-Orientation tracking reward is gated off in S1–S2.
-
-### PPO Config Notes
-
-`MulagHydraulicROMTaskSpacePPORunnerCfg` overrides:
-
-- `num_steps_per_env = 128` (was 24 in `MulagAdaptiveRLPPORunnerCfg`)
-- `init_std = 0.20` (higher initial policy entropy for exploration)
-- `num_mini_batches = 4` → 32 samples per minibatch with 1 env
-
-Do not remove `empirical_normalization`; it is required for stable training.
-
-### Running Tests
-
-Standalone curriculum unit tests (no IsaacLab dependency):
+Use 2,000 environments only after the smaller runs are stable:
 
 ```bash
+./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 2000 \
+  --max_iterations 100 \
+  --headless
+```
+
+Resume training from a checkpoint:
+
+```bash
+CHECKPOINT=/absolute/path/to/model_250.pt
+
+./rrlab.sh -p kevin_integration/scripts/train_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 600 \
+  --max_iterations 100 \
+  --checkpoint "$CHECKPOINT" \
+  --headless
+```
+
+## Online AAM Branch
+
+The Arm Adaptation Module is active online and remains frozen:
+
+```text
+q[5], qdot[5], dP[4], previous applied ValveCmd[4]
+-> one AAM history with shape (N, 100, 18)
+-> frozen aam.pth under inference mode
+-> z_arm_hat[24]
+   |-> PPO observation indices 44:68
+   `-> matching ID conditioning input
+```
+
+`_prev_valve_cmd` is copied from the ValveCmd supplied to FD and ROM during the
+preceding control step. The same stored latent is used by PPO and ID. AAM does
+not directly write valves, torques, ROM state, cylinder targets, rewards,
+targets, or success state. The System Factor Encoder is offline-only.
+
+## 73D Observation
+
+```text
+0:7    final target EE pose
+7:14   current EE pose
+14:17  position error
+17:18  quaternion-geodesic orientation error
+18:23  mechanical q[5]
+23:28  mechanical qdot[5]
+28:32  cylinder position[4]
+32:36  cylinder velocity[4]
+36:40  previous Action[4]
+40:44  previous applied ValveCmd[4]
+44:68  z_arm_hat[24]
+68:72  normalized FD observer output[4]
+72:73  vehicle speed[1]
+```
+
+## Active Hydraulic ROM
+
+Only the deployed valve-conditioned causal ROM is command-authoritative:
+
+```text
+kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom/
+```
+
+Runtime dependencies:
+
+- `valve_conditioned_causal_rom.py`
+- `multirate_rom_wrapper.py`
+- `cylinder_coordinate_adapter.py`
+- `cylinder_coordinate_mapping.json`
+- `rom_data_contract.py`
+
+The ROM consumes the fixed 26-feature order:
+
+```text
+ValveCmd[4], dP[4], Extension[4], ExtensionVelocity[4],
+JointPos[5], JointVel[5]
+```
+
+It predicts `DeltaExtension[4]` over `0.05 s`. The multirate wrapper distributes
+that prediction over five `0.01 s` Isaac control steps. The coordinate adapter
+maps Simscape extension deltas to four Isaac prismatic position targets. FD is
+observer-only and does not write actuator effort in this workflow.
+
+## Current Source Layout
+
+```text
+scripts/
+  train_mulag_adaptive_rl.py
+  play_mulag_adaptive_rl.py
+
+tasks/
+  registered environment, configuration, task/reference helpers, contract tests
+
+rl/
+  AAM/ID/FD controller, observation/action adapters, rewards, torque conversion
+
+controllers/
+  learned checkpoint loaders and the imported reduced-ROM compatibility class
+
+rom_cylinders/
+  deployed valve-conditioned ROM, export package, mapping, multirate wrapper,
+  data contract, and focused tests
+
+models/
+  aam.pth, id.pth, fd.pth, fd_scaler.pth, sd.pth
+
+utils/
+  Isaac simulation memory configuration
+```
+
+The reduced hydraulic actuator class remains because the environment imports
+and initializes it for the retained compatibility path. It is not the active
+command-authoritative ROM in the canonical task.
+
+## Fixed Final-Pose Contract
+
+The canonical experiment keeps:
+
+- automatic curriculum advancement disabled;
+- Stage 1 action authority `0.25`;
+- episode duration `15 s`;
+- position tolerance `0.05 m`;
+- orientation tolerance `0.0872664626 rad`;
+- EE linear speed tolerance `0.05 m/s`;
+- EE angular speed tolerance `0.10 rad/s`;
+- success hold of 50 consecutive `0.01 s` steps;
+- separate success termination and one-time bonus `10.0`.
+
+## Offline Verification
+
+These commands do not start IsaacLab:
+
+```bash
+python kevin_integration/tasks/test_aam_runtime_wiring_contract.py
+python kevin_integration/tasks/test_fixed_final_pose_task.py
 python kevin_integration/tasks/test_curriculum_learnability_repair.py
-```
-
-43 tests covering stage boundaries, command ranges, action authority, episode
-lengths, orientation gating, vehicle speed, reward formulae, observation/action
-dimensions, termination diagnostics, config field integrity, reset semantics,
-and boundary conditions.
-
-Pre-existing pipeline tests:
-
-```bash
 python kevin_integration/tasks/test_preflight_observation_contract.py
+python kevin_integration/tasks/test_asset_preflight_classifier.py
+python kevin_integration/tasks/test_mechanical_constraint_resolver.py
+python kevin_integration/tasks/test_rrlab_reference_conventions.py
+python kevin_integration/tasks/test_task_space_reference.py
+python kevin_integration/tasks/test_fd_observer_contract.py
 python kevin_integration/rom_cylinders/test_valve_conditioned_runtime.py
 python kevin_integration/rom_cylinders/test_multirate_rom_wrapper.py
 python kevin_integration/rom_cylinders/test_cylinder_coordinate_adapter.py
 ```
+
+Offline tests verify source and tensor contracts. They do not prove live Isaac
+motion, GPU scaling, or training quality. Run the preflight and simulation
+commands above before claiming runtime success.
+
+## More Detail
+
+- [Active file map](ACTIVE_PIPELINE_FILES.md)
+- [IsaacLab control contract](ISAACLAB_CONTROL_CONTRACT.md)
+- [Full hydraulic pipeline](FULL_HYDRAULIC_PIPELINE.md)
+- [ROM runtime contract](rom_cylinders/ROM_DATA_CONTRACT.md)
