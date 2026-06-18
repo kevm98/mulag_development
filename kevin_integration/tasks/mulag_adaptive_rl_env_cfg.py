@@ -32,7 +32,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     action_scale = 1.0
     action_space = 4
-    observation_space = 62
+    observation_space = 52
     task_space_observation_space = TASK_SPACE_OBSERVATION_DIM
     state_space = 0
     # Legacy low-level values ("position_delta", "effort") are still accepted by
@@ -144,6 +144,13 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     # The canonical fixed-final-pose experiment remains at Stage 1. The
     # curriculum implementation is retained for explicit future experiments.
     enable_automatic_curriculum = False
+    enable_goal_difficulty_curriculum = False
+    goal_curriculum_min_completed_episodes = 256
+    goal_curriculum_advance_success_rate = 0.20
+    goal_curriculum_advance_near_pose_low_speed_rate = 0.10
+    goal_curriculum_advance_mean_max_hold_steps = 10.0
+    goal_curriculum_hysteresis_windows = 2
+    goal_curriculum_stage_scales = [0.25, 0.60, 1.0, 1.0]
     # Stage boundaries in cumulative env steps: S1: 0-50k, S2: 50k-150k,
     # S3: 150k-300k, S4: >300k.
     curriculum_stage_steps = [0, 50000, 150000, 300000]
@@ -181,10 +188,27 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     unsafe_terminal_penalty = -5.0
 
     # Task-space reward weights (stage-independent base values).
+    kevin_fixed_pose_contract_version = "kevin_fixed_pose_task_space_v2"
+    reward_contract_version = "task_space_reward_balance_v2"
     rew_task_pos_tracking = 1.0       # bounded [0,1] exponential position tracking reward
+    position_tracking_reward_weight = 1.0
     rew_task_orient_tracking = 0.25   # dense quaternion-geodesic orientation tracking
-    rew_task_progress = 0.5           # progress reward = Δposition_error, clamped
+    rew_task_progress = 0.5           # potential progress shaping scale
     rew_task_progress_clip = 0.2      # max absolute progress-reward contribution
+    taskspace_progress_position_scale_m = 1.0
+    taskspace_progress_orientation_scale_rad = 3.141592653589793
+    taskspace_progress_position_weight = 1.0
+    taskspace_progress_orientation_weight = 0.25
+    taskspace_progress_gamma = 0.99
+    rew_final_pose_linear_velocity = 0.15
+    rew_final_pose_angular_velocity = 0.08
+    rew_final_pose_settling = 0.20
+    rew_final_pose_hold_progress = 1.00
+    rew_clamp_outward = 0.25
+    rom_clamp_documented_increment_scale = 0.008
+    valve_saturation_start = 0.90
+    rew_valve_saturation_soft = 0.15
+    fd_load_soft_threshold = 1.0
     final_pose_position_tolerance_m = 0.05
     final_pose_orientation_tolerance_rad = 0.0872664626
     final_pose_linear_speed_tolerance_mps = 0.05
@@ -192,6 +216,14 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     final_pose_success_hold_steps = 50
     final_pose_success_bonus_value = 10.0
 
+    mechanical_joint_names = list(OBSTACLE_ARM_JOINT_NAMES)
+    mechanical_joint_position_units = ["rad", "rad", "rad", "rad", "rad"]
+    mechanical_joint_velocity_units = ["rad/s", "rad/s", "rad/s", "rad/s", "rad/s"]
+    mechanical_joint_types = ["revolute", "revolute", "revolute", "revolute", "revolute_follower"]
+    cylinder_joint_names = list(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
+    cylinder_joint_position_units = ["m", "m", "m", "m"]
+    cylinder_joint_velocity_units = ["m/s", "m/s", "m/s", "m/s"]
+    # Backward-compatible field names used by older tests/tools.
     state_joint_names = list(OBSTACLE_ARM_JOINT_NAMES)
     command_joint_names = list(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
 
@@ -243,10 +275,27 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     scripted_demo_settle_time_s = 1.0
     scripted_demo_control_ramp_time_s = 2.0
     scripted_demo_disable_safety_termination = True
-    print_reset_telemetry = True
+    verbose_reset_logging = False
+    reset_diagnostic_log_limit = 8
+    print_reset_telemetry = False
 
     joint_limit_margin = 0.02
-    max_abs_joint_velocity = 6.0
+    # Historical diagnostic threshold only. It is not a validated MulaG
+    # hydraulic safety limit and must not be used for hard termination.
+    unvalidated_velocity_diagnostic_threshold = 6.0
+    enable_validated_hydraulic_velocity_termination = False
+    hydraulic_soft_velocity_limits_mps = [0.0, 0.0, 0.0, 0.0]
+    hydraulic_hard_velocity_limits_mps = [0.0, 0.0, 0.0, 0.0]
+    hydraulic_velocity_persistence_steps = 3
+    hydraulic_velocity_limits_source = "blocked_missing_pytorch_hydraulic_rom_dataset_causal_mat"
+    enable_validated_mechanical_velocity_termination = False
+    mechanical_soft_velocity_limits = [0.0, 0.0, 0.0, 0.0, 0.0]
+    mechanical_hard_velocity_limits = [0.0, 0.0, 0.0, 0.0, 0.0]
+    mechanical_velocity_limits_source = "working_collision_task_has_no_arm_hard_velocity_termination"
+    final_pose_linear_shaping_scale_mps = 0.05
+    final_pose_angular_shaping_scale_radps = 0.10
+    final_pose_linear_settling_scale_mps = 0.05
+    final_pose_angular_settling_scale_radps = 0.10
 
     rew_q_tracking = 3.0
     rew_qdot = 0.25
@@ -264,7 +313,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rew_action_saturation = 0.5
     action_saturation_threshold = 0.90
     rew_valve_effort = 0.01
-    rew_torque_effort = 1.0e-6
+    rew_torque_effort = 0.0
     rew_alive = 0.1
     rew_termination = 5.0
 
@@ -406,6 +455,7 @@ class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
     curriculum_command_z_range = [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.5, 0.5]]
     curriculum_orientation_enabled = [False, False, True, True]
     rew_task_pos_tracking = 1.0
+    position_tracking_reward_weight = 1.0
     rew_task_orient_tracking = 0.25
     rew_task_progress = 0.5
     rew_task_progress_clip = 0.2

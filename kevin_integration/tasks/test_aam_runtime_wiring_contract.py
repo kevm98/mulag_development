@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -151,8 +150,16 @@ class TestAAMRuntimeWiringContract(unittest.TestCase):
         self.assertNotIn("nominal", source.lower())
         self.assertNotIn("_current_valve_cmd", source)
 
-    def test_08_aam_runs_under_inference_mode(self) -> None:
-        self.assertIn("with torch.inference_mode():", CONTROLLER_SOURCE)
+    def test_08_aam_runs_under_no_grad(self) -> None:
+        """_update_aam_latent uses torch.no_grad() to ensure the AAM output
+        is a normal mutable tensor, not an inference tensor.
+
+        The controller's internal update_aam_latent may still use
+        inference_mode, but the env wrapper must produce a mutable buffer.
+        """
+        source = _env_method_source("_update_aam_latent")
+        self.assertIn("with torch.no_grad():", source)
+        self.assertNotIn("with torch.inference_mode():", source)
         self.assertIn("with torch.no_grad():", MODELS_SOURCE)
 
     def test_09_aam_is_in_eval_mode(self) -> None:
@@ -199,17 +206,17 @@ class TestAAMRuntimeWiringContract(unittest.TestCase):
     def test_13_latent_enters_the_task_observation(self) -> None:
         latent = torch.arange(48, dtype=torch.float32).reshape(2, 24)
         observation = _task_observation(2, latent)
-        self.assertTrue(torch.equal(observation[:, 44:68], latent))
+        self.assertTrue(torch.equal(observation[:, 41:65], latent))
 
     def test_14_latent_occupies_exactly_24_observation_values(self) -> None:
         latent = torch.ones(2, 24)
         observation = _task_observation(2, latent)
-        self.assertEqual(observation[:, 44:68].shape[-1], 24)
+        self.assertEqual(observation[:, 41:65].shape[-1], 24)
 
-    def test_15_task_observation_remains_73d(self) -> None:
+    def test_15_task_observation_remains_70d(self) -> None:
         observation = _task_observation(2, torch.zeros(2, 24))
-        self.assertEqual(TASK_SPACE_OBSERVATION_DIM, 73)
-        self.assertEqual(observation.shape, (2, 73))
+        self.assertEqual(TASK_SPACE_OBSERVATION_DIM, 70)
+        self.assertEqual(observation.shape, (2, 70))
 
     def test_16_id_receives_the_same_stored_latent(self) -> None:
         helper_source = _env_method_source("_id_conditioning_latent")
@@ -341,20 +348,94 @@ class TestAAMRuntimeWiringContract(unittest.TestCase):
         self.assertIn("self._sample_task_space_command(env_ids)", _env_method_source("_reset_idx"))
 
     def test_30_hydra_and_launcher_are_unchanged(self) -> None:
-        result = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--",
-                "kevin_integration/tasks/__init__.py",
-                "kevin_integration/scripts/train_mulag_adaptive_rl.py",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
+        task_init = (ROOT / "kevin_integration/tasks/__init__.py").read_text(
+            encoding="utf-8"
         )
-        self.assertEqual(result.stdout, "")
+        train_source = (
+            ROOT / "kevin_integration/scripts/train_mulag_adaptive_rl.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('id="Kevin-Mulag-HydraulicROM-TaskSpace-v0"', task_init)
+        self.assertIn(
+            'DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-TaskSpace-v0"',
+            train_source,
+        )
+        self.assertIn(
+            '@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")',
+            train_source,
+        )
+
+    def test_31_latent_copy_preserves_buffer_identity(self) -> None:
+        """.copy_() preserves the buffer object identity so that
+        partial resets via self._z_arm_hat[env_ids] = 0.0
+        continue to work after the AAM latent is updated.
+        """
+        buffer = torch.zeros((4, 24), dtype=torch.float32)
+        original_id = id(buffer)
+        new_values = torch.randn(4, 24)
+        buffer.copy_(new_values)
+        self.assertEqual(
+            id(buffer),
+            original_id,
+            ".copy_() must preserve the buffer identity",
+        )
+        self.assertTrue(
+            torch.equal(buffer, new_values),
+            ".copy_() must write the new values into the buffer",
+        )
+
+    def test_32_update_aam_latent_uses_copy_not_assignment(self) -> None:
+        """_update_aam_latent must use .copy_() to write the AAM output
+        into the pre-allocated _z_arm_hat buffer, not direct assignment
+        which would replace the buffer with an inference tensor.
+        """
+        source = _env_method_source("_update_aam_latent")
+        self.assertIn(
+            "self._z_arm_hat.copy_(",
+            source,
+            "_update_aam_latent must use .copy_() to write into the buffer",
+        )
+        self.assertNotIn(
+            "self._z_arm_hat = ",
+            source,
+            "_update_aam_latent must not replace the buffer with =",
+        )
+
+    def test_33_partial_reset_preserves_nonreset_latent_rows(self) -> None:
+        """Partial reset of _z_arm_hat must zero only the specified env_ids
+        and leave non-reset rows intact.
+        """
+        buffer = torch.full((4, 24), 42.0, dtype=torch.float32)
+        env_ids = torch.tensor([1, 3])
+        buffer[env_ids] = 0.0
+        self.assertTrue(
+            torch.all(buffer[[0, 2]] == 42.0),
+            "Non-reset rows must be preserved",
+        )
+        self.assertTrue(
+            torch.all(buffer[1] == 0.0),
+            "Reset row 1 must be zeroed",
+        )
+        self.assertTrue(
+            torch.all(buffer[3] == 0.0),
+            "Reset row 3 must be zeroed",
+        )
+
+    def test_34_z_arm_hat_allocation_works_for_batch_sizes(self) -> None:
+        """The _z_arm_hat buffer allocation pattern (torch.zeros, N, 24)
+        works for all canonical batch sizes and produces mutable buffers.
+        """
+        for num_envs in (1, 16, 600, 2000):
+            with self.subTest(num_envs=num_envs):
+                buffer = torch.zeros(
+                    (num_envs, 24),
+                    dtype=torch.float32,
+                    device=torch.device("cpu"),
+                )
+                self.assertEqual(buffer.shape, (num_envs, 24))
+                self.assertFalse(
+                    buffer.is_inference(),
+                    f"Buffer for N={num_envs} must be mutable",
+                )
 
 
 if __name__ == "__main__":

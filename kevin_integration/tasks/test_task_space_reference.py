@@ -29,7 +29,7 @@ def test_pose_and_quaternion_contract() -> None:
 
 def test_task_space_observation_order_and_dimension() -> None:
     expected = (
-        ("ee_pose_command", 7),
+        ("ee_orientation_command", 4),
         ("current_ee_pose", 7),
         ("ee_position_error", 3),
         ("ee_orientation_error", 1),
@@ -45,7 +45,7 @@ def test_task_space_observation_order_and_dimension() -> None:
     )
     if _MODULE.TASK_SPACE_OBSERVATION_ORDER != expected:
         raise AssertionError(_MODULE.TASK_SPACE_OBSERVATION_ORDER)
-    if _MODULE.task_space_observation_dim() != 73:
+    if _MODULE.task_space_observation_dim() != 70:
         raise AssertionError(_MODULE.task_space_observation_dim())
     _MODULE.validate_task_space_observation_contract()
 

@@ -71,8 +71,8 @@ def test_kevin_source_keeps_vehicle_command_separate_from_rom_action_contract() 
     env_source = (ROOT / "kevin_integration" / "tasks" / "mulag_adaptive_rl_env.py").read_text()
     if "action_space = 4" not in cfg_source:
         raise AssertionError("Kevin hydraulic ROM action_space changed from 4")
-    if "observation_space = 62" not in cfg_source:
-        raise AssertionError("Kevin hydraulic ROM observation_space changed from 62")
+    if "observation_space = 52" not in cfg_source:
+        raise AssertionError("Kevin hydraulic ROM observation_space changed from 52")
     if "task_space_observation_space = TASK_SPACE_OBSERVATION_DIM" not in cfg_source:
         raise AssertionError("Kevin task-space observation dimension is not sourced from the contract")
     if "vehicle_command_mode = \"rrlab_obstacle_scripted_wheel_velocity\"" not in cfg_source:

@@ -7,7 +7,7 @@ TASK_SPACE_FRAME = "robot_base"
 TASK_SPACE_EE_BODY = "Messerkopf"
 TASK_SPACE_COMMAND_NAME = "ee_pose"
 TASK_SPACE_COMMAND_DIM = 7
-TASK_SPACE_OBSERVATION_DIM = 73
+TASK_SPACE_OBSERVATION_DIM = 70
 
 TASK_SPACE_COMMAND_POS_X_RANGE_M = (6.5, 7.5)
 TASK_SPACE_COMMAND_POS_Y_RANGE_M = (0.7, 2.2)
@@ -26,7 +26,7 @@ BLOCKED_FD_OUTPUT_NONFINITE = "BLOCKED_FD_OUTPUT_NONFINITE"
 BLOCKED_FD_ACTUATOR_CONFLICT = "BLOCKED_FD_ACTUATOR_CONFLICT"
 
 TASK_SPACE_OBSERVATION_ORDER = (
-    ("ee_pose_command", 7),
+    ("ee_orientation_command", 4),
     ("current_ee_pose", 7),
     ("ee_position_error", 3),
     ("ee_orientation_error", 1),

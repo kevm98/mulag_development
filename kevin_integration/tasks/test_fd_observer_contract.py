@@ -46,7 +46,7 @@ def test_task_space_observation_builder_includes_fd_tau_hat() -> None:
     )
     if obs.shape != (n, _TASK.TASK_SPACE_OBSERVATION_DIM):
         raise AssertionError(obs.shape)
-    fd_start = 7 + 7 + 3 + 1 + 5 + 5 + 4 + 4 + 4 + 4 + 24
+    fd_start = 4 + 7 + 3 + 1 + 5 + 5 + 4 + 4 + 4 + 4 + 24
     if not torch.equal(obs[:, fd_start : fd_start + 4], torch.ones(n, 4)):
         raise AssertionError("fd_tau_hat is not at the documented observation offset")
 

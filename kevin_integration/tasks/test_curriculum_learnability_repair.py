@@ -14,7 +14,7 @@ Verifies the post-repair design:
   9.  Reward weight configuration defaults (pos_tracking=1.0, orient=0.25, progress=0.5)
   10. Bounded position tracking reward formula: exp(-4 * error)
   11. Bounded progress reward: delta_position_error, clamped
-  12. Task-space observation dimension = 73
+  12. Task-space observation dimension = 70
   13. Action dimension = 4 (hydraulic cylinders)
   14. Termination diagnostics: 5 per-reason booleans, 7 counters
   15. Stage-aware timeout replaces episode_length_buf >= _stage_max_episode_length
@@ -64,7 +64,7 @@ REW_TASK_PROGRESS = 0.5
 REW_TASK_PROGRESS_CLIP = 0.2
 UNSAFE_TERMINAL_PENALTY = -5.0
 
-TASK_SPACE_OBSERVATION_DIM = 73
+TASK_SPACE_OBSERVATION_DIM = 70
 ACTION_DIM = 4
 
 SIM_DT = 0.01  # nominal Isaac sim dt (matches cfg.sim.dt)
@@ -410,8 +410,8 @@ class TestCurriculumLearnabilityRepair(unittest.TestCase):
     # 10. Observation dimension
     # ═══════════════════════════════════════════════════════════════════════
     def test_task_space_obs_dim(self) -> None:
-        """Task-space observation dimension is 73."""
-        self.assertEqual(TASK_SPACE_OBSERVATION_DIM, 73)
+        """Task-space observation dimension is 70."""
+        self.assertEqual(TASK_SPACE_OBSERVATION_DIM, 70)
 
     # ═══════════════════════════════════════════════════════════════════════
     # 11. Action dimension
