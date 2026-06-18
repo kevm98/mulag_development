@@ -1,54 +1,82 @@
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Project-local RSL-RL player for the Kevin/Mulag task-space checkpoint."""
+
 from __future__ import annotations
 
 import argparse
-import math
+from dataclasses import MISSING
+import json
+import os
 import sys
+import time
 from pathlib import Path
-
-from isaaclab.app import AppLauncher
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-TaskSpace-v0"
+ISAACLAB_ROOT = Path(os.environ.get("ISAACLAB_PATH", "/home/rrlab/IsaacLab"))
+ISAACLAB_RSL_RL_SCRIPTS = ISAACLAB_ROOT / "scripts" / "reinforcement_learning" / "rsl_rl"
+if ISAACLAB_RSL_RL_SCRIPTS.is_dir() and str(ISAACLAB_RSL_RL_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(ISAACLAB_RSL_RL_SCRIPTS))
 
-parser = argparse.ArgumentParser(description="Play the Kevin/Mulag hydraulic ROM joint-tracking task.")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of Isaac Lab environments.")
+from isaaclab.app import AppLauncher
+
+import cli_args  # isort: skip
+
+DEFAULT_HYDRAULIC_ROM_TASK = "Kevin-Mulag-HydraulicROM-TaskSpace-v0"
+EXPECTED_REGISTRATION_MODULE = "kevin_integration.tasks"
+
+parser = argparse.ArgumentParser(description="Play a Kevin/Mulag RSL-RL checkpoint.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during play.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video in steps.")
+parser.add_argument(
+    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+)
+parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=DEFAULT_HYDRAULIC_ROM_TASK, help="Gym task name.")
 parser.add_argument(
-    "--checkpoint",
+    "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
+)
+parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
+parser.add_argument("--real-time", action="store_true", default=False, help="Run in real time, if possible.")
+parser.add_argument(
+    "--best_from_run",
     type=str,
     default=None,
-    help="Optional RSL-RL checkpoint path. Omit it for the scripted visible reference demo.",
-)
-parser.add_argument("--steps", type=int, default=-1, help="Number of policy steps to run. Use -1 to run until closed.")
-parser.add_argument(
-    "--play_mode",
-    choices=["joint_space_validation", "rl_task_space_tracking"],
-    default=None,
-    help="Optional override. Task-space tracking requires --checkpoint.",
+    help="Run directory containing best_checkpoint.json from evaluate_mulag_checkpoints.py.",
 )
 parser.add_argument(
-    "--enable_vehicle_motion",
+    "--evaluate_best_from_run",
     action="store_true",
     default=False,
-    help="Enable RRLAB-style scripted vehicle motion for task-space play.",
+    help="Require the evaluator to be run explicitly when best_checkpoint.json is missing.",
 )
+cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.checkpoint is not None and not Path(args_cli.checkpoint).is_file():
-    raise FileNotFoundError(f"Checkpoint does not exist: {args_cli.checkpoint}")
+if args_cli.video:
+    args_cli.enable_cameras = True
+if args_cli.checkpoint and args_cli.best_from_run:
+    raise ValueError("Use either --checkpoint or --best_from_run, not both.")
 
-sys.argv = [sys.argv[0], *hydra_args]
+sys.argv = [sys.argv[0]] + hydra_args
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+import importlib.metadata as metadata
+
+from packaging import version
+
+installed_version = metadata.version("rsl-rl-lib")
+
 import gymnasium as gym
 import torch
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -57,283 +85,314 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab.utils.assets import retrieve_file_path
+from isaaclab.utils.dict import print_dict
 
+from isaaclab_rl.rsl_rl import (
+    RslRlBaseRunnerCfg,
+    RslRlVecEnvWrapper,
+    export_policy_as_jit,
+    export_policy_as_onnx,
+    handle_deprecated_rsl_rl_cfg,
+)
+
+import isaaclab_tasks  # noqa: F401
 import kevin_integration.tasks  # noqa: F401
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
 from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 
 
-def _as_list(value, precision: int = 4) -> list[float]:
-    if isinstance(value, torch.Tensor):
-        return [round(float(x), precision) for x in value.detach().flatten().cpu().tolist()]
-    return []
+def _is_missing_cfg_value(value: object) -> bool:
+    return isinstance(value, type(MISSING))
 
 
-def _scalar(value, default: float = float("nan")) -> float:
-    if isinstance(value, torch.Tensor):
-        return float(value.detach().flatten()[0].cpu())
+def _has_non_missing_attr(obj: object, attr_name: str) -> bool:
+    return hasattr(obj, attr_name) and not _is_missing_cfg_value(getattr(obj, attr_name))
+
+
+def _uses_current_distribution_schema(agent_cfg: RslRlBaseRunnerCfg, installed_rsl_rl_version: str) -> bool:
+    """Return True when the agent config is already in the RSL-RL 5 distribution schema."""
+    if version.parse(installed_rsl_rl_version) < version.parse("5.0.0"):
+        return False
+    if _has_non_missing_attr(agent_cfg, "policy"):
+        return False
+
+    saw_model_cfg = False
+    for model_name in ("actor", "critic", "student", "teacher"):
+        if not _has_non_missing_attr(agent_cfg, model_name):
+            continue
+        model_cfg = getattr(agent_cfg, model_name)
+        if not hasattr(model_cfg, "distribution_cfg"):
+            return False
+        saw_model_cfg = True
+        for attr_name in ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"):
+            if _has_non_missing_attr(model_cfg, attr_name):
+                return False
+    return saw_model_cfg
+
+
+def _prepare_rsl_rl_agent_cfg(
+    agent_cfg: RslRlBaseRunnerCfg,
+    installed_rsl_rl_version: str,
+) -> RslRlBaseRunnerCfg:
+    """Apply IsaacLab migration only when the Kevin config is not already current-schema."""
+    if _uses_current_distribution_schema(agent_cfg, installed_rsl_rl_version):
+        print(
+            "[INFO] RSL-RL agent config already uses distribution_cfg; "
+            "skipping deprecated stochastic-field migration.",
+            flush=True,
+        )
+        return agent_cfg
+    return handle_deprecated_rsl_rl_cfg(agent_cfg, installed_rsl_rl_version)
+
+
+def _verify_task_registration(task_name: str | None) -> None:
+    if not task_name:
+        raise RuntimeError("No --task was provided for the Kevin local player.")
     try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _roll_pitch_from_wxyz(quat: torch.Tensor | None) -> tuple[float, float]:
-    if not isinstance(quat, torch.Tensor) or quat.numel() != 4:
-        return float("nan"), float("nan")
-    w, x, y, z = [float(v) for v in quat.detach().flatten().cpu().tolist()]
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-    sinp = 2.0 * (w * y - z * x)
-    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
-    return roll, pitch
-
-
-def _vector_stats(value) -> tuple[float, float, float, float, float]:
-    if not isinstance(value, torch.Tensor) or value.numel() == 0:
-        nan = float("nan")
-        return nan, nan, nan, nan, nan
-    data = value.detach().float().flatten().cpu()
-    saturation = torch.mean((torch.abs(data) >= 0.99).float())
-    return (
-        float(torch.mean(data)),
-        float(torch.std(data, unbiased=False)),
-        float(torch.min(data)),
-        float(torch.max(data)),
-        float(saturation),
-    )
-
-
-class RuntimeSignalStats:
-    VECTOR_KEYS = (
-        "q_ref_commanded",
-        "q_actual",
-        "q_error",
-        "qdot_ref",
-        "qddot_cmd",
-        "id_input_normalized",
-        "valve_cmd",
-        "final_rom_input_features_normalized",
-        "final_rom_delta_extension_kinematic_50ms",
-        "final_rom_delta_extension_correction_50ms",
-        "final_rom_delta_extension_50ms",
-        "final_rom_delta_isaac_50ms",
-        "final_rom_delta_isaac_10ms",
-        "rom_cylinder_pos_target",
-        "rom_cylinder_cumulative_target_motion",
-        "rom_cylinder_cumulative_measured_motion",
-        "rom_cylinder_tracking_ratio",
-        "final_rom_extension_velocity",
-        "dP",
-    )
-    SCALAR_KEYS = (
-        "id_input_normalized_min",
-        "id_input_normalized_max",
-        "id_input_normalized_abs_max",
-        "final_rom_input_normalized_min",
-        "final_rom_input_normalized_max",
-        "z_arm_norm",
-        "z_arm_runtime_std",
-        "rom_target_clamp_fraction",
-        "reset_count",
-        "timeout",
-        "unsafe_termination",
-    )
-
-    def __init__(self) -> None:
-        self.samples: dict[str, list[torch.Tensor]] = {key: [] for key in self.VECTOR_KEYS}
-        self.scalars: dict[str, list[float]] = {key: [] for key in self.SCALAR_KEYS}
-
-    def update(self, debug: dict) -> None:
-        for key in self.VECTOR_KEYS:
-            value = debug.get(key)
-            if isinstance(value, torch.Tensor):
-                self.samples[key].append(torch.nan_to_num(value.detach().float().flatten().cpu()))
-        for key in self.SCALAR_KEYS:
-            value = debug.get(key)
-            if isinstance(value, torch.Tensor):
-                self.scalars[key].append(_scalar(value))
-
-    def print_summary(self) -> None:
-        print("[SUMMARY] Runtime signal max/RMS by stage:", flush=True)
-        for key, values in self.samples.items():
-            if not values:
-                continue
-            max_len = max(v.numel() for v in values)
-            padded = []
-            for value in values:
-                if value.numel() == max_len:
-                    padded.append(value)
-                else:
-                    pad = torch.zeros((max_len,), dtype=value.dtype)
-                    pad[: value.numel()] = value
-                    padded.append(pad)
-            data = torch.stack(padded)
-            abs_max = torch.max(torch.abs(data), dim=0).values
-            rms = torch.sqrt(torch.mean(torch.square(data), dim=0))
-            print(f"[SUMMARY] {key}: max={_as_list(abs_max, 6)} rms={_as_list(rms, 6)}", flush=True)
-        for key, values in self.scalars.items():
-            if not values:
-                continue
-            data = torch.tensor(values, dtype=torch.float32)
-            print(
-                f"[SUMMARY] {key}: max={float(torch.max(torch.abs(data))):.6g} "
-                f"rms={float(torch.sqrt(torch.mean(torch.square(data)))):.6g}",
-                flush=True,
-            )
-
-
-def _print_live_telemetry(raw_env, step: int, *, root0: torch.Tensor | None) -> None:
-    if not hasattr(raw_env, "get_debug_state"):
-        return
-    debug = raw_env.get_debug_state(0)
-    root = debug.get("root_pos_w")
-    if isinstance(root, torch.Tensor) and root0 is not None:
-        base_move = float(torch.linalg.norm(root - root0).detach().cpu())
-    else:
-        base_move = float("nan")
-    root_z = _scalar(root[2] if isinstance(root, torch.Tensor) and root.numel() >= 3 else None)
-    root_vel = debug.get("root_lin_vel_w")
-    root_vel_z = _scalar(root_vel[2] if isinstance(root_vel, torch.Tensor) and root_vel.numel() >= 3 else None)
-    roll, pitch = _roll_pitch_from_wxyz(debug.get("root_quat_w"))
-    valve_mean, valve_std, valve_min, valve_max, valve_sat = _vector_stats(debug.get("valve_cmd"))
+        spec = gym.spec(task_name)
+    except Exception as exc:
+        raise RuntimeError(
+            "Kevin Gym task registration failed before Hydra resolution.\n"
+            f"requested task: {task_name}\n"
+            f"expected registration module: {EXPECTED_REGISTRATION_MODULE}\n"
+            f"current working directory: {os.getcwd()}\n"
+            f"Python executable: {sys.executable}\n"
+            "suggested editable-install check: run `python -m pip install -e .` "
+            "from the Kevin project or ensure the repository root is on PYTHONPATH."
+        ) from exc
     print(
-        "[LIVE] "
-        f"step={step} "
-        f"episode_step={int(_scalar(debug.get('episode_step'), -1))} "
-        f"reset_count={int(_scalar(debug.get('reset_count'), 0))} "
-        f"reset_reason={debug.get('reset_reason', 'unknown')} "
-        f"q_des={_as_list(debug.get('q_ref_commanded'))} "
-        f"q={_as_list(debug.get('q_actual'))} "
-        f"err={_as_list(debug.get('q_error'))} "
-        f"qdot_des={_as_list(debug.get('qdot_ref'))} "
-        f"qddot_des={_as_list(debug.get('qddot_cmd'))} "
-        f"ee_des={_as_list(debug.get('ee_pose_command'))} "
-        f"ee={_as_list(debug.get('current_ee_pose'))} "
-        f"ee_err={_as_list(debug.get('ee_position_error'))} "
-        f"ee_rot_err={_scalar(debug.get('ee_orientation_error')):.4f} "
-        f"qddot_fb={_as_list(debug.get('scripted_qddot_feedback'))} "
-        f"qddot_ff={_as_list(debug.get('scripted_qddot_feedforward'))} "
-        f"action={_as_list(debug.get('action'))} "
-        f"id_norm_minmax=({_scalar(debug.get('id_input_normalized_min')):.3f},{_scalar(debug.get('id_input_normalized_max')):.3f}) "
-        f"z_arm_norm={_scalar(debug.get('z_arm_norm')):.3f} "
-        f"ValveCmd={_as_list(debug.get('valve_cmd'))} "
-        f"FD_tau={_as_list(debug.get('fd_tau_hat'))} "
-        f"FD_norm={_as_list(debug.get('fd_tau_hat_normalized'))} "
-        f"FD_load=({_scalar(debug.get('fd_soft_limit_fraction')):.3f},{_scalar(debug.get('fd_hard_limit_fraction')):.3f},{_scalar(debug.get('fd_normalized_abs_max')):.3f}) "
-        f"ValveStats=({valve_mean:.3f},{valve_std:.3f},{valve_min:.3f},{valve_max:.3f},sat={valve_sat:.2f}) "
-        f"ROM_norm_minmax=({_scalar(debug.get('final_rom_input_normalized_min')):.3f},{_scalar(debug.get('final_rom_input_normalized_max')):.3f}) "
-        f"ROM_kin={_as_list(debug.get('final_rom_delta_extension_kinematic_50ms'), 6)} "
-        f"ROM_corr={_as_list(debug.get('final_rom_delta_extension_correction_50ms'), 6)} "
-        f"ROM_dExt50={_as_list(debug.get('final_rom_delta_extension_50ms'), 6)} "
-        f"dIsaac50={_as_list(debug.get('final_rom_delta_isaac_50ms'), 6)} "
-        f"dIsaac10={_as_list(debug.get('final_rom_delta_isaac_10ms'), 6)} "
-        f"cyl_target={_as_list(debug.get('rom_cylinder_pos_target'))} "
-        f"cyl_q={_as_list(debug.get('q_actual'))[:4]} "
-        f"target_motion={_as_list(debug.get('rom_cylinder_cumulative_target_motion'), 5)} "
-        f"measured_motion={_as_list(debug.get('rom_cylinder_cumulative_measured_motion'), 5)} "
-        f"tracking_ratio={_as_list(debug.get('rom_cylinder_tracking_ratio'), 3)} "
-        f"root_z={root_z:.4f} root_vz={root_vel_z:.4f} roll={roll:.4f} pitch={pitch:.4f} "
-        f"vehicle_kmh={_scalar(debug.get('vehicle_speed_kmh')):.3f} "
-        f"base_move={base_move:.5f} "
-        f"clamp={float(debug.get('rom_target_clamp_fraction', torch.tensor(float('nan')))):.4f}",
+        "[INFO] Gym task registration resolved: "
+        f"id={spec.id} entry_point={spec.entry_point} kwargs={sorted(spec.kwargs)}",
         flush=True,
     )
 
 
-@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
-    env_cfg.scene.num_envs = args_cli.num_envs
-    if args_cli.task == DEFAULT_HYDRAULIC_ROM_TASK:
-        play_mode = args_cli.play_mode
-        if play_mode is None:
-            play_mode = "rl_task_space_tracking" if args_cli.checkpoint is not None else "joint_space_validation"
-        if play_mode == "rl_task_space_tracking" and args_cli.checkpoint is None:
+def _resolve_best_checkpoint(run_dir: str, *, evaluate_if_missing: bool = False) -> str:
+    run_path = Path(run_dir).expanduser().resolve()
+    best_path = run_path / "best_checkpoint.json"
+    if not best_path.is_file():
+        if evaluate_if_missing:
             raise RuntimeError(
-                "Task-space tracking requires a trained PPO checkpoint because the reference RRLAB task uses "
-                "the policy, not IK, to map ee_pose commands to arm actions."
+                "best_checkpoint.json is missing. Run the deterministic evaluator explicitly first:\n"
+                "./rrlab.sh -p kevin_integration/scripts/evaluate_mulag_checkpoints.py "
+                f"--task {args_cli.task} --run_dir {run_path} --headless"
             )
-
-        env_cfg.reference_mode = play_mode
-        env_cfg.control_mode = play_mode
-        if play_mode == "rl_task_space_tracking":
-            env_cfg.observation_space = env_cfg.task_space_observation_space
-        env_cfg.enable_scripted_vehicle_motion = (
-            bool(args_cli.enable_vehicle_motion) if play_mode == "joint_space_validation" else True
+        raise FileNotFoundError(
+            f"Missing best checkpoint metadata: {best_path}. "
+            "Run evaluate_mulag_checkpoints.py before using --best_from_run."
         )
+    data = json.loads(best_path.read_text(encoding="utf-8"))
+    checkpoint = data.get("checkpoint_path") or data.get("checkpoint path")
+    if not checkpoint:
+        raise RuntimeError(f"{best_path} does not contain checkpoint_path.")
+    checkpoint_path = Path(checkpoint).expanduser()
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = run_path / checkpoint_path
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Best checkpoint path from {best_path} does not exist: {checkpoint_path}")
+    print(f"[INFO] Resolved best checkpoint from {best_path}: {checkpoint_path}", flush=True)
+    return str(checkpoint_path)
+
+
+def _agent_architecture(agent_cfg: RslRlBaseRunnerCfg) -> dict[str, object]:
+    actor = getattr(agent_cfg, "actor", None)
+    critic = getattr(agent_cfg, "critic", None)
+    algorithm = getattr(agent_cfg, "algorithm", None)
+    return {
+        "runner_class": getattr(agent_cfg, "class_name", None),
+        "actor_hidden_dims": list(getattr(actor, "hidden_dims", []) or []),
+        "critic_hidden_dims": list(getattr(critic, "hidden_dims", []) or []),
+        "actor_activation": getattr(actor, "activation", None),
+        "critic_activation": getattr(critic, "activation", None),
+        "gamma": getattr(algorithm, "gamma", None),
+    }
+
+
+def _checkpoint_contract_payload(checkpoint_path: str) -> dict[str, object]:
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    except Exception as exc:
+        print(f"[WARN] Could not inspect checkpoint metadata before loading: {exc}", flush=True)
+        return {}
+    if not isinstance(checkpoint, dict):
+        return {}
+    infos = checkpoint.get("infos", {})
+    if isinstance(infos, dict):
+        for key in ("kevin_checkpoint_contract", "environment_contract", "env_contract"):
+            value = infos.get(key)
+            if isinstance(value, dict):
+                return value
+    for key in ("kevin_checkpoint_contract", "environment_contract", "env_contract"):
+        value = checkpoint.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _validate_checkpoint_compatibility(
+    checkpoint_path: str,
+    *,
+    task_name: str,
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    agent_cfg: RslRlBaseRunnerCfg,
+    env,
+) -> None:
+    current = {
+        "task_name": task_name,
+        "observation_dimension": int(getattr(env_cfg, "observation_space", -1)),
+        "action_dimension": int(getattr(env_cfg, "action_space", -1)),
+        "runner_class": getattr(agent_cfg, "class_name", None),
+        "policy_architecture": _agent_architecture(agent_cfg),
+        "normalizer_present": bool(getattr(agent_cfg, "empirical_normalization", False))
+        or bool(getattr(getattr(agent_cfg, "actor", None), "obs_normalization", False)),
+        "environment_contract_version": str(getattr(env_cfg, "kevin_fixed_pose_contract_version", "")),
+        "reward_contract_version": str(getattr(env_cfg, "reward_contract_version", "")),
+    }
+    actual_obs = env.unwrapped.get_observations()
+    if isinstance(actual_obs, dict) and "policy" in actual_obs:
+        current["observation_dimension"] = int(actual_obs["policy"].shape[-1])
+    current["action_dimension"] = int(getattr(env.unwrapped, "num_actions", current["action_dimension"]))
+
+    saved = _checkpoint_contract_payload(checkpoint_path)
+    if not saved:
         print(
-            "[INFO] Kevin play mode: "
-            f"{play_mode} reference_mode={env_cfg.reference_mode} "
-            f"enable_scripted_vehicle_motion={env_cfg.enable_scripted_vehicle_motion}",
+            "[WARN] Checkpoint has no Kevin environment/reward contract metadata; "
+            "visualization is allowed only because tensor dimensions will be checked by RSL-RL load.",
             flush=True,
         )
-    if args_cli.device is not None:
-        env_cfg.sim.device = args_cli.device
-        agent_cfg.device = args_cli.device
+        return
+    strict_keys = ("task_name", "observation_dimension", "action_dimension", "runner_class")
+    mismatches = []
+    warnings = []
+    for key in strict_keys:
+        if key in saved and saved[key] != current[key]:
+            mismatches.append(f"{key}: checkpoint={saved[key]!r} current={current[key]!r}")
+    for key in ("policy_architecture", "normalizer_present", "environment_contract_version", "reward_contract_version"):
+        if key in saved and saved[key] != current[key]:
+            warnings.append(f"{key}: checkpoint={saved[key]!r} current={current[key]!r}")
+    if mismatches:
+        raise RuntimeError("Checkpoint is incompatible with the current task contract:\n" + "\n".join(mismatches))
+    if warnings:
+        print(
+            "[WARN] Checkpoint contract differs from current visualization contract:\n"
+            + "\n".join(warnings)
+            + "\nDo not resume training silently under a changed reward or environment contract.",
+            flush=True,
+        )
 
+
+_verify_task_registration(args_cli.task)
+
+
+@hydra_task_config(args_cli.task, args_cli.agent)
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
+    """Play with RSL-RL agent."""
+    task_name = args_cli.task.split(":")[-1]
+
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    agent_cfg = _prepare_rsl_rl_agent_cfg(agent_cfg, installed_version)
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.seed = agent_cfg.seed
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     apply_kevin_sim_memory_optimizations(env_cfg.sim, verbose=True)
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    if args_cli.best_from_run:
+        resume_path = _resolve_best_checkpoint(
+            args_cli.best_from_run,
+            evaluate_if_missing=bool(args_cli.evaluate_best_from_run),
+        )
+    elif args_cli.checkpoint:
+        resume_path = retrieve_file_path(args_cli.checkpoint)
+    else:
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+
+    log_dir = os.path.dirname(resume_path)
+    env_cfg.log_dir = log_dir
+
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     try:
         if isinstance(env.unwrapped, DirectMARLEnv):
             env = multi_agent_to_single_agent(env)
-        raw_env = env.unwrapped
-        if getattr(raw_env.cfg, "control_mode", "") == "rl_task_space_tracking" and hasattr(raw_env, "run_task_space_bridge_preflight"):
-            task_space_result = raw_env.run_task_space_bridge_preflight()
-            print(f"[PREFLIGHT] task_space_bridge={task_space_result}", flush=True)
-            if not bool(task_space_result.get("passed", False)):
-                raise RuntimeError(
-                    "Task-space play mode is blocked before playback: "
-                    f"{task_space_result.get('preflight_decision', 'BLOCKED_TASKSPACE_REFERENCE')}"
-                )
 
-        env = RslRlVecEnvWrapper(env)
-        policy = None
-        if args_cli.checkpoint is not None:
+        _validate_checkpoint_compatibility(
+            resume_path,
+            task_name=task_name,
+            env_cfg=env_cfg,
+            agent_cfg=agent_cfg,
+            env=env,
+        )
+
+        if args_cli.video:
+            video_kwargs = {
+                "video_folder": os.path.join(log_dir, "videos", "play"),
+                "step_trigger": lambda step: step == 0,
+                "video_length": args_cli.video_length,
+                "disable_logger": True,
+            }
+            print("[INFO] Recording videos during play.")
+            print_dict(video_kwargs, nesting=4)
+            env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+        print(f"[INFO] Loading model checkpoint from: {resume_path}")
+        if agent_cfg.class_name == "OnPolicyRunner":
             runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-            print(f"[INFO] Loading checkpoint: {args_cli.checkpoint}")
-            runner.load(args_cli.checkpoint)
-            policy = runner.get_inference_policy(device=agent_cfg.device)
+        elif agent_cfg.class_name == "DistillationRunner":
+            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         else:
-            print("[INFO] Running joint_space_validation with zero external actions.")
+            raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+        runner.load(resume_path)
+        policy = runner.get_inference_policy(device=env.unwrapped.device)
 
+        export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+        policy_nn = None
+        if version.parse(installed_version) >= version.parse("4.0.0"):
+            runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
+            runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
+        else:
+            if version.parse(installed_version) >= version.parse("2.3.0"):
+                policy_nn = runner.alg.policy
+            else:
+                policy_nn = runner.alg.actor_critic
+            if hasattr(policy_nn, "actor_obs_normalizer"):
+                normalizer = policy_nn.actor_obs_normalizer
+            elif hasattr(policy_nn, "student_obs_normalizer"):
+                normalizer = policy_nn.student_obs_normalizer
+            else:
+                normalizer = None
+            export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
+            export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
+
+        dt = env.unwrapped.step_dt
         obs = env.get_observations()
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        root0 = None
-        if hasattr(raw_env, "get_debug_state"):
-            root_candidate = raw_env.get_debug_state(0).get("root_pos_w")
-            if isinstance(root_candidate, torch.Tensor):
-                root0 = root_candidate.detach().clone()
-        step_dt = float(getattr(raw_env, "step_dt", getattr(env_cfg.sim, "dt", 0.01) * getattr(env_cfg, "decimation", 1)))
-        telemetry_interval = max(1, int(round(1.0 / max(step_dt, 1.0e-6))))
-        stats = RuntimeSignalStats()
-        step = 0
-        while args_cli.steps < 0 or step < args_cli.steps:
-            if args_cli.steps < 0 and hasattr(simulation_app, "is_running") and not simulation_app.is_running():
-                break
+        timestep = 0
+        while simulation_app.is_running():
+            start_time = time.time()
             with torch.inference_mode():
-                if policy is None:
-                    actions = torch.zeros((env.num_envs, env.num_actions), dtype=torch.float32, device=env.device)
-                else:
-                    actions = policy(obs)
-            obs, _, _, _ = env.step(actions)
-            if isinstance(obs, tuple):
-                obs = obs[0]
-            step += 1
-            if hasattr(raw_env, "get_debug_state"):
-                stats.update(raw_env.get_debug_state(0))
-            if step % telemetry_interval == 0:
-                _print_live_telemetry(raw_env, step, root0=root0)
-        stats.print_summary()
+                actions = policy(obs)
+                obs, _, dones, _ = env.step(actions)
+                if version.parse(installed_version) >= version.parse("4.0.0"):
+                    policy.reset(dones)
+                elif policy_nn is not None:
+                    policy_nn.reset(dones)
+            if args_cli.video:
+                timestep += 1
+                if timestep == args_cli.video_length:
+                    break
+            sleep_time = dt - (time.time() - start_time)
+            if args_cli.real_time and sleep_time > 0:
+                time.sleep(sleep_time)
     finally:
         env.close()
 
 
 if __name__ == "__main__":
     try:
-        main()  # type: ignore
+        main()
     finally:
         simulation_app.close()
