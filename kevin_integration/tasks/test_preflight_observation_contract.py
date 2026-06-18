@@ -5,7 +5,7 @@ No Isaac Lab, gymnasium, or Conda dependencies required.
 Verifies:
 1. Canonical task remains rl_task_space_tracking.
 2. Enabling the internal flag routes to the complete scripted lifecycle.
-3. The flag does not change the 73D observation contract.
+3. The flag does not change the 70D observation contract.
 4. Scripted lifecycle: settling → _hold_reference_at_current_state.
 5. Scripted lifecycle: after settling → _update_scripted_reference invoked.
 6. Scripted lifecycle: action is zero during settling period.
@@ -14,7 +14,7 @@ Verifies:
 9. qddot_cmd is computed from the final ramped/scaled action.
 10. Flag is restored after preflight success.
 11. Flag is restored if preflight raises an exception.
-12. Joint-space validation contract remains 62D.
+12. Joint-space validation contract remains 52D.
 13. _maybe_initialize_learned_control defers init during settling when flag active.
 """
 
@@ -26,8 +26,8 @@ import unittest
 import torch
 
 # Canonical constants matching the production code.
-TASK_SPACE_OBSERVATION_DIM = 73
-JOINT_SPACE_OBSERVATION_DIM = 62
+TASK_SPACE_OBSERVATION_DIM = 70
+JOINT_SPACE_OBSERVATION_DIM = 52
 CANONICAL_CONTROL_MODE = "rl_task_space_tracking"
 JOINT_SPACE_VALIDATION_MODE = "joint_space_validation"
 SCRIPTED_REFERENCE_DEMO_MODE = "scripted_reference_demo"
@@ -107,14 +107,14 @@ class TestPreflightObservationContract(unittest.TestCase):
     # Test 3: Flag does not change observation dimension
     # ----------------------------------------------------------------
     def test_flag_preserves_observation_dimension(self):
-        """Enabling the internal flag must NOT change the 73D observation.
+        """Enabling the internal flag must NOT change the 70D observation.
 
         The observation dimension is determined by _task_control_mode(),
         which reads cfg.control_mode. Since the fix never mutates
         cfg.control_mode, the flag has zero effect on observation dimension.
         """
         obs_dim = TASK_SPACE_OBSERVATION_DIM
-        self.assertEqual(obs_dim, 73)
+        self.assertEqual(obs_dim, 70)
         # Flag does not affect dim — this is the invariant
         self.assertEqual(
             TASK_SPACE_OBSERVATION_DIM,
@@ -402,14 +402,14 @@ class TestPreflightObservationContract(unittest.TestCase):
         self.assertFalse(flag, "Flag must be False after preflight exception")
 
     # ----------------------------------------------------------------
-    # Test 12: Joint-space validation remains 62D
+    # Test 12: Joint-space validation remains 52D
     # ----------------------------------------------------------------
     def test_joint_space_validation_observation_dim(self):
-        """joint_space_validation must use 62D observations."""
+        """joint_space_validation must use 52D observations."""
         self.assertEqual(
             JOINT_SPACE_OBSERVATION_DIM,
-            62,
-            "Joint-space validation observation must be 62D",
+            52,
+            "Joint-space validation observation must be 52D",
         )
         self.assertNotEqual(
             JOINT_SPACE_OBSERVATION_DIM,

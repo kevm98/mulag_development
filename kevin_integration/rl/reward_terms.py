@@ -19,7 +19,7 @@ class JointReachRewardWeights:
     joint1_settle_tracking: float = 3.0
     joint1_settle_error_deadband: float = 0.005
     valve_effort: float = 0.01
-    torque_effort: float = 1.0e-6
+    torque_effort: float = 0.0
     alive: float = 0.1
     termination: float = 5.0
 
@@ -110,6 +110,121 @@ def update_consecutive_success_counter(
         success_counter + 1,
         torch.zeros_like(success_counter),
     )
+
+
+def bounded_loss(value: torch.Tensor) -> torch.Tensor:
+    """Smooth bounded loss in ``[0, 1)`` for normalized excess signals."""
+    return torch.tanh(torch.square(torch.clamp(value, min=0.0)))
+
+
+def normalized_task_space_potential(
+    position_error_norm: torch.Tensor,
+    orientation_error: torch.Tensor,
+    *,
+    position_scale_m: float,
+    orientation_scale_rad: float,
+    position_weight: float,
+    orientation_weight: float,
+) -> torch.Tensor:
+    """Negative normalized pose error used for potential-based progress shaping."""
+    if position_scale_m <= 0.0:
+        raise ValueError("position_scale_m must be positive")
+    if orientation_scale_rad <= 0.0:
+        raise ValueError("orientation_scale_rad must be positive")
+    normalized_position_error = position_error_norm / float(position_scale_m)
+    normalized_orientation_error = orientation_error / float(orientation_scale_rad)
+    return -(
+        float(position_weight) * normalized_position_error
+        + float(orientation_weight) * normalized_orientation_error
+    )
+
+
+def potential_progress_shaping(
+    phi_current: torch.Tensor,
+    phi_next: torch.Tensor,
+    *,
+    gamma: float,
+    weight: float = 1.0,
+    reset_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Return ``weight * (gamma * phi_next - phi_current)`` with reset leakage masked out."""
+    if gamma <= 0.0:
+        raise ValueError("gamma must be positive")
+    shaping = float(weight) * (float(gamma) * phi_next - phi_current)
+    if reset_mask is not None:
+        shaping = torch.where(reset_mask, torch.zeros_like(shaping), shaping)
+    return shaping
+
+
+def avoidable_clamp_penalty(
+    boundary_active: torch.Tensor,
+    outward_request: torch.Tensor,
+    blocked_outward_increment: torch.Tensor,
+    *,
+    increment_scale: float,
+    weight: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Penalize only avoidable outward requests at a boundary, not static occupancy."""
+    if increment_scale <= 0.0:
+        raise ValueError("increment_scale must be positive")
+    outward_violation = boundary_active & outward_request
+    normalized_outward_request = torch.abs(blocked_outward_increment) / float(increment_scale)
+    per_channel_loss = outward_violation.float() * bounded_loss(normalized_outward_request)
+    penalty = -float(weight) * torch.mean(per_channel_loss, dim=-1)
+    activation_fraction = torch.mean(outward_violation.float(), dim=-1)
+    mean_blocked_request = torch.mean(
+        outward_violation.float() * torch.abs(blocked_outward_increment),
+        dim=-1,
+    )
+    return penalty, activation_fraction, mean_blocked_request
+
+
+def valve_saturation_penalty(
+    applied_valve_cmd: torch.Tensor,
+    *,
+    sat_start: float,
+    weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Soft bounded penalty based on applied ValveCmd excess above ``sat_start``."""
+    if not 0.0 <= sat_start < 1.0:
+        raise ValueError("sat_start must be in [0, 1)")
+    sat_excess = torch.relu(torch.abs(applied_valve_cmd) - float(sat_start)) / (1.0 - float(sat_start))
+    penalty = -float(weight) * torch.mean(bounded_loss(sat_excess), dim=-1)
+    saturation_fraction = torch.mean((sat_excess > 0.0).float(), dim=-1)
+    return penalty, saturation_fraction
+
+
+def fd_load_excess_penalty(
+    fd_tau_hat_normalized: torch.Tensor,
+    *,
+    soft_threshold: float,
+    weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Bounded penalty for normalized FD load only above an evidence-backed soft threshold."""
+    if soft_threshold <= 0.0:
+        raise ValueError("soft_threshold must be positive")
+    fd_excess = torch.relu(torch.abs(fd_tau_hat_normalized) - float(soft_threshold)) / float(soft_threshold)
+    penalty = -float(weight) * torch.mean(bounded_loss(fd_excess), dim=-1)
+    excess_fraction = torch.mean((fd_excess > 0.0).float(), dim=-1)
+    return penalty, excess_fraction
+
+
+def hold_progress_reward(
+    success_hold_counter: torch.Tensor,
+    *,
+    required_hold_steps: int,
+    weight: float,
+    within_final_pose: torch.Tensor,
+) -> torch.Tensor:
+    """Bounded monotonic reward for consecutive settled steps before strict success."""
+    if required_hold_steps <= 0:
+        raise ValueError("required_hold_steps must be positive")
+    hold_fraction = torch.clamp(
+        success_hold_counter.to(dtype=torch.float32) / float(required_hold_steps),
+        min=0.0,
+        max=1.0,
+    )
+    return float(weight) * within_final_pose.float() * torch.square(hold_fraction)
 
 
 def _as_joint_weights(

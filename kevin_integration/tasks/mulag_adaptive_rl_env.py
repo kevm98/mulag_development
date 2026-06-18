@@ -32,14 +32,20 @@ from kevin_integration.rl import AdaptiveRLLearnedController, AdaptiveRLLearnedC
 from kevin_integration.rl.action_adapter import clamp_and_sanitize
 from kevin_integration.rl.reward_terms import (
     JointReachRewardWeights,
+    avoidable_clamp_penalty,
+    fd_load_excess_penalty,
     final_pose_orientation_reward,
     final_pose_within_tolerance,
+    hold_progress_reward,
     joint_reach_reward,
     joint_reach_reward_debug,
     joint_safety_termination,
     normalize_quaternion_wxyz,
+    normalized_task_space_potential,
+    potential_progress_shaping,
     quaternion_geodesic_error,
     update_consecutive_success_counter,
+    valve_saturation_penalty,
 )
 from kevin_integration.tasks.asset_preflight_classifier import (
     ASSET_TRANSMISSION_PASS,
@@ -70,18 +76,24 @@ from kevin_integration.tasks.task_space_reference import (
 class MulagAdaptiveRLEnv(DirectRLEnv):
     cfg: MulagAdaptiveRLJointReachEnvCfg
     _runtime_contract_printed = False
+    _reward_contract_printed = False
 
     def __init__(self, cfg: MulagAdaptiveRLJointReachEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self._state_joint_ids = self._find_joint_ids(self.cfg.state_joint_names)
-        self._command_joint_ids = self._find_joint_ids(self.cfg.command_joint_names)
+        self._mechanical_joint_ids = self._find_joint_ids(self.cfg.mechanical_joint_names)
+        self._cylinder_joint_ids = self._find_joint_ids(self.cfg.cylinder_joint_names)
+        # Backward-compatible aliases: "state" is the learned-model mechanical
+        # state; "command" is the low-level cylinder/ROM writer state.
+        self._state_joint_ids = self._mechanical_joint_ids
+        self._command_joint_ids = self._cylinder_joint_ids
         self._vehicle_wheel_joint_ids = self._find_optional_joint_ids(self.cfg.vehicle_wheel_joint_names)
         self._ee_body_id = self._find_optional_body_id(getattr(self.cfg, "task_space_ee_body_name", TASK_SPACE_EE_BODY))
-        if len(self._state_joint_ids) != 5:
-            raise RuntimeError(f"Expected 5 state joints, got {len(self._state_joint_ids)}")
-        if len(self._command_joint_ids) != 4:
-            raise RuntimeError(f"Expected 4 command joints, got {len(self._command_joint_ids)}")
+        if len(self._mechanical_joint_ids) != 5:
+            raise RuntimeError(f"Expected 5 mechanical feature joints, got {len(self._mechanical_joint_ids)}")
+        if len(self._cylinder_joint_ids) != 4:
+            raise RuntimeError(f"Expected 4 cylinder joints, got {len(self._cylinder_joint_ids)}")
+        self._assert_velocity_state_contract()
         self._assert_single_actuator_writer()
         self._q_tracking_reward_joint_weights = torch.as_tensor(
             getattr(self.cfg, "q_tracking_reward_joint_weights", self.cfg.q_tracking_joint_weights),
@@ -240,6 +252,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._current_tau_isaac_filtered = torch.zeros_like(self._current_torque)
         self._current_tau_isaac_clamped = torch.zeros_like(self._current_torque)
         self._rom_cylinder_pos_target = torch.zeros_like(self._current_torque)
+        self._rom_cylinder_pos_target_prev = torch.zeros_like(self._current_torque)
         self._rom_cylinder_pos_target_at_reset = torch.zeros_like(self._current_torque)
         self._rom_cylinder_measured_at_reset = torch.zeros_like(self._current_torque)
         self._rom_cylinder_cumulative_target_motion = torch.zeros_like(self._current_torque)
@@ -258,6 +271,27 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_rom_delta_isaac_10ms = torch.zeros_like(self._current_torque)
         self._final_rom_extension = torch.zeros_like(self._current_torque)
         self._final_rom_extension_velocity = torch.zeros_like(self._current_torque)
+        self._prev_hydraulic_q = torch.zeros_like(self._current_torque)
+        self._hydraulic_qdot_fd = torch.zeros_like(self._current_torque)
+        self._hydraulic_target_velocity = torch.zeros_like(self._current_torque)
+        self._hydraulic_rom_applied_rate = torch.zeros_like(self._current_torque)
+        self._hydraulic_velocity_persistence = torch.zeros(
+            (self.num_envs, 4), dtype=torch.long, device=self.device
+        )
+        self._hydraulic_velocity_raw_exceedance = torch.zeros(
+            (self.num_envs, 4), dtype=torch.bool, device=self.device
+        )
+        self._hydraulic_velocity_confirmed_hard = torch.zeros_like(
+            self._hydraulic_velocity_raw_exceedance
+        )
+        self._hydraulic_velocity_spike_ignored = torch.zeros_like(
+            self._hydraulic_velocity_raw_exceedance
+        )
+        self._velocity_audit_physx_spike_count = torch.zeros((), dtype=torch.float32, device=self.device)
+        self._velocity_audit_target_jump_count = torch.zeros((), dtype=torch.float32, device=self.device)
+        self._velocity_audit_genuine_high_motion_count = torch.zeros((), dtype=torch.float32, device=self.device)
+        self._velocity_audit_unit_mapping_mismatch_count = torch.zeros((), dtype=torch.float32, device=self.device)
+        self._velocity_audit_nonfinite_count = torch.zeros((), dtype=torch.float32, device=self.device)
         self._final_rom_input_features_raw = torch.zeros((self.num_envs, 4, 17), dtype=torch.float32, device=self.device)
         self._final_rom_input_features_normalized = torch.zeros_like(self._final_rom_input_features_raw)
         self._final_rom_inverse_mapping_error = torch.zeros_like(self._current_torque)
@@ -265,6 +299,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_rom_update_flag = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self._final_rom_history_ready = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self._rom_target_clamp_fraction = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._rom_boundary_active = torch.zeros((self.num_envs, 4), dtype=torch.bool, device=self.device)
+        self._rom_outward_request = torch.zeros_like(self._rom_boundary_active)
+        self._rom_blocked_outward_increment = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        self._rom_clamp_activation_fraction = torch.zeros_like(self._rom_target_clamp_fraction)
+        self._rom_clamp_blocked_outward_mean = torch.zeros_like(self._rom_target_clamp_fraction)
         self._rom_pressure_clamp_fraction = torch.zeros_like(self._rom_target_clamp_fraction)
         self._rom_velocity_clamp_fraction = torch.zeros_like(self._rom_target_clamp_fraction)
         self._rom_dx_clamp_fraction = torch.zeros_like(self._rom_target_clamp_fraction)
@@ -298,6 +337,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_pose_time_to_success_steps = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device
         )
+        self._final_pose_entered_tolerance_count_total = torch.zeros((), dtype=torch.float32, device=self.device)
+        self._final_pose_settling_hold_max = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self._final_pose_settling_hold_max_total = torch.zeros((), dtype=torch.float32, device=self.device)
         self._fd_tau_hat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._fd_tau_hat_normalized = torch.zeros_like(self._fd_tau_hat)
         self._fd_soft_limit_fraction = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
@@ -320,6 +362,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._torque_adapter_clamp_fraction = torch.zeros_like(self._torque_clamp_fraction)
         self._torque_rate_limited_fraction = torch.zeros_like(self._torque_clamp_fraction)
         self._z_arm_hat = torch.zeros((self.num_envs, 24), dtype=torch.float32, device=self.device)
+        assert not self._z_arm_hat.is_inference(), "_z_arm_hat must be a normal mutable buffer."
         self._aam_latent_state_version = torch.zeros(
             (self.num_envs,), dtype=torch.long, device=self.device
         )
@@ -350,6 +393,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._curriculum_stage_other_unsafe_count = 0.0
         self._curriculum_stage_position_error_sum = 0.0
         self._curriculum_stage_advance_count = 0
+        self._curriculum_stage_success_count = 0.0
+        self._curriculum_stage_near_pose_low_speed_count = 0.0
+        self._curriculum_stage_max_hold_steps_sum = 0.0
+        self._curriculum_stage_ready_windows = 0
 
         # ── Termination diagnostics (per-reason, per-env) ─────────────────────────
         # Per-step booleans (copied from latest _get_dones call).
@@ -358,6 +405,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         )
         self._termination_lower_limit = torch.zeros_like(self._termination_joint_nonfinite)
         self._termination_upper_limit = torch.zeros_like(self._termination_joint_nonfinite)
+        self._termination_cylinder_lower_limit = torch.zeros_like(self._termination_joint_nonfinite)
+        self._termination_cylinder_upper_limit = torch.zeros_like(self._termination_joint_nonfinite)
         self._termination_velocity = torch.zeros_like(self._termination_joint_nonfinite)
         self._termination_control_nonfinite = torch.zeros_like(self._termination_joint_nonfinite)
         self._termination_success = torch.zeros_like(self._termination_joint_nonfinite)
@@ -388,11 +437,49 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_clamp_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_fd_load_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_unsafe_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_linear_velocity_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_angular_velocity_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_settling_reward_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_hold_progress_reward_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_clamp_activation_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_valve_saturation_fraction_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_position_error_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_success_bonus_sum = torch.zeros_like(self._episode_pos_tracking_sum)
 
+        # ── Persistent cumulative unsafe-penalty counters (monotonic, survive resets) ──
+        self._unsafe_penalty_event_count_total = torch.zeros(
+            (), dtype=torch.long, device=self.device
+        )
+        self._unsafe_penalty_value_total = torch.zeros(
+            (), dtype=torch.float32, device=self.device
+        )
+        # ── Per-environment terminal unsafe-penalty snapshot buffers (consumed on reset) ──
+        self._terminal_unsafe_penalty = torch.zeros(
+            (self.num_envs,), dtype=torch.float32, device=self.device
+        )
+        self._terminal_unsafe_mask = torch.zeros(
+            (self.num_envs,), dtype=torch.bool, device=self.device
+        )
+
         # ── Progress reward buffer (per-env, stores previous position-error norm) ─
         self._prev_pos_error_norm = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._prev_task_space_potential = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._task_space_potential_valid = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+
+        rolling_capacity = 1000
+        self._rolling_1000_cursor = torch.zeros((), dtype=torch.long, device=self.device)
+        self._rolling_1000_count = torch.zeros((), dtype=torch.long, device=self.device)
+        self._rolling_1000_success = torch.zeros((rolling_capacity,), dtype=torch.float32, device=self.device)
+        self._rolling_1000_timeout = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_final_position_error = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_final_orientation_error = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_final_linear_speed = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_final_angular_speed = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_max_hold_steps = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_clamp_activation_fraction = torch.zeros_like(self._rolling_1000_success)
+        self._rolling_1000_valve_saturation_fraction = torch.zeros_like(self._rolling_1000_success)
+
+        self._print_and_write_reward_contract_once()
 
     def _setup_scene(self):
         self.robot = Articulation(self.cfg.robot_cfg)
@@ -446,6 +533,45 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             print(f"[WARN] Could not resolve optional end-effector body: {body_name}", flush=True)
             return None
         return int(body_ids[0])
+
+    def _assert_velocity_state_contract(self) -> None:
+        mechanical_names = tuple(self.cfg.mechanical_joint_names)
+        cylinder_names = tuple(self.cfg.cylinder_joint_names)
+        mechanical_pos_units = tuple(self.cfg.mechanical_joint_position_units)
+        mechanical_vel_units = tuple(self.cfg.mechanical_joint_velocity_units)
+        mechanical_types = tuple(self.cfg.mechanical_joint_types)
+        cylinder_pos_units = tuple(self.cfg.cylinder_joint_position_units)
+        cylinder_vel_units = tuple(self.cfg.cylinder_joint_velocity_units)
+        if len(mechanical_names) != 5 or len(self._mechanical_joint_ids) != 5:
+            raise RuntimeError("Mechanical learned-model state must resolve exactly five joints.")
+        if len(cylinder_names) != 4 or len(self._cylinder_joint_ids) != 4:
+            raise RuntimeError("Cylinder ROM/writer state must resolve exactly four joints.")
+        if mechanical_pos_units != ("rad", "rad", "rad", "rad", "rad"):
+            raise RuntimeError(f"Mechanical q units must be radians, got {mechanical_pos_units}.")
+        if mechanical_vel_units != ("rad/s", "rad/s", "rad/s", "rad/s", "rad/s"):
+            raise RuntimeError(f"Mechanical qdot units must be rad/s, got {mechanical_vel_units}.")
+        if cylinder_pos_units != ("m", "m", "m", "m"):
+            raise RuntimeError(f"Cylinder extension units must be metres, got {cylinder_pos_units}.")
+        if cylinder_vel_units != ("m/s", "m/s", "m/s", "m/s"):
+            raise RuntimeError(f"Cylinder extension velocity units must be m/s, got {cylinder_vel_units}.")
+        if len(mechanical_types) != 5:
+            raise RuntimeError(f"mechanical_joint_types must contain five entries, got {mechanical_types}.")
+        self._mechanical_cylinder_joint_id_overlap = sorted(
+            set(int(joint_id) for joint_id in self._mechanical_joint_ids)
+            & set(int(joint_id) for joint_id in self._cylinder_joint_ids)
+        )
+        self._velocity_state_contract = {
+            "mechanical_joint_names": mechanical_names,
+            "mechanical_joint_ids": tuple(int(joint_id) for joint_id in self._mechanical_joint_ids),
+            "mechanical_joint_types": mechanical_types,
+            "mechanical_position_units": mechanical_pos_units,
+            "mechanical_velocity_units": mechanical_vel_units,
+            "cylinder_joint_names": cylinder_names,
+            "cylinder_joint_ids": tuple(int(joint_id) for joint_id in self._cylinder_joint_ids),
+            "cylinder_position_units": cylinder_pos_units,
+            "cylinder_velocity_units": cylinder_vel_units,
+            "overlap_joint_ids": tuple(self._mechanical_cylinder_joint_id_overlap),
+        }
 
     def _assert_single_actuator_writer(self) -> None:
         use_rom_position_targets = bool(self.cfg.use_final_causal_cylinder_rom or self.cfg.use_reduced_hydraulic_rom)
@@ -656,6 +782,13 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             ("dP_source", str(self.cfg.final_causal_rom_pressure_source)),
             ("coordinate_mapping", str(self.cfg.cylinder_coordinate_mapping_mode)),
             ("writer", "set_joint_position_target on four prismatic cylinder joints"),
+            ("mechanical_joint_names", str(tuple(self.cfg.mechanical_joint_names))),
+            ("mechanical_joint_ids", str(self._mechanical_joint_ids)),
+            ("mechanical_units", "q=rad, qdot=rad/s"),
+            ("cylinder_joint_names", str(tuple(self.cfg.cylinder_joint_names))),
+            ("cylinder_joint_ids", str(self._cylinder_joint_ids)),
+            ("cylinder_units", "extension=m, extension_velocity=m/s"),
+            ("mechanical_cylinder_overlap_ids", str(self._mechanical_cylinder_joint_id_overlap)),
         ]
         for key, value in rows:
             print(f"[INFO]   {key:18s} {value}", flush=True)
@@ -768,15 +901,385 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             "blocker": "" if passed else decision,
         }
 
+    def _read_mechanical_state(self) -> tuple[torch.Tensor, torch.Tensor]:
+        mechanical_q = self.robot.data.joint_pos[:, self._mechanical_joint_ids]
+        mechanical_qdot = self.robot.data.joint_vel[:, self._mechanical_joint_ids]
+        return mechanical_q, mechanical_qdot
+
     def _read_joint_state(self) -> tuple[torch.Tensor, torch.Tensor]:
-        q = self.robot.data.joint_pos[:, self._state_joint_ids]
-        qdot = self.robot.data.joint_vel[:, self._state_joint_ids]
-        return q, qdot
+        """Backward-compatible alias for the 5D learned-model mechanical state."""
+        return self._read_mechanical_state()
 
     def _read_cylinder_state(self) -> tuple[torch.Tensor, torch.Tensor]:
-        cylinder_q = self.robot.data.joint_pos[:, self._command_joint_ids]
-        cylinder_qdot = self.robot.data.joint_vel[:, self._command_joint_ids]
-        return cylinder_q, cylinder_qdot
+        cylinder_extension = self.robot.data.joint_pos[:, self._cylinder_joint_ids]
+        cylinder_extension_velocity = self.robot.data.joint_vel[:, self._cylinder_joint_ids]
+        return cylinder_extension, cylinder_extension_velocity
+
+    def _validated_hydraulic_velocity_limits_enabled(self) -> bool:
+        if not bool(getattr(self.cfg, "enable_validated_hydraulic_velocity_termination", False)):
+            return False
+        hard = torch.as_tensor(
+            self.cfg.hydraulic_hard_velocity_limits_mps,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if hard.shape != (4,):
+            raise RuntimeError(f"hydraulic_hard_velocity_limits_mps must have shape (4,), got {tuple(hard.shape)}")
+        return bool(torch.all(torch.isfinite(hard)) and torch.all(hard > 0.0))
+
+    def _hydraulic_velocity_limit_tensor(self, field: str) -> torch.Tensor:
+        limits = torch.as_tensor(getattr(self.cfg, field), dtype=torch.float32, device=self.device)
+        if limits.shape != (4,):
+            raise RuntimeError(f"{field} must have shape (4,), got {tuple(limits.shape)}")
+        return limits.reshape(1, 4)
+
+    def _mechanical_velocity_limit_tensor(self, field: str) -> torch.Tensor:
+        limits = torch.as_tensor(getattr(self.cfg, field), dtype=torch.float32, device=self.device)
+        if limits.shape != (5,):
+            raise RuntimeError(f"{field} must have shape (5,), got {tuple(limits.shape)}")
+        return limits.reshape(1, 5)
+
+    def _validated_mechanical_velocity_limits_enabled(self) -> bool:
+        if not bool(getattr(self.cfg, "enable_validated_mechanical_velocity_termination", False)):
+            return False
+        hard = self._mechanical_velocity_limit_tensor("mechanical_hard_velocity_limits")
+        return bool(torch.all(torch.isfinite(hard)) and torch.all(hard > 0.0))
+
+    def _update_hydraulic_velocity_audit(self, q_hyd: torch.Tensor, qdot_physx: torch.Tensor) -> torch.Tensor:
+        if q_hyd.shape != (self.num_envs, 4) or qdot_physx.shape != (self.num_envs, 4):
+            raise RuntimeError(
+                "Hydraulic velocity audit expects q_hyd and qdot_physx shapes "
+                f"({self.num_envs}, 4), got {tuple(q_hyd.shape)} and {tuple(qdot_physx.shape)}"
+            )
+        control_dt = float(self.cfg.sim.dt)
+        if control_dt <= 0.0:
+            raise RuntimeError(f"Control dt must be positive, got {control_dt}")
+
+        self._hydraulic_qdot_fd = (q_hyd - self._prev_hydraulic_q) / control_dt
+        self._hydraulic_target_velocity = (
+            self._rom_cylinder_pos_target - self._rom_cylinder_pos_target_prev
+        ) / control_dt
+        self._hydraulic_rom_applied_rate = self._final_rom_delta_isaac_10ms / control_dt
+
+        finite = (
+            torch.isfinite(q_hyd)
+            & torch.isfinite(qdot_physx)
+            & torch.isfinite(self._hydraulic_qdot_fd)
+            & torch.isfinite(self._hydraulic_target_velocity)
+            & torch.isfinite(self._final_rom_extension_velocity)
+            & torch.isfinite(self._hydraulic_rom_applied_rate)
+        )
+        finite_all = finite.all(dim=-1)
+
+        if self._validated_hydraulic_velocity_limits_enabled():
+            hard_limits = self._hydraulic_velocity_limit_tensor("hydraulic_hard_velocity_limits_mps")
+            raw_exceedance = torch.abs(qdot_physx) > hard_limits
+            corroborated = (
+                (torch.abs(self._hydraulic_qdot_fd) > hard_limits)
+                | (torch.abs(self._hydraulic_target_velocity) > hard_limits)
+                | (torch.abs(self._final_rom_extension_velocity) > hard_limits)
+                | (torch.abs(self._hydraulic_rom_applied_rate) > hard_limits)
+            )
+        else:
+            diagnostic_threshold = abs(float(getattr(self.cfg, "unvalidated_velocity_diagnostic_threshold", 6.0)))
+            hard_limits = torch.full((1, 4), diagnostic_threshold, dtype=torch.float32, device=self.device)
+            raw_exceedance = torch.abs(qdot_physx) > hard_limits
+            corroborated = torch.zeros_like(raw_exceedance)
+
+        self._hydraulic_velocity_raw_exceedance = raw_exceedance.detach().clone()
+        persistence_next = torch.where(
+            raw_exceedance,
+            self._hydraulic_velocity_persistence + 1,
+            torch.zeros_like(self._hydraulic_velocity_persistence),
+        )
+        self._hydraulic_velocity_persistence = persistence_next
+        required_steps = max(int(getattr(self.cfg, "hydraulic_velocity_persistence_steps", 3)), 1)
+        confirmed = (
+            raw_exceedance
+            & corroborated
+            & finite
+            & (self._hydraulic_velocity_persistence >= required_steps)
+            & bool(self._validated_hydraulic_velocity_limits_enabled())
+        )
+        self._hydraulic_velocity_confirmed_hard = confirmed.detach().clone()
+        self._hydraulic_velocity_spike_ignored = (
+            raw_exceedance & ~confirmed & finite
+        ).detach().clone()
+
+        fd_ok = torch.abs(self._hydraulic_qdot_fd) <= hard_limits
+        target_ok = torch.abs(self._hydraulic_target_velocity) <= hard_limits
+        rom_ok = torch.abs(self._final_rom_extension_velocity) <= hard_limits
+        applied_ok = torch.abs(self._hydraulic_rom_applied_rate) <= hard_limits
+        physx_spike = raw_exceedance & fd_ok & target_ok & rom_ok & applied_ok & finite
+        target_jump = raw_exceedance & ~target_ok & ~applied_ok & finite
+        genuine_high_motion = raw_exceedance & ~fd_ok & (~target_ok | ~rom_ok | ~applied_ok) & finite
+        nonfinite_event = raw_exceedance & ~finite
+
+        self._velocity_audit_physx_spike_count += physx_spike.float().sum()
+        self._velocity_audit_target_jump_count += target_jump.float().sum()
+        self._velocity_audit_genuine_high_motion_count += genuine_high_motion.float().sum()
+        self._velocity_audit_nonfinite_count += nonfinite_event.float().sum()
+        self._velocity_audit_unit_mapping_mismatch_count += torch.zeros((), dtype=torch.float32, device=self.device)
+
+        self._prev_hydraulic_q = q_hyd.detach().clone()
+        self._rom_cylinder_pos_target_prev = self._rom_cylinder_pos_target.detach().clone()
+        return ~finite_all
+
+    def export_velocity_audit_events(self) -> list[dict[str, object]]:
+        """Return bounded CPU-readable velocity audit summary for external diagnostics."""
+        event_mask = self._hydraulic_velocity_raw_exceedance.detach()
+        env_ids, channels = torch.where(event_mask)
+        max_events = min(int(env_ids.numel()), 32)
+        records: list[dict[str, object]] = []
+        for i in range(max_events):
+            env_id = int(env_ids[i].detach().cpu())
+            channel = int(channels[i].detach().cpu())
+            records.append(
+                {
+                    "env_id": env_id,
+                    "simulation_step": int(getattr(self, "common_step_counter", 0)),
+                    "offending_hydraulic_channel": channel,
+                    "articulation_joint_name": self.cfg.command_joint_names[channel],
+                    "articulation_dof_id": int(self._command_joint_ids[channel]),
+                    "joint_type": "hydraulic_prismatic_cylinder",
+                    "q_after_event": float(self.robot.data.joint_pos[env_id, self._command_joint_ids[channel]].detach().cpu()),
+                    "q_before_event": float(self._prev_hydraulic_q[env_id, channel].detach().cpu()),
+                    "qdot_physx": float(self.robot.data.joint_vel[env_id, self._command_joint_ids[channel]].detach().cpu()),
+                    "qdot_fd": float(self._hydraulic_qdot_fd[env_id, channel].detach().cpu()),
+                    "target_velocity": float(self._hydraulic_target_velocity[env_id, channel].detach().cpu()),
+                    "rom_extension_velocity": float(self._final_rom_extension_velocity[env_id, channel].detach().cpu()),
+                    "rom_applied_rate": float(self._hydraulic_rom_applied_rate[env_id, channel].detach().cpu()),
+                    "valve_cmd": float(self._current_valve_cmd[env_id, channel].detach().cpu()),
+                    "ppo_action": float(self._current_action[env_id, channel].detach().cpu()),
+                    "qddot_command": float(self._current_qddot_cmd[env_id, channel].detach().cpu()),
+                    "ee_linear_speed": float(self._ee_linear_speed[env_id].detach().cpu()),
+                    "ee_angular_speed": float(self._ee_angular_speed[env_id].detach().cpu()),
+                }
+            )
+        return records
+
+    def _reward_contract_summary(self) -> dict[str, object]:
+        """Serializable summary of the task-space reward contract."""
+        return {
+            "environment_contract_version": str(self.cfg.kevin_fixed_pose_contract_version),
+            "reward_contract_version": str(self.cfg.reward_contract_version),
+            "components": [
+                {
+                    "name": "position_tracking",
+                    "formula": "position_tracking_reward_weight * exp(-4 * final_position_error_m)",
+                    "weight": float(self.cfg.position_tracking_reward_weight),
+                    "normalization": "metres, bounded exponential",
+                    "minimum": 0.0,
+                    "maximum": float(self.cfg.position_tracking_reward_weight),
+                    "activation_condition": "every task-space reward step",
+                    "source_tensor": "_ee_position_error",
+                },
+                {
+                    "name": "orientation_tracking",
+                    "formula": "rew_task_orient_tracking * exp(-(orientation_error_rad / tolerance_rad)^2)",
+                    "weight": float(self.cfg.rew_task_orient_tracking),
+                    "normalization": "quaternion geodesic radians / final_pose_orientation_tolerance_rad",
+                    "minimum": 0.0,
+                    "maximum": float(self.cfg.rew_task_orient_tracking),
+                    "activation_condition": "enabled curriculum orientation stage",
+                    "source_tensor": "_ee_orientation_error",
+                },
+                {
+                    "name": "potential_progress",
+                    "formula": "rew_task_progress * clamp(gamma * phi_next - phi_current)",
+                    "weight": float(self.cfg.rew_task_progress),
+                    "normalization": "phi = -(wp * pos_err / pos_scale + wo * orient_err / orient_scale)",
+                    "minimum": -float(self.cfg.rew_task_progress_clip) * float(self.cfg.rew_task_progress),
+                    "maximum": float(self.cfg.rew_task_progress_clip) * float(self.cfg.rew_task_progress),
+                    "activation_condition": "after first non-reset transition",
+                    "source_tensor": "_prev_task_space_potential, _ee_position_error, _ee_orientation_error",
+                },
+                {
+                    "name": "near_pose_velocity",
+                    "formula": "-weight * pose_gate * tanh((speed / scale)^2)",
+                    "weight": {
+                        "linear": float(self.cfg.rew_final_pose_linear_velocity),
+                        "angular": float(self.cfg.rew_final_pose_angular_velocity),
+                    },
+                    "normalization": "end-effector speed / configured shaping scale",
+                    "minimum": -(
+                        float(self.cfg.rew_final_pose_linear_velocity)
+                        + float(self.cfg.rew_final_pose_angular_velocity)
+                    ),
+                    "maximum": 0.0,
+                    "activation_condition": "smooth near-pose gate",
+                    "source_tensor": "_ee_linear_speed, _ee_angular_speed",
+                },
+                {
+                    "name": "settling",
+                    "formula": "rew_final_pose_settling * pose_gate * mean(exp(-(speed / scale)^2))",
+                    "weight": float(self.cfg.rew_final_pose_settling),
+                    "normalization": "end-effector speed / configured settling scale",
+                    "minimum": 0.0,
+                    "maximum": float(self.cfg.rew_final_pose_settling),
+                    "activation_condition": "smooth near-pose gate",
+                    "source_tensor": "_ee_linear_speed, _ee_angular_speed",
+                },
+                {
+                    "name": "hold_progress",
+                    "formula": "rew_final_pose_hold_progress * within_final_pose * (hold_counter / required_hold_steps)^2",
+                    "weight": float(self.cfg.rew_final_pose_hold_progress),
+                    "normalization": "consecutive strict settled steps / final_pose_success_hold_steps",
+                    "minimum": 0.0,
+                    "maximum": float(self.cfg.rew_final_pose_hold_progress),
+                    "activation_condition": "strict pose and speed tolerances are met",
+                    "source_tensor": "_final_pose_success_counter, _within_final_pose",
+                },
+                {
+                    "name": "valve_saturation",
+                    "formula": "-rew_valve_saturation_soft * mean(tanh(relu(abs(applied_valve)-sat_start)/(1-sat_start))^2)",
+                    "weight": float(self.cfg.rew_valve_saturation_soft),
+                    "normalization": "applied ValveCmd excess above valve_saturation_start",
+                    "minimum": -float(self.cfg.rew_valve_saturation_soft),
+                    "maximum": 0.0,
+                    "activation_condition": "abs(applied ValveCmd) > valve_saturation_start",
+                    "source_tensor": "_current_valve_cmd",
+                },
+                {
+                    "name": "avoidable_clamp",
+                    "formula": "-rew_clamp_outward * mean(outward_violation * bounded_loss(abs(blocked_increment)/increment_scale))",
+                    "weight": float(self.cfg.rew_clamp_outward),
+                    "normalization": "blocked outward cylinder increment / rom_clamp_documented_increment_scale",
+                    "minimum": -float(self.cfg.rew_clamp_outward),
+                    "maximum": 0.0,
+                    "activation_condition": "boundary active and request points outward",
+                    "source_tensor": "_rom_boundary_active, _rom_outward_request, _rom_blocked_outward_increment",
+                },
+                {
+                    "name": "fd_load",
+                    "formula": "-rew_fd_load * mean(bounded_loss(relu(abs(fd_norm)-soft_threshold)/soft_threshold))",
+                    "weight": float(self.cfg.rew_fd_load),
+                    "normalization": "FD normalized observer output above fd_load_soft_threshold",
+                    "minimum": -float(self.cfg.rew_fd_load),
+                    "maximum": 0.0,
+                    "activation_condition": "abs(_fd_tau_hat_normalized) > fd_load_soft_threshold",
+                    "source_tensor": "_fd_tau_hat_normalized",
+                },
+                {
+                    "name": "strict_success_bonus",
+                    "formula": "final_pose_success_bonus_value on first transition reaching required consecutive hold",
+                    "weight": float(self.cfg.final_pose_success_bonus_value),
+                    "normalization": "one-shot terminal event",
+                    "minimum": 0.0,
+                    "maximum": float(self.cfg.final_pose_success_bonus_value),
+                    "activation_condition": "final_pose_success_hold_steps consecutive strict settled steps",
+                    "source_tensor": "_new_final_pose_success",
+                },
+            ],
+        }
+
+    def _print_and_write_reward_contract_once(self) -> None:
+        if MulagAdaptiveRLEnv._reward_contract_printed:
+            return
+        contract = self._reward_contract_summary()
+        print(
+            "[INFO] Kevin reward contract: "
+            f"env={contract['environment_contract_version']} "
+            f"reward={contract['reward_contract_version']}",
+            flush=True,
+        )
+        log_dir = getattr(self.cfg, "log_dir", None)
+        if log_dir:
+            path = Path(log_dir) / "reward_contract.json"
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(contract, indent=2, sort_keys=True), encoding="utf-8")
+            except OSError as exc:
+                print(f"[WARN] Failed to write reward contract to {path}: {exc}", flush=True)
+        MulagAdaptiveRLEnv._reward_contract_printed = True
+
+    def _record_rom_clamp_telemetry(
+        self,
+        boundary_active: torch.Tensor,
+        outward_request: torch.Tensor,
+        blocked_outward_increment: torch.Tensor,
+    ) -> None:
+        self._rom_boundary_active = boundary_active.detach().clone()
+        self._rom_outward_request = outward_request.detach().clone()
+        self._rom_blocked_outward_increment = blocked_outward_increment.detach().clone()
+        self._rom_clamp_activation_fraction = torch.mean(
+            (boundary_active & outward_request).float(), dim=-1
+        )
+        self._rom_clamp_blocked_outward_mean = torch.mean(
+            (boundary_active & outward_request).float() * torch.abs(blocked_outward_increment.detach()),
+            dim=-1,
+        )
+
+    def _update_rolling_1000_metrics(
+        self,
+        *,
+        success: torch.Tensor,
+        timeout: torch.Tensor,
+        final_position_error: torch.Tensor,
+        final_orientation_error: torch.Tensor,
+        final_linear_speed: torch.Tensor,
+        final_angular_speed: torch.Tensor,
+        max_hold_steps: torch.Tensor,
+        clamp_activation_fraction: torch.Tensor,
+        valve_saturation_fraction: torch.Tensor,
+    ) -> None:
+        n = int(success.numel())
+        if n == 0:
+            return
+        capacity = int(self._rolling_1000_success.numel())
+        offsets = torch.arange(n, device=self.device, dtype=torch.long)
+        indices = (self._rolling_1000_cursor + offsets) % capacity
+        self._rolling_1000_success[indices] = success.detach().float()
+        self._rolling_1000_timeout[indices] = timeout.detach().float()
+        self._rolling_1000_final_position_error[indices] = final_position_error.detach().float()
+        self._rolling_1000_final_orientation_error[indices] = final_orientation_error.detach().float()
+        self._rolling_1000_final_linear_speed[indices] = final_linear_speed.detach().float()
+        self._rolling_1000_final_angular_speed[indices] = final_angular_speed.detach().float()
+        self._rolling_1000_max_hold_steps[indices] = max_hold_steps.detach().float()
+        self._rolling_1000_clamp_activation_fraction[indices] = clamp_activation_fraction.detach().float()
+        self._rolling_1000_valve_saturation_fraction[indices] = valve_saturation_fraction.detach().float()
+        self._rolling_1000_cursor = (self._rolling_1000_cursor + n) % capacity
+        self._rolling_1000_count = torch.clamp(self._rolling_1000_count + n, max=capacity)
+
+    def _rolling_1000_mean(self, values: torch.Tensor) -> torch.Tensor:
+        count = torch.clamp(self._rolling_1000_count, min=1)
+        mask = torch.arange(values.numel(), device=self.device) < count
+        return torch.sum(values * mask.float()) / count.to(dtype=torch.float32)
+
+    def _rolling_1000_max(self, values: torch.Tensor) -> torch.Tensor:
+        count = torch.clamp(self._rolling_1000_count, min=1)
+        mask = torch.arange(values.numel(), device=self.device) < count
+        active_values = torch.where(mask, values, torch.zeros_like(values))
+        return torch.max(active_values)
+
+    def _rolling_1000_log(self) -> dict[str, object]:
+        return {
+            "rolling_1000/success_rate": self._rolling_1000_mean(self._rolling_1000_success),
+            "rolling_1000/timeout_rate": self._rolling_1000_mean(self._rolling_1000_timeout),
+            "rolling_1000/final_position_error": self._rolling_1000_mean(
+                self._rolling_1000_final_position_error
+            ),
+            "rolling_1000/final_orientation_error": self._rolling_1000_mean(
+                self._rolling_1000_final_orientation_error
+            ),
+            "rolling_1000/final_linear_speed": self._rolling_1000_mean(
+                self._rolling_1000_final_linear_speed
+            ),
+            "rolling_1000/final_angular_speed": self._rolling_1000_mean(
+                self._rolling_1000_final_angular_speed
+            ),
+            "rolling_1000/max_hold_steps": self._rolling_1000_max(self._rolling_1000_max_hold_steps),
+            "rolling_1000/clamp_activation_fraction": self._rolling_1000_mean(
+                self._rolling_1000_clamp_activation_fraction
+            ),
+            "rolling_1000/valve_saturation_fraction": self._rolling_1000_mean(
+                self._rolling_1000_valve_saturation_fraction
+            ),
+        }
+
+    @property
+    def _previous_action(self) -> torch.Tensor:
+        return self._prev_action
 
     def _final_pose_target(self) -> torch.Tensor:
         """Return the authoritative robot-base final pose target."""
@@ -790,72 +1293,26 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         return final_pose_target
 
     def _sample_task_space_command(self, env_ids: torch.Tensor) -> None:
-        """Sample curriculum-aware task-space pose command at reset.
-
-        S1:  position = local offset from settled ee pose (conservative ±0.05 m),
-             orientation = current ee quaternion (settled).
-        S2:  position = sampled from curriculum ranges,
-             orientation = settled ee quaternion.
-        S3:  position = sampled from curriculum ranges,
-             orientation = identity (gradual ramp over episode).
-        S4:  position = sampled from curriculum ranges,
-             orientation = identity + small bounded perturbation, normalized.
-        """
+        """Sample a reachable reset-time final pose from a safe robot configuration."""
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        n = env_ids.numel()
-        if n == 0:
+        if env_ids.numel() == 0:
             return
+
+        sampled_joint_pos = self._q_ref_target[env_ids].detach().clone()
+        sampled_joint_pos = self._apply_joint5_coupling_to_reference(
+            sampled_joint_pos,
+            lower=self.robot.data.soft_joint_pos_limits[env_ids][:, self._state_joint_ids, 0],
+            upper=self.robot.data.soft_joint_pos_limits[env_ids][:, self._state_joint_ids, 1],
+        )
+        joint_pos_for_fk = self.robot.data.joint_pos[env_ids].detach().clone()
+        joint_vel_for_fk = torch.zeros_like(joint_pos_for_fk)
+        joint_pos_for_fk[:, self._state_joint_ids] = sampled_joint_pos
+        self.robot.write_joint_state_to_sim(joint_pos_for_fk, joint_vel_for_fk, None, env_ids)
+        self.robot.update(0.0)
+        self._update_task_space_state()
+
         final_pose_target = self._final_pose_target()
-        stage = self._curriculum_stage()
-        idx = int(stage) - 1
-
-        # ── Position command ──────────────────────────────────────────────────────
-        if stage == 1:
-            # S1: local offset from settled ee pose, conservative all-three-axis.
-            settled_pos = self._current_ee_pose[env_ids, :3].detach().clone()
-            offset = torch.empty(
-                (n, 3), dtype=torch.float32, device=self.device
-            ).uniform_(-0.05, 0.05)
-            x = settled_pos[:, 0] + offset[:, 0]
-            y = settled_pos[:, 1] + offset[:, 1]
-            z = settled_pos[:, 2] + offset[:, 2]
-        else:
-            x_range = self.cfg.curriculum_command_x_range[idx]
-            y_range = self.cfg.curriculum_command_y_range[idx]
-            z_range = self.cfg.curriculum_command_z_range[idx]
-            x = torch.empty((n,), dtype=torch.float32, device=self.device).uniform_(
-                x_range[0], x_range[1]
-            )
-            y = torch.empty((n,), dtype=torch.float32, device=self.device).uniform_(
-                y_range[0], y_range[1]
-            )
-            z = torch.full((n,), z_range[0], dtype=torch.float32, device=self.device)
-
-        final_pose_target[env_ids, 0] = x
-        final_pose_target[env_ids, 1] = y
-        final_pose_target[env_ids, 2] = z
-
-        # ── Orientation command ───────────────────────────────────────────────────
-        if stage in (1, 2):
-            # S1-S2: settled ee orientation at reset.
-            quat = self._current_ee_pose[env_ids, 3:7].detach().clone()
-        elif stage == 3:
-            # S3: identity quaternion (gradual ramp handled elsewhere).
-            quat = torch.zeros((n, 4), dtype=torch.float32, device=self.device)
-            quat[:, 0] = 1.0
-        else:
-            # S4: identity + small bounded perturbation.
-            perturbation = torch.empty(
-                (n, 3), dtype=torch.float32, device=self.device
-            ).uniform_(-0.1, 0.1)
-            quat = torch.zeros((n, 4), dtype=torch.float32, device=self.device)
-            quat[:, 0] = 1.0
-            quat[:, 1:] = perturbation
-
-        # Normalise all quaternion outputs to unit length.
-        quat_norm = torch.linalg.norm(quat, dim=-1, keepdim=True)
-        quat = quat / torch.clamp(quat_norm, min=1.0e-8)
-        final_pose_target[env_ids, 3:7] = quat
+        final_pose_target[env_ids] = self._current_ee_pose[env_ids].detach().clone()
 
     def _update_task_space_state(self) -> None:
         final_pose_target = self._final_pose_target()
@@ -1237,18 +1694,18 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 f"({self.num_envs}, 18), got "
                 f"{tuple(aam_step_features.shape)}"
             )
-        with torch.inference_mode():
-            z_arm_hat = self._controller.update_aam_latent(aam_step_features)
+        with torch.no_grad():
+            z_arm_hat_new = self._controller.update_aam_latent(aam_step_features)
         expected_latent_shape = (self.num_envs, 24)
-        if tuple(z_arm_hat.shape) != expected_latent_shape:
+        if tuple(z_arm_hat_new.shape) != expected_latent_shape:
             raise RuntimeError(
                 "AAM latent must have shape "
                 f"({self.num_envs}, 24), got "
-                f"{tuple(z_arm_hat.shape)}"
+                f"{tuple(z_arm_hat_new.shape)}"
             )
-        if not torch.isfinite(z_arm_hat).all():
+        if not torch.isfinite(z_arm_hat_new).all():
             raise RuntimeError("AAM produced non-finite latent values.")
-        self._z_arm_hat = z_arm_hat
+        self._z_arm_hat.copy_(z_arm_hat_new)
         self._aam_latent_state_version += 1
 
     def _id_conditioning_latent(self) -> torch.Tensor:
@@ -1480,18 +1937,18 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._zero_sd_feedback_state()
             return
 
-        q, qdot = self._read_joint_state()
+        mechanical_q, mechanical_qdot = self._read_mechanical_state()
         dP = self._read_pressure_delta()
-        self._maybe_initialize_learned_control(q, qdot, dP)
-        self._prepare_high_level_action(actions, q, qdot)
+        self._maybe_initialize_learned_control(mechanical_q, mechanical_qdot, dP)
+        self._prepare_high_level_action(actions, mechanical_q, mechanical_qdot)
         previous_dP = self._dP.detach().clone()
         previous_fnet = self._fnet.detach().clone()
         control_out = None
 
         if self.cfg.use_final_causal_cylinder_rom:
             self._pre_physics_step_final_causal_rom(
-                q=q,
-                qdot=qdot,
+                q=mechanical_q,
+                qdot=mechanical_qdot,
                 dP=dP,
                 previous_dP=previous_dP,
                 previous_fnet=previous_fnet,
@@ -1500,8 +1957,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         if self.cfg.use_reduced_hydraulic_rom:
             self._pre_physics_step_reduced_hydraulic_rom(
-                q=q,
-                qdot=qdot,
+                q=mechanical_q,
+                qdot=mechanical_qdot,
                 dP=dP,
                 previous_dP=previous_dP,
                 previous_fnet=previous_fnet,
@@ -1515,8 +1972,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 self._zero_torque_state()
             elif self.cfg.position_delta_source == "id_valve":
                 control_out = self._controller.apply_action_valve_only(
-                    q,
-                    qdot,
+                    mechanical_q,
+                    mechanical_qdot,
                     dP,
                     self._current_action,
                     self._prev_valve_cmd,
@@ -1531,8 +1988,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 raise ValueError(f"Unsupported position_delta_source: {self.cfg.position_delta_source!r}")
         elif low_level_mode == "effort" or self.cfg.use_fd_effort:
             control_out = self._controller.apply_action_full_pipeline(
-                q,
-                qdot,
+                mechanical_q,
+                mechanical_qdot,
                 dP,
                 self._fnet,
                 self._current_action,
@@ -1559,8 +2016,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         run_sd_observer = self.cfg.use_sd_observer or self.cfg.use_sd_feedback
         if run_sd_observer:
             sd_observer = self._controller.run_sd_observer(
-                q,
-                qdot,
+                mechanical_q,
+                mechanical_qdot,
                 dP,
                 self._fnet,
                 self._current_valve_cmd,
@@ -1595,8 +2052,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
     ) -> None:
         if self._final_causal_rom_wrapper is None:
             raise RuntimeError("use_final_causal_cylinder_rom=True but the final causal ROM wrapper is not initialized.")
-        if tuple(self.cfg.command_joint_names) != tuple(self.cfg.state_joint_names[:4]):
-            raise RuntimeError("Final causal ROM requires the first four state joints to be the four hydraulic cylinders.")
+        if len(self._mechanical_joint_ids) != 5 or len(self._cylinder_joint_ids) != 4:
+            raise RuntimeError("Final causal ROM requires separate 5D mechanical and 4D cylinder state selectors.")
 
         if self.cfg.rom_use_id_valve_cmd:
             control_out = self._controller.apply_action_valve_only(
@@ -1725,6 +2182,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         at_lower = target_candidate <= lower
         moving_outward_lower = delta_isaac_10ms < 0.0
         boundary_blocked = (at_upper & moving_outward_upper) | (at_lower & moving_outward_lower)
+        blocked_outward_increment = torch.where(
+            boundary_blocked,
+            delta_isaac_10ms,
+            torch.zeros_like(delta_isaac_10ms),
+        )
         delta_effective = torch.where(
             ~boundary_blocked,
             delta_isaac_10ms,
@@ -1733,6 +2195,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_cylinder_pos_target = self._rom_cylinder_pos_target + delta_effective
         self._rom_cylinder_pos_target = torch.clamp(self._rom_cylinder_pos_target, lower, upper)
         self._rom_target_clamp_fraction = torch.mean(boundary_blocked.float(), dim=-1)
+        self._record_rom_clamp_telemetry(
+            boundary_active=at_upper | at_lower,
+            outward_request=moving_outward_upper | moving_outward_lower,
+            blocked_outward_increment=blocked_outward_increment,
+        )
         self._rom_nan_guard_triggered = torch.maximum(self._rom_nan_guard_triggered, invalid_target.float())
 
         # ── Measured-velocity channel 4 damping (Change 7) ────────────────
@@ -1841,6 +2308,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_rom_extension_velocity[env_ids] = extension_velocity.detach().clone()
         self._final_rom_inverse_mapping_error[env_ids] = inverse_error.detach().clone()
         self._final_rom_range_violation_fraction[env_ids] = torch.mean(range_flags.float(), dim=-1)
+        # ROM feature order: ValveCmd_1..4, dP_1..4, Extension_1..4,
+        # ExtensionVelocity_1..4, mechanical JointPos_1..5, mechanical JointVel_1..5.
         features = torch.cat(
             [
                 valve_cmd,
@@ -1954,9 +2423,25 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         lower = self.robot.data.soft_joint_pos_limits[:, self._command_joint_ids, 0]
         upper = self.robot.data.soft_joint_pos_limits[:, self._command_joint_ids, 1]
         target_clamp_mask = (target_candidate < lower) | (target_candidate > upper)
+        target_delta = target_candidate - self._rom_cylinder_pos_target
+        at_upper = target_candidate >= upper
+        moving_outward_upper = target_delta > 0.0
+        at_lower = target_candidate <= lower
+        moving_outward_lower = target_delta < 0.0
+        outward_violation = (at_upper & moving_outward_upper) | (at_lower & moving_outward_lower)
+        blocked_outward_increment = torch.where(
+            outward_violation,
+            target_delta,
+            torch.zeros_like(target_delta),
+        )
         target_clamped = torch.clamp(target_candidate, lower, upper)
         self._rom_cylinder_pos_target = target_clamped.detach().clone()
         self._rom_target_clamp_fraction = torch.mean(target_clamp_mask.float(), dim=-1)
+        self._record_rom_clamp_telemetry(
+            boundary_active=at_upper | at_lower,
+            outward_request=moving_outward_upper | moving_outward_lower,
+            blocked_outward_increment=blocked_outward_increment,
+        )
         self._rom_nan_guard_triggered = torch.maximum(
             self._rom_nan_guard_triggered,
             invalid_target.float(),
@@ -2032,9 +2517,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                     f"({self.num_envs}, {TASK_SPACE_OBSERVATION_DIM}), got "
                     f"{tuple(obs.shape)}"
                 )
-            if not torch.equal(obs[:, 44:68], self._z_arm_hat):
+            if not torch.equal(obs[:, 41:65], self._z_arm_hat):
                 raise RuntimeError(
-                    "AAM latent must occupy task-space observation indices 44:68."
+                    "AAM latent must occupy task-space observation indices 41:65."
                 )
         else:
             obs = build_rl_obs(
@@ -2129,10 +2614,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         pos_error_norm = torch.linalg.norm(self._ee_position_error, dim=-1)
         orient_error = self._ee_orientation_error.reshape(-1)
         stage = self._curriculum_stage()
+        W_pos = float(self.cfg.position_tracking_reward_weight)
 
         # ── Bounded position tracking reward [0, 1] ──
         pos_tracking = torch.exp(-4.0 * pos_error_norm)
-        pos_tracking_weighted = float(self.cfg.rew_task_pos_tracking) * pos_tracking
+        pos_tracking_weighted = W_pos * pos_tracking
 
         # ── Dense quaternion-geodesic orientation tracking ──
         orient_enabled = (
@@ -2161,39 +2647,166 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             torch.zeros_like(pos_tracking),
         )
 
-        # ── Progress reward (improvement in position error since last step) ──
-        # positive = closer to target than previous step
-        progress_raw = self._prev_pos_error_norm - pos_error_norm
+        # ── Potential-based progress reward ──
+        # positive = potential improves between consecutive non-reset states
+        current_potential = normalized_task_space_potential(
+            pos_error_norm,
+            orient_error,
+            position_scale_m=float(self.cfg.taskspace_progress_position_scale_m),
+            orientation_scale_rad=float(self.cfg.taskspace_progress_orientation_scale_rad),
+            position_weight=float(self.cfg.taskspace_progress_position_weight),
+            orientation_weight=float(self.cfg.taskspace_progress_orientation_weight),
+        )
+        progress_raw = potential_progress_shaping(
+            self._prev_task_space_potential,
+            current_potential,
+            gamma=float(self.cfg.taskspace_progress_gamma),
+            weight=1.0,
+            reset_mask=~self._task_space_potential_valid,
+        )
         progress_clip = float(getattr(self.cfg, "rew_task_progress_clip", 0.2))
         progress_clamped = torch.clamp(progress_raw, -progress_clip, progress_clip)
         progress_reward = float(self.cfg.rew_task_progress) * progress_clamped
 
+        position_gate = torch.exp(
+            -torch.square(pos_error_norm / 0.20)
+        )
+        orientation_gate = torch.exp(
+            -torch.square(orient_error / 0.1745329252)
+        )
+        pose_gate = position_gate * orientation_gate
+        ee_linear_speed = self._ee_linear_speed.reshape(-1)
+        ee_angular_speed = self._ee_angular_speed.reshape(-1)
+        linear_velocity_penalty = (
+            -float(self.cfg.rew_final_pose_linear_velocity)
+            * W_pos
+            * pose_gate
+            * torch.tanh(
+                torch.square(
+                    ee_linear_speed / float(self.cfg.final_pose_linear_shaping_scale_mps)
+                )
+            )
+        )
+        angular_velocity_penalty = (
+            -float(self.cfg.rew_final_pose_angular_velocity)
+            * W_pos
+            * pose_gate
+            * torch.tanh(
+                torch.square(
+                    ee_angular_speed / float(self.cfg.final_pose_angular_shaping_scale_radps)
+                )
+            )
+        )
+        linear_settling_score = torch.exp(
+            -torch.square(
+                ee_linear_speed / float(self.cfg.final_pose_linear_settling_scale_mps)
+            )
+        )
+        angular_settling_score = torch.exp(
+            -torch.square(
+                ee_angular_speed / float(self.cfg.final_pose_angular_settling_scale_radps)
+            )
+        )
+        settling_reward = (
+            float(self.cfg.rew_final_pose_settling)
+            * W_pos
+            * pose_gate
+            * 0.5
+            * (
+                linear_settling_score
+                + angular_settling_score
+            )
+        )
+        hold_reward = hold_progress_reward(
+            self._final_pose_success_counter,
+            required_hold_steps=int(self.cfg.final_pose_success_hold_steps),
+            weight=float(self.cfg.rew_final_pose_hold_progress) * W_pos,
+            within_final_pose=self._within_final_pose,
+        )
+
         # ── Penalties ──
-        action_rate_penalty = -float(self.cfg.rew_action_rate) * torch.mean(
-            torch.square(self._action_delta), dim=-1
+        action_delta = (
+            self._current_action
+            - self._previous_action
         )
-        action_mag_penalty = -float(self.cfg.rew_action_magnitude) * torch.mean(
-            torch.square(self._current_action), dim=-1
+        action_rate_penalty = (
+            -0.01
+            * W_pos
+            * torch.mean(
+                torch.square(action_delta),
+                dim=-1,
+            )
         )
-        valve_sat = torch.mean(
-            (torch.abs(self._current_valve_cmd) > float(self.cfg.action_saturation_threshold)).float(),
-            dim=-1,
+        action_mag_penalty = (
+            -0.0025
+            * W_pos
+            * torch.mean(
+                torch.square(
+                    self._current_action
+                ),
+                dim=-1,
+            )
         )
-        valve_sat_penalty = -float(self.cfg.rew_action_saturation) * valve_sat
-        clamp_penalty = -torch.nan_to_num(self._rom_target_clamp_fraction, nan=1.0)
-        fd_excess = torch.clamp(torch.abs(self._fd_tau_hat_normalized) - 1.0, min=0.0)
-        fd_load_penalty = -float(getattr(self.cfg, "rew_fd_load", 0.0)) * torch.mean(
-            torch.square(fd_excess), dim=-1
+        valve_sat_penalty, valve_sat = valve_saturation_penalty(
+            self._current_valve_cmd,
+            sat_start=float(self.cfg.valve_saturation_start),
+            weight=float(self.cfg.rew_valve_saturation_soft) * W_pos,
+        )
+        clamp_penalty, clamp_activation_fraction, clamp_blocked_outward_mean = avoidable_clamp_penalty(
+            self._rom_boundary_active,
+            self._rom_outward_request,
+            self._rom_blocked_outward_increment,
+            increment_scale=float(self.cfg.rom_clamp_documented_increment_scale),
+            weight=float(self.cfg.rew_clamp_outward) * W_pos,
+        )
+        fd_load_penalty, fd_excess_fraction = fd_load_excess_penalty(
+            self._fd_tau_hat_normalized,
+            soft_threshold=float(self.cfg.fd_load_soft_threshold),
+            weight=float(getattr(self.cfg, "rew_fd_load", 0.0)) * W_pos,
         )
         # ── Unsafe terminal penalty (reconnected; uses current _termination_* masks) ──
         unsafe_termination = (
-            self._termination_joint_nonfinite
+            self._termination_velocity
             | self._termination_lower_limit
             | self._termination_upper_limit
-            | self._termination_velocity
+            | self._termination_cylinder_lower_limit
+            | self._termination_cylinder_upper_limit
+            | self._termination_joint_nonfinite
             | self._termination_control_nonfinite
         )
-        unsafe_penalty = float(getattr(self.cfg, "unsafe_terminal_penalty", -5.0)) * unsafe_termination.float()
+        unsafe_termination = (
+            unsafe_termination
+            & ~self._termination_success
+            & ~self.reset_time_outs
+        )
+        if unsafe_termination.shape != (self.num_envs,):
+            raise RuntimeError(
+                f"unsafe_termination mask must have shape ({self.num_envs},), "
+                f"got {tuple(unsafe_termination.shape)}"
+            )
+        unsafe_penalty = torch.where(
+            unsafe_termination,
+            torch.full_like(
+                pos_tracking,
+                -10.0 * W_pos,
+            ),
+            torch.zeros_like(pos_tracking),
+        )
+
+        # ── Debug telemetry for unsafe penalty ──
+        velocity_mask_count = self._termination_velocity.sum()
+        unsafe_mask_count = unsafe_termination.sum()
+        unsafe_penalty_nonzero_count = (unsafe_penalty != 0.0).sum()
+        unsafe_penalty_min = unsafe_penalty.min()
+
+        # ── Persistent cumulative unsafe-penalty counters (monotonic, survive resets) ──
+        self._unsafe_penalty_event_count_total += unsafe_termination.sum().long()
+        self._unsafe_penalty_value_total += unsafe_penalty.sum()
+        # ── Update terminal snapshot buffers for rows that just went unsafe ──
+        unsafe_ids = torch.where(unsafe_termination)[0]
+        if unsafe_ids.numel() > 0:
+            self._terminal_unsafe_penalty[unsafe_ids] = unsafe_penalty[unsafe_ids].detach()
+            self._terminal_unsafe_mask[unsafe_ids] = unsafe_termination[unsafe_ids].detach()
 
         # ── Total reward ──
         reward = (
@@ -2202,6 +2815,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             + progress_reward
             + action_rate_penalty
             + action_mag_penalty
+            + linear_velocity_penalty
+            + angular_velocity_penalty
+            + settling_reward
+            + hold_reward
             + valve_sat_penalty
             + clamp_penalty
             + fd_load_penalty
@@ -2211,6 +2828,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         # ── Update progress buffer ──
         self._prev_pos_error_norm = pos_error_norm.detach().clone()
+        self._prev_task_space_potential = current_potential.detach().clone()
+        self._task_space_potential_valid.fill_(True)
 
         # ── Accumulate episode sums ──
         self._episode_pos_tracking_sum += pos_tracking_weighted.detach()
@@ -2222,8 +2841,55 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_clamp_penalty_sum += clamp_penalty.detach()
         self._episode_fd_load_penalty_sum += fd_load_penalty.detach()
         self._episode_unsafe_penalty_sum += unsafe_penalty.detach()
+        self._episode_linear_velocity_penalty_sum += linear_velocity_penalty.detach()
+        self._episode_angular_velocity_penalty_sum += angular_velocity_penalty.detach()
+        self._episode_settling_reward_sum += settling_reward.detach()
+        self._episode_hold_progress_reward_sum += hold_reward.detach()
+        self._episode_clamp_activation_sum += clamp_activation_fraction.detach()
+        self._episode_valve_saturation_fraction_sum += valve_sat.detach()
         self._episode_position_error_sum += pos_error_norm.detach()
         self._episode_success_bonus_sum += success_bonus.detach()
+
+        positive_total = (
+            pos_tracking_weighted
+            + orient_tracking
+            + torch.relu(progress_reward)
+            + settling_reward
+            + hold_reward
+            + success_bonus
+        )
+        negative_total_abs = (
+            torch.abs(action_rate_penalty)
+            + torch.abs(action_mag_penalty)
+            + torch.abs(linear_velocity_penalty)
+            + torch.abs(angular_velocity_penalty)
+            + torch.abs(valve_sat_penalty)
+            + torch.abs(clamp_penalty)
+            + torch.abs(fd_load_penalty)
+            + torch.abs(unsafe_penalty)
+            + torch.relu(-progress_reward)
+        )
+        tracking_positive = pos_tracking_weighted + orient_tracking + torch.relu(progress_reward)
+        actuator_penalty_abs = (
+            torch.abs(valve_sat_penalty)
+            + torch.abs(clamp_penalty)
+            + torch.abs(fd_load_penalty)
+        )
+        positive_total_mean = torch.mean(positive_total.detach())
+        negative_total_abs_mean = torch.mean(negative_total_abs.detach())
+        negative_to_positive_ratio = negative_total_abs_mean / torch.clamp(
+            positive_total_mean,
+            min=1.0e-6,
+        )
+        tracking_fraction = torch.mean(
+            tracking_positive.detach() / torch.clamp(positive_total.detach(), min=1.0e-6)
+        )
+        actuator_penalty_fraction = torch.mean(
+            actuator_penalty_abs.detach() / torch.clamp(negative_total_abs.detach(), min=1.0e-6)
+        )
+        settling_fraction = torch.mean(
+            (settling_reward + hold_reward).detach() / torch.clamp(positive_total.detach(), min=1.0e-6)
+        )
 
         if self.cfg.debug_reward_terms:
             target_changed = torch.any(
@@ -2253,9 +2919,16 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 "progress_reward": torch.mean(progress_reward.detach()),
                 "action_rate_penalty": torch.mean(action_rate_penalty.detach()),
                 "action_magnitude_penalty": torch.mean(action_mag_penalty.detach()),
+                "linear_velocity_penalty": torch.mean(linear_velocity_penalty.detach()),
+                "angular_velocity_penalty": torch.mean(angular_velocity_penalty.detach()),
+                "settling_reward": torch.mean(settling_reward.detach()),
+                "hold_progress_reward": torch.mean(hold_reward.detach()),
                 "valve_saturation_penalty": torch.mean(valve_sat_penalty.detach()),
                 "rom_clamp_penalty": torch.mean(clamp_penalty.detach()),
+                "rom_clamp_activation_fraction": torch.mean(clamp_activation_fraction.detach()),
+                "rom_clamp_blocked_outward_mean": torch.mean(clamp_blocked_outward_mean.detach()),
                 "fd_load_penalty": torch.mean(fd_load_penalty.detach()),
+                "fd_load_excess_fraction": torch.mean(fd_excess_fraction.detach()),
                 "fd_soft_limit_fraction": torch.mean(self._fd_soft_limit_fraction.detach()),
                 "fd_hard_limit_fraction": torch.mean(self._fd_hard_limit_fraction.detach()),
                 "fd_normalized_abs_max": torch.mean(self._fd_normalized_abs_max.detach()),
@@ -2281,12 +2954,28 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["reward/progress_mean"] = torch.mean(progress_reward.detach())
         log["reward/action_rate_penalty_mean"] = torch.mean(action_rate_penalty.detach())
         log["reward/action_mag_penalty_mean"] = torch.mean(action_mag_penalty.detach())
+        log["reward/linear_velocity_penalty_mean"] = torch.mean(linear_velocity_penalty.detach())
+        log["reward/angular_velocity_penalty_mean"] = torch.mean(angular_velocity_penalty.detach())
+        log["reward/settling_reward_mean"] = torch.mean(settling_reward.detach())
+        log["reward/hold_progress_reward_mean"] = torch.mean(hold_reward.detach())
+        log["settling_reward_mean"] = torch.mean(settling_reward.detach())
+        log["hold_progress_reward_mean"] = torch.mean(hold_reward.detach())
         log["reward/valve_sat_penalty_mean"] = torch.mean(valve_sat_penalty.detach())
+        log["reward/valve_saturation_fraction"] = torch.mean(valve_sat.detach())
         log["reward/clamp_penalty_mean"] = torch.mean(clamp_penalty.detach())
+        log["reward/clamp_activation_fraction"] = torch.mean(clamp_activation_fraction.detach())
+        log["reward/clamp_blocked_outward_mean"] = torch.mean(clamp_blocked_outward_mean.detach())
         log["reward/fd_load_penalty_mean"] = torch.mean(fd_load_penalty.detach())
+        log["reward/fd_load_excess_fraction"] = torch.mean(fd_excess_fraction.detach())
         log["reward/unsafe_penalty_mean"] = torch.mean(unsafe_penalty.detach())
         log["reward/pos_error_norm_mean"] = torch.mean(pos_error_norm.detach())
         log["reward/orient_error_mean"] = torch.mean(orient_error.detach())
+        log["reward_balance/positive_total_mean"] = positive_total_mean
+        log["reward_balance/negative_total_abs_mean"] = negative_total_abs_mean
+        log["reward_balance/negative_to_positive_ratio"] = negative_to_positive_ratio
+        log["reward_balance/tracking_fraction"] = tracking_fraction
+        log["reward_balance/actuator_penalty_fraction"] = actuator_penalty_fraction
+        log["reward_balance/settling_fraction"] = settling_fraction
         log["episode/pos_tracking_sum"] = torch.mean(self._episode_pos_tracking_sum)
         log["episode/orient_tracking_sum"] = torch.mean(self._episode_orient_tracking_sum)
         log["episode/progress_reward_sum"] = torch.mean(self._episode_progress_reward_sum)
@@ -2295,7 +2984,31 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["episode/valve_sat_penalty_sum"] = torch.mean(self._episode_valve_sat_penalty_sum)
         log["episode/clamp_penalty_sum"] = torch.mean(self._episode_clamp_penalty_sum)
         log["episode/fd_load_penalty_sum"] = torch.mean(self._episode_fd_load_penalty_sum)
+        log["debug/velocity_mask_count"] = velocity_mask_count.float()
+        log["debug/unsafe_mask_count"] = unsafe_mask_count.float()
+        log["debug/unsafe_penalty_nonzero_count"] = unsafe_penalty_nonzero_count.float()
+        log["debug/unsafe_penalty_min"] = unsafe_penalty_min
+        log["debug/unsafe_penalty_event_count_total"] = self._unsafe_penalty_event_count_total.float()
+        log["debug/unsafe_penalty_value_total"] = self._unsafe_penalty_value_total
         log["episode/unsafe_penalty_sum"] = torch.mean(self._episode_unsafe_penalty_sum)
+        log["episode/linear_velocity_penalty_sum"] = torch.mean(
+            self._episode_linear_velocity_penalty_sum
+        )
+        log["episode/angular_velocity_penalty_sum"] = torch.mean(
+            self._episode_angular_velocity_penalty_sum
+        )
+        log["episode/settling_reward_sum"] = torch.mean(
+            self._episode_settling_reward_sum
+        )
+        log["episode/hold_progress_reward_sum"] = torch.mean(
+            self._episode_hold_progress_reward_sum
+        )
+        log["episode/clamp_activation_fraction_sum"] = torch.mean(
+            self._episode_clamp_activation_sum
+        )
+        log["episode/valve_saturation_fraction_sum"] = torch.mean(
+            self._episode_valve_saturation_fraction_sum
+        )
         log["episode/final_pose_success_bonus_sum"] = torch.mean(
             self._episode_success_bonus_sum
         )
@@ -2308,6 +3021,33 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["final_pose/orientation_error_max_rad"] = torch.max(orient_error.detach())
         log["final_pose/linear_speed_mean"] = torch.mean(self._ee_linear_speed.detach())
         log["final_pose/angular_speed_mean"] = torch.mean(self._ee_angular_speed.detach())
+        near_position = pos_error_norm <= float(self.cfg.final_pose_position_tolerance_m)
+        near_orientation = orient_error <= float(self.cfg.final_pose_orientation_tolerance_rad)
+        near_pose = near_position & near_orientation
+        low_speed = (
+            (self._ee_linear_speed <= float(self.cfg.final_pose_linear_speed_tolerance_mps))
+            & (self._ee_angular_speed <= float(self.cfg.final_pose_angular_speed_tolerance_radps))
+        )
+        near_pose_low_speed = near_pose & low_speed
+        near_pose_high_speed = near_pose & ~low_speed
+        self._final_pose_entered_tolerance_count_total += near_pose.float().sum()
+        self._final_pose_settling_hold_max = torch.maximum(
+            self._final_pose_settling_hold_max,
+            self._final_pose_success_counter,
+        )
+        self._final_pose_settling_hold_max_total = torch.maximum(
+            self._final_pose_settling_hold_max_total,
+            torch.max(self._final_pose_settling_hold_max.float()),
+        )
+        log["final_pose/near_position_fraction"] = torch.mean(near_position.float())
+        log["final_pose/near_orientation_fraction"] = torch.mean(near_orientation.float())
+        log["final_pose/near_pose_fraction"] = torch.mean(near_pose.float())
+        log["final_pose/near_pose_high_speed_fraction"] = torch.mean(near_pose_high_speed.float())
+        log["final_pose/near_pose_low_speed_fraction"] = torch.mean(near_pose_low_speed.float())
+        log["final_pose/entered_tolerance_count_total"] = self._final_pose_entered_tolerance_count_total
+        log["final_pose/settling_hold_max_mean"] = torch.mean(self._final_pose_settling_hold_max.float())
+        log["final_pose/settling_hold_max_total"] = self._final_pose_settling_hold_max_total
+        log["final_pose/success_count_total"] = torch.sum(self._termination_success_count)
         log["final_pose/within_tolerance_fraction"] = torch.mean(
             self._within_final_pose.float()
         )
@@ -2318,6 +3058,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._final_pose_success_counter.float()
         )
         log["final_pose/target_changed_fraction"] = torch.mean(target_changed.float())
+        log["final_pose/target_finite_fraction"] = torch.mean(
+            torch.isfinite(self._final_pose_target()).all(dim=-1).float()
+        )
         aam_history = self._controller.aam_history
         z_arm_hat = self._z_arm_hat
         log["adaptation/z_arm_hat_mean"] = torch.mean(z_arm_hat)
@@ -2376,7 +3119,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
     def _evaluate_stage_advancement(self) -> None:
         """Check performance gates and advance stage by at most 1 level."""
-        if not bool(self.cfg.enable_automatic_curriculum):
+        goal_curriculum_enabled = bool(getattr(self.cfg, "enable_goal_difficulty_curriculum", False))
+        if not (bool(self.cfg.enable_automatic_curriculum) or goal_curriculum_enabled):
             return
         if self._curriculum_stage_index >= 4:
             return  # already at maximum stage
@@ -2400,13 +3144,33 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             / max(self._curriculum_stage_episode_count, 1.0)
         )
 
-        stage_ready = (
-            episodes_per_env >= float(self.cfg.curriculum_min_completed_episodes_per_env)
-            and mean_position_error <= float(self.cfg.curriculum_max_mean_position_error)
-            and velocity_rate <= float(self.cfg.curriculum_max_velocity_termination_rate)
-            and other_unsafe <= float(self.cfg.curriculum_max_other_unsafe_rate)
-            and timeout_rate >= float(self.cfg.curriculum_min_timeout_rate)
-        )
+        if goal_curriculum_enabled:
+            completed = max(self._curriculum_stage_episode_count, 1.0)
+            success_rate = self._curriculum_stage_success_count / completed
+            near_pose_low_speed_rate = self._curriculum_stage_near_pose_low_speed_count / completed
+            mean_max_hold_steps = self._curriculum_stage_max_hold_steps_sum / completed
+            stage_ready = (
+                self._curriculum_stage_episode_count >= float(self.cfg.goal_curriculum_min_completed_episodes)
+                and success_rate >= float(self.cfg.goal_curriculum_advance_success_rate)
+                and near_pose_low_speed_rate >= float(self.cfg.goal_curriculum_advance_near_pose_low_speed_rate)
+                and mean_max_hold_steps >= float(self.cfg.goal_curriculum_advance_mean_max_hold_steps)
+            )
+            if stage_ready:
+                self._curriculum_stage_ready_windows += 1
+            else:
+                self._curriculum_stage_ready_windows = 0
+            stage_ready = self._curriculum_stage_ready_windows >= max(
+                int(getattr(self.cfg, "goal_curriculum_hysteresis_windows", 2)),
+                1,
+            )
+        else:
+            stage_ready = (
+                episodes_per_env >= float(self.cfg.curriculum_min_completed_episodes_per_env)
+                and mean_position_error <= float(self.cfg.curriculum_max_mean_position_error)
+                and velocity_rate <= float(self.cfg.curriculum_max_velocity_termination_rate)
+                and other_unsafe <= float(self.cfg.curriculum_max_other_unsafe_rate)
+                and timeout_rate >= float(self.cfg.curriculum_min_timeout_rate)
+            )
         if stage_ready:
             self._curriculum_stage_index += 1
             self._curriculum_stage_advance_count += 1
@@ -2416,10 +3180,17 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._curriculum_stage_velocity_count = 0.0
             self._curriculum_stage_other_unsafe_count = 0.0
             self._curriculum_stage_position_error_sum = 0.0
+            self._curriculum_stage_success_count = 0.0
+            self._curriculum_stage_near_pose_low_speed_count = 0.0
+            self._curriculum_stage_max_hold_steps_sum = 0.0
+            self._curriculum_stage_ready_windows = 0
 
     def _update_curriculum_state(self) -> None:
         """Refresh curriculum-derived state (stage, action authority, episode length)."""
-        if not bool(self.cfg.enable_automatic_curriculum):
+        if not (
+            bool(self.cfg.enable_automatic_curriculum)
+            or bool(getattr(self.cfg, "enable_goal_difficulty_curriculum", False))
+        ):
             self._curriculum_stage_index = 1
         stage = self._curriculum_stage()
         authority = self.cfg.curriculum_action_authority
@@ -2484,6 +3255,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         return min(1.0, max(0.0, step_count / float(self.cfg.q_ref_curriculum_steps)))
 
     def _current_q_ref_target_scale(self) -> tuple[float, float]:
+        if bool(getattr(self.cfg, "enable_goal_difficulty_curriculum", False)):
+            scales = list(getattr(self.cfg, "goal_curriculum_stage_scales", [1.0]))
+            stage = min(max(self._curriculum_stage(), 1), len(scales))
+            return float(scales[stage - 1]), float(stage) / float(max(len(scales), 1))
         progress = self._current_q_ref_curriculum_progress()
         if not self.cfg.use_q_ref_curriculum:
             return float(self.cfg.q_ref_target_scale_final), progress
@@ -3063,17 +3838,42 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 )
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        q, qdot = self._read_joint_state()
+        mechanical_q, mechanical_qdot = self._read_mechanical_state()
+        q = mechanical_q
+        qdot = mechanical_qdot
         lower_limits = self.robot.data.soft_joint_pos_limits[:, self._state_joint_ids, 0]
         upper_limits = self.robot.data.soft_joint_pos_limits[:, self._state_joint_ids, 1]
+        cylinder_extension, cylinder_extension_velocity = self._read_cylinder_state()
+        cylinder_lower_limits = self.robot.data.soft_joint_pos_limits[:, self._cylinder_joint_ids, 0]
+        cylinder_upper_limits = self.robot.data.soft_joint_pos_limits[:, self._cylinder_joint_ids, 1]
 
         # ── Per-reason termination diagnostics ──
-        joint_nonfinite = ~(torch.isfinite(q).all(dim=-1) & torch.isfinite(qdot).all(dim=-1))
-        lower_limit = torch.any(q < lower_limits - self.cfg.joint_limit_margin, dim=-1)
-        upper_limit = torch.any(q > upper_limits + self.cfg.joint_limit_margin, dim=-1)
-        velocity_violation = torch.any(torch.abs(qdot) > self.cfg.max_abs_joint_velocity, dim=-1)
+        joint_nonfinite = ~(torch.isfinite(mechanical_q).all(dim=-1) & torch.isfinite(mechanical_qdot).all(dim=-1))
+        lower_limit = torch.any(mechanical_q < lower_limits - self.cfg.joint_limit_margin, dim=-1)
+        upper_limit = torch.any(mechanical_q > upper_limits + self.cfg.joint_limit_margin, dim=-1)
+        cylinder_lower_limit = torch.any(cylinder_extension < cylinder_lower_limits - self.cfg.joint_limit_margin, dim=-1)
+        cylinder_upper_limit = torch.any(cylinder_extension > cylinder_upper_limits + self.cfg.joint_limit_margin, dim=-1)
+        cylinder_state_invalid = self._update_hydraulic_velocity_audit(
+            cylinder_extension.detach(),
+            cylinder_extension_velocity.detach(),
+        )
+        if self._validated_mechanical_velocity_limits_enabled():
+            mechanical_hard_limits = self._mechanical_velocity_limit_tensor("mechanical_hard_velocity_limits")
+            mechanical_hard_exceedance = torch.abs(mechanical_qdot) > mechanical_hard_limits
+        else:
+            mechanical_hard_limits = torch.zeros((1, 5), dtype=torch.float32, device=self.device)
+            mechanical_hard_exceedance = torch.zeros_like(mechanical_qdot, dtype=torch.bool)
+        velocity_violation = torch.any(mechanical_hard_exceedance, dim=-1)
 
-        safety_terminated = joint_nonfinite | lower_limit | upper_limit | velocity_violation
+        safety_terminated = (
+            joint_nonfinite
+            | lower_limit
+            | upper_limit
+            | cylinder_lower_limit
+            | cylinder_upper_limit
+            | cylinder_state_invalid
+            | velocity_violation
+        )
 
         finite_control = (
             torch.isfinite(self._current_torque).all(dim=-1)
@@ -3138,7 +3938,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 | (q[:, j] > upper_limits[:, j] + self.cfg.joint_limit_margin)
                 | (~torch.isfinite(q[:, j]))
                 | (~torch.isfinite(qdot[:, j]))
-                | (torch.abs(qdot[:, j]) > self.cfg.max_abs_joint_velocity)
+                | mechanical_hard_exceedance[:, j]
             )
             offending_joint = torch.where(
                 joint_violation & (offending_joint < 0),
@@ -3187,6 +3987,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._termination_joint_nonfinite = joint_nonfinite.detach().clone()
         self._termination_lower_limit = lower_limit.detach().clone()
         self._termination_upper_limit = upper_limit.detach().clone()
+        self._termination_cylinder_lower_limit = cylinder_lower_limit.detach().clone()
+        self._termination_cylinder_upper_limit = cylinder_upper_limit.detach().clone()
         self._termination_velocity = velocity_violation.detach().clone()
         self._termination_control_nonfinite = control_nonfinite.detach().clone()
         self._termination_offending_joint = offending_joint.detach().clone()
@@ -3208,7 +4010,53 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         term_log["termination/joint_nonfinite"] = torch.mean(joint_nonfinite.float())
         term_log["termination/lower_limit"] = torch.mean(lower_limit.float())
         term_log["termination/upper_limit"] = torch.mean(upper_limit.float())
+        term_log["termination/cylinder_lower_limit"] = torch.mean(cylinder_lower_limit.float())
+        term_log["termination/cylinder_upper_limit"] = torch.mean(cylinder_upper_limit.float())
         term_log["termination/velocity"] = torch.mean(velocity_violation.float())
+        mechanical_soft_limits = self._mechanical_velocity_limit_tensor("mechanical_soft_velocity_limits")
+        mechanical_soft_exceedance = (
+            (mechanical_soft_limits > 0.0)
+            & (torch.abs(mechanical_qdot) > mechanical_soft_limits)
+        )
+        cylinder_old_threshold_crossing = (
+            torch.abs(cylinder_extension_velocity)
+            > abs(float(getattr(self.cfg, "unvalidated_velocity_diagnostic_threshold", 6.0)))
+        )
+        term_log["mechanical_velocity/abs_mean_per_joint"] = torch.mean(torch.abs(mechanical_qdot.detach()), dim=0)
+        term_log["mechanical_velocity/abs_max_per_joint"] = torch.max(torch.abs(mechanical_qdot.detach()), dim=0).values
+        term_log["mechanical_velocity/soft_exceedance_fraction_per_joint"] = torch.mean(
+            mechanical_soft_exceedance.float(), dim=0
+        )
+        term_log["mechanical_velocity/hard_exceedance_fraction_per_joint"] = torch.mean(
+            mechanical_hard_exceedance.float(), dim=0
+        )
+        term_log["cylinder_velocity/abs_mean_per_channel"] = torch.mean(
+            torch.abs(cylinder_extension_velocity.detach()), dim=0
+        )
+        term_log["cylinder_velocity/abs_max_per_channel"] = torch.max(
+            torch.abs(cylinder_extension_velocity.detach()), dim=0
+        ).values
+        term_log["cylinder_velocity/old_6_threshold_crossing_fraction"] = torch.mean(
+            cylinder_old_threshold_crossing.float()
+        )
+        term_log["cylinder_velocity/diagnostic_only"] = torch.ones((), dtype=torch.float32, device=self.device)
+        term_log["termination/velocity_raw_exceedance"] = torch.mean(
+            torch.any(self._hydraulic_velocity_raw_exceedance, dim=-1).float()
+        )
+        term_log["termination/velocity_confirmed_hard"] = torch.mean(
+            torch.any(self._hydraulic_velocity_confirmed_hard, dim=-1).float()
+        )
+        term_log["termination/velocity_spike_ignored"] = torch.mean(
+            torch.any(self._hydraulic_velocity_spike_ignored, dim=-1).float()
+        )
+        term_log["termination/velocity_persistence_max"] = torch.max(
+            self._hydraulic_velocity_persistence.float()
+        )
+        term_log["velocity_audit/physx_spike_count"] = self._velocity_audit_physx_spike_count
+        term_log["velocity_audit/target_jump_count"] = self._velocity_audit_target_jump_count
+        term_log["velocity_audit/genuine_high_motion_count"] = self._velocity_audit_genuine_high_motion_count
+        term_log["velocity_audit/unit_mapping_mismatch_count"] = self._velocity_audit_unit_mapping_mismatch_count
+        term_log["velocity_audit/nonfinite_count"] = self._velocity_audit_nonfinite_count
         term_log["termination/control_nonfinite"] = torch.mean(control_nonfinite.float())
         term_log["termination/success"] = torch.mean(self._termination_success.float())
         term_log["termination/unsafe"] = torch.mean(unsafe_terminated.float())
@@ -3275,8 +4123,33 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         final_success_counter_snapshot = (
             self._final_pose_success_counter[env_ids].detach().float().clone()
         )
+        near_pose_low_speed_snapshot = (
+            (final_position_error_snapshot <= float(self.cfg.final_pose_position_tolerance_m))
+            & (final_orientation_error_snapshot <= float(self.cfg.final_pose_orientation_tolerance_rad))
+            & (final_linear_speed_snapshot <= float(self.cfg.final_pose_linear_speed_tolerance_mps))
+            & (final_angular_speed_snapshot <= float(self.cfg.final_pose_angular_speed_tolerance_radps))
+        ).float()
+        episode_denominator = torch.clamp(episode_length_snapshot, min=1.0)
+        mean_position_error_snapshot = (
+            self._episode_position_error_sum[env_ids].detach().clone()
+            / episode_denominator
+        )
+        clamp_activation_snapshot = (
+            self._episode_clamp_activation_sum[env_ids].detach().clone()
+            / episode_denominator
+        )
+        valve_saturation_snapshot = (
+            self._episode_valve_saturation_fraction_sum[env_ids].detach().clone()
+            / episode_denominator
+        )
         time_to_success_snapshot = (
             self._final_pose_time_to_success_steps[env_ids].detach().float().clone()
+        )
+        final_unsafe_penalty_snapshot = (
+            self._terminal_unsafe_penalty[env_ids].detach().clone()
+        )
+        final_unsafe_mask_snapshot = (
+            self._terminal_unsafe_mask[env_ids].detach().clone()
         )
         termination_reason_snapshot = torch.zeros_like(reset_due_to_timeout)
         termination_reason_snapshot = torch.where(
@@ -3308,11 +4181,28 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         terminal_log["Episode/final_success_hold_steps"] = torch.mean(
             final_success_counter_snapshot
         )
+        terminal_log["Episode/mean_position_error"] = torch.mean(mean_position_error_snapshot)
+        terminal_log["Episode/clamp_activation_fraction"] = torch.mean(clamp_activation_snapshot)
+        terminal_log["Episode/valve_saturation_fraction"] = torch.mean(valve_saturation_snapshot)
         terminal_log["Episode/time_to_success_steps"] = torch.mean(time_to_success_snapshot)
         terminal_log["Episode/final_episode_length"] = torch.mean(episode_length_snapshot)
         terminal_log["Episode/final_termination_reason"] = torch.mean(
             termination_reason_snapshot
         )
+        terminal_log["Episode/final_unsafe_penalty"] = torch.mean(final_unsafe_penalty_snapshot)
+        terminal_log["Episode/final_unsafe_mask"] = torch.mean(final_unsafe_mask_snapshot.float())
+        self._update_rolling_1000_metrics(
+            success=final_pose_success_snapshot,
+            timeout=reset_due_to_timeout,
+            final_position_error=final_position_error_snapshot,
+            final_orientation_error=final_orientation_error_snapshot,
+            final_linear_speed=final_linear_speed_snapshot,
+            final_angular_speed=final_angular_speed_snapshot,
+            max_hold_steps=final_success_counter_snapshot,
+            clamp_activation_fraction=clamp_activation_snapshot,
+            valve_saturation_fraction=valve_saturation_snapshot,
+        )
+        terminal_log.update(self._rolling_1000_log())
         self._populate_extras_log(terminal_log)
 
         # ── Aggregate curriculum performance from completed episodes ──
@@ -3326,9 +4216,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._curriculum_stage_timeout_count += float(timeout_mask.sum().item())
         self._curriculum_stage_velocity_count += float(velocity_done.sum().item())
         self._curriculum_stage_other_unsafe_count += float(other_unsafe_done.sum().item())
-        self._curriculum_stage_position_error_sum += float(
-            self._episode_position_error_sum[env_ids].sum().item()
-        )
+        self._curriculum_stage_position_error_sum += float(mean_position_error_snapshot.sum().item())
+        self._curriculum_stage_success_count += float(final_pose_success_snapshot.sum().item())
+        self._curriculum_stage_near_pose_low_speed_count += float(near_pose_low_speed_snapshot.sum().item())
+        self._curriculum_stage_max_hold_steps_sum += float(final_success_counter_snapshot.sum().item())
 
         # ── Evaluate and log curriculum advancement ──
         old_stage = self._curriculum_stage_index
@@ -3367,6 +4258,22 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._curriculum_stage_timeout_count
             / max(self._curriculum_stage_episode_count, 1.0)
         )
+        curriculum_log["curriculum/goal_difficulty_enabled"] = float(
+            bool(getattr(self.cfg, "enable_goal_difficulty_curriculum", False))
+        )
+        curriculum_log["curriculum/stage_success_rate"] = (
+            self._curriculum_stage_success_count
+            / max(self._curriculum_stage_episode_count, 1.0)
+        )
+        curriculum_log["curriculum/stage_near_pose_low_speed_rate"] = (
+            self._curriculum_stage_near_pose_low_speed_count
+            / max(self._curriculum_stage_episode_count, 1.0)
+        )
+        curriculum_log["curriculum/stage_mean_max_hold_steps"] = (
+            self._curriculum_stage_max_hold_steps_sum
+            / max(self._curriculum_stage_episode_count, 1.0)
+        )
+        curriculum_log["curriculum/stage_ready_windows"] = float(self._curriculum_stage_ready_windows)
         self._populate_extras_log(curriculum_log)
 
         super()._reset_idx(env_ids)
@@ -3439,6 +4346,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._current_tau_isaac_filtered[env_ids] = 0.0
         self._current_tau_isaac_clamped[env_ids] = 0.0
         self._rom_cylinder_pos_target[env_ids] = joint_pos[:, self._command_joint_ids]
+        self._rom_cylinder_pos_target_prev[env_ids] = joint_pos[:, self._command_joint_ids]
         self._rom_cylinder_pos_target_at_reset[env_ids] = joint_pos[:, self._command_joint_ids]
         self._rom_cylinder_measured_at_reset[env_ids] = joint_pos[:, self._command_joint_ids]
         self._rom_cylinder_cumulative_target_motion[env_ids] = 0.0
@@ -3457,11 +4365,21 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_rom_delta_isaac_10ms[env_ids] = 0.0
         self._final_rom_extension[env_ids] = 0.0
         self._final_rom_extension_velocity[env_ids] = 0.0
+        self._prev_hydraulic_q[env_ids] = joint_pos[:, self._command_joint_ids]
+        self._hydraulic_qdot_fd[env_ids] = 0.0
+        self._hydraulic_target_velocity[env_ids] = 0.0
+        self._hydraulic_rom_applied_rate[env_ids] = 0.0
+        self._hydraulic_velocity_persistence[env_ids] = 0
+        self._hydraulic_velocity_raw_exceedance[env_ids] = False
+        self._hydraulic_velocity_confirmed_hard[env_ids] = False
+        self._hydraulic_velocity_spike_ignored[env_ids] = False
 
         # ── Reset curriculum / termination / reward tracking state ─────────────
         self._termination_joint_nonfinite[env_ids] = False
         self._termination_lower_limit[env_ids] = False
         self._termination_upper_limit[env_ids] = False
+        self._termination_cylinder_lower_limit[env_ids] = False
+        self._termination_cylinder_upper_limit[env_ids] = False
         self._termination_velocity[env_ids] = False
         self._termination_control_nonfinite[env_ids] = False
         self._termination_success[env_ids] = False
@@ -3470,6 +4388,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_pose_success_previous[env_ids] = False
         self._new_final_pose_success[env_ids] = False
         self._final_pose_time_to_success_steps[env_ids] = -1
+        self._final_pose_settling_hold_max[env_ids] = 0
         # NOTE: accumulated counters (_termination_*_count) are deliberately NOT
         # reset — they accumulate across episodes for lifetime diagnostics.
         self._termination_offending_joint[env_ids] = -1
@@ -3483,9 +4402,21 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_clamp_penalty_sum[env_ids] = 0.0
         self._episode_fd_load_penalty_sum[env_ids] = 0.0
         self._episode_unsafe_penalty_sum[env_ids] = 0.0
+        self._episode_linear_velocity_penalty_sum[env_ids] = 0.0
+        self._episode_angular_velocity_penalty_sum[env_ids] = 0.0
+        self._episode_settling_reward_sum[env_ids] = 0.0
+        self._episode_hold_progress_reward_sum[env_ids] = 0.0
+        self._episode_clamp_activation_sum[env_ids] = 0.0
+        self._episode_valve_saturation_fraction_sum[env_ids] = 0.0
         self._episode_position_error_sum[env_ids] = 0.0
         self._episode_success_bonus_sum[env_ids] = 0.0
         self._prev_pos_error_norm[env_ids] = 0.0
+        self._prev_task_space_potential[env_ids] = 0.0
+        self._task_space_potential_valid[env_ids] = False
+
+        # ── Clear consumed terminal unsafe-penalty snapshot buffers ──
+        self._terminal_unsafe_penalty[env_ids] = 0.0
+        self._terminal_unsafe_mask[env_ids] = False
 
         self._final_rom_input_features_raw[env_ids] = 0.0
         self._final_rom_input_features_normalized[env_ids] = 0.0
@@ -3503,6 +4434,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_actuator_pos_error_abs_max[env_ids] = 0.0
         self._rom_rate_limit_fraction[env_ids] = 0.0
         self._rom_ch4_damping_applied[env_ids] = 0.0
+        self._rom_boundary_active[env_ids] = False
+        self._rom_outward_request[env_ids] = False
+        self._rom_blocked_outward_increment[env_ids] = 0.0
+        self._rom_clamp_activation_fraction[env_ids] = 0.0
+        self._rom_clamp_blocked_outward_mean[env_ids] = 0.0
         self._fd_tau_hat[env_ids] = 0.0
         self._fd_tau_hat_normalized[env_ids] = 0.0
         self._fd_soft_limit_fraction[env_ids] = 0.0
@@ -3546,15 +4482,18 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self.robot.write_root_pose_to_sim(default_root_pose, env_ids)
         self.robot.write_root_velocity_to_sim(default_root_velocity, env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-        if bool(self.cfg.print_reset_telemetry):
+        if bool(getattr(self.cfg, "verbose_reset_logging", False)):
+            max_logs = max(int(getattr(self.cfg, "reset_diagnostic_log_limit", 8)), 0)
             for local_index, env_id in enumerate(env_ids.detach().cpu().tolist()):
+                if local_index >= max_logs:
+                    break
                 code = float(reason_code[local_index].detach().cpu())
                 print(
                     "[RESET] "
                     f"env={env_id} "
                     f"count={int(self._reset_count[env_id].detach().cpu().item())} "
                     f"reason={self._reset_reason_name(code)} "
-                    f"episode_step={int(self.episode_length_buf[env_id].detach().cpu().item())} "
+                    f"episode_step={int(episode_length_snapshot[local_index].detach().cpu().item())} "
                     f"timeout={bool(reset_due_to_timeout[local_index].detach().cpu().item() > 0.5)} "
                     f"unsafe_termination={bool(reset_due_to_termination[local_index].detach().cpu().item() > 0.5)}",
                     flush=True,

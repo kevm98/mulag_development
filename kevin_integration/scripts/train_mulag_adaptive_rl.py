@@ -106,6 +106,18 @@ parser.add_argument("--q_ref_target_scale", type=float, default=None, help="Use 
 parser.add_argument("--q_ref_target_scale_initial", type=float, default=None, help="Initial q_ref curriculum scale.")
 parser.add_argument("--q_ref_target_scale_final", type=float, default=None, help="Final q_ref curriculum scale.")
 parser.add_argument("--q_ref_curriculum_steps", type=int, default=None, help="Steps over which q_ref scale increases.")
+parser.add_argument(
+    "--enable_goal_difficulty_curriculum",
+    action="store_true",
+    default=False,
+    help="Enable the goal-difficulty curriculum even when resuming from a checkpoint.",
+)
+parser.add_argument(
+    "--disable_goal_difficulty_curriculum",
+    action="store_true",
+    default=False,
+    help="Disable the fresh-training goal-difficulty curriculum default.",
+)
 parser.add_argument("--episode_length_s", type=float, default=None, help="Override episode duration.")
 parser.add_argument(
     "--enable_scripted_vehicle_motion",
@@ -172,6 +184,44 @@ import kevin_integration.tasks  # noqa: F401
 from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
 
 
+def _is_task_space_training_cfg(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> bool:
+    return (
+        getattr(env_cfg, "control_mode", None) == "rl_task_space_tracking"
+        or getattr(env_cfg, "reference_mode", None) == "rl_task_space_tracking"
+    )
+
+
+def _has_explicit_q_ref_scale_override() -> bool:
+    return any(
+        value is not None
+        for value in (
+            args_cli.q_ref_target_scale,
+            args_cli.q_ref_target_scale_initial,
+            args_cli.q_ref_target_scale_final,
+            args_cli.q_ref_curriculum_steps,
+        )
+    )
+
+
+def _apply_goal_difficulty_curriculum_default(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+) -> None:
+    if not hasattr(env_cfg, "enable_goal_difficulty_curriculum"):
+        return
+    if args_cli.disable_goal_difficulty_curriculum:
+        env_cfg.enable_goal_difficulty_curriculum = False
+        return
+    if args_cli.enable_goal_difficulty_curriculum:
+        env_cfg.enable_goal_difficulty_curriculum = True
+        return
+    if (
+        _is_task_space_training_cfg(env_cfg)
+        and args_cli.checkpoint is None
+        and not _has_explicit_q_ref_scale_override()
+    ):
+        env_cfg.enable_goal_difficulty_curriculum = True
+
+
 def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
     if args_cli.task == DEFAULT_HYDRAULIC_ROM_TASK and args_cli.control_mode is None:
         env_cfg.control_mode = "rl_task_space_tracking"
@@ -188,7 +238,7 @@ def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | Direct
             elif args_cli.control_mode == "joint_space_validation":
                 env_cfg.reference_mode = "joint_space_validation"
                 env_cfg.enable_scripted_vehicle_motion = False
-                env_cfg.observation_space = 62
+                env_cfg.observation_space = 52
         elif getattr(env_cfg, "control_mode", None) in {"scripted_reference_demo", "rl_policy"}:
             env_cfg.low_level_control_mode = args_cli.control_mode
         else:
@@ -265,6 +315,7 @@ def _apply_env_overrides(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | Direct
         env_cfg.vehicle_speed_min_kmh = args_cli.vehicle_speed_min_kmh
     if args_cli.vehicle_speed_max_kmh is not None:
         env_cfg.vehicle_speed_max_kmh = args_cli.vehicle_speed_max_kmh
+    _apply_goal_difficulty_curriculum_default(env_cfg)
 
 
 def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
@@ -299,6 +350,8 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
         f"joint5_coupling_bias={env_cfg.joint5_coupling_bias} "
         f"q_tracking_reward_joint_weights={getattr(env_cfg, 'q_tracking_reward_joint_weights', env_cfg.q_tracking_joint_weights)} "
         f"q_tracking_debug_joint_weights={getattr(env_cfg, 'q_tracking_debug_joint_weights', env_cfg.q_tracking_joint_weights)} "
+        f"kevin_fixed_pose_contract_version={getattr(env_cfg, 'kevin_fixed_pose_contract_version', '')} "
+        f"reward_contract_version={getattr(env_cfg, 'reward_contract_version', '')} "
         f"rew_q_tracking={env_cfg.rew_q_tracking} "
         f"rew_action_saturation={env_cfg.rew_action_saturation} "
         f"action_saturation_threshold={env_cfg.action_saturation_threshold} "
@@ -316,6 +369,8 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
         f"q_ref_ramp_time_s={env_cfg.q_ref_ramp_time_s} "
         f"q_ref_ramp_profile={env_cfg.q_ref_ramp_profile} "
         f"use_q_ref_curriculum={env_cfg.use_q_ref_curriculum} "
+        f"enable_goal_difficulty_curriculum={getattr(env_cfg, 'enable_goal_difficulty_curriculum', False)} "
+        f"goal_curriculum_stage_scales={getattr(env_cfg, 'goal_curriculum_stage_scales', [])} "
         f"q_ref_target_scale_initial={env_cfg.q_ref_target_scale_initial} "
         f"q_ref_target_scale_final={env_cfg.q_ref_target_scale_final} "
         f"q_ref_curriculum_steps={env_cfg.q_ref_curriculum_steps} "

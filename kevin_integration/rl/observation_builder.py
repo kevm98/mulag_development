@@ -58,8 +58,6 @@ def build_rl_obs(
         [
             q,
             qdot,
-            q_ref,
-            qdot_ref,
             q_error,
             qdot_error,
             prev_action,
@@ -102,9 +100,10 @@ def build_task_space_rl_obs(
             ("vehicle_speed_kmh", vehicle_speed_kmh, 1),
         )
     )
+    ee_orientation_command = ee_pose_command[..., 3:7]
     return torch.cat(
         [
-            ee_pose_command,
+            ee_orientation_command,
             current_ee_pose,
             ee_position_error,
             ee_orientation_error,

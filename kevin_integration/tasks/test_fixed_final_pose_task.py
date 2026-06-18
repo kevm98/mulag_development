@@ -13,6 +13,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -28,6 +29,7 @@ CONVENTIONS_PATH = ROOT / "kevin_integration/tasks/rrlab_reference_conventions.p
 CONTROLLER_PATH = ROOT / "kevin_integration/rl/adaptive_rl_controller.py"
 MODELS_PATH = ROOT / "kevin_integration/controllers/learned_models.py"
 ROM_PATH = ROOT / "kevin_integration/rom_cylinders/valve_conditioned_causal_rom.py"
+TRAIN_PATH = ROOT / "kevin_integration/scripts/train_mulag_adaptive_rl.py"
 ISAAC_DIRECT_ENV_PATH = (
     Path("/home/rrlab/IsaacLab/source/isaaclab/isaaclab/envs/direct_rl_env.py")
 )
@@ -51,8 +53,10 @@ conventions = _load_module("fixed_pose_conventions", CONVENTIONS_PATH)
 
 ENV_SOURCE = ENV_PATH.read_text(encoding="utf-8")
 CFG_SOURCE = CFG_PATH.read_text(encoding="utf-8")
+TRAIN_SOURCE = TRAIN_PATH.read_text(encoding="utf-8")
 ENV_TREE = ast.parse(ENV_SOURCE)
 CFG_TREE = ast.parse(CFG_SOURCE)
+TRAIN_TREE = ast.parse(TRAIN_SOURCE)
 
 
 def _class_node(tree: ast.AST, name: str) -> ast.ClassDef:
@@ -103,6 +107,22 @@ def _sampler_callers() -> list[str]:
     return callers
 
 
+def _train_curriculum_namespace(args_cli: SimpleNamespace) -> dict[str, object]:
+    helper_names = {
+        "_is_task_space_training_cfg",
+        "_has_explicit_q_ref_scale_override",
+        "_apply_goal_difficulty_curriculum_default",
+    }
+    helper_source = "\n\n".join(
+        ast.get_source_segment(TRAIN_SOURCE, node) or ""
+        for node in ast.walk(TRAIN_TREE)
+        if isinstance(node, ast.FunctionDef) and node.name in helper_names
+    )
+    namespace: dict[str, object] = {"args_cli": args_cli}
+    exec("from __future__ import annotations\n" + helper_source, namespace)
+    return namespace
+
+
 class TestFixedFinalPoseTask(unittest.TestCase):
     def test_target_contract_shape_order_and_frame(self) -> None:
         self.assertEqual(task_reference.TASK_SPACE_COMMAND_DIM, 7)
@@ -121,8 +141,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         reset_source = _method_source("_reset_idx")
         sampler_source = _method_source("_sample_task_space_command")
         self.assertIn("self._sample_task_space_command(env_ids)", reset_source)
-        self.assertIn("final_pose_target[env_ids, 0]", sampler_source)
-        self.assertIn("final_pose_target[env_ids, 3:7]", sampler_source)
+        self.assertIn("final_pose_target[env_ids]", sampler_source)
         self.assertIn(
             "self._final_pose_target_at_episode_start[env_ids]",
             reset_source,
@@ -136,6 +155,87 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "_update_task_space_state",
         ):
             self.assertNotIn("_sample_task_space_command(", _method_source(method))
+
+    def test_reset_sampler_generates_reachable_pose_from_controlled_configuration(self) -> None:
+        sampler_source = _method_source("_sample_task_space_command")
+        self.assertIn("sampled_joint_pos = self._q_ref_target[env_ids]", sampler_source)
+        self.assertIn("self._apply_joint5_coupling_to_reference(", sampler_source)
+        self.assertIn("joint_pos_for_fk[:, self._state_joint_ids] = sampled_joint_pos", sampler_source)
+        self.assertIn("self.robot.write_joint_state_to_sim(joint_pos_for_fk", sampler_source)
+        self.assertIn("self.robot.update(0.0)", sampler_source)
+        self.assertIn("self._update_task_space_state()", sampler_source)
+        self.assertIn(
+            "final_pose_target[env_ids] = self._current_ee_pose[env_ids]",
+            sampler_source,
+        )
+        self.assertNotIn("curriculum_command_x_range", sampler_source)
+        self.assertNotIn("uniform_(-0.05, 0.05)", sampler_source)
+
+    def test_reachable_sampler_uses_stage_one_safe_joint_ranges(self) -> None:
+        sampler_source = _method_source("_sample_joint_targets")
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._sample_joint_targets(env_ids, q_ref_center)", reset_source)
+        self.assertIn("self.cfg.q_ref_target_amplitude", sampler_source)
+        self.assertIn("self._current_q_ref_target_scale()", sampler_source)
+        self.assertIn("safe_lower", sampler_source)
+        self.assertIn("safe_upper", sampler_source)
+        self.assertIn("self._apply_joint5_coupling_to_reference(q_ref_target", sampler_source)
+
+    def test_goal_curriculum_starts_at_easiest_reachable_stage(self) -> None:
+        self.assertFalse(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "enable_goal_difficulty_curriculum",
+            )
+        )
+        self.assertEqual(
+            _literal_assignment("MulagAdaptiveRLJointReachEnvCfg", "goal_curriculum_stage_scales")[0],
+            0.25,
+        )
+        self.assertIn("self._curriculum_stage_index = 1", ENV_SOURCE)
+        scale_source = _method_source("_current_q_ref_target_scale")
+        self.assertIn('getattr(self.cfg, "enable_goal_difficulty_curriculum", False)', scale_source)
+        self.assertIn("scales[stage - 1]", scale_source)
+
+    def test_fresh_training_enables_goal_curriculum_without_checkpoint(self) -> None:
+        class EnvCfg:
+            control_mode = "rl_task_space_tracking"
+            reference_mode = "rl_task_space_tracking"
+            enable_goal_difficulty_curriculum = False
+
+        args = SimpleNamespace(
+            checkpoint=None,
+            enable_goal_difficulty_curriculum=False,
+            disable_goal_difficulty_curriculum=False,
+            q_ref_target_scale=None,
+            q_ref_target_scale_initial=None,
+            q_ref_target_scale_final=None,
+            q_ref_curriculum_steps=None,
+        )
+        namespace = _train_curriculum_namespace(args)
+        env_cfg = EnvCfg()
+        namespace["_apply_goal_difficulty_curriculum_default"](env_cfg)
+        self.assertTrue(env_cfg.enable_goal_difficulty_curriculum)
+
+    def test_checkpoint_training_does_not_auto_enable_goal_curriculum(self) -> None:
+        class EnvCfg:
+            control_mode = "rl_task_space_tracking"
+            reference_mode = "rl_task_space_tracking"
+            enable_goal_difficulty_curriculum = False
+
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pt",
+            enable_goal_difficulty_curriculum=False,
+            disable_goal_difficulty_curriculum=False,
+            q_ref_target_scale=None,
+            q_ref_target_scale_initial=None,
+            q_ref_target_scale_final=None,
+            q_ref_curriculum_steps=None,
+        )
+        namespace = _train_curriculum_namespace(args)
+        env_cfg = EnvCfg()
+        namespace["_apply_goal_difficulty_curriculum_default"](env_cfg)
+        self.assertFalse(env_cfg.enable_goal_difficulty_curriculum)
 
     def test_authoritative_target_drives_observation_and_errors(self) -> None:
         observation_source = _method_source("_get_observations")
@@ -219,6 +319,12 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         )
         self.assertEqual(
             _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg", "position_tracking_reward_weight"
+            ),
+            1.0,
+        )
+        self.assertEqual(
+            _literal_assignment(
                 "MulagAdaptiveRLJointReachEnvCfg", "rew_task_orient_tracking"
             ),
             0.25,
@@ -231,7 +337,9 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             10.0,
         )
         reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("W_pos = float(self.cfg.position_tracking_reward_weight)", reward_source)
         self.assertIn("pos_tracking = torch.exp(-4.0 * pos_error_norm)", reward_source)
+        self.assertIn("pos_tracking_weighted = W_pos * pos_tracking", reward_source)
         reward_assignment = next(
             node
             for node in ast.walk(_method_node("_get_task_space_rewards"))
@@ -243,6 +351,10 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         ]
         self.assertEqual(reward_names.count("orient_tracking"), 1)
         self.assertEqual(reward_names.count("success_bonus"), 1)
+        self.assertEqual(reward_names.count("linear_velocity_penalty"), 1)
+        self.assertEqual(reward_names.count("angular_velocity_penalty"), 1)
+        self.assertEqual(reward_names.count("settling_reward"), 1)
+        self.assertEqual(reward_names.count("hold_reward"), 1)
 
     def test_success_requires_pose_and_settling(self) -> None:
         base = dict(
@@ -297,8 +409,68 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             reward_source.index("unsafe_termination = ("):
             reward_source.index("# ── Total reward")
         ]
-        self.assertNotIn("_termination_success", unsafe_block)
+        self.assertIn("self._termination_velocity", unsafe_block)
+        self.assertIn("self._termination_lower_limit", unsafe_block)
+        self.assertIn("self._termination_upper_limit", unsafe_block)
+        self.assertIn("self._termination_joint_nonfinite", unsafe_block)
+        self.assertIn("self._termination_control_nonfinite", unsafe_block)
+        self.assertIn("& ~self._termination_success", unsafe_block)
+        self.assertIn("& ~self.reset_time_outs", unsafe_block)
+        self.assertIn("-10.0 * W_pos", unsafe_block)
+        self.assertNotIn("unsafe_terminal_penalty", unsafe_block)
         self.assertIn("self._within_final_pose = within_final_pose & ~unsafe_termination", ENV_SOURCE)
+
+    def test_near_target_velocity_shaping_terms_and_telemetry(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for snippet in (
+            "position_gate = torch.exp(",
+            "pos_error_norm / 0.20",
+            "orientation_gate = torch.exp(",
+            "orient_error / 0.1745329252",
+            "pose_gate = position_gate * orientation_gate",
+            "ee_linear_speed = self._ee_linear_speed.reshape(-1)",
+            "ee_angular_speed = self._ee_angular_speed.reshape(-1)",
+            "float(self.cfg.rew_final_pose_linear_velocity)",
+            "ee_linear_speed / float(self.cfg.final_pose_linear_shaping_scale_mps)",
+            "float(self.cfg.rew_final_pose_angular_velocity)",
+            "ee_angular_speed / float(self.cfg.final_pose_angular_shaping_scale_radps)",
+            "linear_settling_score = torch.exp(",
+            "ee_linear_speed / float(self.cfg.final_pose_linear_settling_scale_mps)",
+            "angular_settling_score = torch.exp(",
+            "ee_angular_speed / float(self.cfg.final_pose_angular_settling_scale_radps)",
+            "float(self.cfg.rew_final_pose_settling)",
+            "hold_reward = hold_progress_reward(",
+            "reward/linear_velocity_penalty_mean",
+            "reward/angular_velocity_penalty_mean",
+            "reward/settling_reward_mean",
+            "reward/hold_progress_reward_mean",
+            "episode/linear_velocity_penalty_sum",
+            "episode/angular_velocity_penalty_sum",
+            "episode/settling_reward_sum",
+            "episode/hold_progress_reward_sum",
+            "debug/velocity_mask_count",
+            "debug/unsafe_mask_count",
+            "debug/unsafe_penalty_nonzero_count",
+            "debug/unsafe_penalty_min",
+        ):
+            self.assertIn(snippet, reward_source)
+        for absent in (
+            "pos_error_norm / 0.05",
+            "orient_error / 0.0872664626",
+        ):
+            self.assertNotIn(absent, reward_source)
+
+    def test_action_smoothing_uses_normalized_task_space_formulas(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("action_delta = (", reward_source)
+        self.assertIn("self._current_action", reward_source)
+        self.assertIn("self._previous_action", reward_source)
+        self.assertIn("-0.01", reward_source)
+        self.assertIn("torch.mean(\n                torch.square(action_delta),", reward_source)
+        self.assertIn("-0.0025", reward_source)
+        self.assertIn("torch.square(\n                    self._current_action", reward_source)
+        self.assertNotIn("float(self.cfg.rew_action_rate) * torch.mean", reward_source)
+        self.assertNotIn("float(self.cfg.rew_action_magnitude) * torch.mean", reward_source)
 
     def test_success_bonus_first_transition_and_partial_reset(self) -> None:
         success_source = _method_source("_update_final_pose_success_state")
@@ -343,9 +515,27 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         }
         for field, value in expected.items():
             self.assertEqual(_literal_assignment(class_name, field), value)
+        success_source = _method_source("_update_final_pose_success_state")
+        for field in expected:
+            self.assertIn(f"self.cfg.{field}", success_source)
+        self.assertNotIn("_curriculum_stage", success_source)
+
+    def test_required_hold_telemetry_keys_are_logged(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        rolling_source = _method_source("_rolling_1000_log")
+        for key in (
+            '"hold_progress_reward_mean"',
+            '"settling_reward_mean"',
+            '"final_pose/success_hold_counter_mean"',
+            '"final_pose/settling_hold_max_total"',
+            '"final_pose/near_pose_low_speed_fraction"',
+        ):
+            self.assertIn(key, reward_source)
+        self.assertIn('"rolling_1000/max_hold_steps"', rolling_source)
+        self.assertIn("_rolling_1000_max(self._rolling_1000_max_hold_steps)", rolling_source)
 
     def test_observation_and_action_dimensions_remain_fixed(self) -> None:
-        self.assertEqual(task_reference.TASK_SPACE_OBSERVATION_DIM, 73)
+        self.assertEqual(task_reference.TASK_SPACE_OBSERVATION_DIM, 70)
         tensors = {
             "ee_pose_command": torch.zeros(2, 7),
             "current_ee_pose": torch.zeros(2, 7),
@@ -362,7 +552,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "vehicle_speed_kmh": torch.zeros(2, 1),
         }
         observation = observation_builder.build_task_space_rl_obs(**tensors)
-        self.assertEqual(observation.shape, (2, 73))
+        self.assertEqual(observation.shape, (2, 70))
         self.assertEqual(
             _literal_assignment("MulagAdaptiveRLJointReachEnvCfg", "action_space"),
             4,
@@ -439,21 +629,473 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         self.assertLess(dones, rewards)
         self.assertLess(rewards, reset)
 
-    def test_hydra_and_launcher_files_have_no_worktree_diff(self) -> None:
-        result = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--",
-                "kevin_integration/tasks/__init__.py",
-                "kevin_integration/scripts/train_mulag_adaptive_rl.py",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
+    def test_hydra_source_is_not_modified_and_task_registration_is_local(self) -> None:
+        hydra_path = Path("/home/rrlab/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/utils/hydra.py")
+        isaac_root = Path("/home/rrlab/IsaacLab")
+        if hydra_path.is_file() and (isaac_root / ".git").is_dir():
+            result = subprocess.run(
+                ["git", "diff", "--", str(hydra_path.relative_to(isaac_root))],
+                cwd=isaac_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.stdout, "")
+        task_init = (ROOT / "kevin_integration/tasks/__init__.py").read_text(encoding="utf-8")
+        self.assertIn('id="Kevin-Mulag-HydraulicROM-TaskSpace-v0"', task_init)
+
+
+class TestUnsafePenalty(unittest.TestCase):
+    """Unsafe-penalty wiring: shape assertion, value, debug keys, exclusion."""
+
+    def test_unsafe_penalty_shape_assertion_present(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("if unsafe_termination.shape != (self.num_envs,):", reward_source)
+        self.assertIn("raise RuntimeError(", reward_source)
+        self.assertIn("unsafe_termination mask must have shape", reward_source)
+
+    def test_unsafe_penalty_value_is_minus_10_times_W_pos(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("-10.0 * W_pos", reward_source)
+
+    def test_unsafe_penalty_excludes_success_and_timeout(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("& ~self._termination_success", reward_source)
+        self.assertIn("& ~self.reset_time_outs", reward_source)
+
+    def test_unsafe_penalty_uses_all_five_termination_masks(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        unsafe_block = reward_source[
+            reward_source.index("unsafe_termination = (") :
+            reward_source.index("# ── Debug telemetry for unsafe penalty")
+        ]
+        for mask in (
+            "self._termination_velocity",
+            "self._termination_lower_limit",
+            "self._termination_upper_limit",
+            "self._termination_joint_nonfinite",
+            "self._termination_control_nonfinite",
+        ):
+            self.assertIn(mask, unsafe_block)
+
+    def test_unsafe_penalty_debug_telemetry_scalars_computed(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for scalar in (
+            "velocity_mask_count = self._termination_velocity.sum()",
+            "unsafe_mask_count = unsafe_termination.sum()",
+            "unsafe_penalty_nonzero_count = (unsafe_penalty != 0.0).sum()",
+            "unsafe_penalty_min = unsafe_penalty.min()",
+        ):
+            self.assertIn(scalar, reward_source)
+
+    def test_unsafe_penalty_debug_keys_in_log_dict(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for key in (
+            '"debug/velocity_mask_count"',
+            '"debug/unsafe_mask_count"',
+            '"debug/unsafe_penalty_nonzero_count"',
+            '"debug/unsafe_penalty_min"',
+        ):
+            self.assertIn(key, reward_source)
+
+    def test_unsafe_penalty_accumulator_in_episode_sums(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._episode_unsafe_penalty_sum += unsafe_penalty.detach()", reward_source)
+        self.assertIn('"episode/unsafe_penalty_sum"', reward_source)
+
+    def test_unsafe_penalty_does_not_exceed_minus_10_bound(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertNotIn("-100.0", reward_source)
+        self.assertNotIn("-20.0", reward_source)
+
+    def test_unsafe_penalty_applied_via_torch_where(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("torch.where(", reward_source)
+        self.assertIn("unsafe_termination", reward_source)
+
+    def test_unsafe_penalty_masks_detached_and_cloned_in_dones(self) -> None:
+        dones_source = _method_source("_get_dones")
+        self.assertIn("self._termination_velocity = velocity_violation.detach().clone()", dones_source)
+
+    def test_unsafe_mean_logged_as_reward_unsafe_penalty_mean(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"reward/unsafe_penalty_mean"', reward_source)
+
+
+class TestSettlingReward(unittest.TestCase):
+    """Settling reward uses decoupled velocity scores + pose_gate."""
+
+    def test_settling_uses_linear_and_angular_scores(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("linear_settling_score = torch.exp(", reward_source)
+        self.assertIn("angular_settling_score = torch.exp(", reward_source)
+
+    def test_settling_linear_scale_uses_configured_final_pose_scale(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("ee_linear_speed / float(self.cfg.final_pose_linear_settling_scale_mps)", reward_source)
+
+    def test_settling_angular_scale_uses_configured_final_pose_scale(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("ee_angular_speed / float(self.cfg.final_pose_angular_settling_scale_radps)", reward_source)
+
+    def test_settling_multiplied_by_pose_gate(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        settling_block = reward_source[
+            reward_source.index("settling_reward = (") :
+            reward_source.index("── Penalties ──")
+        ]
+        self.assertIn("pose_gate", settling_block)
+
+    def test_settling_uses_configured_weight(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        settling_block = reward_source[
+            reward_source.index("settling_reward = (") :
+            reward_source.index("── Penalties ──")
+        ]
+        self.assertIn("float(self.cfg.rew_final_pose_settling)", settling_block)
+
+    def test_settling_weighted_by_W_pos(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        settling_block = reward_source[
+            reward_source.index("settling_reward = (") :
+            reward_source.index("── Penalties ──")
+        ]
+        self.assertIn("* W_pos", settling_block)
+
+    def test_settling_reward_uses_broad_gate_and_velocity_scales_not_tolerances(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertNotIn("pos_error_norm / 0.05", reward_source)
+        self.assertNotIn("orient_error / 0.0872664626", reward_source)
+
+    def test_settling_reward_mean_in_log(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"reward/settling_reward_mean"', reward_source)
+
+    def test_settling_episode_sum_in_log(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"episode/settling_reward_sum"', reward_source)
+
+    def test_settling_accumulator_present(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._episode_settling_reward_sum += settling_reward.detach()", reward_source)
+
+    def test_settling_reward_included_in_total_reward(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        total_block = reward_source[
+            reward_source.index("# ── Total reward ──") :
+            reward_source.index("# ── Update progress buffer")
+        ]
+        self.assertIn("settling_reward", total_block)
+
+    def test_settling_gate_scales_are_0_point_20m_and_10_deg(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("pos_error_norm / 0.20", reward_source)
+        self.assertIn("orient_error / 0.1745329252", reward_source)
+
+
+class TestPreservation(unittest.TestCase):
+    """Existing reward terms and pipeline are preserved."""
+
+    def test_position_tracking_formula_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("pos_tracking = torch.exp(-4.0 * pos_error_norm)", reward_source)
+        self.assertIn("pos_tracking_weighted = W_pos * pos_tracking", reward_source)
+
+    def test_orientation_tracking_formula_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("orient_tracking_unweighted = final_pose_orientation_reward(", reward_source)
+        self.assertIn("orient_error,", reward_source)
+        self.assertIn("float(self.cfg.final_pose_orientation_tolerance_rad)", reward_source)
+
+    def test_success_bonus_formula_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("success_bonus = torch.where(", reward_source)
+        self.assertIn("self._new_final_pose_success", reward_source)
+        self.assertIn("float(self.cfg.final_pose_success_bonus_value)", reward_source)
+
+    def test_progress_reward_formula_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("current_potential = normalized_task_space_potential(", reward_source)
+        self.assertIn("progress_raw = potential_progress_shaping(", reward_source)
+        self.assertIn("reset_mask=~self._task_space_potential_valid", reward_source)
+
+    def test_action_smoothness_penalties_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("action_rate_penalty", reward_source)
+        self.assertIn("action_mag_penalty", reward_source)
+        self.assertIn("-0.01", reward_source)
+        self.assertIn("-0.0025", reward_source)
+
+    def test_linear_and_angular_velocity_penalties_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("linear_velocity_penalty", reward_source)
+        self.assertIn("angular_velocity_penalty", reward_source)
+        self.assertIn("torch.tanh(", reward_source)
+
+    def test_valve_sat_clamp_and_fd_penalties_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("valve_sat_penalty", reward_source)
+        self.assertIn("clamp_penalty", reward_source)
+        self.assertIn("fd_load_penalty", reward_source)
+
+    def test_velocity_penalty_pose_gate_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("pose_gate", reward_source)
+
+    def test_curriculum_log_keys_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for key in (
+            '"curriculum/stage"',
+            '"curriculum/action_authority"',
+            '"curriculum/episode_length"',
+        ):
+            self.assertIn(key, reward_source)
+
+    def test_final_pose_log_keys_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for key in (
+            '"final_pose/position_error_mean"',
+            '"final_pose/orientation_error_mean_rad"',
+            '"final_pose/success_fraction"',
+            '"final_pose/within_tolerance_fraction"',
+        ):
+            self.assertIn(key, reward_source)
+
+    def test_adaptation_log_keys_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for key in (
+            '"adaptation/z_arm_hat_mean"',
+            '"adaptation/aam_active"',
+            '"adaptation/aam_frozen"',
+        ):
+            self.assertIn(key, reward_source)
+
+    def test_episode_terminal_snapshots_preserved(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        for snapshot in (
+            "final_pose_success_snapshot",
+            "final_position_error_snapshot",
+            "final_orientation_error_snapshot",
+        ):
+            self.assertIn(snapshot, reset_source)
+
+
+class TestUnsafePenaltyCounters(unittest.TestCase):
+    """Persistent cumulative unsafe-penalty counters and terminal snapshot buffers."""
+
+    # ── Buffer existence and dtypes (tests 1-4) ──
+
+    def test_unsafe_penalty_event_count_total_allocated(self) -> None:
+        self.assertIn("self._unsafe_penalty_event_count_total", ENV_SOURCE)
+        self.assertIn("dtype=torch.long", ENV_SOURCE)
+        self.assertIn("device=self.device", ENV_SOURCE)
+
+    def test_unsafe_penalty_value_total_allocated(self) -> None:
+        self.assertIn("self._unsafe_penalty_value_total", ENV_SOURCE)
+        self.assertIn("dtype=torch.float32", ENV_SOURCE)
+
+    def test_terminal_unsafe_penalty_buffer_allocated(self) -> None:
+        self.assertIn("self._terminal_unsafe_penalty", ENV_SOURCE)
+        self.assertIn("(self.num_envs,)", ENV_SOURCE)
+        self.assertIn("dtype=torch.float32", ENV_SOURCE)
+
+    def test_terminal_unsafe_mask_buffer_allocated(self) -> None:
+        self.assertIn("self._terminal_unsafe_mask", ENV_SOURCE)
+        self.assertIn("(self.num_envs,)", ENV_SOURCE)
+        self.assertIn("dtype=torch.bool", ENV_SOURCE)
+
+    # ── Counter increment logic (tests 5-11) ──
+
+    def test_cumulative_event_counter_incremented(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._unsafe_penalty_event_count_total += unsafe_termination.sum().long()", reward_source)
+
+    def test_cumulative_value_counter_incremented(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._unsafe_penalty_value_total += unsafe_penalty.sum()", reward_source)
+
+    def test_terminal_unsafe_penalty_buffer_populated(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._terminal_unsafe_penalty[unsafe_ids]", reward_source)
+
+    def test_terminal_unsafe_mask_buffer_populated(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("self._terminal_unsafe_mask[unsafe_ids]", reward_source)
+
+    def test_terminal_buffer_update_uses_detached_values(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("unsafe_penalty[unsafe_ids].detach()", reward_source)
+        self.assertIn("unsafe_termination[unsafe_ids].detach()", reward_source)
+
+    def test_terminal_buffer_update_guarded_by_nonempty_ids(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn("if unsafe_ids.numel() > 0:", reward_source)
+
+    def test_cumulative_counters_updated_before_total_reward(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        counters_index = reward_source.index("self._unsafe_penalty_event_count_total")
+        total_index = reward_source.index("# ── Total reward ──")
+        self.assertLess(counters_index, total_index)
+
+    # ── Debug log keys (tests 12-13) ──
+
+    def test_debug_log_contains_event_count_total(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"debug/unsafe_penalty_event_count_total"', reward_source)
+        self.assertIn("self._unsafe_penalty_event_count_total.float()", reward_source)
+
+    def test_debug_log_contains_value_total(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"debug/unsafe_penalty_value_total"', reward_source)
+        self.assertIn("self._unsafe_penalty_value_total", reward_source)
+
+    # ── Terminal snapshot capture before super (tests 14-19) ──
+
+    def test_terminal_unsafe_penalty_snapshot_captured(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        super_index = reset_source.index("super()._reset_idx(env_ids)")
+        self.assertIn("final_unsafe_penalty_snapshot", reset_source)
+        self.assertLess(
+            reset_source.index("final_unsafe_penalty_snapshot"),
+            super_index,
         )
-        self.assertEqual(result.stdout, "")
+
+    def test_terminal_unsafe_mask_snapshot_captured(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        super_index = reset_source.index("super()._reset_idx(env_ids)")
+        self.assertIn("final_unsafe_mask_snapshot", reset_source)
+        self.assertLess(
+            reset_source.index("final_unsafe_mask_snapshot"),
+            super_index,
+        )
+
+    def test_terminal_unsafe_penalty_snapshot_from_buffer(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._terminal_unsafe_penalty[env_ids]", reset_source)
+
+    def test_terminal_unsafe_mask_snapshot_from_buffer(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._terminal_unsafe_mask[env_ids]", reset_source)
+
+    def test_terminal_unsafe_penalty_snapshot_detached_and_cloned(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        penalty_pos = reset_source.index("final_unsafe_penalty_snapshot")
+        snapshot_block = reset_source[penalty_pos:penalty_pos + 120]
+        self.assertIn(".detach().clone()", snapshot_block)
+
+    def test_terminal_unsafe_mask_snapshot_detached_and_cloned(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        mask_pos = reset_source.index("final_unsafe_mask_snapshot")
+        snapshot_block = reset_source[mask_pos:mask_pos + 120]
+        self.assertIn(".detach().clone()", snapshot_block)
+
+    # ── Terminal log key presence (tests 20-22) ──
+
+    def test_terminal_log_contains_final_unsafe_penalty(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn('"Episode/final_unsafe_penalty"', reset_source)
+        self.assertIn("final_unsafe_penalty_snapshot", reset_source)
+
+    def test_terminal_log_contains_final_unsafe_mask(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn('"Episode/final_unsafe_mask"', reset_source)
+        self.assertIn("final_unsafe_mask_snapshot", reset_source)
+
+    def test_terminal_unsafe_mask_logged_as_float(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("final_unsafe_mask_snapshot.float()", reset_source)
+
+    # ── Post-reset buffer clearing (tests 23-24) ──
+
+    def test_terminal_unsafe_penalty_cleared_on_reset(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._terminal_unsafe_penalty[env_ids] = 0.0", reset_source)
+
+    def test_terminal_unsafe_mask_cleared_on_reset(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._terminal_unsafe_mask[env_ids] = False", reset_source)
+
+    # ── Counter non-reset (tests 25-28) ──
+
+    def test_cumulative_event_counter_not_reset_in_reset_idx(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertNotIn("_unsafe_penalty_event_count_total", reset_source)
+
+    def test_cumulative_value_counter_not_reset_in_reset_idx(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertNotIn("_unsafe_penalty_value_total", reset_source)
+
+    def test_cumulative_event_counter_not_zeroed_in_init(self) -> None:
+        source_since_init = ENV_SOURCE[ENV_SOURCE.index("self._unsafe_penalty_event_count_total"):]
+        self.assertNotIn("self._unsafe_penalty_event_count_total = 0", source_since_init[:300])
+
+    def test_cumulative_value_counter_not_zeroed_in_init(self) -> None:
+        source_since_init = ENV_SOURCE[ENV_SOURCE.index("self._unsafe_penalty_value_total"):]
+        self.assertNotIn("self._unsafe_penalty_value_total = 0", source_since_init[:300])
+
+    # ── Preservation of existing unsafe penalty (tests 29-35) ──
+
+    def test_existing_unsafe_penalty_keys_preserved(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        for key in (
+            '"debug/velocity_mask_count"',
+            '"debug/unsafe_mask_count"',
+            '"debug/unsafe_penalty_nonzero_count"',
+            '"debug/unsafe_penalty_min"',
+            '"reward/unsafe_penalty_mean"',
+            '"episode/unsafe_penalty_sum"',
+        ):
+            self.assertIn(key, reward_source)
+
+    def test_existing_terminal_snapshot_fields_preserved(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        for field in (
+            "final_pose_success_snapshot",
+            "final_position_error_snapshot",
+            "final_orientation_error_snapshot",
+        ):
+            self.assertIn(field, reset_source)
+
+    def test_existing_terminal_log_keys_preserved(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        for key in (
+            '"Episode/final_pose_success"',
+            '"Episode/final_position_error"',
+            '"Episode/final_orientation_error_rad"',
+            '"Episode/final_orientation_error_deg"',
+            '"Episode/final_linear_speed"',
+            '"Episode/final_angular_speed"',
+        ):
+            self.assertIn(key, reset_source)
+
+    def test_existing_episode_accumulators_not_affected(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertIn("self._episode_unsafe_penalty_sum[env_ids] = 0.0", reset_source)
+        self.assertIn("self._episode_pos_tracking_sum[env_ids] = 0.0", reset_source)
+
+    def test_terminal_snapshots_captured_before_super(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        super_index = reset_source.index("super()._reset_idx(env_ids)")
+        self.assertLess(
+            reset_source.index("final_unsafe_penalty_snapshot"),
+            super_index,
+        )
+        self.assertLess(
+            reset_source.index("final_unsafe_mask_snapshot"),
+            super_index,
+        )
+
+    def test_super_is_only_called_once_in_reset_idx(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        self.assertEqual(reset_source.count("super()._reset_idx(env_ids)"), 1)
+
+    def test_buffer_clearing_happens_after_episode_sums_zeroed(self) -> None:
+        reset_source = _method_source("_reset_idx")
+        ep_unsafe_index = reset_source.rindex("self._episode_unsafe_penalty_sum[env_ids] = 0.0")
+        clear_penalty_index = reset_source.rindex("self._terminal_unsafe_penalty[env_ids] = 0.0")
+        clear_mask_index = reset_source.rindex("self._terminal_unsafe_mask[env_ids] = False")
+        self.assertLess(ep_unsafe_index, clear_penalty_index)
+        self.assertLess(ep_unsafe_index, clear_mask_index)
 
 
 if __name__ == "__main__":

@@ -126,7 +126,7 @@ class TestPlayLauncherContract(unittest.TestCase):
                 self.shape = shape
 
         class RawDirectEnv:
-            observation_space = BoxSpace((73,))
+            observation_space = BoxSpace((70,))
             action_space = BoxSpace((4,))
 
             def get_observations(self):
@@ -137,7 +137,7 @@ class TestPlayLauncherContract(unittest.TestCase):
                 self.unwrapped = RawDirectEnv()
 
         class EnvCfg:
-            observation_space = 73
+            observation_space = 70
             action_space = 4
             kevin_fixed_pose_contract_version = "fixed-pose-v1"
             reward_contract_version = "reward-v1"
@@ -148,7 +148,7 @@ class TestPlayLauncherContract(unittest.TestCase):
 
         saved_contract = {
             "task_name": "Kevin-Mulag-HydraulicROM-TaskSpace-v0",
-            "observation_dimension": 73,
+            "observation_dimension": 70,
             "action_dimension": 4,
             "runner_class": "OnPolicyRunner",
         }
