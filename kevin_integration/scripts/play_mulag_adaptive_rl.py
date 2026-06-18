@@ -231,6 +231,23 @@ def _checkpoint_contract_payload(checkpoint_path: str) -> dict[str, object]:
     return {}
 
 
+def _space_dimension(space: object, fallback: int = -1) -> int:
+    if isinstance(space, int):
+        return int(space)
+    if hasattr(space, "spaces") and "policy" in getattr(space, "spaces", {}):
+        return _space_dimension(space.spaces["policy"], fallback=fallback)
+    shape = getattr(space, "shape", None)
+    if shape is not None:
+        size = 1
+        for dim in shape:
+            size *= int(dim)
+        return int(size)
+    try:
+        return int(space)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
 def _validate_checkpoint_compatibility(
     checkpoint_path: str,
     *,
@@ -239,10 +256,17 @@ def _validate_checkpoint_compatibility(
     agent_cfg: RslRlBaseRunnerCfg,
     env,
 ) -> None:
+    raw_env = env.unwrapped
     current = {
         "task_name": task_name,
-        "observation_dimension": int(getattr(env_cfg, "observation_space", -1)),
-        "action_dimension": int(getattr(env_cfg, "action_space", -1)),
+        "observation_dimension": _space_dimension(
+            getattr(raw_env, "observation_space", None),
+            fallback=int(getattr(env_cfg, "observation_space", -1)),
+        ),
+        "action_dimension": _space_dimension(
+            getattr(raw_env, "action_space", None),
+            fallback=int(getattr(env_cfg, "action_space", -1)),
+        ),
         "runner_class": getattr(agent_cfg, "class_name", None),
         "policy_architecture": _agent_architecture(agent_cfg),
         "normalizer_present": bool(getattr(agent_cfg, "empirical_normalization", False))
@@ -250,10 +274,6 @@ def _validate_checkpoint_compatibility(
         "environment_contract_version": str(getattr(env_cfg, "kevin_fixed_pose_contract_version", "")),
         "reward_contract_version": str(getattr(env_cfg, "reward_contract_version", "")),
     }
-    actual_obs = env.unwrapped.get_observations()
-    if isinstance(actual_obs, dict) and "policy" in actual_obs:
-        current["observation_dimension"] = int(actual_obs["policy"].shape[-1])
-    current["action_dimension"] = int(getattr(env.unwrapped, "num_actions", current["action_dimension"]))
 
     saved = _checkpoint_contract_payload(checkpoint_path)
     if not saved:
@@ -338,8 +358,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
         env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+        print("[INFO] RSL-RL VecEnv wrapper created.", flush=True)
 
-        print(f"[INFO] Loading model checkpoint from: {resume_path}")
+        print(f"[INFO] Loading model checkpoint from: {resume_path}", flush=True)
         if agent_cfg.class_name == "OnPolicyRunner":
             runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         elif agent_cfg.class_name == "DistillationRunner":
@@ -347,7 +368,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         else:
             raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
         runner.load(resume_path)
+        print("[INFO] Checkpoint loaded.", flush=True)
         policy = runner.get_inference_policy(device=env.unwrapped.device)
+        print("[INFO] Inference policy created.", flush=True)
 
         export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
         policy_nn = None
@@ -370,6 +393,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         dt = env.unwrapped.step_dt
         obs = env.get_observations()
+        print("[INFO] Initial wrapper observation acquired; entering play loop.", flush=True)
         timestep = 0
         while simulation_app.is_running():
             start_time = time.time()
