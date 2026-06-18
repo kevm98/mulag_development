@@ -252,11 +252,13 @@ class TestFixedFinalPoseTask(unittest.TestCase):
 
     def test_target_fixed_episode_debug_contract(self) -> None:
         reward_source = _method_source("_get_task_space_rewards")
+        target_changed_source = _method_source("_target_changed_this_episode")
         self.assertIn("if self.cfg.debug_reward_terms:", reward_source)
         self.assertIn(
             "self._final_pose_target_at_episode_start",
-            reward_source,
+            target_changed_source,
         )
+        self.assertIn("target_changed = self._target_changed_this_episode()", reward_source)
         self.assertIn('"final_pose/target_changed_fraction"', reward_source)
 
     def test_quaternion_geodesic_reference_cases(self) -> None:
@@ -418,7 +420,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         self.assertIn("& ~self.reset_time_outs", unsafe_block)
         self.assertIn("-10.0 * W_pos", unsafe_block)
         self.assertNotIn("unsafe_terminal_penalty", unsafe_block)
-        self.assertIn("self._within_final_pose = within_final_pose & ~unsafe_termination", ENV_SOURCE)
+        self.assertIn("self._within_final_pose = strict_all_except_hold.detach().clone()", ENV_SOURCE)
 
     def test_near_target_velocity_shaping_terms_and_telemetry(self) -> None:
         reward_source = _method_source("_get_task_space_rewards")
@@ -529,10 +531,102 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             '"final_pose/success_hold_counter_mean"',
             '"final_pose/settling_hold_max_total"',
             '"final_pose/near_pose_low_speed_fraction"',
+            '"final_pose/strict_position_fraction"',
+            '"final_pose/strict_orientation_fraction"',
+            '"final_pose/strict_linear_speed_fraction"',
+            '"final_pose/strict_angular_speed_fraction"',
+            '"final_pose/strict_all_except_hold_fraction"',
+            '"final_pose/hold_break_reason_position"',
+            '"final_pose/hold_break_reason_orientation"',
+            '"final_pose/hold_break_reason_linear_speed"',
+            '"final_pose/hold_break_reason_angular_speed"',
+            '"final_pose/hold_break_reason_target_changed"',
+            '"final_pose/hold_break_reason_timeout"',
+            '"final_pose/hold_break_reason_unknown"',
+            '"final_pose/max_hold_position_error_at_break"',
+            '"final_pose/max_hold_orientation_error_at_break"',
+            '"final_pose/max_hold_linear_speed_at_break"',
+            '"final_pose/max_hold_angular_speed_at_break"',
+            '"final_pose/max_hold_steps_before_break"',
+            '"final_pose/steps_remaining_after_max_hold"',
+            '"final_pose/first_step_entered_strict_settled"',
+            '"final_pose/last_step_entered_strict_settled"',
         ):
             self.assertIn(key, reward_source)
         self.assertIn('"rolling_1000/max_hold_steps"', rolling_source)
         self.assertIn("_rolling_1000_max(self._rolling_1000_max_hold_steps)", rolling_source)
+
+    def test_hold_counter_uses_only_four_strict_conditions(self) -> None:
+        success_source = _method_source("_update_final_pose_success_state")
+        counter_block = success_source[
+            success_source.index("strict_position =") :
+            success_source.index("final_pose_success = (")
+        ]
+        for snippet in (
+            "strict_position",
+            "strict_orientation",
+            "strict_linear_speed",
+            "strict_angular_speed",
+            "strict_all_except_hold = (",
+            "self._within_final_pose = strict_all_except_hold.detach().clone()",
+            "update_consecutive_success_counter(",
+        ):
+            self.assertIn(snippet, counter_block)
+        update_call = counter_block[
+            counter_block.index("self._final_pose_success_counter = update_consecutive_success_counter(") :
+            counter_block.index("new_env_max =")
+        ]
+        self.assertIn("self._within_final_pose", update_call)
+        self.assertNotIn("unsafe_termination", update_call)
+
+    def test_hold_break_records_failed_strict_condition_reasons(self) -> None:
+        success_source = _method_source("_update_final_pose_success_state")
+        self.assertIn("hold_broke = (previous_counter > 0) & ~strict_all_except_hold", success_source)
+        for snippet in (
+            "reason_position=hold_broke & ~strict_position",
+            "reason_orientation=hold_broke & ~strict_orientation",
+            "reason_linear_speed=hold_broke & ~strict_linear_speed",
+            "reason_angular_speed=hold_broke & ~strict_angular_speed",
+            "reason_target_changed=hold_broke & target_changed",
+        ):
+            self.assertIn(snippet, success_source)
+
+    def test_success_is_counted_before_timeout_and_timeout_cannot_erase_it(self) -> None:
+        dones_source = _method_source("_get_dones")
+        self.assertLess(
+            dones_source.index("self._update_final_pose_success_state(unsafe_terminated)"),
+            dones_source.index("time_out = self.episode_length_buf"),
+        )
+        self.assertLess(
+            dones_source.index("terminated = unsafe_terminated | self._termination_success"),
+            dones_source.index("time_out = time_out & ~terminated"),
+        )
+        self.assertIn("time_out = time_out & ~terminated", dones_source)
+        self.assertIn("self._termination_success_count += self._new_final_pose_success.float()", dones_source)
+
+    def test_timeout_break_is_recorded_after_timeout_masking(self) -> None:
+        dones_source = _method_source("_get_dones")
+        timeout_mask = dones_source.index("time_out = time_out & ~terminated")
+        timeout_break = dones_source.index("self._record_hold_timeout_break(time_out)")
+        self.assertLess(timeout_mask, timeout_break)
+        timeout_source = _method_source("_record_hold_timeout_break")
+        self.assertIn("timeout_break = time_out & (current_hold_steps > 0) & ~self._termination_success", timeout_source)
+        self.assertIn("reason_timeout=timeout_break", timeout_source)
+
+    def test_target_is_fixed_and_episode_has_room_after_first_strict_entry(self) -> None:
+        self.assertEqual(_sampler_callers(), ["_reset_idx"])
+        self.assertEqual(
+            _literal_assignment("MulagHydraulicROMTaskSpaceEnvCfg", "curriculum_episode_length_s")[0],
+            15.0,
+        )
+        self.assertGreater(
+            int(15.0 / 0.01),
+            _literal_assignment("MulagAdaptiveRLJointReachEnvCfg", "final_pose_success_hold_steps"),
+        )
+        success_source = _method_source("_update_final_pose_success_state")
+        self.assertIn("self._final_pose_first_strict_settled_step", success_source)
+        self.assertIn("self._final_pose_last_strict_settled_step", success_source)
+        self.assertIn("self._final_pose_steps_remaining_after_max_hold", success_source)
 
     def test_observation_and_action_dimensions_remain_fixed(self) -> None:
         self.assertEqual(task_reference.TASK_SPACE_OBSERVATION_DIM, 70)
@@ -603,6 +697,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "final_linear_speed_snapshot",
             "final_angular_speed_snapshot",
             "final_success_counter_snapshot",
+            "final_max_hold_snapshot",
             "episode_length_snapshot",
             "termination_reason_snapshot",
         ):
@@ -615,6 +710,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "Episode/final_linear_speed",
             "Episode/final_angular_speed",
             "Episode/final_success_hold_steps",
+            "Episode/max_hold_steps",
             "Episode/time_to_success_steps",
         ):
             self.assertIn(key, reset_source)
