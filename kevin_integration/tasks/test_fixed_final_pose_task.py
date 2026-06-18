@@ -542,6 +542,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             '"final_pose/hold_break_reason_angular_speed"',
             '"final_pose/hold_break_reason_target_changed"',
             '"final_pose/hold_break_reason_timeout"',
+            '"final_pose/hold_break_reason_success_reached"',
             '"final_pose/hold_break_reason_unknown"',
             '"final_pose/max_hold_position_error_at_break"',
             '"final_pose/max_hold_orientation_error_at_break"',
@@ -590,6 +591,26 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "reason_target_changed=hold_broke & target_changed",
         ):
             self.assertIn(snippet, success_source)
+
+    def test_success_reached_suppresses_unknown_hold_break_reason(self) -> None:
+        ongoing_source = _method_source("_update_global_hold_diagnostic_without_break")
+        break_source = _method_source("_record_hold_break_diagnostic")
+        for source in (ongoing_source, break_source):
+            self.assertIn(
+                "success_reached = best_steps >= int(self.cfg.final_pose_success_hold_steps)",
+                source,
+            )
+            self.assertIn(
+                "self._final_pose_hold_break_reason_success_reached.copy_(",
+                source,
+            )
+        self.assertIn(
+            "self._final_pose_hold_break_reason_unknown.copy_((~success_reached).detach().float())",
+            ongoing_source,
+        )
+        self.assertIn("| success_reached", break_source)
+        reward_source = _method_source("_get_task_space_rewards")
+        self.assertIn('"final_pose/hold_break_reason_success_reached"', reward_source)
 
     def test_success_is_counted_before_timeout_and_timeout_cannot_erase_it(self) -> None:
         dones_source = _method_source("_get_dones")
@@ -1192,6 +1213,244 @@ class TestUnsafePenaltyCounters(unittest.TestCase):
         clear_mask_index = reset_source.rindex("self._terminal_unsafe_mask[env_ids] = False")
         self.assertLess(ep_unsafe_index, clear_penalty_index)
         self.assertLess(ep_unsafe_index, clear_mask_index)
+
+
+
+class TestHoldProgressReward(unittest.TestCase):
+    """Hold progress reward is positive and increasing for partial holds 1-49."""
+
+    def test_hold_progress_reward_positive_for_partial_holds(self) -> None:
+        """hold_progress_reward returns positive values for steps 1 through 49."""
+        for hold_steps in range(1, 50):
+            counter = torch.full((8,), hold_steps, dtype=torch.long)
+            within = torch.ones(8, dtype=torch.bool)
+            reward = reward_terms.hold_progress_reward(
+                counter,
+                required_hold_steps=50,
+                weight=1.0,
+                within_final_pose=within,
+            )
+            self.assertTrue(
+                bool(torch.all(reward > 0.0)),
+                f"hold_progress_reward should be positive at hold step {hold_steps}",
+            )
+
+    def test_hold_progress_reward_increases_with_hold(self) -> None:
+        """hold_progress_reward increases monotonically with hold steps."""
+        prev = -1.0
+        for hold_steps in range(1, 50):
+            counter = torch.full((8,), hold_steps, dtype=torch.long)
+            within = torch.ones(8, dtype=torch.bool)
+            reward = reward_terms.hold_progress_reward(
+                counter,
+                required_hold_steps=50,
+                weight=1.0,
+                within_final_pose=within,
+            )
+            mean_reward = reward.mean().item()
+            self.assertGreater(
+                mean_reward, prev,
+                f"hold_progress_reward should increase from step {hold_steps - 1} to {hold_steps}",
+            )
+            prev = mean_reward
+
+    def test_hold_progress_reward_zero_when_not_within_pose(self) -> None:
+        """hold_progress_reward is zero when within_final_pose is False."""
+        counter = torch.tensor([25, 25], dtype=torch.long)
+        within = torch.tensor([False, False], dtype=torch.bool)
+        reward = reward_terms.hold_progress_reward(
+            counter,
+            required_hold_steps=50,
+            weight=1.0,
+            within_final_pose=within,
+        )
+        self.assertTrue(bool(torch.all(reward == 0.0)))
+
+    def test_hold_progress_reward_at_max_hold(self) -> None:
+        """hold_progress_reward equals weight at exactly 50 steps."""
+        counter = torch.full((4,), 50, dtype=torch.long)
+        within = torch.ones(4, dtype=torch.bool)
+        reward = reward_terms.hold_progress_reward(
+            counter,
+            required_hold_steps=50,
+            weight=1.0,
+            within_final_pose=within,
+        )
+        self.assertTrue(bool(torch.allclose(reward, torch.ones(4))))
+
+    def test_hold_progress_reward_uses_required_hold_steps(self) -> None:
+        """hold_progress_reward scales correctly with different required_hold_steps."""
+        counter = torch.full((4,), 10, dtype=torch.long)
+        within = torch.ones(4, dtype=torch.bool)
+        reward_20 = reward_terms.hold_progress_reward(
+            counter, required_hold_steps=20, weight=1.0, within_final_pose=within,
+        )
+        reward_50 = reward_terms.hold_progress_reward(
+            counter, required_hold_steps=50, weight=1.0, within_final_pose=within,
+        )
+        # 10/20 = 0.5, squared = 0.25; 10/50 = 0.2, squared = 0.04
+        expected_20 = (10.0 / 20.0) ** 2
+        expected_50 = (10.0 / 50.0) ** 2
+        self.assertAlmostEqual(reward_20[0].item(), expected_20, places=5)
+        self.assertAlmostEqual(reward_50[0].item(), expected_50, places=5)
+
+
+class TestSuccessBonus(unittest.TestCase):
+    """Success bonus value and activation threshold are correct."""
+
+    def test_success_bonus_value_is_10(self) -> None:
+        """final_pose_success_bonus_value is exactly 10.0."""
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_success_bonus_value",
+            ),
+            10.0,
+        )
+
+    def test_success_hold_steps_is_50(self) -> None:
+        """final_pose_success_hold_steps is exactly 50."""
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_success_hold_steps",
+            ),
+            50,
+        )
+
+    def test_success_bonus_activates_at_hold_50_not_49(self) -> None:
+        """Success bonus triggers at hold >= 50, not at 49."""
+        self.assertIn("final_pose_success = (", ENV_SOURCE)
+        self.assertIn(
+            "self._final_pose_success_counter\n            >= int(self.cfg.final_pose_success_hold_steps)",
+            ENV_SOURCE,
+        )
+
+
+class TestSuccessThresholdsUnchanged(unittest.TestCase):
+    """Strict success thresholds are unchanged."""
+
+    def test_position_tolerance_unchanged(self) -> None:
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_position_tolerance_m",
+            ),
+            0.05,
+        )
+
+    def test_orientation_tolerance_unchanged(self) -> None:
+        self.assertAlmostEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_orientation_tolerance_rad",
+            ),
+            0.0872664626,
+            places=8,
+        )
+
+    def test_linear_speed_tolerance_unchanged(self) -> None:
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_linear_speed_tolerance_mps",
+            ),
+            0.05,
+        )
+
+    def test_angular_speed_tolerance_unchanged(self) -> None:
+        self.assertAlmostEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "final_pose_angular_speed_tolerance_radps",
+            ),
+            0.10,
+        )
+
+
+class TestEntropyArchitecturePreserved(unittest.TestCase):
+    """Entropy / std changes preserve action dimension and model architecture."""
+
+    def test_action_space_unchanged(self) -> None:
+        """Action dimension remains 4."""
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "action_space",
+            ),
+            4,
+        )
+
+    def test_observation_space_unchanged(self) -> None:
+        """Joint-space observation dimension is 52."""
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "observation_space",
+            ),
+            52,
+        )
+
+    def test_task_space_observation_dim_unchanged(self) -> None:
+        """Task-space observation dimension is 70."""
+        self.assertEqual(task_reference.TASK_SPACE_OBSERVATION_DIM, 70)
+
+    def test_model_has_no_new_layers(self) -> None:
+        """The LSTM model init has no new nn.Module submodules beyond original."""
+        model_source = (ROOT / "standalone/workflows/skrl_ppo_lstm/lstm_model.py").read_text()
+        n_linear = model_source.count("nn.Linear(")
+        n_lstm = model_source.count("nn.LSTM(")
+        # Original counts: 22 nn.Linear (Shared + SharedRNN classes), 1 nn.LSTM
+        self.assertEqual(n_linear, 22, "nn.Linear count changed - architecture modified")
+        self.assertEqual(n_lstm, 1, "nn.LSTM count changed - architecture modified")
+
+    def test_entropy_increased_in_skrl_config(self) -> None:
+        """entropy_loss_scale in skrl training is >= 0.01 (increased from 0.005)."""
+        train_source = (ROOT / "standalone/workflows/skrl_ppo_lstm/mulag_train.py").read_text()
+        self.assertIn('cfg["entropy_loss_scale"] = 0.02', train_source)
+
+
+class TestCurriculumHysteresis(unittest.TestCase):
+    """Curriculum does not advance from one isolated success."""
+
+    def test_curriculum_advance_min_success_rate_exists(self) -> None:
+        """curriculum_advance_min_success_rate config field exists with value > 0."""
+        value = _literal_assignment(
+            "MulagAdaptiveRLJointReachEnvCfg",
+            "curriculum_advance_min_success_rate",
+        )
+        self.assertGreater(value, 0.0)
+
+    def test_standard_curriculum_checks_success_rate(self) -> None:
+        """Standard curriculum path references curriculum_advance_min_success_rate."""
+        eval_source = _method_source("_evaluate_stage_advancement")
+        self.assertIn("curriculum_advance_min_success_rate", eval_source)
+
+    def test_hysteresis_windows_applied_in_standard_path(self) -> None:
+        """Standard curriculum path uses hysteresis windows before advancing."""
+        eval_source = _method_source("_evaluate_stage_advancement")
+        self.assertIn("if not goal_curriculum_enabled:", eval_source)
+        self.assertIn("self._curriculum_stage_ready_windows", eval_source)
+
+    def test_goal_curriculum_hysteresis_preserved(self) -> None:
+        """Goal curriculum hysteresis windows setting is preserved."""
+        self.assertEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "goal_curriculum_hysteresis_windows",
+            ),
+            2,
+        )
+
+    def test_goal_curriculum_advance_success_rate_unchanged(self) -> None:
+        """Goal curriculum advance success rate is 20%."""
+        self.assertAlmostEqual(
+            _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg",
+                "goal_curriculum_advance_success_rate",
+            ),
+            0.20,
+        )
 
 
 if __name__ == "__main__":

@@ -183,6 +183,9 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     curriculum_max_other_unsafe_rate = 0.01
     # Minimum timeout (successful completion) rate for stage advancement.
     curriculum_min_timeout_rate = 0.80
+    # Minimum final-pose success rate for stage advancement (standard curriculum).
+    # Prevents advancement from one rare isolated success.
+    curriculum_advance_min_success_rate = 0.05
     # Unsafe terminal penalty (negative value applied on unsafe termination).
     # Set to -taskspace_unsafe_penalty_weight by default in MulagHydraulicROMTaskSpaceEnvCfg.
     unsafe_terminal_penalty = -5.0
