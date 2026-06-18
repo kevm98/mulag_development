@@ -337,6 +337,68 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_pose_time_to_success_steps = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device
         )
+        self._strict_position_condition = torch.zeros_like(self._within_final_pose)
+        self._strict_orientation_condition = torch.zeros_like(self._within_final_pose)
+        self._strict_linear_speed_condition = torch.zeros_like(self._within_final_pose)
+        self._strict_angular_speed_condition = torch.zeros_like(self._within_final_pose)
+        self._strict_all_except_hold_condition = torch.zeros_like(self._within_final_pose)
+        self._final_pose_first_strict_settled_step = torch.full(
+            (self.num_envs,), -1, dtype=torch.long, device=self.device
+        )
+        self._final_pose_last_strict_settled_step = torch.full(
+            (self.num_envs,), -1, dtype=torch.long, device=self.device
+        )
+        self._final_pose_steps_remaining_after_max_hold = torch.zeros(
+            (self.num_envs,), dtype=torch.long, device=self.device
+        )
+        self._final_pose_max_hold_steps_before_break = torch.zeros_like(
+            self._final_pose_success_counter
+        )
+        self._final_pose_hold_break_reason_position = torch.zeros(
+            (), dtype=torch.float32, device=self.device
+        )
+        self._final_pose_hold_break_reason_orientation = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_hold_break_reason_linear_speed = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_hold_break_reason_angular_speed = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_hold_break_reason_target_changed = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_hold_break_reason_timeout = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_hold_break_reason_unknown = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_max_hold_position_error_at_break = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_max_hold_orientation_error_at_break = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_max_hold_linear_speed_at_break = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_max_hold_angular_speed_at_break = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_max_hold_steps_before_break_total = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_steps_remaining_after_max_hold_total = torch.zeros_like(
+            self._final_pose_hold_break_reason_position
+        )
+        self._final_pose_first_step_entered_strict_settled = torch.full(
+            (), -1.0, dtype=torch.float32, device=self.device
+        )
+        self._final_pose_last_step_entered_strict_settled = torch.full(
+            (), -1.0, dtype=torch.float32, device=self.device
+        )
         self._final_pose_entered_tolerance_count_total = torch.zeros((), dtype=torch.float32, device=self.device)
         self._final_pose_settling_hold_max = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self._final_pose_settling_hold_max_total = torch.zeros((), dtype=torch.float32, device=self.device)
@@ -1383,9 +1445,159 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._ee_angular_velocity_base, dim=-1
         )
 
+    def _target_changed_this_episode(self) -> torch.Tensor:
+        return torch.any(
+            self._final_pose_target() != self._final_pose_target_at_episode_start,
+            dim=-1,
+        )
+
+    def _clear_global_hold_break_reasons(self) -> None:
+        self._final_pose_hold_break_reason_position.zero_()
+        self._final_pose_hold_break_reason_orientation.zero_()
+        self._final_pose_hold_break_reason_linear_speed.zero_()
+        self._final_pose_hold_break_reason_angular_speed.zero_()
+        self._final_pose_hold_break_reason_target_changed.zero_()
+        self._final_pose_hold_break_reason_timeout.zero_()
+        self._final_pose_hold_break_reason_unknown.zero_()
+
+    def _update_global_hold_diagnostic_without_break(
+        self,
+        *,
+        candidate_mask: torch.Tensor,
+        hold_steps: torch.Tensor,
+        position_error_norm: torch.Tensor,
+        orientation_error: torch.Tensor,
+        linear_speed: torch.Tensor,
+        angular_speed: torch.Tensor,
+    ) -> None:
+        if not bool(torch.any(candidate_mask)):
+            return
+        candidate_steps = torch.where(candidate_mask, hold_steps, torch.zeros_like(hold_steps))
+        best_steps = torch.max(candidate_steps)
+        if best_steps <= self._final_pose_hold_diagnostic_best_steps():
+            return
+        best_env = torch.argmax(candidate_steps).reshape(())
+        self._final_pose_settling_hold_max_total = best_steps.detach().float().clone()
+        self._clear_global_hold_break_reasons()
+        self._final_pose_hold_break_reason_unknown.fill_(1.0)
+        self._final_pose_max_hold_position_error_at_break.copy_(position_error_norm[best_env].detach())
+        self._final_pose_max_hold_orientation_error_at_break.copy_(orientation_error[best_env].detach())
+        self._final_pose_max_hold_linear_speed_at_break.copy_(linear_speed[best_env].detach())
+        self._final_pose_max_hold_angular_speed_at_break.copy_(angular_speed[best_env].detach())
+        self._final_pose_max_hold_steps_before_break_total.copy_(best_steps.detach().float())
+        self._final_pose_steps_remaining_after_max_hold_total.copy_(
+            self._final_pose_steps_remaining_after_max_hold[best_env].detach().float()
+        )
+        self._final_pose_first_step_entered_strict_settled.copy_(
+            self._final_pose_first_strict_settled_step[best_env].detach().float()
+        )
+        self._final_pose_last_step_entered_strict_settled.copy_(
+            self._final_pose_last_strict_settled_step[best_env].detach().float()
+        )
+
+    def _record_hold_break_diagnostic(
+        self,
+        *,
+        candidate_mask: torch.Tensor,
+        hold_steps_before_break: torch.Tensor,
+        reason_position: torch.Tensor,
+        reason_orientation: torch.Tensor,
+        reason_linear_speed: torch.Tensor,
+        reason_angular_speed: torch.Tensor,
+        reason_target_changed: torch.Tensor,
+        reason_timeout: torch.Tensor,
+        position_error_norm: torch.Tensor,
+        orientation_error: torch.Tensor,
+        linear_speed: torch.Tensor,
+        angular_speed: torch.Tensor,
+    ) -> None:
+        if not bool(torch.any(candidate_mask)):
+            return
+        candidate_steps = torch.where(
+            candidate_mask,
+            hold_steps_before_break,
+            torch.zeros_like(hold_steps_before_break),
+        )
+        best_steps = torch.max(candidate_steps)
+        if best_steps < self._final_pose_hold_diagnostic_best_steps():
+            return
+        best_env = torch.argmax(candidate_steps).reshape(())
+        self._final_pose_settling_hold_max_total = torch.maximum(
+            self._final_pose_settling_hold_max_total,
+            best_steps.detach().float(),
+        )
+        self._clear_global_hold_break_reasons()
+        self._final_pose_hold_break_reason_position.copy_(reason_position[best_env].detach().float())
+        self._final_pose_hold_break_reason_orientation.copy_(reason_orientation[best_env].detach().float())
+        self._final_pose_hold_break_reason_linear_speed.copy_(reason_linear_speed[best_env].detach().float())
+        self._final_pose_hold_break_reason_angular_speed.copy_(reason_angular_speed[best_env].detach().float())
+        self._final_pose_hold_break_reason_target_changed.copy_(reason_target_changed[best_env].detach().float())
+        self._final_pose_hold_break_reason_timeout.copy_(reason_timeout[best_env].detach().float())
+        explained = (
+            reason_position[best_env]
+            | reason_orientation[best_env]
+            | reason_linear_speed[best_env]
+            | reason_angular_speed[best_env]
+            | reason_target_changed[best_env]
+            | reason_timeout[best_env]
+        )
+        self._final_pose_hold_break_reason_unknown.copy_((~explained).detach().float())
+        self._final_pose_max_hold_position_error_at_break.copy_(position_error_norm[best_env].detach())
+        self._final_pose_max_hold_orientation_error_at_break.copy_(orientation_error[best_env].detach())
+        self._final_pose_max_hold_linear_speed_at_break.copy_(linear_speed[best_env].detach())
+        self._final_pose_max_hold_angular_speed_at_break.copy_(angular_speed[best_env].detach())
+        self._final_pose_max_hold_steps_before_break_total.copy_(best_steps.detach().float())
+        self._final_pose_steps_remaining_after_max_hold_total.copy_(
+            self._final_pose_steps_remaining_after_max_hold[best_env].detach().float()
+        )
+        self._final_pose_first_step_entered_strict_settled.copy_(
+            self._final_pose_first_strict_settled_step[best_env].detach().float()
+        )
+        self._final_pose_last_step_entered_strict_settled.copy_(
+            self._final_pose_last_strict_settled_step[best_env].detach().float()
+        )
+
+    def _final_pose_hold_diagnostic_best_steps(self) -> torch.Tensor:
+        return self._final_pose_settling_hold_max_total.to(dtype=torch.long)
+
+    def _record_hold_timeout_break(self, time_out: torch.Tensor) -> None:
+        position_error_norm = torch.linalg.vector_norm(self._ee_position_error, dim=-1)
+        orientation_error = self._ee_orientation_error.reshape(-1)
+        current_hold_steps = self._final_pose_success_counter.detach().clone()
+        timeout_break = time_out & (current_hold_steps > 0) & ~self._termination_success
+        false_reason = torch.zeros_like(timeout_break)
+        self._record_hold_break_diagnostic(
+            candidate_mask=timeout_break,
+            hold_steps_before_break=current_hold_steps,
+            reason_position=false_reason,
+            reason_orientation=false_reason,
+            reason_linear_speed=false_reason,
+            reason_angular_speed=false_reason,
+            reason_target_changed=self._target_changed_this_episode() & timeout_break,
+            reason_timeout=timeout_break,
+            position_error_norm=position_error_norm,
+            orientation_error=orientation_error,
+            linear_speed=self._ee_linear_speed.reshape(-1),
+            angular_speed=self._ee_angular_speed.reshape(-1),
+        )
+
     def _update_final_pose_success_state(self, unsafe_termination: torch.Tensor) -> None:
         position_error_norm = torch.linalg.vector_norm(self._ee_position_error, dim=-1)
         orientation_error = self._ee_orientation_error.reshape(-1)
+        strict_position = position_error_norm <= float(self.cfg.final_pose_position_tolerance_m)
+        strict_orientation = orientation_error <= float(self.cfg.final_pose_orientation_tolerance_rad)
+        strict_linear_speed = self._ee_linear_speed <= float(
+            self.cfg.final_pose_linear_speed_tolerance_mps
+        )
+        strict_angular_speed = self._ee_angular_speed <= float(
+            self.cfg.final_pose_angular_speed_tolerance_radps
+        )
+        strict_all_except_hold = (
+            strict_position
+            & strict_orientation
+            & strict_linear_speed
+            & strict_angular_speed
+        )
         within_final_pose = final_pose_within_tolerance(
             position_error_norm,
             orientation_error,
@@ -1398,10 +1610,73 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 self.cfg.final_pose_angular_speed_tolerance_radps
             ),
         )
-        self._within_final_pose = within_final_pose & ~unsafe_termination
+        if not bool(torch.equal(strict_all_except_hold, within_final_pose)):
+            raise RuntimeError("Strict final-pose predicate mismatch.")
+        previous_counter = self._final_pose_success_counter.detach().clone()
+        current_step = self.episode_length_buf.detach().to(dtype=torch.long)
+        first_strict = strict_all_except_hold & (self._final_pose_first_strict_settled_step < 0)
+        self._final_pose_first_strict_settled_step = torch.where(
+            first_strict,
+            current_step,
+            self._final_pose_first_strict_settled_step,
+        )
+        self._final_pose_last_strict_settled_step = torch.where(
+            strict_all_except_hold,
+            current_step,
+            self._final_pose_last_strict_settled_step,
+        )
+        self._strict_position_condition = strict_position.detach().clone()
+        self._strict_orientation_condition = strict_orientation.detach().clone()
+        self._strict_linear_speed_condition = strict_linear_speed.detach().clone()
+        self._strict_angular_speed_condition = strict_angular_speed.detach().clone()
+        self._strict_all_except_hold_condition = strict_all_except_hold.detach().clone()
+        self._within_final_pose = strict_all_except_hold.detach().clone()
         self._final_pose_success_counter = update_consecutive_success_counter(
             self._final_pose_success_counter,
             self._within_final_pose,
+        )
+        new_env_max = self._final_pose_success_counter > self._final_pose_settling_hold_max
+        remaining_steps = torch.clamp(
+            int(self._stage_max_episode_length) - current_step - 1,
+            min=0,
+        )
+        self._final_pose_steps_remaining_after_max_hold = torch.where(
+            new_env_max,
+            remaining_steps,
+            self._final_pose_steps_remaining_after_max_hold,
+        )
+        self._final_pose_settling_hold_max = torch.maximum(
+            self._final_pose_settling_hold_max,
+            self._final_pose_success_counter,
+        )
+        self._update_global_hold_diagnostic_without_break(
+            candidate_mask=new_env_max,
+            hold_steps=self._final_pose_success_counter.detach().clone(),
+            position_error_norm=position_error_norm,
+            orientation_error=orientation_error,
+            linear_speed=self._ee_linear_speed.reshape(-1),
+            angular_speed=self._ee_angular_speed.reshape(-1),
+        )
+        hold_broke = (previous_counter > 0) & ~strict_all_except_hold
+        target_changed = self._target_changed_this_episode()
+        self._final_pose_max_hold_steps_before_break = torch.where(
+            hold_broke & (previous_counter >= self._final_pose_max_hold_steps_before_break),
+            previous_counter,
+            self._final_pose_max_hold_steps_before_break,
+        )
+        self._record_hold_break_diagnostic(
+            candidate_mask=hold_broke,
+            hold_steps_before_break=previous_counter,
+            reason_position=hold_broke & ~strict_position,
+            reason_orientation=hold_broke & ~strict_orientation,
+            reason_linear_speed=hold_broke & ~strict_linear_speed,
+            reason_angular_speed=hold_broke & ~strict_angular_speed,
+            reason_target_changed=hold_broke & target_changed,
+            reason_timeout=torch.zeros_like(hold_broke),
+            position_error_norm=position_error_norm,
+            orientation_error=orientation_error,
+            linear_speed=self._ee_linear_speed.reshape(-1),
+            angular_speed=self._ee_angular_speed.reshape(-1),
         )
         final_pose_success = (
             self._final_pose_success_counter
@@ -2891,16 +3166,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             (settling_reward + hold_reward).detach() / torch.clamp(positive_total.detach(), min=1.0e-6)
         )
 
-        if self.cfg.debug_reward_terms:
-            target_changed = torch.any(
-                self._final_pose_target()
-                != self._final_pose_target_at_episode_start,
-                dim=-1,
-            )
-        else:
-            target_changed = torch.zeros(
-                (self.num_envs,), dtype=torch.bool, device=self.device
-            )
+        target_changed = self._target_changed_this_episode()
 
         # ── Populate reward_debug ──
         if self.cfg.debug_reward_terms:
@@ -3021,13 +3287,24 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["final_pose/orientation_error_max_rad"] = torch.max(orient_error.detach())
         log["final_pose/linear_speed_mean"] = torch.mean(self._ee_linear_speed.detach())
         log["final_pose/angular_speed_mean"] = torch.mean(self._ee_angular_speed.detach())
-        near_position = pos_error_norm <= float(self.cfg.final_pose_position_tolerance_m)
-        near_orientation = orient_error <= float(self.cfg.final_pose_orientation_tolerance_rad)
-        near_pose = near_position & near_orientation
-        low_speed = (
-            (self._ee_linear_speed <= float(self.cfg.final_pose_linear_speed_tolerance_mps))
-            & (self._ee_angular_speed <= float(self.cfg.final_pose_angular_speed_tolerance_radps))
+        strict_position = pos_error_norm <= float(self.cfg.final_pose_position_tolerance_m)
+        strict_orientation = orient_error <= float(self.cfg.final_pose_orientation_tolerance_rad)
+        strict_linear_speed = self._ee_linear_speed <= float(
+            self.cfg.final_pose_linear_speed_tolerance_mps
         )
+        strict_angular_speed = self._ee_angular_speed <= float(
+            self.cfg.final_pose_angular_speed_tolerance_radps
+        )
+        strict_all_except_hold = (
+            strict_position
+            & strict_orientation
+            & strict_linear_speed
+            & strict_angular_speed
+        )
+        near_position = strict_position
+        near_orientation = strict_orientation
+        near_pose = near_position & near_orientation
+        low_speed = strict_linear_speed & strict_angular_speed
         near_pose_low_speed = near_pose & low_speed
         near_pose_high_speed = near_pose & ~low_speed
         self._final_pose_entered_tolerance_count_total += near_pose.float().sum()
@@ -3044,9 +3321,45 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["final_pose/near_pose_fraction"] = torch.mean(near_pose.float())
         log["final_pose/near_pose_high_speed_fraction"] = torch.mean(near_pose_high_speed.float())
         log["final_pose/near_pose_low_speed_fraction"] = torch.mean(near_pose_low_speed.float())
+        log["final_pose/strict_position_fraction"] = torch.mean(strict_position.float())
+        log["final_pose/strict_orientation_fraction"] = torch.mean(strict_orientation.float())
+        log["final_pose/strict_linear_speed_fraction"] = torch.mean(strict_linear_speed.float())
+        log["final_pose/strict_angular_speed_fraction"] = torch.mean(strict_angular_speed.float())
+        log["final_pose/strict_all_except_hold_fraction"] = torch.mean(strict_all_except_hold.float())
         log["final_pose/entered_tolerance_count_total"] = self._final_pose_entered_tolerance_count_total
         log["final_pose/settling_hold_max_mean"] = torch.mean(self._final_pose_settling_hold_max.float())
         log["final_pose/settling_hold_max_total"] = self._final_pose_settling_hold_max_total
+        log["final_pose/hold_break_reason_position"] = self._final_pose_hold_break_reason_position
+        log["final_pose/hold_break_reason_orientation"] = self._final_pose_hold_break_reason_orientation
+        log["final_pose/hold_break_reason_linear_speed"] = self._final_pose_hold_break_reason_linear_speed
+        log["final_pose/hold_break_reason_angular_speed"] = self._final_pose_hold_break_reason_angular_speed
+        log["final_pose/hold_break_reason_target_changed"] = self._final_pose_hold_break_reason_target_changed
+        log["final_pose/hold_break_reason_timeout"] = self._final_pose_hold_break_reason_timeout
+        log["final_pose/hold_break_reason_unknown"] = self._final_pose_hold_break_reason_unknown
+        log["final_pose/max_hold_position_error_at_break"] = (
+            self._final_pose_max_hold_position_error_at_break
+        )
+        log["final_pose/max_hold_orientation_error_at_break"] = (
+            self._final_pose_max_hold_orientation_error_at_break
+        )
+        log["final_pose/max_hold_linear_speed_at_break"] = (
+            self._final_pose_max_hold_linear_speed_at_break
+        )
+        log["final_pose/max_hold_angular_speed_at_break"] = (
+            self._final_pose_max_hold_angular_speed_at_break
+        )
+        log["final_pose/max_hold_steps_before_break"] = (
+            self._final_pose_max_hold_steps_before_break_total
+        )
+        log["final_pose/steps_remaining_after_max_hold"] = (
+            self._final_pose_steps_remaining_after_max_hold_total
+        )
+        log["final_pose/first_step_entered_strict_settled"] = (
+            self._final_pose_first_step_entered_strict_settled
+        )
+        log["final_pose/last_step_entered_strict_settled"] = (
+            self._final_pose_last_step_entered_strict_settled
+        )
         log["final_pose/success_count_total"] = torch.sum(self._termination_success_count)
         log["final_pose/within_tolerance_fraction"] = torch.mean(
             self._within_final_pose.float()
@@ -3927,6 +4240,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         time_out = time_out & ~terminated
         if self._preflight_disable_ordinary_resets:
             time_out = torch.zeros_like(time_out)
+        if self._task_control_mode() == "rl_task_space_tracking":
+            self._record_hold_timeout_break(time_out)
 
         # ── Record offending joint (first joint violating a limit) ──
         offending_joint = torch.full((self.num_envs,), -1, dtype=torch.long, device=self.device)
@@ -4123,6 +4438,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         final_success_counter_snapshot = (
             self._final_pose_success_counter[env_ids].detach().float().clone()
         )
+        final_max_hold_snapshot = (
+            self._final_pose_settling_hold_max[env_ids].detach().float().clone()
+        )
         near_pose_low_speed_snapshot = (
             (final_position_error_snapshot <= float(self.cfg.final_pose_position_tolerance_m))
             & (final_orientation_error_snapshot <= float(self.cfg.final_pose_orientation_tolerance_rad))
@@ -4181,6 +4499,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         terminal_log["Episode/final_success_hold_steps"] = torch.mean(
             final_success_counter_snapshot
         )
+        terminal_log["Episode/max_hold_steps"] = torch.mean(final_max_hold_snapshot)
         terminal_log["Episode/mean_position_error"] = torch.mean(mean_position_error_snapshot)
         terminal_log["Episode/clamp_activation_fraction"] = torch.mean(clamp_activation_snapshot)
         terminal_log["Episode/valve_saturation_fraction"] = torch.mean(valve_saturation_snapshot)
@@ -4198,7 +4517,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             final_orientation_error=final_orientation_error_snapshot,
             final_linear_speed=final_linear_speed_snapshot,
             final_angular_speed=final_angular_speed_snapshot,
-            max_hold_steps=final_success_counter_snapshot,
+            max_hold_steps=final_max_hold_snapshot,
             clamp_activation_fraction=clamp_activation_snapshot,
             valve_saturation_fraction=valve_saturation_snapshot,
         )
@@ -4219,7 +4538,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._curriculum_stage_position_error_sum += float(mean_position_error_snapshot.sum().item())
         self._curriculum_stage_success_count += float(final_pose_success_snapshot.sum().item())
         self._curriculum_stage_near_pose_low_speed_count += float(near_pose_low_speed_snapshot.sum().item())
-        self._curriculum_stage_max_hold_steps_sum += float(final_success_counter_snapshot.sum().item())
+        self._curriculum_stage_max_hold_steps_sum += float(final_max_hold_snapshot.sum().item())
 
         # ── Evaluate and log curriculum advancement ──
         old_stage = self._curriculum_stage_index
@@ -4388,6 +4707,15 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_pose_success_previous[env_ids] = False
         self._new_final_pose_success[env_ids] = False
         self._final_pose_time_to_success_steps[env_ids] = -1
+        self._strict_position_condition[env_ids] = False
+        self._strict_orientation_condition[env_ids] = False
+        self._strict_linear_speed_condition[env_ids] = False
+        self._strict_angular_speed_condition[env_ids] = False
+        self._strict_all_except_hold_condition[env_ids] = False
+        self._final_pose_first_strict_settled_step[env_ids] = -1
+        self._final_pose_last_strict_settled_step[env_ids] = -1
+        self._final_pose_steps_remaining_after_max_hold[env_ids] = 0
+        self._final_pose_max_hold_steps_before_break[env_ids] = 0
         self._final_pose_settling_hold_max[env_ids] = 0
         # NOTE: accumulated counters (_termination_*_count) are deliberately NOT
         # reset — they accumulate across episodes for lifetime diagnostics.
