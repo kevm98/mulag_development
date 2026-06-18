@@ -237,6 +237,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._prev_action = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._current_action = torch.zeros_like(self._prev_action)
         self._action_delta = torch.zeros_like(self._prev_action)
+        self._policy_action_std = torch.zeros((), dtype=torch.float32, device=self.device)
         self._current_qddot_cmd = torch.zeros((self.num_envs, 5), dtype=torch.float32, device=self.device)
         self._scripted_qddot_feedback = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._scripted_qddot_feedforward = torch.zeros_like(self._scripted_qddot_feedback)
@@ -2202,6 +2203,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._torque_rate_limited_fraction.zero_()
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
+
+        self._policy_action_std = torch.std(actions, dim=0).mean().detach()
         if self._preflight_direct_target is not None:
             self._current_action.zero_()
             self._action_delta.zero_()
@@ -3214,6 +3217,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["curriculum/automatic_advancement_enabled"] = float(
             bool(self.cfg.enable_automatic_curriculum)
         )
+        log["policy/action_std_mean"] = self._policy_action_std
         log["reward/pos_tracking_mean"] = torch.mean(pos_tracking_weighted.detach())
         log["reward/orient_tracking_mean"] = torch.mean(orient_tracking.detach())
         log["reward/final_pose_success_bonus_mean"] = torch.mean(success_bonus.detach())
@@ -3361,6 +3365,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._final_pose_last_step_entered_strict_settled
         )
         log["final_pose/success_count_total"] = torch.sum(self._termination_success_count)
+        log["final_pose/success_events_this_iteration"] = self._new_final_pose_success.sum().float()
         log["final_pose/within_tolerance_fraction"] = torch.mean(
             self._within_final_pose.float()
         )
@@ -3477,12 +3482,24 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 1,
             )
         else:
+            success_rate = self._curriculum_stage_success_count / max(self._curriculum_stage_episode_count, 1.0)
             stage_ready = (
                 episodes_per_env >= float(self.cfg.curriculum_min_completed_episodes_per_env)
                 and mean_position_error <= float(self.cfg.curriculum_max_mean_position_error)
                 and velocity_rate <= float(self.cfg.curriculum_max_velocity_termination_rate)
                 and other_unsafe <= float(self.cfg.curriculum_max_other_unsafe_rate)
                 and timeout_rate >= float(self.cfg.curriculum_min_timeout_rate)
+                and success_rate >= float(getattr(self.cfg, "curriculum_advance_min_success_rate", 0.0))
+            )
+        # Hysteresis: require consecutive ready windows before advancing.
+        if not goal_curriculum_enabled:
+            if stage_ready:
+                self._curriculum_stage_ready_windows += 1
+            else:
+                self._curriculum_stage_ready_windows = 0
+            stage_ready = self._curriculum_stage_ready_windows >= max(
+                int(getattr(self.cfg, "goal_curriculum_hysteresis_windows", 2)),
+                1,
             )
         if stage_ready:
             self._curriculum_stage_index += 1

@@ -248,7 +248,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     cfg["ratio_clip"] = 0.2
     cfg["value_clip"] = 0.2
     cfg["clip_predicted_values"] = True
-    cfg["entropy_loss_scale"] = 0.005
+    cfg["entropy_loss_scale"] = 0.02
     cfg["value_loss_scale"] = 1.0
 
     cfg["kl_threshold"] = 0.0
