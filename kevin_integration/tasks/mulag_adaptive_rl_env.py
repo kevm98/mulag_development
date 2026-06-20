@@ -40,6 +40,7 @@ from kevin_integration.rl.reward_terms import (
     joint_reach_reward,
     joint_reach_reward_debug,
     joint_safety_termination,
+    near_target_angular_settling_reward,
     near_target_linear_settling_reward,
     normalize_quaternion_wxyz,
     normalized_task_space_potential,
@@ -241,6 +242,14 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._policy_action_std = torch.zeros((), dtype=torch.float32, device=self.device)
         self._policy_action_std_min = torch.zeros_like(self._policy_action_std)
         self._policy_action_std_max = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_hold_fraction = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_blend = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_min_std = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_max_std = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_entropy_coef = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_applied = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_std_mean = torch.zeros_like(self._policy_action_std)
+        self._action_std_schedule_std_max = torch.zeros_like(self._policy_action_std)
         self._current_qddot_cmd = torch.zeros((self.num_envs, 5), dtype=torch.float32, device=self.device)
         self._scripted_qddot_feedback = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._scripted_qddot_feedforward = torch.zeros_like(self._scripted_qddot_feedback)
@@ -510,6 +519,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_angular_velocity_penalty_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_settling_reward_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_near_target_linear_settling_sum = torch.zeros_like(self._episode_pos_tracking_sum)
+        self._episode_near_target_angular_settling_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_hold_progress_reward_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_clamp_activation_sum = torch.zeros_like(self._episode_pos_tracking_sum)
         self._episode_valve_saturation_fraction_sum = torch.zeros_like(self._episode_pos_tracking_sum)
@@ -3037,6 +3047,18 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             speed_margin_mps=float(self.cfg.near_target_linear_settling_speed_margin_mps),
             weight=float(self.cfg.rew_near_target_linear_settling) * W_pos,
         )
+        near_target_angular_settling = near_target_angular_settling_reward(
+            pos_error_norm,
+            orient_error,
+            ee_angular_speed,
+            position_tolerance_m=float(self.cfg.final_pose_position_tolerance_m),
+            orientation_tolerance_rad=float(self.cfg.final_pose_orientation_tolerance_rad),
+            angular_speed_tolerance_radps=float(self.cfg.final_pose_angular_speed_tolerance_radps),
+            position_gate_scale=float(self.cfg.near_target_angular_settling_position_gate_scale),
+            orientation_gate_scale=float(self.cfg.near_target_angular_settling_orientation_gate_scale),
+            speed_margin_radps=float(self.cfg.near_target_angular_settling_speed_margin_radps),
+            weight=float(self.cfg.rew_near_target_angular_settling) * W_pos,
+        )
         hold_reward = hold_progress_reward(
             self._final_pose_success_counter,
             required_hold_steps=int(self.cfg.final_pose_success_hold_steps),
@@ -3139,6 +3161,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             + angular_velocity_penalty
             + settling_reward
             + near_target_linear_settling
+            + near_target_angular_settling
             + hold_reward
             + valve_sat_penalty
             + clamp_penalty
@@ -3166,6 +3189,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_angular_velocity_penalty_sum += angular_velocity_penalty.detach()
         self._episode_settling_reward_sum += settling_reward.detach()
         self._episode_near_target_linear_settling_sum += near_target_linear_settling.detach()
+        self._episode_near_target_angular_settling_sum += near_target_angular_settling.detach()
         self._episode_hold_progress_reward_sum += hold_reward.detach()
         self._episode_clamp_activation_sum += clamp_activation_fraction.detach()
         self._episode_valve_saturation_fraction_sum += valve_sat.detach()
@@ -3178,6 +3202,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             + torch.relu(progress_reward)
             + settling_reward
             + torch.relu(near_target_linear_settling)
+            + torch.relu(near_target_angular_settling)
             + hold_reward
             + success_bonus
         )
@@ -3187,6 +3212,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             + torch.abs(linear_velocity_penalty)
             + torch.abs(angular_velocity_penalty)
             + torch.relu(-near_target_linear_settling)
+            + torch.relu(-near_target_angular_settling)
             + torch.abs(valve_sat_penalty)
             + torch.abs(clamp_penalty)
             + torch.abs(fd_load_penalty)
@@ -3215,6 +3241,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             (
                 settling_reward
                 + torch.relu(near_target_linear_settling)
+                + torch.relu(near_target_angular_settling)
                 + hold_reward
             ).detach() / torch.clamp(positive_total.detach(), min=1.0e-6)
         )
@@ -3242,6 +3269,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 "angular_velocity_penalty": torch.mean(angular_velocity_penalty.detach()),
                 "settling_reward": torch.mean(settling_reward.detach()),
                 "near_target_linear_settling": torch.mean(near_target_linear_settling.detach()),
+                "near_target_angular_settling": torch.mean(near_target_angular_settling.detach()),
                 "hold_progress_reward": torch.mean(hold_reward.detach()),
                 "valve_saturation_penalty": torch.mean(valve_sat_penalty.detach()),
                 "rom_clamp_penalty": torch.mean(clamp_penalty.detach()),
@@ -3271,6 +3299,14 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["policy/action_std_mean"] = self._policy_action_std
         log["policy/action_std_min"] = self._policy_action_std_min
         log["policy/action_std_max"] = self._policy_action_std_max
+        log["policy/action_std_schedule_hold_fraction"] = self._action_std_schedule_hold_fraction
+        log["policy/action_std_schedule_blend"] = self._action_std_schedule_blend
+        log["policy/action_std_schedule_min_std"] = self._action_std_schedule_min_std
+        log["policy/action_std_schedule_max_std"] = self._action_std_schedule_max_std
+        log["policy/action_std_schedule_entropy_coef"] = self._action_std_schedule_entropy_coef
+        log["policy/action_std_schedule_applied"] = self._action_std_schedule_applied
+        log["policy/action_std_schedule_std_mean"] = self._action_std_schedule_std_mean
+        log["policy/action_std_schedule_std_max"] = self._action_std_schedule_std_max
         log["reward/pos_tracking_mean"] = torch.mean(pos_tracking_weighted.detach())
         log["reward/orient_tracking_mean"] = torch.mean(orient_tracking.detach())
         log["reward/final_pose_success_bonus_mean"] = torch.mean(success_bonus.detach())
@@ -3281,6 +3317,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["reward/angular_velocity_penalty_mean"] = torch.mean(angular_velocity_penalty.detach())
         log["reward/settling_reward_mean"] = torch.mean(settling_reward.detach())
         log["reward/near_target_linear_settling_mean"] = torch.mean(near_target_linear_settling.detach())
+        log["reward/near_target_angular_settling_mean"] = torch.mean(near_target_angular_settling.detach())
         log["reward/hold_progress_reward_mean"] = torch.mean(hold_reward.detach())
         log["settling_reward_mean"] = torch.mean(settling_reward.detach())
         log["hold_progress_reward_mean"] = torch.mean(hold_reward.detach())
@@ -3326,6 +3363,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         )
         log["episode/near_target_linear_settling_sum"] = torch.mean(
             self._episode_near_target_linear_settling_sum
+        )
+        log["episode/near_target_angular_settling_sum"] = torch.mean(
+            self._episode_near_target_angular_settling_sum
         )
         log["episode/hold_progress_reward_sum"] = torch.mean(
             self._episode_hold_progress_reward_sum
@@ -3417,6 +3457,14 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         )
         log["final_pose/max_hold_angular_speed_at_break"] = (
             self._final_pose_max_hold_angular_speed_at_break
+        )
+        angular_speed_margin_at_break = (
+            float(self.cfg.final_pose_angular_speed_tolerance_radps)
+            - self._final_pose_max_hold_angular_speed_at_break
+        )
+        log["final_pose/angular_speed_margin_at_break"] = angular_speed_margin_at_break
+        log["final_pose/angular_speed_break_excess"] = torch.relu(
+            -angular_speed_margin_at_break
         )
         log["final_pose/max_hold_steps_before_break"] = (
             self._final_pose_max_hold_steps_before_break_total
@@ -4817,6 +4865,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._episode_angular_velocity_penalty_sum[env_ids] = 0.0
         self._episode_settling_reward_sum[env_ids] = 0.0
         self._episode_near_target_linear_settling_sum[env_ids] = 0.0
+        self._episode_near_target_angular_settling_sum[env_ids] = 0.0
         self._episode_hold_progress_reward_sum[env_ids] = 0.0
         self._episode_clamp_activation_sum[env_ids] = 0.0
         self._episode_valve_saturation_fraction_sum[env_ids] = 0.0

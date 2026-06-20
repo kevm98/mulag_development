@@ -123,6 +123,26 @@ def _train_curriculum_namespace(args_cli: SimpleNamespace) -> dict[str, object]:
     return namespace
 
 
+def _train_std_schedule_namespace() -> dict[str, object]:
+    helper_names = {
+        "_linear_schedule_fraction",
+        "_task_space_hold_fraction",
+        "_action_std_schedule_values",
+        "_clamp_actor_gaussian_std",
+        "_set_action_std_schedule_telemetry",
+        "_install_task_space_action_std_schedule",
+        "_is_task_space_training_cfg",
+    }
+    helper_source = "\n\n".join(
+        ast.get_source_segment(TRAIN_SOURCE, node) or ""
+        for node in ast.walk(TRAIN_TREE)
+        if isinstance(node, ast.FunctionDef) and node.name in helper_names
+    )
+    namespace: dict[str, object] = {"torch": torch}
+    exec("from __future__ import annotations\n" + helper_source, namespace)
+    return namespace
+
+
 class TestFixedFinalPoseTask(unittest.TestCase):
     def test_target_contract_shape_order_and_frame(self) -> None:
         self.assertEqual(task_reference.TASK_SPACE_COMMAND_DIM, 7)
@@ -443,6 +463,12 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "ee_angular_speed / float(self.cfg.final_pose_angular_settling_scale_radps)",
             "float(self.cfg.rew_final_pose_settling)",
             "near_target_linear_settling = near_target_linear_settling_reward(",
+            "near_target_angular_settling = near_target_angular_settling_reward(",
+            "float(self.cfg.final_pose_angular_speed_tolerance_radps)",
+            "float(self.cfg.near_target_angular_settling_speed_margin_radps)",
+            "float(self.cfg.rew_near_target_angular_settling)",
+            '"reward/near_target_angular_settling_mean"',
+            '"episode/near_target_angular_settling_sum"',
             "float(self.cfg.rew_near_target_linear_settling)",
             "float(self.cfg.near_target_linear_settling_speed_margin_mps)",
             "hold_reward = hold_progress_reward(",
@@ -583,6 +609,8 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             '"final_pose/linear_speed_margin_at_break"',
             '"final_pose/linear_speed_break_excess"',
             '"final_pose/max_hold_angular_speed_at_break"',
+            '"final_pose/angular_speed_margin_at_break"',
+            '"final_pose/angular_speed_break_excess"',
             '"final_pose/max_hold_steps_before_break"',
             '"final_pose/steps_remaining_after_max_hold"',
             '"final_pose/first_step_entered_strict_settled"',
@@ -599,6 +627,14 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             '"policy/action_std_mean"',
             '"policy/action_std_min"',
             '"policy/action_std_max"',
+            '"policy/action_std_schedule_hold_fraction"',
+            '"policy/action_std_schedule_blend"',
+            '"policy/action_std_schedule_min_std"',
+            '"policy/action_std_schedule_max_std"',
+            '"policy/action_std_schedule_entropy_coef"',
+            '"policy/action_std_schedule_applied"',
+            '"policy/action_std_schedule_std_mean"',
+            '"policy/action_std_schedule_std_max"',
         ):
             self.assertIn(key, reward_source)
         self.assertIn("torch.std(actions, dim=0, unbiased=False)", action_source)
@@ -1456,6 +1492,112 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
         """entropy_loss_scale in skrl training is >= 0.01 (increased from 0.005)."""
         train_source = (ROOT / "standalone/workflows/skrl_ppo_lstm/mulag_train.py").read_text()
         self.assertIn('cfg["entropy_loss_scale"] = 0.02', train_source)
+
+    def test_action_std_hold_schedule_config_preserves_architecture(self) -> None:
+        self.assertTrue(
+            _literal_assignment(
+                "MulagHydraulicROMTaskSpacePPORunnerCfg",
+                "enable_action_std_hold_schedule",
+            )
+        )
+        self.assertEqual(
+            _literal_assignment(
+                "MulagHydraulicROMTaskSpacePPORunnerCfg",
+                "action_std_schedule_max_std_initial",
+            ),
+            0.55,
+        )
+        self.assertEqual(
+            _literal_assignment(
+                "MulagHydraulicROMTaskSpacePPORunnerCfg",
+                "action_std_schedule_max_std_final",
+            ),
+            0.25,
+        )
+        self.assertEqual(
+            _literal_assignment(
+                "MulagHydraulicROMTaskSpacePPORunnerCfg",
+                "action_std_schedule_min_std",
+            ),
+            0.12,
+        )
+
+    def test_action_std_schedule_prevents_early_collapse_and_late_noise(self) -> None:
+        ns = _train_std_schedule_namespace()
+        agent_cfg = SimpleNamespace(
+            action_std_schedule_start_hold_fraction=0.50,
+            action_std_schedule_end_hold_fraction=0.98,
+            action_std_schedule_min_std=0.12,
+            action_std_schedule_max_std_initial=0.55,
+            action_std_schedule_max_std_final=0.25,
+            action_std_schedule_entropy_final=0.001,
+        )
+        early = ns["_action_std_schedule_values"](agent_cfg, 0.0, 0.005)
+        late = ns["_action_std_schedule_values"](agent_cfg, 1.0, 0.005)
+        self.assertEqual(early["min_std"], 0.12)
+        self.assertEqual(early["max_std"], 0.55)
+        self.assertEqual(early["entropy_coef"], 0.005)
+        self.assertEqual(late["max_std"], 0.25)
+        self.assertEqual(late["entropy_coef"], 0.001)
+        self.assertGreater(early["max_std"], 0.52)
+        self.assertLess(late["max_std"], 0.4852)
+
+    def test_action_std_schedule_clamps_existing_gaussian_std_only(self) -> None:
+        ns = _train_std_schedule_namespace()
+        distribution = SimpleNamespace(
+            std_param=torch.nn.Parameter(torch.tensor([0.08, 0.20, 0.52, 0.70]))
+        )
+        actor = SimpleNamespace(distribution=distribution)
+        stats = ns["_clamp_actor_gaussian_std"](actor, min_std=0.12, max_std=0.25)
+        self.assertEqual(stats["applied"], 1.0)
+        self.assertGreaterEqual(float(torch.min(distribution.std_param).item()), 0.12 - 1.0e-6)
+        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.25 + 1.0e-6)
+
+    def test_action_std_schedule_installs_for_task_space_runner(self) -> None:
+        ns = _train_std_schedule_namespace()
+        distribution = SimpleNamespace(
+            std_param=torch.nn.Parameter(torch.tensor([0.48, 0.50, 0.52, 0.49]))
+        )
+        actor = SimpleNamespace(distribution=distribution)
+        calls = {"n": 0}
+
+        def update():
+            calls["n"] += 1
+            return {"surrogate": 0.0}
+
+        alg = SimpleNamespace(actor=actor, entropy_coef=0.005, update=update)
+        runner = SimpleNamespace(alg=alg)
+        raw_env = SimpleNamespace(
+            _final_pose_settling_hold_max_total=torch.tensor(49.0),
+        )
+        env_cfg = SimpleNamespace(
+            control_mode="rl_task_space_tracking",
+            reference_mode="rl_task_space_tracking",
+            final_pose_success_hold_steps=50,
+        )
+        agent_cfg = SimpleNamespace(
+            enable_action_std_hold_schedule=True,
+            action_std_schedule_start_hold_fraction=0.50,
+            action_std_schedule_end_hold_fraction=0.98,
+            action_std_schedule_min_std=0.12,
+            action_std_schedule_max_std_initial=0.55,
+            action_std_schedule_max_std_final=0.25,
+            action_std_schedule_entropy_final=0.001,
+        )
+        self.assertTrue(
+            ns["_install_task_space_action_std_schedule"](
+                runner,
+                raw_env,
+                env_cfg,
+                agent_cfg,
+            )
+        )
+        result = alg.update()
+        self.assertEqual(result["surrogate"], 0.0)
+        self.assertEqual(calls["n"], 1)
+        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.25)
+        self.assertAlmostEqual(float(alg.entropy_coef), 0.001)
+        self.assertGreater(float(raw_env._action_std_schedule_hold_fraction), 0.95)
 
 
 class TestCurriculumHysteresis(unittest.TestCase):

@@ -207,6 +207,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rew_final_pose_angular_velocity = 0.08
     rew_final_pose_settling = 0.20
     rew_near_target_linear_settling = 0.35
+    rew_near_target_angular_settling = 0.35
     rew_final_pose_hold_progress = 1.00
     rew_clamp_outward = 0.25
     rom_clamp_documented_increment_scale = 0.008
@@ -303,6 +304,9 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     near_target_linear_settling_position_gate_scale = 1.5
     near_target_linear_settling_orientation_gate_scale = 1.5
     near_target_linear_settling_speed_margin_mps = 0.03
+    near_target_angular_settling_position_gate_scale = 1.5
+    near_target_angular_settling_orientation_gate_scale = 1.5
+    near_target_angular_settling_speed_margin_radps = 0.05
 
     rew_q_tracking = 3.0
     rew_qdot = 0.25
@@ -484,18 +488,25 @@ class MulagHydraulicROMTaskSpacePPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
     experiment_name = "kevin_hydraulic_rom_task_space"
     max_iterations = 1000
     num_steps_per_env = 128
+    enable_action_std_hold_schedule = True
+    action_std_schedule_start_hold_fraction = 0.50
+    action_std_schedule_end_hold_fraction = 0.98
+    action_std_schedule_min_std = 0.12
+    action_std_schedule_max_std_initial = 0.55
+    action_std_schedule_max_std_final = 0.25
+    action_std_schedule_entropy_final = 0.001
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.001,
+        entropy_coef=0.005,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=0.01,
+        desired_kl=0.03,
         max_grad_norm=1.0,
     )
     actor = RslRlMLPModelCfg(

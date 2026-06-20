@@ -383,6 +383,117 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
     )
 
 
+def _linear_schedule_fraction(value: float, start: float, end: float) -> float:
+    if end <= start:
+        return 1.0 if value >= end else 0.0
+    return min(1.0, max(0.0, (float(value) - float(start)) / (float(end) - float(start))))
+
+
+def _task_space_hold_fraction(raw_env, env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> float:
+    required = max(1, int(getattr(env_cfg, "final_pose_success_hold_steps", 1)))
+    hold_steps = getattr(raw_env, "_final_pose_settling_hold_max_total", 0.0)
+    if isinstance(hold_steps, torch.Tensor):
+        hold_steps = float(hold_steps.detach().max().cpu().item())
+    return min(1.0, max(0.0, float(hold_steps) / float(required)))
+
+
+def _action_std_schedule_values(agent_cfg, hold_fraction: float, base_entropy_coef: float) -> dict[str, float]:
+    start = float(getattr(agent_cfg, "action_std_schedule_start_hold_fraction", 0.5))
+    end = float(getattr(agent_cfg, "action_std_schedule_end_hold_fraction", 1.0))
+    blend = _linear_schedule_fraction(float(hold_fraction), start, end)
+    max_std_initial = float(getattr(agent_cfg, "action_std_schedule_max_std_initial", 0.55))
+    max_std_final = float(getattr(agent_cfg, "action_std_schedule_max_std_final", 0.25))
+    entropy_final = float(getattr(agent_cfg, "action_std_schedule_entropy_final", base_entropy_coef))
+    return {
+        "hold_fraction": float(hold_fraction),
+        "blend": blend,
+        "min_std": float(getattr(agent_cfg, "action_std_schedule_min_std", 0.12)),
+        "max_std": (1.0 - blend) * max_std_initial + blend * max_std_final,
+        "entropy_coef": (1.0 - blend) * float(base_entropy_coef) + blend * entropy_final,
+    }
+
+
+def _clamp_actor_gaussian_std(actor, *, min_std: float, max_std: float) -> dict[str, float]:
+    distribution = getattr(actor, "distribution", None)
+    if distribution is None:
+        return {"applied": 0.0, "std_min": 0.0, "std_max": 0.0, "std_mean": 0.0}
+    with torch.no_grad():
+        if hasattr(distribution, "std_param"):
+            distribution.std_param.clamp_(min=float(min_std), max=float(max_std))
+            std = distribution.std_param.detach()
+        elif hasattr(distribution, "log_std_param"):
+            distribution.log_std_param.clamp_(
+                min=float(torch.log(torch.tensor(float(min_std))).item()),
+                max=float(torch.log(torch.tensor(float(max_std))).item()),
+            )
+            std = torch.exp(distribution.log_std_param.detach())
+        else:
+            return {"applied": 0.0, "std_min": 0.0, "std_max": 0.0, "std_mean": 0.0}
+    return {
+        "applied": 1.0,
+        "std_min": float(torch.min(std).cpu().item()),
+        "std_max": float(torch.max(std).cpu().item()),
+        "std_mean": float(torch.mean(std).cpu().item()),
+    }
+
+
+def _set_action_std_schedule_telemetry(raw_env, values: dict[str, float], stats: dict[str, float]) -> None:
+    for name, value in {
+        "_action_std_schedule_hold_fraction": values["hold_fraction"],
+        "_action_std_schedule_blend": values["blend"],
+        "_action_std_schedule_min_std": values["min_std"],
+        "_action_std_schedule_max_std": values["max_std"],
+        "_action_std_schedule_entropy_coef": values["entropy_coef"],
+        "_action_std_schedule_applied": stats["applied"],
+        "_action_std_schedule_std_mean": stats["std_mean"],
+        "_action_std_schedule_std_max": stats["std_max"],
+    }.items():
+        current = getattr(raw_env, name, None)
+        if isinstance(current, torch.Tensor):
+            current.fill_(float(value))
+        else:
+            setattr(raw_env, name, float(value))
+
+
+def _install_task_space_action_std_schedule(
+    runner: OnPolicyRunner,
+    raw_env,
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    agent_cfg: RslRlOnPolicyRunnerCfg,
+) -> bool:
+    if not (_is_task_space_training_cfg(env_cfg) and bool(getattr(agent_cfg, "enable_action_std_hold_schedule", False))):
+        return False
+    alg = getattr(runner, "alg", None)
+    actor = getattr(alg, "actor", None)
+    if actor is None or getattr(actor, "distribution", None) is None:
+        return False
+    base_entropy_coef = float(getattr(alg, "entropy_coef", 0.0))
+    original_update = alg.update
+
+    def scheduled_update(*args, **kwargs):
+        hold_fraction = _task_space_hold_fraction(raw_env, env_cfg)
+        values = _action_std_schedule_values(agent_cfg, hold_fraction, base_entropy_coef)
+        alg.entropy_coef = values["entropy_coef"]
+        _clamp_actor_gaussian_std(actor, min_std=values["min_std"], max_std=values["max_std"])
+        result = original_update(*args, **kwargs)
+        hold_fraction_after = _task_space_hold_fraction(raw_env, env_cfg)
+        values_after = _action_std_schedule_values(agent_cfg, hold_fraction_after, base_entropy_coef)
+        alg.entropy_coef = values_after["entropy_coef"]
+        stats = _clamp_actor_gaussian_std(
+            actor,
+            min_std=values_after["min_std"],
+            max_std=values_after["max_std"],
+        )
+        _set_action_std_schedule_telemetry(raw_env, values_after, stats)
+        return result
+
+    values = _action_std_schedule_values(agent_cfg, _task_space_hold_fraction(raw_env, env_cfg), base_entropy_coef)
+    stats = _clamp_actor_gaussian_std(actor, min_std=values["min_std"], max_std=values["max_std"])
+    _set_action_std_schedule_telemetry(raw_env, values, stats)
+    alg.update = scheduled_update
+    return bool(stats["applied"])
+
+
 def _validate_env_dimensions(env, env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> None:
     num_actions = int(getattr(env.unwrapped, "num_actions", getattr(env_cfg, "action_space", -1)))
     expected_actions = int(getattr(env_cfg, "action_space", -1))
@@ -494,6 +605,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if isinstance(env.unwrapped, DirectMARLEnv):
             env = multi_agent_to_single_agent(env)
 
+        raw_env = env.unwrapped
         env = RslRlVecEnvWrapper(env)
 
         runner = OnPolicyRunner(
@@ -506,6 +618,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if args_cli.checkpoint is not None:
             print(f"[INFO] Loading checkpoint: {args_cli.checkpoint}")
             runner.load(args_cli.checkpoint)
+
+        if _install_task_space_action_std_schedule(runner, raw_env, env_cfg, agent_cfg):
+            print("[INFO] Enabled hold-progress action-std schedule.", flush=True)
 
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
