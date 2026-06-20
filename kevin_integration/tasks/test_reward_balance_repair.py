@@ -34,6 +34,7 @@ from kevin_integration.rl.reward_terms import (
     fd_load_excess_penalty,
     final_pose_within_tolerance,
     hold_progress_reward,
+    near_target_linear_settling_reward,
     normalized_task_space_potential,
     potential_progress_shaping,
     update_consecutive_success_counter,
@@ -204,6 +205,34 @@ class TestRewardBalanceRepair(unittest.TestCase):
         )
         self.assertEqual(float(torch.sum(rewards[1:]).item()), 0.0)
 
+    def test_near_target_linear_settling_is_gated_and_speed_ordered(self) -> None:
+        base = dict(
+            position_tolerance_m=0.05,
+            orientation_tolerance_rad=0.0872664626,
+            linear_speed_tolerance_mps=0.05,
+            position_gate_scale=1.5,
+            orientation_gate_scale=1.5,
+            speed_margin_mps=0.03,
+            weight=0.35,
+        )
+        far = near_target_linear_settling_reward(
+            torch.tensor([0.50]),
+            torch.tensor([0.50]),
+            torch.tensor([0.00]),
+            **base,
+        )
+        near = near_target_linear_settling_reward(
+            torch.tensor([0.02, 0.02, 0.02]),
+            torch.tensor([0.02, 0.02, 0.02]),
+            torch.tensor([0.052, 0.02, 0.00]),
+            **base,
+        )
+        self.assertLess(abs(float(far.item())), 1.0e-8)
+        self.assertLess(float(near[0].item()), 0.0)
+        self.assertGreater(float(near[1].item()), 0.0)
+        self.assertGreater(float(near[1].item()), float(near[0].item()))
+        self.assertGreater(float(near[2].item()), float(near[1].item()))
+
     def test_reward_balance_weights_remain_bounded_after_hold_increase(self) -> None:
         class_name = "MulagAdaptiveRLJointReachEnvCfg"
         self.assertEqual(_literal_assignment(class_name, "rew_task_pos_tracking"), 1.0)
@@ -211,12 +240,13 @@ class TestRewardBalanceRepair(unittest.TestCase):
         self.assertEqual(_literal_assignment(class_name, "rew_task_progress"), 0.5)
         self.assertEqual(_literal_assignment(class_name, "rew_task_progress_clip"), 0.2)
         self.assertEqual(_literal_assignment(class_name, "rew_final_pose_settling"), 0.20)
+        self.assertEqual(_literal_assignment(class_name, "rew_near_target_linear_settling"), 0.35)
         self.assertEqual(_literal_assignment(class_name, "rew_final_pose_hold_progress"), 1.00)
 
-        dense_positive_bound = 1.0 + 0.25 + 0.5 * 0.2 + 0.20 + 1.00
+        dense_positive_bound = 1.0 + 0.25 + 0.5 * 0.2 + 0.20 + 0.35 + 1.00
         actuator_penalty_bound = 0.15 + 0.25 + 0.01
         velocity_penalty_bound = 0.15 + 0.08
-        self.assertLessEqual(dense_positive_bound, 2.60)
+        self.assertLessEqual(dense_positive_bound, 3.00)
         self.assertLessEqual(actuator_penalty_bound, 0.50)
         self.assertLessEqual(actuator_penalty_bound + velocity_penalty_bound, 0.65)
 

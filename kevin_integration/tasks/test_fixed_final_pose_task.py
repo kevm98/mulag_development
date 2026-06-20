@@ -356,6 +356,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         self.assertEqual(reward_names.count("linear_velocity_penalty"), 1)
         self.assertEqual(reward_names.count("angular_velocity_penalty"), 1)
         self.assertEqual(reward_names.count("settling_reward"), 1)
+        self.assertEqual(reward_names.count("near_target_linear_settling"), 1)
         self.assertEqual(reward_names.count("hold_reward"), 1)
 
     def test_success_requires_pose_and_settling(self) -> None:
@@ -441,14 +442,19 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "angular_settling_score = torch.exp(",
             "ee_angular_speed / float(self.cfg.final_pose_angular_settling_scale_radps)",
             "float(self.cfg.rew_final_pose_settling)",
+            "near_target_linear_settling = near_target_linear_settling_reward(",
+            "float(self.cfg.rew_near_target_linear_settling)",
+            "float(self.cfg.near_target_linear_settling_speed_margin_mps)",
             "hold_reward = hold_progress_reward(",
             "reward/linear_velocity_penalty_mean",
             "reward/angular_velocity_penalty_mean",
             "reward/settling_reward_mean",
+            "reward/near_target_linear_settling_mean",
             "reward/hold_progress_reward_mean",
             "episode/linear_velocity_penalty_sum",
             "episode/angular_velocity_penalty_sum",
             "episode/settling_reward_sum",
+            "episode/near_target_linear_settling_sum",
             "episode/hold_progress_reward_sum",
             "debug/velocity_mask_count",
             "debug/unsafe_mask_count",
@@ -461,6 +467,33 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             "orient_error / 0.0872664626",
         ):
             self.assertNotIn(absent, reward_source)
+
+    def test_near_target_linear_settling_reward_behavior(self) -> None:
+        base = dict(
+            position_tolerance_m=0.05,
+            orientation_tolerance_rad=0.0872664626,
+            linear_speed_tolerance_mps=0.05,
+            position_gate_scale=1.5,
+            orientation_gate_scale=1.5,
+            speed_margin_mps=0.03,
+            weight=0.35,
+        )
+        far = reward_terms.near_target_linear_settling_reward(
+            torch.tensor([0.50]),
+            torch.tensor([0.50]),
+            torch.tensor([0.00]),
+            **base,
+        )
+        near = reward_terms.near_target_linear_settling_reward(
+            torch.tensor([0.02, 0.02, 0.02]),
+            torch.tensor([0.02, 0.02, 0.02]),
+            torch.tensor([0.052, 0.02, 0.00]),
+            **base,
+        )
+        self.assertLess(abs(float(far.item())), 1.0e-8)
+        self.assertLess(float(near[0].item()), 0.0)
+        self.assertGreater(float(near[1].item()), float(near[0].item()))
+        self.assertGreater(float(near[2].item()), float(near[1].item()))
 
     def test_action_smoothing_uses_normalized_task_space_formulas(self) -> None:
         reward_source = _method_source("_get_task_space_rewards")
@@ -547,6 +580,8 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             '"final_pose/max_hold_position_error_at_break"',
             '"final_pose/max_hold_orientation_error_at_break"',
             '"final_pose/max_hold_linear_speed_at_break"',
+            '"final_pose/linear_speed_margin_at_break"',
+            '"final_pose/linear_speed_break_excess"',
             '"final_pose/max_hold_angular_speed_at_break"',
             '"final_pose/max_hold_steps_before_break"',
             '"final_pose/steps_remaining_after_max_hold"',
@@ -556,6 +591,19 @@ class TestFixedFinalPoseTask(unittest.TestCase):
             self.assertIn(key, reward_source)
         self.assertIn('"rolling_1000/max_hold_steps"', rolling_source)
         self.assertIn("_rolling_1000_max(self._rolling_1000_max_hold_steps)", rolling_source)
+
+    def test_policy_action_std_telemetry_keys_are_logged(self) -> None:
+        reward_source = _method_source("_get_task_space_rewards")
+        action_source = _method_source("_pre_physics_step")
+        for key in (
+            '"policy/action_std_mean"',
+            '"policy/action_std_min"',
+            '"policy/action_std_max"',
+        ):
+            self.assertIn(key, reward_source)
+        self.assertIn("torch.std(actions, dim=0, unbiased=False)", action_source)
+        self.assertIn("self._policy_action_std_min", action_source)
+        self.assertIn("self._policy_action_std_max", action_source)
 
     def test_hold_counter_uses_only_four_strict_conditions(self) -> None:
         success_source = _method_source("_update_final_pose_success_state")

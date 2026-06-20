@@ -206,6 +206,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rew_final_pose_linear_velocity = 0.15
     rew_final_pose_angular_velocity = 0.08
     rew_final_pose_settling = 0.20
+    rew_near_target_linear_settling = 0.35
     rew_final_pose_hold_progress = 1.00
     rew_clamp_outward = 0.25
     rom_clamp_documented_increment_scale = 0.008
@@ -299,6 +300,9 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     final_pose_angular_shaping_scale_radps = 0.10
     final_pose_linear_settling_scale_mps = 0.05
     final_pose_angular_settling_scale_radps = 0.10
+    near_target_linear_settling_position_gate_scale = 1.5
+    near_target_linear_settling_orientation_gate_scale = 1.5
+    near_target_linear_settling_speed_margin_mps = 0.03
 
     rew_q_tracking = 3.0
     rew_qdot = 0.25
