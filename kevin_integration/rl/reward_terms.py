@@ -142,6 +142,48 @@ def near_target_linear_settling_reward(
     return float(weight) * position_gate * orientation_gate * torch.tanh(speed_margin)
 
 
+def near_target_angular_settling_reward(
+    position_error_norm: torch.Tensor,
+    orientation_error: torch.Tensor,
+    ee_angular_speed: torch.Tensor,
+    *,
+    position_tolerance_m: float,
+    orientation_tolerance_rad: float,
+    angular_speed_tolerance_radps: float,
+    position_gate_scale: float,
+    orientation_gate_scale: float,
+    speed_margin_radps: float,
+    weight: float,
+) -> torch.Tensor:
+    """Smooth near-pose reward that prefers angular speed below the strict limit."""
+    if position_tolerance_m <= 0.0:
+        raise ValueError("position_tolerance_m must be positive")
+    if orientation_tolerance_rad <= 0.0:
+        raise ValueError("orientation_tolerance_rad must be positive")
+    if angular_speed_tolerance_radps <= 0.0:
+        raise ValueError("angular_speed_tolerance_radps must be positive")
+    if position_gate_scale <= 0.0:
+        raise ValueError("position_gate_scale must be positive")
+    if orientation_gate_scale <= 0.0:
+        raise ValueError("orientation_gate_scale must be positive")
+    if speed_margin_radps <= 0.0:
+        raise ValueError("speed_margin_radps must be positive")
+    position_gate = torch.exp(
+        -torch.square(
+            position_error_norm / (float(position_tolerance_m) * float(position_gate_scale))
+        )
+    )
+    orientation_gate = torch.exp(
+        -torch.square(
+            orientation_error / (float(orientation_tolerance_rad) * float(orientation_gate_scale))
+        )
+    )
+    speed_margin = (
+        float(angular_speed_tolerance_radps) - ee_angular_speed
+    ) / float(speed_margin_radps)
+    return float(weight) * position_gate * orientation_gate * torch.tanh(speed_margin)
+
+
 def update_consecutive_success_counter(
     success_counter: torch.Tensor,
     within_final_pose: torch.Tensor,
