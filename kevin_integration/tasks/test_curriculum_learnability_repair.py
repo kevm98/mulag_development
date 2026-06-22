@@ -12,7 +12,7 @@ Verifies the post-repair design:
   7.  Orientation tracking disabled in S1/S2, enabled in S3/S4
   8.  Vehicle stationary in S1–S3, moving in S4
   9.  Reward weight configuration defaults (pos_tracking=1.0, orient=0.25, progress=0.5)
-  10. Bounded position tracking reward formula: exp(-4 * error)
+  10. Bounded position tracking reward formula: exp(-2 * error)
   11. Bounded progress reward: delta_position_error, clamped
   12. Task-space observation dimension = 70
   13. Action dimension = 4 (hydraulic cylinders)
@@ -59,6 +59,7 @@ CURRICULUM_MAX_OTHER_UNSAFE_RATE = 0.01
 CURRICULUM_MIN_TIMEOUT_RATE = 0.80
 
 REW_TASK_POS_TRACKING = 1.0
+POSITION_TRACKING_EXP_SCALE = 2.0
 REW_TASK_ORIENT_TRACKING = 0.25
 REW_TASK_PROGRESS = 0.5
 REW_TASK_PROGRESS_CLIP = 0.2
@@ -121,7 +122,7 @@ def orientation_enabled(stage: int) -> bool:
 
 # ── Standalone reward helpers ────────────────────────────────────────────────
 def _pos_tracking_reward(pos_error_norm: torch.Tensor) -> torch.Tensor:
-    return REW_TASK_POS_TRACKING * torch.exp(-4.0 * pos_error_norm)
+    return REW_TASK_POS_TRACKING * torch.exp(-POSITION_TRACKING_EXP_SCALE * pos_error_norm)
 
 
 def _orient_tracking_reward(orient_error: torch.Tensor, stage: int) -> torch.Tensor:
@@ -343,6 +344,7 @@ class TestCurriculumLearnabilityRepair(unittest.TestCase):
     def test_reward_weight_defaults(self) -> None:
         """Task-space reward weights match expected defaults."""
         self.assertAlmostEqual(REW_TASK_POS_TRACKING, 1.0)
+        self.assertAlmostEqual(POSITION_TRACKING_EXP_SCALE, 2.0)
         self.assertAlmostEqual(REW_TASK_ORIENT_TRACKING, 0.25)
         self.assertAlmostEqual(REW_TASK_PROGRESS, 0.5)
         self.assertAlmostEqual(REW_TASK_PROGRESS_CLIP, 0.2)
@@ -352,9 +354,9 @@ class TestCurriculumLearnabilityRepair(unittest.TestCase):
     # 8. Position tracking reward formula
     # ═══════════════════════════════════════════════════════════════════════
     def test_pos_tracking_reward_formula(self) -> None:
-        """pos_tracking = 1.0 * exp(-4 * error)."""
+        """pos_tracking = 1.0 * exp(-2 * error)."""
         errors = torch.tensor([0.0, 0.1, 0.5, 1.0, 2.0])
-        expected = REW_TASK_POS_TRACKING * torch.exp(-4.0 * errors)
+        expected = REW_TASK_POS_TRACKING * torch.exp(-POSITION_TRACKING_EXP_SCALE * errors)
         actual = _pos_tracking_reward(errors)
         self.assertTrue(torch.allclose(actual, expected))
 

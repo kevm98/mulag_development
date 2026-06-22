@@ -213,7 +213,7 @@ class TestRewardBalanceRepair(unittest.TestCase):
             linear_speed_tolerance_mps=0.05,
             position_gate_scale=1.5,
             orientation_gate_scale=1.5,
-            speed_margin_mps=0.03,
+            speed_margin_mps=0.015,
             weight=0.35,
         )
         far = near_target_linear_settling_reward(
@@ -264,18 +264,23 @@ class TestRewardBalanceRepair(unittest.TestCase):
     def test_reward_balance_weights_remain_bounded_after_hold_increase(self) -> None:
         class_name = "MulagAdaptiveRLJointReachEnvCfg"
         self.assertEqual(_literal_assignment(class_name, "rew_task_pos_tracking"), 1.0)
+        self.assertEqual(_literal_assignment(class_name, "position_tracking_exponential_scale"), 2.0)
         self.assertEqual(_literal_assignment(class_name, "rew_task_orient_tracking"), 0.25)
         self.assertEqual(_literal_assignment(class_name, "rew_task_progress"), 0.5)
         self.assertEqual(_literal_assignment(class_name, "rew_task_progress_clip"), 0.2)
+        self.assertEqual(_literal_assignment(class_name, "taskspace_progress_gamma"), 1.0)
         self.assertEqual(_literal_assignment(class_name, "rew_final_pose_settling"), 0.20)
-        self.assertEqual(_literal_assignment(class_name, "rew_near_target_linear_settling"), 0.35)
+        self.assertEqual(_literal_assignment(class_name, "rew_near_target_linear_settling"), 1.00)
         self.assertEqual(_literal_assignment(class_name, "rew_near_target_angular_settling"), 0.35)
+        self.assertEqual(_literal_assignment(class_name, "near_target_linear_settling_speed_margin_mps"), 0.015)
+        self.assertEqual(_literal_assignment(class_name, "near_target_linear_settling_sharpness"), 1.5)
+        self.assertEqual(_literal_assignment(class_name, "near_target_angular_settling_speed_margin_radps"), 0.08)
         self.assertEqual(_literal_assignment(class_name, "rew_final_pose_hold_progress"), 1.00)
 
-        dense_positive_bound = 1.0 + 0.25 + 0.5 * 0.2 + 0.20 + 0.35 + 0.35 + 1.00
+        dense_positive_bound = 1.0 + 0.25 + 1.0 * 0.2 + 0.20 + 1.00 + 0.35 + 1.00
         actuator_penalty_bound = 0.15 + 0.25 + 0.01
         velocity_penalty_bound = 0.15 + 0.08
-        self.assertLessEqual(dense_positive_bound, 3.35)
+        self.assertLessEqual(dense_positive_bound, 4.10)
         self.assertLessEqual(actuator_penalty_bound, 0.50)
         self.assertLessEqual(actuator_penalty_bound + velocity_penalty_bound, 0.65)
 

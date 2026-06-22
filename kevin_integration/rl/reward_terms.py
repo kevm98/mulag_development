@@ -112,8 +112,12 @@ def near_target_linear_settling_reward(
     orientation_gate_scale: float,
     speed_margin_mps: float,
     weight: float,
+    sharpness: float = 1.0,
 ) -> torch.Tensor:
-    """Smooth near-pose reward that prefers linear speed below the strict limit."""
+    """Smooth near-pose reward that prefers linear speed below the strict limit.
+
+    sharpness > 1 steepens the tanh funnel for stronger gradient near tolerance.
+    """
     if position_tolerance_m <= 0.0:
         raise ValueError("position_tolerance_m must be positive")
     if orientation_tolerance_rad <= 0.0:
@@ -126,6 +130,8 @@ def near_target_linear_settling_reward(
         raise ValueError("orientation_gate_scale must be positive")
     if speed_margin_mps <= 0.0:
         raise ValueError("speed_margin_mps must be positive")
+    if sharpness <= 0.0:
+        raise ValueError("sharpness must be positive")
     position_gate = torch.exp(
         -torch.square(
             position_error_norm / (float(position_tolerance_m) * float(position_gate_scale))
@@ -139,7 +145,7 @@ def near_target_linear_settling_reward(
     speed_margin = (
         float(linear_speed_tolerance_mps) - ee_linear_speed
     ) / float(speed_margin_mps)
-    return float(weight) * position_gate * orientation_gate * torch.tanh(speed_margin)
+    return float(weight) * position_gate * orientation_gate * torch.tanh(float(sharpness) * speed_margin)
 
 
 def near_target_angular_settling_reward(
@@ -154,6 +160,7 @@ def near_target_angular_settling_reward(
     orientation_gate_scale: float,
     speed_margin_radps: float,
     weight: float,
+    sharpness: float = 1.0,
 ) -> torch.Tensor:
     """Smooth near-pose reward that prefers angular speed below the strict limit."""
     if position_tolerance_m <= 0.0:
@@ -181,7 +188,7 @@ def near_target_angular_settling_reward(
     speed_margin = (
         float(angular_speed_tolerance_radps) - ee_angular_speed
     ) / float(speed_margin_radps)
-    return float(weight) * position_gate * orientation_gate * torch.tanh(speed_margin)
+    return float(weight) * position_gate * orientation_gate * torch.tanh(float(sharpness) * speed_margin)
 
 
 def update_consecutive_success_counter(
@@ -247,6 +254,7 @@ def avoidable_clamp_penalty(
     *,
     increment_scale: float,
     weight: float,
+    sharpness: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Penalize only avoidable outward requests at a boundary, not static occupancy."""
     if increment_scale <= 0.0:
@@ -268,6 +276,7 @@ def valve_saturation_penalty(
     *,
     sat_start: float,
     weight: float,
+    sharpness: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Soft bounded penalty based on applied ValveCmd excess above ``sat_start``."""
     if not 0.0 <= sat_start < 1.0:
@@ -283,6 +292,7 @@ def fd_load_excess_penalty(
     *,
     soft_threshold: float,
     weight: float,
+    sharpness: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Bounded penalty for normalized FD load only above an evidence-backed soft threshold."""
     if soft_threshold <= 0.0:
@@ -298,6 +308,7 @@ def hold_progress_reward(
     *,
     required_hold_steps: int,
     weight: float,
+    sharpness: float = 1.0,
     within_final_pose: torch.Tensor,
 ) -> torch.Tensor:
     """Bounded monotonic reward for consecutive settled steps before strict success."""

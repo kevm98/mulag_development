@@ -89,6 +89,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     use_torque_rate_limit = True
     use_torque_lowpass = True
     max_abs_pressure_delta = 1.0e7
+    sd_max_abs_pressure_delta = 2.5e8
     max_abs_fnet = 1.0e7
     sd_dP_rate_limit = 100000.0
     sd_fnet_rate_limit = 10000.0
@@ -109,7 +110,9 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     final_causal_rom_debug = True
     final_causal_rom_extension_delta_clamp = 0.04
     final_causal_rom_applied_delta_clamp = 0.008
-    final_causal_rom_pressure_source = "training_mean"
+    final_causal_rom_valve_feedforward_gain = 0.65
+    final_causal_rom_pressure_source = "sd_observer"
+    final_causal_rom_pressure_clamp = 2.5e8
     cylinder_coordinate_mapping = str(_ROM_DIR / "cylinder_coordinate_mapping.json")
     cylinder_coordinate_mapping_mode = "nominal_sign_offset"
     allow_provisional_range_mapping = False
@@ -131,7 +134,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     rom_Fs = [10.0, 10.0, 10.0, 10.0]
     rom_kf = [100.0, 100.0, 100.0, 100.0]
     rom_Pmax = [1.0e7, 1.0e7, 1.0e7, 1.0e7]
-    rom_xdot_max = [0.02, 0.02, 0.02, 0.02]
+    rom_xdot_max = [0.80, 0.80, 0.80, 0.80]
     rom_dx_max = [5.0e-4, 5.0e-4, 5.0e-4, 5.0e-4]
     rom_delay_steps = [0, 0, 0, 0]
     rom_udz_pos = [0.0, 0.0, 0.0, 0.0]
@@ -150,7 +153,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     goal_curriculum_advance_near_pose_low_speed_rate = 0.10
     goal_curriculum_advance_mean_max_hold_steps = 10.0
     goal_curriculum_hysteresis_windows = 2
-    goal_curriculum_stage_scales = [0.25, 0.60, 1.0, 1.0]
+    goal_curriculum_stage_scales = [0.10, 0.25, 0.60, 1.0]
     # Stage boundaries in cumulative env steps: S1: 0-50k, S2: 50k-150k,
     # S3: 150k-300k, S4: >300k.
     curriculum_stage_steps = [0, 50000, 150000, 300000]
@@ -195,6 +198,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     reward_contract_version = "task_space_reward_balance_v2"
     rew_task_pos_tracking = 1.0       # bounded [0,1] exponential position tracking reward
     position_tracking_reward_weight = 1.0
+    position_tracking_exponential_scale = 2.0
     rew_task_orient_tracking = 0.25   # dense quaternion-geodesic orientation tracking
     rew_task_progress = 0.5           # potential progress shaping scale
     rew_task_progress_clip = 0.2      # max absolute progress-reward contribution
@@ -202,11 +206,11 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     taskspace_progress_orientation_scale_rad = 3.141592653589793
     taskspace_progress_position_weight = 1.0
     taskspace_progress_orientation_weight = 0.25
-    taskspace_progress_gamma = 0.99
+    taskspace_progress_gamma = 1.0
     rew_final_pose_linear_velocity = 0.15
     rew_final_pose_angular_velocity = 0.08
     rew_final_pose_settling = 0.20
-    rew_near_target_linear_settling = 0.35
+    rew_near_target_linear_settling = 1.00
     rew_near_target_angular_settling = 0.35
     rew_final_pose_hold_progress = 1.00
     rew_clamp_outward = 0.25
@@ -288,25 +292,26 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     # Historical diagnostic threshold only. It is not a validated MulaG
     # hydraulic safety limit and must not be used for hard termination.
     unvalidated_velocity_diagnostic_threshold = 6.0
-    enable_validated_hydraulic_velocity_termination = False
+    enable_validated_hydraulic_velocity_termination = True
     hydraulic_soft_velocity_limits_mps = [0.0, 0.0, 0.0, 0.0]
-    hydraulic_hard_velocity_limits_mps = [0.0, 0.0, 0.0, 0.0]
+    hydraulic_hard_velocity_limits_mps = [0.5, 0.5, 0.5, 0.5]
     hydraulic_velocity_persistence_steps = 3
-    hydraulic_velocity_limits_source = "blocked_missing_pytorch_hydraulic_rom_dataset_causal_mat"
-    enable_validated_mechanical_velocity_termination = False
+    hydraulic_velocity_limits_source = "conservative_rom_operating_range_0p5_mps"
+    enable_validated_mechanical_velocity_termination = True
     mechanical_soft_velocity_limits = [0.0, 0.0, 0.0, 0.0, 0.0]
-    mechanical_hard_velocity_limits = [0.0, 0.0, 0.0, 0.0, 0.0]
+    mechanical_hard_velocity_limits = [3.0, 3.0, 3.0, 3.0, 3.0]
     mechanical_velocity_limits_source = "working_collision_task_has_no_arm_hard_velocity_termination"
     final_pose_linear_shaping_scale_mps = 0.05
     final_pose_angular_shaping_scale_radps = 0.10
-    final_pose_linear_settling_scale_mps = 0.05
+    final_pose_linear_settling_scale_mps = 0.08
     final_pose_angular_settling_scale_radps = 0.10
-    near_target_linear_settling_position_gate_scale = 1.5
-    near_target_linear_settling_orientation_gate_scale = 1.5
-    near_target_linear_settling_speed_margin_mps = 0.03
-    near_target_angular_settling_position_gate_scale = 1.5
-    near_target_angular_settling_orientation_gate_scale = 1.5
-    near_target_angular_settling_speed_margin_radps = 0.05
+    near_target_linear_settling_position_gate_scale = 3.0
+    near_target_linear_settling_orientation_gate_scale = 3.0
+    near_target_linear_settling_speed_margin_mps = 0.015
+    near_target_linear_settling_sharpness = 1.5
+    near_target_angular_settling_position_gate_scale = 3.0
+    near_target_angular_settling_orientation_gate_scale = 3.0
+    near_target_angular_settling_speed_margin_radps = 0.08
 
     rew_q_tracking = 3.0
     rew_qdot = 0.25
@@ -467,9 +472,11 @@ class MulagHydraulicROMTaskSpaceEnvCfg(MulagAdaptiveRLJointReachEnvCfg):
     curriculum_orientation_enabled = [False, False, True, True]
     rew_task_pos_tracking = 1.0
     position_tracking_reward_weight = 1.0
+    position_tracking_exponential_scale = 2.0
     rew_task_orient_tracking = 0.25
-    rew_task_progress = 0.5
+    rew_task_progress = 1.0
     rew_task_progress_clip = 0.2
+    taskspace_progress_gamma = 1.0
     # FD load penalty weight (auxiliary load from observer-only FD).
     rew_fd_load = 0.01
     # Unsafe termination penalty weight (5.0, NOT hardcoded 100).
@@ -491,10 +498,11 @@ class MulagHydraulicROMTaskSpacePPORunnerCfg(MulagAdaptiveRLPPORunnerCfg):
     enable_action_std_hold_schedule = True
     action_std_schedule_start_hold_fraction = 0.50
     action_std_schedule_end_hold_fraction = 0.98
-    action_std_schedule_min_std = 0.12
+    action_std_schedule_min_std = 0.05
     action_std_schedule_max_std_initial = 0.55
-    action_std_schedule_max_std_final = 0.25
-    action_std_schedule_entropy_final = 0.001
+    action_std_schedule_max_std_final = 0.15
+    action_std_schedule_entropy_final = 0.0005
+    adaptive_lr_max = 0.001
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,

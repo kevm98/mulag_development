@@ -210,7 +210,7 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         )
         self.assertEqual(
             _literal_assignment("MulagAdaptiveRLJointReachEnvCfg", "goal_curriculum_stage_scales")[0],
-            0.25,
+            0.10,
         )
         self.assertIn("self._curriculum_stage_index = 1", ENV_SOURCE)
         scale_source = _method_source("_current_q_ref_target_scale")
@@ -347,6 +347,12 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         )
         self.assertEqual(
             _literal_assignment(
+                "MulagAdaptiveRLJointReachEnvCfg", "position_tracking_exponential_scale"
+            ),
+            2.0,
+        )
+        self.assertEqual(
+            _literal_assignment(
                 "MulagAdaptiveRLJointReachEnvCfg", "rew_task_orient_tracking"
             ),
             0.25,
@@ -360,7 +366,8 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         )
         reward_source = _method_source("_get_task_space_rewards")
         self.assertIn("W_pos = float(self.cfg.position_tracking_reward_weight)", reward_source)
-        self.assertIn("pos_tracking = torch.exp(-4.0 * pos_error_norm)", reward_source)
+        self.assertIn("pos_tracking_scale = float(getattr(self.cfg, \"position_tracking_exponential_scale\", 4.0))", reward_source)
+        self.assertIn("pos_tracking = torch.exp(-pos_tracking_scale * pos_error_norm)", reward_source)
         self.assertIn("pos_tracking_weighted = W_pos * pos_tracking", reward_source)
         reward_assignment = next(
             node
@@ -520,6 +527,48 @@ class TestFixedFinalPoseTask(unittest.TestCase):
         self.assertLess(float(near[0].item()), 0.0)
         self.assertGreater(float(near[1].item()), float(near[0].item()))
         self.assertGreater(float(near[2].item()), float(near[1].item()))
+
+    def test_near_target_linear_settling_sharpness(self) -> None:
+        """Sharpness > 1 steepens the penalty for speeds above tolerance."""
+        base = dict(
+            position_tolerance_m=0.05,
+            orientation_tolerance_rad=0.0872664626,
+            linear_speed_tolerance_mps=0.05,
+            position_gate_scale=1.5,
+            orientation_gate_scale=1.5,
+            speed_margin_mps=0.015,
+            weight=0.75,
+        )
+        err = torch.tensor([0.02])
+        speed_above = torch.tensor([0.063])
+        default = reward_terms.near_target_linear_settling_reward(
+            err, err, speed_above, sharpness=1.0, **base,
+        )
+        sharp = reward_terms.near_target_linear_settling_reward(
+            err, err, speed_above, sharpness=1.5, **base,
+        )
+        self.assertLess(float(sharp.item()), float(default.item()))
+        self.assertLess(float(sharp.item()), 0.0)
+        speed_below = torch.tensor([0.04])
+        reward_default = reward_terms.near_target_linear_settling_reward(
+            err, err, speed_below, sharpness=1.0, **base,
+        )
+        reward_sharp = reward_terms.near_target_linear_settling_reward(
+            err, err, speed_below, sharpness=1.5, **base,
+        )
+        self.assertGreater(float(reward_sharp.item()), float(reward_default.item()))
+        self.assertGreater(float(reward_sharp.item()), 0.0)
+
+    def test_near_target_linear_settling_sharpness_validation(self) -> None:
+        """Sharpness <= 0 must raise ValueError."""
+        with self.assertRaises(ValueError):
+            reward_terms.near_target_linear_settling_reward(
+                torch.tensor([0.02]), torch.tensor([0.02]), torch.tensor([0.04]),
+                position_tolerance_m=0.05, orientation_tolerance_rad=0.087,
+                linear_speed_tolerance_mps=0.05, position_gate_scale=1.5,
+                orientation_gate_scale=1.5, speed_margin_mps=0.015,
+                weight=0.75, sharpness=0.0,
+            )
 
     def test_action_smoothing_uses_normalized_task_space_formulas(self) -> None:
         reward_source = _method_source("_get_task_space_rewards")
@@ -999,7 +1048,8 @@ class TestPreservation(unittest.TestCase):
 
     def test_position_tracking_formula_preserved(self) -> None:
         reward_source = _method_source("_get_task_space_rewards")
-        self.assertIn("pos_tracking = torch.exp(-4.0 * pos_error_norm)", reward_source)
+        self.assertIn("pos_tracking_scale = float(getattr(self.cfg, \"position_tracking_exponential_scale\", 4.0))", reward_source)
+        self.assertIn("pos_tracking = torch.exp(-pos_tracking_scale * pos_error_norm)", reward_source)
         self.assertIn("pos_tracking_weighted = W_pos * pos_tracking", reward_source)
 
     def test_orientation_tracking_formula_preserved(self) -> None:
@@ -1512,14 +1562,21 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
                 "MulagHydraulicROMTaskSpacePPORunnerCfg",
                 "action_std_schedule_max_std_final",
             ),
-            0.25,
+            0.15,
         )
         self.assertEqual(
             _literal_assignment(
                 "MulagHydraulicROMTaskSpacePPORunnerCfg",
                 "action_std_schedule_min_std",
             ),
-            0.12,
+            0.05,
+        )
+        self.assertEqual(
+            _literal_assignment(
+                "MulagHydraulicROMTaskSpacePPORunnerCfg",
+                "adaptive_lr_max",
+            ),
+            0.001,
         )
 
     def test_action_std_schedule_prevents_early_collapse_and_late_noise(self) -> None:
@@ -1527,20 +1584,20 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
         agent_cfg = SimpleNamespace(
             action_std_schedule_start_hold_fraction=0.50,
             action_std_schedule_end_hold_fraction=0.98,
-            action_std_schedule_min_std=0.12,
+            action_std_schedule_min_std=0.05,
             action_std_schedule_max_std_initial=0.55,
-            action_std_schedule_max_std_final=0.25,
-            action_std_schedule_entropy_final=0.001,
+            action_std_schedule_max_std_final=0.15,
+            action_std_schedule_entropy_final=0.0005,
         )
         early = ns["_action_std_schedule_values"](agent_cfg, 0.0, 0.005)
         late = ns["_action_std_schedule_values"](agent_cfg, 1.0, 0.005)
-        self.assertEqual(early["min_std"], 0.12)
+        self.assertEqual(early["min_std"], 0.05)
         self.assertEqual(early["max_std"], 0.55)
         self.assertEqual(early["entropy_coef"], 0.005)
-        self.assertEqual(late["max_std"], 0.25)
-        self.assertEqual(late["entropy_coef"], 0.001)
+        self.assertEqual(late["max_std"], 0.15)
+        self.assertEqual(late["entropy_coef"], 0.0005)
         self.assertGreater(early["max_std"], 0.52)
-        self.assertLess(late["max_std"], 0.4852)
+        self.assertLess(late["max_std"], 0.16)
 
     def test_action_std_schedule_clamps_existing_gaussian_std_only(self) -> None:
         ns = _train_std_schedule_namespace()
@@ -1548,10 +1605,10 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
             std_param=torch.nn.Parameter(torch.tensor([0.08, 0.20, 0.52, 0.70]))
         )
         actor = SimpleNamespace(distribution=distribution)
-        stats = ns["_clamp_actor_gaussian_std"](actor, min_std=0.12, max_std=0.25)
+        stats = ns["_clamp_actor_gaussian_std"](actor, min_std=0.05, max_std=0.15)
         self.assertEqual(stats["applied"], 1.0)
-        self.assertGreaterEqual(float(torch.min(distribution.std_param).item()), 0.12 - 1.0e-6)
-        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.25 + 1.0e-6)
+        self.assertGreaterEqual(float(torch.min(distribution.std_param).item()), 0.05 - 1.0e-6)
+        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.15 + 1.0e-6)
 
     def test_action_std_schedule_installs_for_task_space_runner(self) -> None:
         ns = _train_std_schedule_namespace()
@@ -1563,9 +1620,11 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
 
         def update():
             calls["n"] += 1
+            self.assertLessEqual(float(alg.learning_rate), 0.001)
+            alg.learning_rate = 0.01
             return {"surrogate": 0.0}
 
-        alg = SimpleNamespace(actor=actor, entropy_coef=0.005, update=update)
+        alg = SimpleNamespace(actor=actor, entropy_coef=0.005, learning_rate=0.003, update=update)
         runner = SimpleNamespace(alg=alg)
         raw_env = SimpleNamespace(
             _final_pose_settling_hold_max_total=torch.tensor(49.0),
@@ -1579,10 +1638,11 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
             enable_action_std_hold_schedule=True,
             action_std_schedule_start_hold_fraction=0.50,
             action_std_schedule_end_hold_fraction=0.98,
-            action_std_schedule_min_std=0.12,
+            action_std_schedule_min_std=0.05,
             action_std_schedule_max_std_initial=0.55,
-            action_std_schedule_max_std_final=0.25,
-            action_std_schedule_entropy_final=0.001,
+            action_std_schedule_max_std_final=0.15,
+            action_std_schedule_entropy_final=0.0005,
+            adaptive_lr_max=0.001,
         )
         self.assertTrue(
             ns["_install_task_space_action_std_schedule"](
@@ -1595,8 +1655,9 @@ class TestEntropyArchitecturePreserved(unittest.TestCase):
         result = alg.update()
         self.assertEqual(result["surrogate"], 0.0)
         self.assertEqual(calls["n"], 1)
-        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.25)
-        self.assertAlmostEqual(float(alg.entropy_coef), 0.001)
+        self.assertLessEqual(float(torch.max(distribution.std_param).item()), 0.15 + 1.0e-6)
+        self.assertAlmostEqual(float(alg.entropy_coef), 0.0005)
+        self.assertAlmostEqual(float(alg.learning_rate), 0.001)
         self.assertGreater(float(raw_env._action_std_schedule_hold_fraction), 0.95)
 
 
@@ -1641,6 +1702,68 @@ class TestCurriculumHysteresis(unittest.TestCase):
             ),
             0.20,
         )
+
+
+class TestROMRateLimitBottleneck(unittest.TestCase):
+    """ROM velocity rate limit must not clamp normal operating-range predictions."""
+
+    def test_rom_correction_exceeds_rate_limit_with_current_values(self) -> None:
+        """Current rom_xdot_max=0.02 clamps most ROM correction predictions."""
+        import json
+        metadata_path = Path(__file__).resolve().parents[1] / "rom_cylinders" / "exported_valve_conditioned_causal_rom" / "best_valve_conditioned_causal_rom_metadata.json"
+        with open(metadata_path) as f:
+            meta = json.load(f)
+        # Per-cylinder correction 95th percentile (absolute, in m per 50ms)
+        for cyl in meta["audit"]["cylinders"]:
+            p95_abs = max(
+                abs(cyl["correction_percentiles"]["5"]),
+                abs(cyl["correction_percentiles"]["95"]),
+            )
+            # Current rate limit: rom_xdot_max * rom_dt = 0.02 * 0.01 = 0.0002 m/step
+            # ROM predicts 50ms deltas → rate limit equivalent = 0.02 * 0.05 = 0.001 m/50ms
+            rate_limit_50ms = 0.02 * 0.05
+            self.assertGreater(
+                p95_abs,
+                rate_limit_50ms,
+                f"Cylinder {cyl['cylinder']}: 95th percentile correction "
+                f"({p95_abs:.6f}m/50ms) does not exceed rate limit "
+                f"({rate_limit_50ms:.6f}m/50ms) — bottleneck evidence is invalid",
+            )
+
+    def test_rom_correction_within_repaired_rate_limit(self) -> None:
+        """Repaired rom_xdot_max=0.80 allows normal ROM corrections to pass."""
+        import json
+        metadata_path = Path(__file__).resolve().parents[1] / "rom_cylinders" / "exported_valve_conditioned_causal_rom" / "best_valve_conditioned_causal_rom_metadata.json"
+        with open(metadata_path) as f:
+            meta = json.load(f)
+        for cyl in meta["audit"]["cylinders"]:
+            p95_abs = max(
+                abs(cyl["correction_percentiles"]["5"]),
+                abs(cyl["correction_percentiles"]["95"]),
+            )
+            rate_limit_50ms = 0.80 * 0.05  # 0.040 m/50ms
+            self.assertLess(
+                p95_abs,
+                rate_limit_50ms,
+                f"Cylinder {cyl['cylinder']}: 95th percentile correction "
+                f"({p95_abs:.6f}m/50ms) exceeds repaired rate limit "
+                f"({rate_limit_50ms:.6f}m/50ms) — rate limit still too tight",
+            )
+
+    def test_rom_xdot_max_config_value(self) -> None:
+        """rom_xdot_max is configured at 0.80 for task-space training."""
+        self.assertEqual(
+            _literal_assignment("MulagAdaptiveRLJointReachEnvCfg", "rom_xdot_max"),
+            [0.80, 0.80, 0.80, 0.80],
+        )
+
+    def test_rom_rate_limit_formula_uses_rom_dt(self) -> None:
+        """Rate limit calculation uses rom_xdot_max * rom_dt."""
+        rom_source = _method_source("_pre_physics_step_final_causal_rom")
+        self.assertIn("rom_velocity_limits", rom_source)
+        self.assertIn("rom_dt", rom_source)
+        self.assertIn("max_delta_per_step", rom_source)
+        self.assertIn("rom_xdot_max", rom_source)
 
 
 if __name__ == "__main__":

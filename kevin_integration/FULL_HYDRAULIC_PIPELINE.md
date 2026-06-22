@@ -17,13 +17,25 @@ The RRLAB obstacle task uses the same idea: `ee_pose` is an observation/reward c
 ## Low-Level Learned Chain
 
 ```text
-measured q[5], qdot[5], dP[4]
-+ previous applied ValveCmd[4]
+history -> frozen AAM -> z_arm_hat[24]
+target/state/z_arm_hat -> PPO
+PPO -> qddot5
+qddot/state -> frozen ID -> ValveCmd4
+ValveCmd/state -> frozen FD observer
+ValveCmd/cylinder state/mechanical state -> frozen ROM
+ROM -> four cylinder targets
+measured EE pose/speed -> reward and success
+```
+
+Expanded runtime flow:
+
+```text
+measured q[5], qdot[5], dP[4] + previous applied ValveCmd[4]
 -> AAM history[100, 18]
 -> frozen AAM from aam.pth
 -> one stored z_arm_hat[24]
-     |-> PPO observation indices 44:68
-     `-> ID conditioning for the matching Action[4]
+   |-> PPO observation indices 41:65
+   `-> ID conditioning for the matching Action[4]
 
 PPO Action[4]
 -> qddot_cmd[5] in ID training units, qddot_cmd[4] = 0
@@ -81,9 +93,13 @@ action authority = 0.25
 vehicle motion = off
 ```
 
-Each reset samples one fixed `Messerkopf` target in `robot_base` frame with
-order `[x, y, z, qw, qx, qy, qz]`. `_ee_pose_command` is the only authoritative
-target. It drives the 73D task-space observation, position error,
+Each reset samples one fixed reachable `Messerkopf` target in `robot_base`
+frame with order `[x, y, z, qw, qx, qy, qz]`. The reset sampler first samples a
+safe controlled arm configuration using the Stage-1 joint target ranges,
+applies the existing Messerkopf follower relation, evaluates the resulting
+end-effector pose through the existing articulation state/FK path, and stores
+that measured pose as `_ee_pose_command`. `_ee_pose_command` is the only
+authoritative target. It drives the 73D task-space observation, position error,
 quaternion-geodesic orientation error, rewards, success logic, preflight, and
 terminal metrics. Partial resets modify only selected target rows.
 
@@ -92,7 +108,10 @@ joint/cylinder command has been inserted. The learned and hydraulic chain below
 the policy is unchanged.
 
 Orientation reward is active with fixed weight `0.25` and tolerance
-`0.0872664626 rad`. Position reward remains unchanged with weight `1.0`.
+`0.0872664626 rad`. Position reward remains with weight `1.0`. The repaired
+reward contract `task_space_reward_balance_v2` adds potential-based progress,
+bounded avoidable actuator penalties, near-pose speed penalties, settling
+reward, and hold-progress reward without changing strict success.
 
 Success requires:
 
@@ -109,11 +128,40 @@ one-time bonus of `10.0` and no unsafe penalty. Terminal values are captured
 before reset. These contracts have offline test coverage but still require
 Isaac runtime validation.
 
+## Literature Alignment
+
+- Task-space RL is retained because hydraulic construction-machine work by Lee
+  and Brell-Cokcan uses a data-driven actuator model in simulation with RL to
+  learn task-space control, avoiding runtime IK assumptions for hydraulic
+  dynamics.
+- Learned hydraulic dynamics remain frozen because this repair targets PPO
+  reward, curriculum, launcher, and telemetry contracts; changing AAM/ID/FD/ROM
+  checkpoints would change the plant model and invalidate checkpoint
+  compatibility.
+- Potential-based progress is used because Ng, Harada, and Russell show that
+  transition rewards derived from state potentials are the safe class of
+  shaping transformations when the Markov-state assumptions hold. Here the
+  fixed target and measured pose errors are already present in the observation.
+- Curriculum is configuration-gated because curriculum-learning work in RL
+  supports increasing task difficulty based on agent competence for sparse or
+  difficult goal tasks. The sampler still uses reachable FK-generated targets.
+- PPO remains the optimizer because the official PPO objective is a clipped
+  policy-gradient update suitable for continuous-control policies, and the
+  existing RSL-RL/IsaacLab runner already implements that optimizer and
+  checkpoint format.
+- Strict settling remains the evaluation target because mean reward can select
+  pass-through or actuator-saturating behavior. Checkpoint ranking prioritizes
+  strict success, 50-step hold completion, and final pose/speed metrics before
+  actuator activity; mean reward is recorded but not used to pick the best
+  checkpoint.
+
 **Contract assertions** (`_validate_control_mode()` for `rl_task_space_tracking`):
 
 - 4 command joints required (cylinders)
-- Observation dimension = 73 (`TASK_SPACE_OBSERVATION_DIM`)
-- SD observer disabled (`use_sd_observer = False`)
+- Observation dimension = 70 (`TASK_SPACE_OBSERVATION_DIM`)
+- Global SD observer flag disabled (`use_sd_observer = False`); the frozen SD
+  model may still run as the final-ROM pressure conditioner when
+  `final_causal_rom_pressure_source = "sd_observer"`
 - SD feedback disabled (`use_sd_feedback = False`)
 - ID valve source active (`position_delta_source = "id_valve"`)
 - FD effort actuation disabled (`use_fd_effort = False`)
@@ -135,6 +183,6 @@ follower ownership, and unchanged Hydra/launcher entrypoints.
 
 The AAM contract suite loads production checkpoints and verifies the exact
 18D feature order, 100-step history, finite 24D latent, shared observation/ID
-latent, selected-row resets, fixed 73D observation and 4D outputs, and pure
+latent, selected-row resets, fixed 70D observation and 4D outputs, and pure
 history shapes for 1, 16, 600, and 2,000 environments. Isaac execution is still
 required for live validation.

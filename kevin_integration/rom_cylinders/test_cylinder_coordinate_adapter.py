@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 from pathlib import Path
@@ -273,6 +274,52 @@ def test_extracted_provisional_nominal_reference() -> None:
     _assert_close(loaded.simscape_delta_to_isaac_delta(torch.ones((1, 4))), -torch.ones((1, 4)))
 
 
+def test_calibration_log_validates_current_sign_scale_deltas() -> None:
+    mapping_path = ROM_DIR / "cylinder_coordinate_mapping.json"
+    calibration_path = ROOT / "logs" / "cylinder_coordinate_calibration" / "20260609_185550" / "cylinder_coordinate_calibration.csv"
+    if not calibration_path.exists():
+        raise AssertionError(f"Missing coordinate calibration log: {calibration_path}")
+
+    mapping_json = json.loads(mapping_path.read_text(encoding="utf-8"))
+    if not mapping_json.get("sign_scale_delta_validated", False):
+        raise AssertionError("Current mapping must record sign/scale delta validation.")
+    if mapping_json.get("mapping_validated", True):
+        raise AssertionError("Absolute mapping must remain unvalidated until paired Simscape second-pose data exists.")
+    if mapping_json.get("absolute_offset_validation_complete", True):
+        raise AssertionError("Absolute offset validation must remain incomplete without paired Simscape pose data.")
+    rows = list(csv.DictReader(calibration_path.read_text(encoding="utf-8").splitlines()))
+    if len(rows) < 2 * len(CYLINDER_ORDER):
+        raise AssertionError("Calibration log does not contain +/- offset samples for every cylinder.")
+
+    for index, name in enumerate(CYLINDER_ORDER):
+        entry = mapping_json["cylinders"][name]
+        if entry.get("sign") != -1 or not entry.get("sign_verified", False):
+            raise AssertionError(f"{name} does not preserve the calibrated sign=-1 convention.")
+        if entry.get("simple_mapping_validated", True):
+            raise AssertionError("Absolute nominal mapping must remain provisional without paired Simscape pose data.")
+
+        cylinder_rows = [row for row in rows if int(row["actuator_index"]) == index]
+        if len(cylinder_rows) != 2:
+            raise AssertionError(f"{name} expected two calibration offsets, got {len(cylinder_rows)}.")
+        for row in cylinder_rows:
+            delta_q = float(row["delta_q"])
+            delta_length_proxy = float(row["delta_length_proxy"])
+            predicted_delta_extension = float(entry["sign"]) * delta_q
+            error = abs(predicted_delta_extension - delta_length_proxy)
+            if error > 2.5e-6:
+                raise AssertionError(
+                    f"{name} calibration delta mismatch: predicted {predicted_delta_extension:.9f}, "
+                    f"length proxy {delta_length_proxy:.9f}, error {error:.9f}"
+                )
+        slope_values = [
+            float(row["delta_length_proxy"]) / float(row["delta_q"])
+            for row in cylinder_rows
+        ]
+        mean_slope = sum(slope_values) / len(slope_values)
+        if abs(mean_slope + 1.0) > 3.0e-4:
+            raise AssertionError(f"{name} length-proxy slope {mean_slope:.9f} is not consistent with sign=-1.")
+
+
 def test_training_range_excess_blocks_severe_mismatch() -> None:
     mapped = torch.tensor([[0.335, 0.9, 0.493, 0.586]], dtype=torch.float64)
     training_min = torch.tensor([0.0112, 0.2753, 0.3092, 0.3319], dtype=torch.float64)
@@ -303,6 +350,7 @@ def main() -> None:
     test_nominal_sign_batch_dtype_and_no_offset_on_rates()
     test_nominal_json_rejections_and_affine_availability()
     test_extracted_provisional_nominal_reference()
+    test_calibration_log_validates_current_sign_scale_deltas()
     test_training_range_excess_blocks_severe_mismatch()
     test_cuda_parity_if_available()
     print("PASS: cylinder coordinate adapter tests passed.")
