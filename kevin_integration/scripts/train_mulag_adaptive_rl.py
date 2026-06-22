@@ -475,7 +475,12 @@ def _install_task_space_action_std_schedule(
         values = _action_std_schedule_values(agent_cfg, hold_fraction, base_entropy_coef)
         alg.entropy_coef = values["entropy_coef"]
         _clamp_actor_gaussian_std(actor, min_std=values["min_std"], max_std=values["max_std"])
+        max_lr = float(getattr(agent_cfg, "adaptive_lr_max", 0.001))
+        if max_lr > 0.0 and hasattr(alg, "learning_rate"):
+            alg.learning_rate = min(alg.learning_rate, max_lr)
         result = original_update(*args, **kwargs)
+        if max_lr > 0.0 and hasattr(alg, "learning_rate"):
+            alg.learning_rate = min(alg.learning_rate, max_lr)
         hold_fraction_after = _task_space_hold_fraction(raw_env, env_cfg)
         values_after = _action_std_schedule_values(agent_cfg, hold_fraction_after, base_entropy_coef)
         alg.entropy_coef = values_after["entropy_coef"]

@@ -25,6 +25,8 @@ Kevin-Mulag-HydraulicROM-TaskSpace-v0
 The final-pose target is sampled once for each selected environment at reset,
 uses `[x, y, z, qw, qx, qy, qz]` in the `robot_base` frame, and remains fixed
 for the episode. PPO is the task-space-to-action bridge; there is no runtime IK.
+Strict success requires final pose accuracy, low end-effector linear/angular
+speed, and 50 consecutive settled control steps.
 
 ## Environment
 
@@ -37,19 +39,7 @@ conda activate env_isaaclab
 
 ## Run The Simulation
 
-### 1. Visible scripted pipeline validation
-
-This opens IsaacLab with one environment and exercises the learned/hydraulic
-pipeline without claiming PPO task-space tracking:
-
-```bash
-./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
-  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
-  --num_envs 1 \
-  --play_mode joint_space_validation
-```
-
-### 2. Fixed final-pose PPO playback
+### 1. Fixed final-pose PPO playback
 
 Use an existing PPO checkpoint:
 
@@ -59,15 +49,42 @@ CHECKPOINT=/absolute/path/to/model_250.pt
 ./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
   --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
   --num_envs 1 \
-  --checkpoint "$CHECKPOINT" \
-  --play_mode rl_task_space_tracking
+  --checkpoint "$CHECKPOINT"
 ```
 
-Add `--headless` for non-visual playback.
+The local player imports `kevin_integration.tasks` after Isaac Sim startup and
+before Hydra task resolution, verifies `gym.spec()`, and leaves the generic
+IsaacLab `play.py` unchanged. Add `--headless` for non-visual playback.
 
 On the current development machine, an example local checkpoint is
 `kevin_integration/results/stage1_500env_13p9M_run/model_250.pt`. PPO `.pt`
 artifacts are ignored by Git and are therefore not published with the source.
+
+### 2. Deterministic checkpoint evaluation
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/evaluate_mulag_checkpoints.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --run_dir /absolute/path/to/run \
+  --num_envs 16 \
+  --episodes 160 \
+  --checkpoint_stride 10 \
+  --headless
+```
+
+The evaluator writes `checkpoint_evaluation.json`,
+`checkpoint_evaluation.csv`, and `best_checkpoint.json`. It ranks checkpoints
+lexicographically by strict success rate, 50-step hold completion, mean maximum
+hold duration, final pose/speed errors, avoidable clamp activity, and avoidable
+valve saturation. Mean reward is recorded but cannot make a low-success
+checkpoint win.
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 1 \
+  --best_from_run /absolute/path/to/run
+```
 
 ### 3. Runtime preflight only
 
@@ -137,7 +154,7 @@ q[5], qdot[5], dP[4], previous applied ValveCmd[4]
 -> one AAM history with shape (N, 100, 18)
 -> frozen aam.pth under inference mode
 -> z_arm_hat[24]
-   |-> PPO observation indices 44:68
+   |-> PPO observation indices 41:65
    `-> matching ID conditioning input
 ```
 
@@ -146,22 +163,22 @@ preceding control step. The same stored latent is used by PPO and ID. AAM does
 not directly write valves, torques, ROM state, cylinder targets, rewards,
 targets, or success state. The System Factor Encoder is offline-only.
 
-## 73D Observation
+## 70D Observation
 
 ```text
-0:7    final target EE pose
-7:14   current EE pose
-14:17  position error
-17:18  quaternion-geodesic orientation error
-18:23  mechanical q[5]
-23:28  mechanical qdot[5]
-28:32  cylinder position[4]
-32:36  cylinder velocity[4]
-36:40  previous Action[4]
-40:44  previous applied ValveCmd[4]
-44:68  z_arm_hat[24]
-68:72  normalized FD observer output[4]
-72:73  vehicle speed[1]
+0:4    final target EE orientation quaternion
+4:11   current EE pose
+11:14  position error
+14:15  quaternion-geodesic orientation error
+15:20  mechanical q[5]
+20:25  mechanical qdot[5]
+25:29  cylinder position[4]
+29:33  cylinder velocity[4]
+33:37  previous Action[4]
+37:41  previous applied ValveCmd[4]
+41:65  z_arm_hat[24]
+65:69  normalized FD observer output[4]
+69:70  vehicle speed[1]
 ```
 
 ## Active Hydraulic ROM
@@ -191,6 +208,35 @@ It predicts `DeltaExtension[4]` over `0.05 s`. The multirate wrapper distributes
 that prediction over five `0.01 s` Isaac control steps. The coordinate adapter
 maps Simscape extension deltas to four Isaac prismatic position targets. FD is
 observer-only and does not write actuator effort in this workflow.
+
+## Reward Contract And Runtime Gates
+
+The current reward contract is `task_space_reward_balance_v2`. It keeps the
+strict success definition unchanged and adds potential-based pose progress,
+bounded avoidable outward clamp penalties, soft applied-ValveCmd saturation
+penalties, FD load excess above its normalized threshold, near-pose speed
+penalties, settling reward, and monotonic hold-progress reward.
+
+Key telemetry:
+
+```text
+reward_balance/positive_total_mean
+reward_balance/negative_total_abs_mean
+reward_balance/negative_to_positive_ratio
+reward_balance/tracking_fraction
+reward_balance/actuator_penalty_fraction
+reward_balance/settling_fraction
+rolling_1000/success_rate
+rolling_1000/final_position_error
+rolling_1000/final_orientation_error
+rolling_1000/max_hold_steps
+```
+
+Changing the reward or environment contract requires fresh PPO training unless
+an explicit checkpoint migration is documented. Runtime gates are registration,
+one-environment visualization, deterministic checkpoint evaluation,
+16-environment reward smoke test, 800-environment trend test, and finally
+2000-environment scaling. Static tests do not prove Isaac runtime success.
 
 ## Current Source Layout
 
@@ -240,6 +286,65 @@ The canonical experiment keeps:
 ## Offline Verification
 
 These commands do not start IsaacLab:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ```bash
 python kevin_integration/tasks/test_aam_runtime_wiring_contract.py

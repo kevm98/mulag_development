@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -25,9 +26,12 @@ if ISAACLAB_RSL_RL_SCRIPTS.is_dir() and str(ISAACLAB_RSL_RL_SCRIPTS) not in sys.
 
 CHECKPOINT_RE = re.compile(r"^model_(\d+)\.pt$")
 RANKING_FIELDS = (
+    "policy_mode",
+    "plant_mode",
     "strict_success_rate",
     "hold_completion_fraction",
     "mean_max_hold_steps",
+    "mean_hold_counter_steps",
     "final_position_error_mean",
     "final_orientation_error_mean",
     "final_linear_speed_mean",
@@ -88,11 +92,14 @@ class CheckpointCandidate:
 class CheckpointEvaluationResult:
     checkpoint_path: str
     iteration: int
+    policy_mode: str
+    plant_mode: str
     episodes: int
     evaluation_seeds: list[int]
     strict_success_rate: float
     hold_completion_fraction: float
     mean_max_hold_steps: float
+    mean_hold_counter_steps: float
     final_position_error_mean: float
     final_orientation_error_mean: float
     final_linear_speed_mean: float
@@ -100,6 +107,19 @@ class CheckpointEvaluationResult:
     clamp_activation_fraction_mean: float
     valve_saturation_fraction_mean: float
     mean_reward: float = 0.0
+
+
+def result_summary(result: CheckpointEvaluationResult) -> str:
+    return (
+        f"iter={result.iteration} policy={result.policy_mode} plant={result.plant_mode} "
+        f"success={result.strict_success_rate:.4f} "
+        f"hold={result.mean_max_hold_steps:.2f} "
+        f"hold_counter={result.mean_hold_counter_steps:.2f} "
+        f"pos={result.final_position_error_mean:.4f} "
+        f"orient={result.final_orientation_error_mean:.4f} "
+        f"lin={result.final_linear_speed_mean:.4f} "
+        f"ang={result.final_angular_speed_mean:.4f}"
+    )
 
 
 def checkpoint_iteration(path: str | Path) -> int:
@@ -216,10 +236,58 @@ def _extract_scalar(log: dict[str, object], *keys: str, default: float = 0.0) ->
     return float(default)
 
 
+def normalized_policy_modes(modes: Iterable[str] | None) -> list[str]:
+    requested = list(modes or ["deterministic"])
+    allowed = {"deterministic", "stochastic"}
+    invalid = sorted(set(requested) - allowed)
+    if invalid:
+        raise ValueError(f"Unsupported policy mode(s): {invalid}. Allowed: {sorted(allowed)}")
+    return requested
+
+
+def normalized_plant_modes(modes: Iterable[str] | None) -> list[str]:
+    requested = list(modes or ["canonical_rom"])
+    allowed = {"canonical_rom", "id_direct"}
+    invalid = sorted(set(requested) - allowed)
+    if invalid:
+        raise ValueError(f"Unsupported plant mode(s): {invalid}. Allowed: {sorted(allowed)}")
+    return requested
+
+
+def apply_evaluation_plant_mode(env_cfg, plant_mode: str) -> None:
+    """Apply diagnostic plant-mode overrides without changing obs/action dimensions."""
+    if plant_mode == "canonical_rom":
+        env_cfg.low_level_control_mode = "position_delta"
+        env_cfg.position_delta_source = "id_valve"
+        env_cfg.use_reduced_hydraulic_rom = False
+        env_cfg.use_final_causal_cylinder_rom = True
+        env_cfg.rom_use_id_valve_cmd = True
+        return
+    if plant_mode == "id_direct":
+        env_cfg.low_level_control_mode = "position_delta"
+        env_cfg.position_delta_source = "id_valve"
+        env_cfg.use_reduced_hydraulic_rom = False
+        env_cfg.use_final_causal_cylinder_rom = False
+        env_cfg.rom_use_id_valve_cmd = True
+        return
+    raise ValueError(f"Unsupported plant mode: {plant_mode!r}")
+
+
+def policy_action(policy, obs, *, policy_mode: str):
+    """Call an RSL-RL MLP policy in deterministic or sampled-action mode."""
+    if policy_mode == "deterministic":
+        return policy(obs)
+    if policy_mode == "stochastic":
+        return policy(obs, stochastic_output=True)
+    raise ValueError(f"Unsupported policy mode: {policy_mode!r}")
+
+
 def evaluate_checkpoint_runtime(
     *,
     checkpoint: CheckpointCandidate,
     task: str,
+    policy_mode: str,
+    plant_mode: str,
     env,
     runner,
     episodes: int,
@@ -235,7 +303,8 @@ def evaluate_checkpoint_runtime(
     completed = 0
     rewards: list[float] = []
     successes: list[float] = []
-    hold_steps: list[float] = []
+    max_hold_steps: list[float] = []
+    hold_counter_steps: list[float] = []
     pos_errors: list[float] = []
     orient_errors: list[float] = []
     linear_speeds: list[float] = []
@@ -244,7 +313,7 @@ def evaluate_checkpoint_runtime(
     valve_fractions: list[float] = []
     while completed < episodes:
         with torch_module.inference_mode():
-            actions = policy(obs)
+            actions = policy_action(policy, obs, policy_mode=policy_mode)
             obs, reward, dones, extras = env.step(actions)
             rewards.append(float(reward.detach().mean().cpu()))
             if version_module.parse(rsl_rl_version) >= version_module.parse("4.0.0"):
@@ -255,7 +324,8 @@ def evaluate_checkpoint_runtime(
         completed += done_count
         log = extras.get("log", {}) if isinstance(extras, dict) else {}
         successes.append(_extract_scalar(log, "Episode/final_pose_success"))
-        hold_steps.append(_extract_scalar(log, "Episode/final_success_hold_steps"))
+        max_hold_steps.append(_extract_scalar(log, "Episode/max_hold_steps", "final_pose/settling_hold_max_mean"))
+        hold_counter_steps.append(_extract_scalar(log, "Episode/final_success_hold_steps"))
         pos_errors.append(_extract_scalar(log, "Episode/final_position_error"))
         orient_errors.append(_extract_scalar(log, "Episode/final_orientation_error_rad"))
         linear_speeds.append(_extract_scalar(log, "Episode/final_linear_speed"))
@@ -263,15 +333,18 @@ def evaluate_checkpoint_runtime(
         clamp_fractions.append(_extract_scalar(log, "Episode/clamp_activation_fraction"))
         valve_fractions.append(_extract_scalar(log, "Episode/valve_saturation_fraction"))
     required_hold = float(getattr(env.unwrapped.cfg, "final_pose_success_hold_steps", 50))
-    mean_hold = _mean(hold_steps)
+    mean_max_hold = _mean(max_hold_steps)
     return CheckpointEvaluationResult(
         checkpoint_path=checkpoint.path,
         iteration=checkpoint.iteration,
+        policy_mode=policy_mode,
+        plant_mode=plant_mode,
         episodes=episodes,
         evaluation_seeds=seeds,
         strict_success_rate=_mean(successes),
-        hold_completion_fraction=min(mean_hold / max(required_hold, 1.0), 1.0),
-        mean_max_hold_steps=mean_hold,
+        hold_completion_fraction=min(mean_max_hold / max(required_hold, 1.0), 1.0),
+        mean_max_hold_steps=mean_max_hold,
+        mean_hold_counter_steps=_mean(hold_counter_steps),
         final_position_error_mean=_mean(pos_errors),
         final_orientation_error_mean=_mean(orient_errors),
         final_linear_speed_mean=_mean(linear_speeds),
@@ -291,6 +364,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint_stride", type=int, default=None)
     parser.add_argument("--checkpoints", nargs="*", default=None)
     parser.add_argument("--seeds", nargs="*", type=int, default=[0, 1, 2, 3])
+    parser.add_argument(
+        "--policy_modes",
+        nargs="+",
+        default=["deterministic"],
+        choices=["deterministic", "stochastic"],
+        help="Evaluate deterministic mean actions, sampled stochastic actions, or both.",
+    )
+    parser.add_argument(
+        "--plant_modes",
+        nargs="+",
+        default=["canonical_rom"],
+        choices=["canonical_rom", "id_direct"],
+        help="Evaluate the canonical ROM plant, the ID-direct no-ROM diagnostic plant, or both.",
+    )
     return parser
 
 
@@ -327,6 +414,17 @@ def main() -> None:
             checkpoint_stride=args_cli.checkpoint_stride,
             explicit_checkpoints=args_cli.checkpoints,
         )
+        policy_modes = normalized_policy_modes(args_cli.policy_modes)
+        plant_modes = normalized_plant_modes(args_cli.plant_modes)
+        if len(plant_modes) > 1:
+            print(
+                "[WARN] Multiple --plant_modes requested but IsaacLab does not support\n"
+                "       closing and recreating a simulation in the same process.\n"
+                "       Only the first plant mode will be evaluated.\n"
+                "       Run separate invocations for each plant mode.",
+                flush=True,
+            )
+            plant_modes = plant_modes[:1]
 
         @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
         def _run(env_cfg, agent_cfg):
@@ -336,40 +434,61 @@ def main() -> None:
                 version,
                 handle_deprecated_rsl_rl_cfg,
             )
+            all_results: list[CheckpointEvaluationResult] = []
             env_cfg.scene.num_envs = int(args_cli.num_envs)
             env_cfg.seed = int(args_cli.seeds[0])
+            env_cfg.log_dir = str(Path(args_cli.run_dir).expanduser().resolve())
             agent_cfg.seed = int(args_cli.seeds[0])
             if getattr(args_cli, "device", None) is not None:
                 env_cfg.sim.device = args_cli.device
                 agent_cfg.device = args_cli.device
-            env_cfg.log_dir = str(Path(args_cli.run_dir).expanduser().resolve())
-            env = gym.make(args_cli.task, cfg=env_cfg)
-            try:
-                if isinstance(env.unwrapped, DirectMARLEnv):
-                    env = multi_agent_to_single_agent(env)
-                env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-                runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-                results = [
-                    evaluate_checkpoint_runtime(
-                        checkpoint=candidate,
-                        task=args_cli.task,
-                        env=env,
-                        runner=runner,
-                        episodes=int(args_cli.episodes),
-                        seeds=list(args_cli.seeds),
-                        rsl_rl_version=installed_version,
-                        version_module=version,
-                        torch_module=torch,
+            for plant_mode in plant_modes:
+                env_cfg_for_mode = copy.deepcopy(env_cfg)
+                apply_evaluation_plant_mode(env_cfg_for_mode, plant_mode)
+                agent_cfg_for_mode = copy.deepcopy(agent_cfg)
+                env = gym.make(args_cli.task, cfg=env_cfg_for_mode)
+                try:
+                    if isinstance(env.unwrapped, DirectMARLEnv):
+                        env = multi_agent_to_single_agent(env)
+                    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg_for_mode.clip_actions)
+                    runner = OnPolicyRunner(
+                        env,
+                        agent_cfg_for_mode.to_dict(),
+                        log_dir=None,
+                        device=agent_cfg_for_mode.device,
                     )
-                    for candidate in candidates
-                ]
-                paths = write_results(args_cli.run_dir, results)
-                best = choose_best_checkpoint(results)
-                print(f"[INFO] Evaluated {len(results)} checkpoints.")
-                print(f"[INFO] Best checkpoint: {best.checkpoint_path}")
-                print(f"[INFO] Wrote {paths['json']}, {paths['csv']}, {paths['best']}")
-            finally:
-                env.close()
+                    for policy_mode in policy_modes:
+                        for candidate in candidates:
+                            print(
+                                "[INFO] Evaluating "
+                                f"checkpoint={Path(candidate.path).name} "
+                                f"policy_mode={policy_mode} plant_mode={plant_mode} "
+                                f"episodes={int(args_cli.episodes)}",
+                                flush=True,
+                            )
+                            result = evaluate_checkpoint_runtime(
+                                checkpoint=candidate,
+                                task=args_cli.task,
+                                policy_mode=policy_mode,
+                                plant_mode=plant_mode,
+                                env=env,
+                                runner=runner,
+                                episodes=int(args_cli.episodes),
+                                seeds=list(args_cli.seeds),
+                                rsl_rl_version=installed_version,
+                                version_module=version,
+                                torch_module=torch,
+                            )
+                            all_results.append(result)
+                            print(f"[RESULT] {result_summary(result)}", flush=True)
+                finally:
+                    env.close()
+            paths = write_results(args_cli.run_dir, all_results)
+            best = choose_best_checkpoint(all_results)
+            print(f"[INFO] Evaluated {len(all_results)} checkpoint/mode combinations.")
+            print(f"[INFO] Best checkpoint: {best.checkpoint_path}")
+            print(f"[INFO] Best policy_mode={best.policy_mode} plant_mode={best.plant_mode}")
+            print(f"[INFO] Wrote {paths['json']}, {paths['csv']}, {paths['best']}")
 
         _run()
     finally:

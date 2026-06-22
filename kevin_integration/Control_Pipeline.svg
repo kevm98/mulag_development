@@ -34,7 +34,7 @@
 
   <rect width="2400" height="1400" fill="#fbfcfe"/>
   <text x="1200" y="62" text-anchor="middle" class="title">Fixed Final Task-Space Pose Control - PPO-ID-FD-Hydraulic ROM</text>
-  <text x="1200" y="101" text-anchor="middle" class="subtitle">One robot-base end-effector target per episode | 73D observation | 4D PPO action | frozen learned models | no runtime IK</text>
+  <text x="1200" y="101" text-anchor="middle" class="subtitle">One robot-base end-effector target per episode | 70D observation | 4D PPO action | frozen learned models | no runtime IK</text>
 
   <!-- Final-pose target -->
   <g filter="url(#shadow)">
@@ -56,24 +56,24 @@
     <rect x="330" y="176" width="360" height="25" fill="#7354bd"/>
   </g>
   <text x="510" y="160" text-anchor="middle" class="white-title">TASK-SPACE OBSERVATION o_k</text>
-  <text x="510" y="188" text-anchor="middle" class="white-title">(73 values)</text>
+  <text x="510" y="188" text-anchor="middle" class="white-title">(70 values)</text>
   <g class="small">
-    <text x="360" y="235">0:7</text><text x="435" y="235">final target EE pose</text>
-    <text x="360" y="271">7:14</text><text x="435" y="271">current EE pose</text>
-    <text x="360" y="307">14:17</text><text x="435" y="307">position error</text>
-    <text x="360" y="343">17:18</text><text x="435" y="343">orientation error</text>
-    <text x="360" y="379">18:23</text><text x="435" y="379">mechanical q[5]</text>
-    <text x="360" y="415">23:28</text><text x="435" y="415">mechanical qdot[5]</text>
-    <text x="360" y="451">28:32</text><text x="435" y="451">cylinder position[4]</text>
-    <text x="360" y="487">32:36</text><text x="435" y="487">cylinder velocity[4]</text>
-    <text x="360" y="523">36:40</text><text x="435" y="523">previous Action[4]</text>
-    <text x="360" y="559">40:44</text><text x="435" y="559">previous applied ValveCmd[4]</text>
-    <text x="360" y="595" fill="#6d3fc0" font-weight="700">44:68</text><text x="435" y="595" fill="#6d3fc0" font-weight="700">z_arm_hat[24]</text>
-    <text x="360" y="631">68:72</text><text x="435" y="631">normalized FD tau_hat[4]</text>
-    <text x="360" y="667">72:73</text><text x="435" y="667">vehicle speed[1]</text>
+    <text x="360" y="235">0:4</text><text x="435" y="235">final target EE orientation</text>
+    <text x="360" y="271">4:11</text><text x="435" y="271">current EE pose</text>
+    <text x="360" y="307">11:14</text><text x="435" y="307">position error</text>
+    <text x="360" y="343">14:15</text><text x="435" y="343">orientation error</text>
+    <text x="360" y="379">15:20</text><text x="435" y="379">mechanical q[5]</text>
+    <text x="360" y="415">20:25</text><text x="435" y="415">mechanical qdot[5]</text>
+    <text x="360" y="451">25:29</text><text x="435" y="451">cylinder position[4]</text>
+    <text x="360" y="487">29:33</text><text x="435" y="487">cylinder velocity[4]</text>
+    <text x="360" y="523">33:37</text><text x="435" y="523">previous Action[4]</text>
+    <text x="360" y="559">37:41</text><text x="435" y="559">previous applied ValveCmd[4]</text>
+    <text x="360" y="595" fill="#6d3fc0" font-weight="700">41:65</text><text x="435" y="595" fill="#6d3fc0" font-weight="700">z_arm_hat[24]</text>
+    <text x="360" y="631">65:69</text><text x="435" y="631">normalized FD tau_hat[4]</text>
+    <text x="360" y="667">69:70</text><text x="435" y="667">vehicle speed[1]</text>
   </g>
   <line x1="355" y1="704" x2="665" y2="704" stroke="#7354bd" stroke-width="3"/>
-  <text x="510" y="745" text-anchor="middle" class="box-title">TOTAL = 73</text>
+  <text x="510" y="745" text-anchor="middle" class="box-title">TOTAL = 70</text>
 
   <!-- PPO -->
   <g filter="url(#shadow)">
@@ -82,7 +82,7 @@
     <rect x="755" y="252" width="255" height="25" fill="#ffd86b"/>
   </g>
   <text x="882" y="250" text-anchor="middle" class="box-title">PPO CONTROL POLICY</text>
-  <text x="882" y="318" text-anchor="middle" class="body">input: o_k[73]</text>
+  <text x="882" y="318" text-anchor="middle" class="body">input: o_k[70]</text>
   <text x="882" y="360" text-anchor="middle" class="body">output: Action[4]</text>
   <text x="882" y="409" text-anchor="middle" class="small">normalized desired</text>
   <text x="882" y="436" text-anchor="middle" class="small">hydraulic accelerations</text>
@@ -234,13 +234,13 @@
   <!-- AAM output: exactly two destinations -->
   <path d="M670 1138 H610 V700 H510 V775" class="latent" marker-end="url(#arrow-purple)"/>
   <text x="450" y="830" text-anchor="middle" class="small" fill="#6d3fc0">z_arm_hat[24]</text>
-  <text x="450" y="854" text-anchor="middle" class="tiny" fill="#6d3fc0">observation indices 44:68</text>
+  <text x="450" y="854" text-anchor="middle" class="tiny" fill="#6d3fc0">observation indices 41:65</text>
   <path d="M1100 1140 H1145 V760 H1527 V555" class="latent" marker-end="url(#arrow-purple)"/>
   <text x="1325" y="738" text-anchor="middle" class="small" fill="#6d3fc0">same stored z_arm_hat[24] -> ID only</text>
 
   <!-- FD output to observation -->
   <path d="M1190 1080 H1155 V790 H630 V775" class="line" marker-end="url(#arrow)"/>
-  <text x="895" y="813" text-anchor="middle" class="tiny">normalized tau_hat[4] -> observation 68:72</text>
+  <text x="895" y="813" text-anchor="middle" class="tiny">normalized tau_hat[4] -> observation 65:69</text>
 
   <!-- Quaternion note -->
   <rect x="35" y="500" width="245" height="180" rx="20" fill="#eef6ff" stroke="#1764d2" stroke-width="3"/>
@@ -256,5 +256,5 @@
   <!-- Preserved contract strip -->
   <rect x="310" y="1320" width="1780" height="62" rx="18" fill="#f7fbff" stroke="#1754a6" stroke-width="4"/>
   <text x="345" y="1360" class="label" fill="#1754a6">PRESERVED:</text>
-  <text x="490" y="1360" class="body">Observation 73 | PPO Action 4 | q/qdot 5 | qddot_cmd 5 | ID Output 4 | ValveCmd 4 | FD Output 4 | ROM Output 4 | Cylinder Targets 4</text>
+  <text x="490" y="1360" class="body">Observation 70 | PPO Action 4 | q/qdot 5 | qddot_cmd 5 | ID Output 4 | ValveCmd 4 | FD Output 4 | ROM Output 4 | Cylinder Targets 4</text>
 </svg>

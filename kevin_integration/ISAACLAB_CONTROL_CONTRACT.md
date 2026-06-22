@@ -42,6 +42,44 @@ Messerkopf ee_pose [x, y, z, qw, qx, qy, qz] in robot-base frame
 The traced RRLAB obstacle task does not contain IK. It observes/rewards
 `ee_pose`, and PPO learns the mapping to arm action.
 
+## Local Launcher And Checkpoint Contract
+
+Use the project-local player for Kevin task visualization:
+
+```bash
+./rrlab.sh -p kevin_integration/scripts/play_mulag_adaptive_rl.py \
+  --task Kevin-Mulag-HydraulicROM-TaskSpace-v0 \
+  --num_envs 1 \
+  --checkpoint /absolute/path/to/model_250.pt
+```
+
+The local player follows the installed IsaacLab RSL-RL player order, but adds
+the Kevin task import after `AppLauncher` starts Isaac Sim and before
+`@hydra_task_config` resolves the registry. It verifies `gym.spec()` and prints
+an explicit diagnostic if the task is not registered. The generic IsaacLab
+`play.py`, Hydra implementation, `rrlab.sh`, task name, and Gym task ID are not
+modified.
+
+Checkpoint compatibility checks compare available metadata for task name,
+observation dimension, action dimension, runner class, policy architecture,
+normalizer presence, environment contract version, and reward contract version.
+Old checkpoints without Kevin metadata may be visualized only when tensor
+dimensions remain compatible; they must not be used to resume training under a
+changed reward contract without an explicit migration.
+
+The deterministic evaluator writes:
+
+```text
+checkpoint_evaluation.json
+checkpoint_evaluation.csv
+best_checkpoint.json
+```
+
+Best-checkpoint selection is lexicographic: strict success rate, 50-step hold
+completion fraction, mean maximum hold duration, final position error, final
+orientation error, final linear speed, final angular speed, avoidable clamp
+activity, and avoidable valve saturation. Mean reward is not a ranking key.
+
 ## Runtime Feature Order
 
 AAM input:
@@ -83,19 +121,19 @@ cannot recompute AAM.
 The task-space observation remains exactly:
 
 ```text
-0:7    final target EE pose
-7:14   current EE pose
-14:17  position error
-17:18  orientation error
-18:23  q[5]
-23:28  qdot[5]
-28:32  cylinder position[4]
-32:36  cylinder velocity[4]
-36:40  previous action[4]
-40:44  previous applied ValveCmd[4]
-44:68  z_arm_hat[24]
-68:72  normalized FD observer output[4]
-72:73  vehicle speed[1]
+0:4    final target EE orientation quaternion
+4:11   current EE pose
+11:14  position error
+14:15  orientation error
+15:20  q[5]
+20:25  qdot[5]
+25:29  cylinder position[4]
+29:33  cylinder velocity[4]
+33:37  previous action[4]
+37:41  previous applied ValveCmd[4]
+41:65  z_arm_hat[24]
+65:69  normalized FD observer output[4]
+69:70  vehicle speed[1]
 ```
 
 The AAM is frozen, in `eval()` mode, and invoked under
@@ -179,18 +217,38 @@ adaptation/aam_frozen
 ```
 
 These reductions remain on the active Torch device and are not appended to the
-73D observation.
+70D observation.
+
+## Reward Contract
+
+The current task-space reward contract is:
+
+```text
+kevin_fixed_pose_contract_version = kevin_fixed_pose_task_space_v2
+reward_contract_version = task_space_reward_balance_v2
+```
+
+The environment prints the contract once at startup and writes
+`reward_contract.json` into the run directory when `env_cfg.log_dir` is set.
+The repaired terms use potential-based progress, bounded avoidable outward
+clamp penalties, soft applied-ValveCmd saturation penalties, FD load excess
+above the documented normalized threshold, near-pose speed penalties, settling
+reward, hold-progress reward, and the existing one-time strict success bonus.
+Reward-balance metrics are logged under `reward_balance/*` and do not enter the
+observation.
 
 ## dP Source
 
 The active final ROM task uses:
 
 ```text
-final_causal_rom_pressure_source = "training_mean"
+final_causal_rom_pressure_source = "sd_observer"
 ```
 
-Training-mean dP is read from the active ROM scaler before assembling the raw
-26-feature ROM vector. SD feedback is disabled.
+The ROM pressure state is initialized from the active ROM scaler's training-mean
+dP, then refreshed by the frozen SD observer for the raw 26-feature ROM vector.
+SD feedback remains disabled; the SD output is used only as pressure
+conditioning for the final causal ROM.
 
 ## Multirate Behavior
 
@@ -427,7 +485,7 @@ These metrics are not added to the PPO observation.
 if any contract is violated:
 
 - `len(self._command_joint_ids) != 4` — must command exactly 4 cylinders
-- Observation dimension != `TASK_SPACE_OBSERVATION_DIM` (73)
+- Observation dimension != `TASK_SPACE_OBSERVATION_DIM` (70)
 - `use_sd_observer = True` — SD observer must be disabled
 - `use_sd_feedback = True` — SD feedback must be disabled
 - `position_delta_source != "id_valve"` — must use ID valve source

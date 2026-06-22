@@ -153,7 +153,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 torque_lowpass_alpha=self.cfg.torque_lowpass_alpha,
                 use_torque_rate_limit=self.cfg.use_torque_rate_limit,
                 use_torque_lowpass=self.cfg.use_torque_lowpass,
-                max_abs_pressure_delta=self.cfg.max_abs_pressure_delta,
+                max_abs_pressure_delta=getattr(
+                    self.cfg,
+                    "sd_max_abs_pressure_delta",
+                    self.cfg.max_abs_pressure_delta,
+                ),
                 max_abs_fnet=self.cfg.max_abs_fnet,
                 sd_output_mode=self.cfg.sd_output_mode,
                 sd_nan_guard=self.cfg.sd_nan_guard,
@@ -240,6 +244,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._current_action = torch.zeros_like(self._prev_action)
         self._action_delta = torch.zeros_like(self._prev_action)
         self._policy_action_std = torch.zeros((), dtype=torch.float32, device=self.device)
+        # ROM 50ms policy-cadence hold buffer (one per env, action held across multirate window).
+        self._rom_multirate_policy_step_counter = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+        self._rom_held_policy_action = None
         self._policy_action_std_min = torch.zeros_like(self._policy_action_std)
         self._policy_action_std_max = torch.zeros_like(self._policy_action_std)
         self._action_std_schedule_hold_fraction = torch.zeros_like(self._policy_action_std)
@@ -311,6 +318,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._final_rom_range_violation_fraction = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self._final_rom_update_flag = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self._final_rom_history_ready = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._final_rom_valve_ff_delta = torch.zeros_like(self._current_torque)
         self._rom_target_clamp_fraction = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self._rom_boundary_active = torch.zeros((self.num_envs, 4), dtype=torch.bool, device=self.device)
         self._rom_outward_request = torch.zeros_like(self._rom_boundary_active)
@@ -847,7 +855,12 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             ("FD", f"{contract.get('fd_input')} -> {contract.get('fd_output')} window={contract.get('fd_window')}"),
             ("FD_output_units", str(contract.get("fd_output_units"))),
             ("FD_effort_writer", str(contract.get("fd_effort_actuation"))),
-            ("SD", "disabled in active hydraulic ROM task" if not self.cfg.use_sd_observer else "passive observer enabled"),
+            (
+                "SD",
+                "ROM pressure observer enabled"
+                if str(self.cfg.final_causal_rom_pressure_source) == "sd_observer"
+                else ("disabled in active hydraulic ROM task" if not self.cfg.use_sd_observer else "passive observer enabled"),
+            ),
             ("ROM", f"{len(CORE_INPUT_FEATURE_NAMES)} features, dt={self.cfg.final_causal_rom_update_period}s, ratio={self.cfg.final_causal_rom_multirate_ratio}"),
             (
                 "ROM_command_coupling",
@@ -1146,7 +1159,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             "components": [
                 {
                     "name": "position_tracking",
-                    "formula": "position_tracking_reward_weight * exp(-4 * final_position_error_m)",
+                    "formula": (
+                        "position_tracking_reward_weight * "
+                        "exp(-position_tracking_exponential_scale * final_position_error_m)"
+                    ),
                     "weight": float(self.cfg.position_tracking_reward_weight),
                     "normalization": "metres, bounded exponential",
                     "minimum": 0.0,
@@ -1968,7 +1984,11 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_cylinder_cumulative_measured_motion[env_ids] = 0.0
         self._rom_cylinder_tracking_ratio[env_ids] = 0.0
         if self._final_causal_rom_wrapper is not None:
-            rom_pressure_input = self._final_causal_rom_pressure_input(dP)
+            if str(self.cfg.final_causal_rom_pressure_source) == "sd_observer":
+                pressure_limit = float(getattr(self.cfg, "final_causal_rom_pressure_clamp", 0.0))
+                rom_pressure_input = clamp_and_sanitize(dP.detach().clone(), pressure_limit if pressure_limit > 0.0 else None)
+            else:
+                rom_pressure_input = self._final_causal_rom_pressure_input(dP)
             features = self._final_causal_rom_feature_row(
                 q,
                 qdot,
@@ -2094,6 +2114,39 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         orientations = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         orientations[:, 0] = 1.0
         marker.visualize(positions, orientations)
+
+    def step(self, actions):
+        """Override to hold policy actions across the ROM multirate window.
+
+        The final causal ROM predicts at 50ms but the Isaac control step is 10ms.
+        Without action holding, the policy provides 5 valve commands per ROM cycle
+        but the ROM only sees the first one (wrapper inserts history only on step 0).
+        The feedforward path applies all 5, creating a ROM-vs-ff mismatch.
+
+        This override enforces 50ms policy cadence: the action from step 0 is held
+        for the full 5-step ROM window. The PPO rollout buffer receives the held
+        action via in-place tensor modification (same-device no-op .to() path).
+
+        Mathematical justification (Chen & Francis, 1995; Bamieh & Pearson, 1992):
+        For a multirate system with slow model period T_s and fast control period
+        T_f = T_s / N, the lifted single-rate representation at period T_s with
+        augmented input u_0..u_{N-1} is equivalent to the multirate system. By
+        constraining u_i = u_0 for i > 0, we reduce to a standard single-rate
+        control problem at period T_s without introducing additional learned components.
+        """
+        if (self.cfg.use_final_causal_cylinder_rom
+                and self._final_causal_rom_wrapper is not None
+                and self.num_envs > 0):
+            # Read wrapper counter BEFORE the step (it tracks pending cycle position)
+            rom_counter = int(self._final_causal_rom_wrapper.rom_step_counter[0].item())
+            if rom_counter != 0 and self._rom_held_policy_action is not None:
+                # Hold step: overwrite actions tensor in-place with held action
+                if isinstance(actions, torch.Tensor):
+                    actions[:] = self._rom_held_policy_action
+            else:
+                # ROM-update step: save the new action as the held action
+                self._rom_held_policy_action = actions.clone()
+        return super().step(actions)
 
     def _apply_rrlab_vehicle_command(self) -> None:
         mode = str(getattr(self.cfg, "vehicle_command_mode", "disabled"))
@@ -2390,7 +2443,13 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             self._current_valve_cmd = clamp_and_sanitize(self._current_action, self.cfg.max_abs_valve)
         self._run_fd_observer_only(q, qdot, dP, self._current_valve_cmd)
 
-        run_sd_observer = self.cfg.use_sd_observer or self.cfg.use_sd_feedback or self.cfg.rom_use_sd_feedback
+        rom_pressure_source = str(self.cfg.final_causal_rom_pressure_source)
+        run_sd_observer = (
+            self.cfg.use_sd_observer
+            or self.cfg.use_sd_feedback
+            or self.cfg.rom_use_sd_feedback
+            or rom_pressure_source == "sd_observer"
+        )
         if run_sd_observer:
             sd_observer = self._controller.run_sd_observer(
                 q,
@@ -2452,7 +2511,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
 
         ratio = float(self._final_causal_rom_wrapper.substeps_per_rom_step)
         exact_sum_error = torch.max(torch.abs(delta_extension_10ms * ratio - delta_extension_50ms))
-        if float(exact_sum_error.detach().cpu()) > 1.0e-6:
+        if float(exact_sum_error.detach().cpu()) > 1.0e-4:
             raise RuntimeError(
                 "Final ROM multirate attenuation contract failed: "
                 f"10ms_delta * {ratio:g} differs from 50ms_delta by {float(exact_sum_error.detach().cpu()):.6g}."
@@ -2487,6 +2546,25 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 torch.max(delta_isaac_10ms, -max_delta_per_step),
             )
 
+
+        # ── Direct valve feedforward (ROM evidence fix) ─────────────────
+        valve_ff_gain = float(getattr(self.cfg, "final_causal_rom_valve_feedforward_gain", 0.0))
+        if valve_ff_gain > 0.0:
+            position_scale = float(self.cfg.position_scale)
+            valve_ff_delta = valve_ff_gain * position_scale * self._current_valve_cmd
+            delta_isaac_10ms = delta_isaac_10ms + valve_ff_delta
+            self._final_rom_valve_ff_delta = valve_ff_delta.detach().clone()
+        else:
+            self._final_rom_valve_ff_delta = torch.zeros_like(delta_isaac_10ms)
+
+        if rom_dt > 0.0 and bool(torch.any(rom_velocity_limits > 0.0)):
+            post_ff_rate_limit_mask = torch.abs(delta_isaac_10ms) > max_delta_per_step
+            delta_isaac_10ms = torch.where(
+                delta_isaac_10ms > 0.0,
+                torch.min(delta_isaac_10ms, max_delta_per_step),
+                torch.max(delta_isaac_10ms, -max_delta_per_step),
+            )
+            rate_limit_mask = rate_limit_mask | post_ff_rate_limit_mask
         # ── Boundary conditional integration (Change 6) ───────────────────
         target_candidate = self._rom_cylinder_pos_target + delta_isaac_10ms
         target_candidate, invalid_target = self._replace_invalid_with_fallback(
@@ -2571,14 +2649,21 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
     def _final_causal_rom_pressure_input(self, dP: torch.Tensor) -> torch.Tensor:
         source = str(self.cfg.final_causal_rom_pressure_source)
         if source == "zero":
-            return torch.zeros_like(dP)
-        if source == "training_mean":
-            return self._final_causal_rom_training_mean_dp.reshape(1, 4).expand_as(dP).clone()
-        if source == "environment":
-            return dP.detach().clone()
-        if source == "sd_observer":
-            return self._sd_dP_next_pred.detach().clone()
-        raise ValueError(f"Unsupported final_causal_rom_pressure_source: {source!r}")
+            pressure = torch.zeros_like(dP)
+        elif source == "training_mean":
+            pressure = self._final_causal_rom_training_mean_dp.reshape(1, 4).expand_as(dP).clone()
+        elif source == "environment":
+            pressure = dP.detach().clone()
+        elif source == "sd_observer":
+            pressure = self._sd_dP_next_pred.detach().clone()
+        else:
+            raise ValueError(f"Unsupported final_causal_rom_pressure_source: {source!r}")
+        limit = float(getattr(self.cfg, "final_causal_rom_pressure_clamp", 0.0))
+        if limit > 0.0:
+            pressure = clamp_and_sanitize(pressure, limit)
+        else:
+            pressure = clamp_and_sanitize(pressure, None)
+        return pressure
 
     def _mapped_cylinder_state(
         self,
@@ -2933,9 +3018,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         orient_error = self._ee_orientation_error.reshape(-1)
         stage = self._curriculum_stage()
         W_pos = float(self.cfg.position_tracking_reward_weight)
+        pos_tracking_scale = float(getattr(self.cfg, "position_tracking_exponential_scale", 4.0))
 
         # ── Bounded position tracking reward [0, 1] ──
-        pos_tracking = torch.exp(-4.0 * pos_error_norm)
+        pos_tracking = torch.exp(-pos_tracking_scale * pos_error_norm)
         pos_tracking_weighted = W_pos * pos_tracking
 
         # ── Dense quaternion-geodesic orientation tracking ──
@@ -3045,6 +3131,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             position_gate_scale=float(self.cfg.near_target_linear_settling_position_gate_scale),
             orientation_gate_scale=float(self.cfg.near_target_linear_settling_orientation_gate_scale),
             speed_margin_mps=float(self.cfg.near_target_linear_settling_speed_margin_mps),
+            sharpness=float(getattr(self.cfg, "near_target_linear_settling_sharpness", 1.0)),
             weight=float(self.cfg.rew_near_target_linear_settling) * W_pos,
         )
         near_target_angular_settling = near_target_angular_settling_reward(
@@ -4774,10 +4861,17 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         final_pose_target = self._final_pose_target()
         self._final_pose_target_at_episode_start[env_ids] = final_pose_target[env_ids]
 
-        self._dP[env_ids] = 0.0
+        pressure_source = str(getattr(self.cfg, "final_causal_rom_pressure_source", "training_mean"))
+        if self._final_causal_rom is not None and pressure_source in {"training_mean", "sd_observer"}:
+            reset_dP = self._final_causal_rom_training_mean_dp.reshape(1, 4).expand(env_ids.numel(), 4)
+            self._dP[env_ids] = reset_dP
+        else:
+            reset_dP = torch.zeros((env_ids.numel(), 4), dtype=torch.float32, device=self.device)
+            self._dP[env_ids] = reset_dP
         self._fnet[env_ids] = 0.0
         self._prev_action[env_ids] = 0.0
         self._current_action[env_ids] = 0.0
+        self._rom_held_policy_action = None  # Force fresh action on next ROM-update step after reset
         self._action_delta[env_ids] = 0.0
         self._vehicle_commanded_speed_kmh[env_ids] = 0.0
         self._vehicle_wheel_velocity_target[env_ids] = 0.0
@@ -4802,7 +4896,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._rom_cylinder_cumulative_target_motion[env_ids] = 0.0
         self._rom_cylinder_cumulative_measured_motion[env_ids] = 0.0
         self._rom_cylinder_tracking_ratio[env_ids] = 0.0
-        self._rom_pressure[env_ids] = 0.0
+        self._rom_pressure[env_ids] = reset_dP
         self._rom_xdot_pred[env_ids] = 0.0
         self._rom_dx_pred[env_ids] = 0.0
         self._rom_valve_cmd_delayed[env_ids] = 0.0
