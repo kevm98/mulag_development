@@ -1,0 +1,33 @@
+# DeepSeek V4 Pro configuration for Codex
+# Workspace-write permissions with safe execution boundaries
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = false
+writable_roots = [
+  "/home/rrlab/rrlab_mulag",
+  "/home/rrlab/rrlab_mulag.worktrees",
+  "/home/rrlab/IsaacLab",
+  "/tmp"
+]
+
+# Terminal execution
+[terminal]
+allowed_commands = [
+  "python",
+  "python3",
+  "/home/rrlab/miniconda3/envs/env_isaaclab/bin/python",
+  "bash",
+  "sh",
+  "timeout",
+  "grep",
+  "find",
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "git",
+  "rg"
+]
