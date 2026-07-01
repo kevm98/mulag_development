@@ -27,7 +27,6 @@
 | ROM data contract | `kevin_integration/rom_cylinders/ROM_DATA_CONTRACT.md` |
 | Active control contract | `kevin_integration/ISAACLAB_CONTROL_CONTRACT.md` |
 | Full hydraulic pipeline | `kevin_integration/FULL_HYDRAULIC_PIPELINE.md` |
-| Curriculum/learnability repair tests | `kevin_integration/tasks/test_curriculum_learnability_repair.py` |
 | Fixed final-pose contracts | `kevin_integration/tasks/test_fixed_final_pose_task.py` |
 | Play launcher contracts | `kevin_integration/tasks/test_play_launcher_contract.py` |
 | Checkpoint evaluation contracts | `kevin_integration/tasks/test_checkpoint_evaluation.py` |

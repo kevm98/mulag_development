@@ -41,3 +41,13 @@ gym.register(
         "rsl_rl_cfg_entry_point": "kevin_integration.tasks.mulag_adaptive_rl_env_cfg:MulagHydraulicROMJointTrackingPPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Kevin-Mulag-UpperLevel-v0",
+    entry_point="kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env:MulagUpperLevelEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg:MulagUpperLevelEnvCfg",
+        "rsl_rl_cfg_entry_point": "kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg:MulagUpperLevelPPORunnerCfg",
+    },
+)

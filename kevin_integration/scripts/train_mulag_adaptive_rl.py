@@ -374,8 +374,8 @@ def _print_adaptive_control_config(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCf
         f"q_ref_target_scale_initial={env_cfg.q_ref_target_scale_initial} "
         f"q_ref_target_scale_final={env_cfg.q_ref_target_scale_final} "
         f"q_ref_curriculum_steps={env_cfg.q_ref_curriculum_steps} "
-        f"q_ref_target_amplitude={env_cfg.q_ref_target_amplitude} "
-        f"q_ref_sample_relative_to_current={env_cfg.q_ref_sample_relative_to_current} "
+        f"q_ref_target_amplitude={getattr(env_cfg, 'q_ref_target_amplitude', [])} "
+        f"q_ref_sample_relative_to_current={getattr(env_cfg, 'q_ref_sample_relative_to_current', False)} "
         f"episode_length_s={env_cfg.episode_length_s} "
         f"torque_adapter_preset={env_cfg.torque_adapter_preset} "
         f"torque_adapter_mode={env_cfg.torque_adapter_mode}",
