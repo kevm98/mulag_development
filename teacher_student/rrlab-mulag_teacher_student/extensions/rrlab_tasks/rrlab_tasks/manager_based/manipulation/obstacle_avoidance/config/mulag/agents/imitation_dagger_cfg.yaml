@@ -1,0 +1,137 @@
+seed: 42
+device: "cuda"
+
+teacher:
+  # load SB3 teacher policy (BasePolicy) from PPO checkpoint
+  checkpoint: "logs/sb3/RRLAB-Obstacle-Avoidance-Mulag-v0/2026-02-20_15-48-31_best_lstm/model_100800000_steps.zip"
+  # checkpoint: "logs/sb3/RRLAB-Obstacle-Avoidance-Mulag-v0/2026-02-23_16-16-44/model_420000_steps.zip"
+  algo_cls: "sb3_contrib:RecurrentPPO"  # optional if you want algo-specific load; otherwise use imitation.load_policy
+  # checkpoint: "logs/sb3/RRLAB-Obstacle-Avoidance-Mulag-v0/2026-02-23_14-44-30/model_560000_steps.zip"
+  # algo_cls: "stable_baselines3:PPO"
+  use_policy_only: true             # if true -> teacher_algo.policy; else -> teacher_algo
+  deterministic: false
+
+student:
+  # choose policy type here (must be importable)
+  policy_cls: "stable_baselines3.ppo.policies:MultiInputActorCriticPolicy"
+
+  # everything below is passed to the SB3 policy constructor
+  policy_kwargs:
+    # SB3 requires lr_schedule callable; we create it from config
+    lr_schedule:
+      type: "constant"  # constant | linear
+      value: 3.0e-4     # used by the policy's optimizer; BC will override via its optimizer anyway
+
+    net_arch:
+      pi: [512, 256, 128]
+      vf: [512, 256, 128]
+
+    activation_fn: "nn.ELU"
+    ortho_init: true
+    use_sde: false
+    log_std_init: 0.0
+    full_std: true
+    use_expln: false
+    squash_output: false
+    share_features_extractor: true
+    normalize_images: true
+
+    # encoder/feature extractor is fully config-driven
+    features_extractor_class: "rrlab_tasks.manager_based.locomotion.velocity.config.go2.agents.sb3.encoders:MultiBranchExtractor"
+    features_extractor_kwargs:
+      fusion: "concat"
+      post_fusion_layers: [256, 128]
+      post_fusion_activation: "elu"
+      branches:
+        state:
+          type: "mlp"
+          keys: ["tcp_height", "joint_pos", "joint_vel", "distance_to_goal", "last_action", "unimog_pose", "unimog_pose_dot"]
+          layers: [256, 128]
+          activation: "elu"
+        depth_image:
+          type: "cnn"
+          keys: ["camera"]
+          channel_order: "chw"         # "chw" or "hwc"
+          img_height_width: [100, 100]
+          conv_channels: [32, 64, 64]
+          kernels: [5, 3, 3]
+          strides: [2, 2, 1]
+          paddings: [2, 1, 0]
+          activation: "elu"
+          head_layers: []
+          out_dim: 512
+          head_final_activation: "tanh"
+
+bc:
+  batch_size: 256
+  minibatch_size: 256
+  optimizer_cls: "torch.optim:Adam"
+  optimizer_kwargs:
+    lr: 3.0e-4
+  ent_weight: 0.0
+  l2_weight: 1e-5
+  grad_clip_norm: 1.0
+  log_interval: 50
+
+dagger:
+  total_timesteps: 1000000
+  rollout_round_min_episodes: 1
+  rollout_round_min_timesteps: 200
+  scratch_dir: "outputs/dagger/${now:%Y-%m-%d_%H-%M-%S}"
+
+  # NEW: periodic saving
+  save_every_rounds: 1        # save every 10 rounds (0/None disables)
+  save_on_last_round: true     # also save at the end
+  save_prefix: "dagger"        # filename prefix
+
+  # Optional: pass bc_train_kwargs directly (recommended for speed)
+  bc_train_kwargs:
+    # Number of complete passes made through expert data before ending training. Provide exactly one of `n_epochs` and `n_batches`.
+    # n_epochs: 1           # leave unset if using n_batches
+    # Number of batches loaded from dataset before ending training. Provide exactly one of `n_epochs` and `n_batches`.
+    n_batches: 300          # e.g., 100–500 is common; tune based on speed
+    # Number of rollouts to generate when calculating rollout stats. Non-positive number disables rollouts.
+    # log_rollouts_n_episodes: 0 # Disable rollout-based eval during BC (very expensive in Isaac Sim)
+
+
+# -----------------------------
+# DAgger round count estimation
+# -----------------------------
+# In SimpleDAggerTrainer.train(), each round collects trajectories until BOTH:
+#   1) total_timesteps_in_round >= T_min
+#   2) num_episodes_in_round   >= E_min
+#
+# where:
+#   T_min = max(rollout_round_min_timesteps, batch_size)
+#   E_min = rollout_round_min_episodes
+#
+# Let:
+#   L = average episode length (steps/episode)
+#
+# Then an estimate of timesteps collected per round is:
+#   steps_per_round ≈ max(T_min, E_min * L)
+#
+# Total number of rounds is approximately:
+#   rounds ≈ total_timesteps / steps_per_round
+#
+# Note: real rounds can be slightly larger due to episode boundaries and VecEnv stepping.
+#
+# -----------------------------
+# Example with your settings
+# -----------------------------
+# total_timesteps = 2,000,000
+# rollout_round_min_timesteps = 500
+# batch_size = 4096  -> T_min = max(500, 4096) = 4096
+# rollout_round_min_episodes = 3  -> E_min = 3
+#
+# Case A: short episodes, L = 1000
+#   steps_per_round ≈ max(4096, 3*1000) = max(4096, 3000) = 4096
+#   rounds ≈ 2,000,000 / 4096 ≈ 488
+#
+# Case B: longer episodes, L = 2000
+#   steps_per_round ≈ max(4096, 3*2000) = max(4096, 6000) = 6000
+#   rounds ≈ 2,000,000 / 6000 ≈ 333
+#
+# Case C: very long episodes, L = 5000
+#   steps_per_round ≈ max(4096, 3*5000) = 15000
+#   rounds ≈ 2,000,000 / 15000 ≈ 133

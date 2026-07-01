@@ -1,0 +1,107 @@
+# ================================
+# SB3 PPO rollout + update settings
+# ================================
+#
+# Notation:
+#   N = number of parallel environments (env.num_envs)
+#   T = n_steps (rollout horizon per env)
+#   B = batch_size (minibatch size for SGD)
+#   E = n_epochs (how many passes over the rollout buffer per update)
+#   total_timesteps = n_timesteps (total environment transitions to collect)
+#
+# 1) Data collected per PPO iteration (one rollout buffer):
+#       rollout_buffer_size = T * N
+#
+#    Because we do T environment steps and each step contains N transitions
+#    from the vectorized environments.
+#
+# 2) Number of PPO iterations (outer loop: collect_rollouts + train):
+#       num_iterations ≈ total_timesteps / (T * N)
+#
+# 3) Minibatches per epoch (SGD steps per epoch):
+#       num_minibatches = ceil((T * N) / B)
+#
+#    (Prefer choosing B such that (T * N) % B == 0 for clean splits.)
+#
+# 4) Gradient updates per PPO iteration:
+#       grad_updates_per_iteration = E * num_minibatches
+#
+# 5) Total gradient updates during training (approx):
+#       total_grad_updates ≈ num_iterations * E * num_minibatches
+#
+# ----------------
+# Practical rules:
+# ----------------
+# - n_steps (T): larger -> more stable advantage estimates, more memory + slower updates
+# - batch_size (B): usually pick a divisor of (T*N), e.g. 64,128,256,512,...
+# - n_epochs (E): more epochs -> more reuse of data (can help or overfit old rollouts)
+# - n_timesteps: total amount of interaction budget (main training length knob)
+#
+# Example:
+#   N=8 envs, T=64 -> rollout_buffer_size = 512 transitions per PPO iteration
+#   total_timesteps=16_384_000 -> num_iterations = 32_000 PPO updates
+#
+
+seed: 89
+
+policy: "MultiInputPolicy"
+n_timesteps: 100800000 # = n_steps * num_envs * num_iterations = 24 * 140 * 30000 = 100800000
+
+# --- PPO core (skrl-equivalent) ---
+n_steps: 24                 
+n_epochs: 5
+batch_size: 512  # num mini_batches = n_steps * num_envs / batch_size = 24 * 140 / 512 = 6.5625
+# gamma: 0.99                  
+# gae_lambda: 0.95             
+# learning_rate: 1e-3          
+# clip_range: 0.2              
+# clip_range_vf: 0.2
+# ent_coef: 0.01               
+# vf_coef: 1.0                 
+# max_grad_norm: 1.0           
+# normalize_advantage: true
+
+# n_steps: 24                 
+# n_epochs: 5
+# batch_size: 512  # num mini_batches = n_steps * num_envs / batch_size = 24 * 140 / 512 = 6.5625
+gamma: 0.99                  
+gae_lambda: 0.95             
+learning_rate: 1e-4         
+clip_range: 0.1              
+clip_range_vf: 0.1
+ent_coef: 0.0               
+vf_coef: 1.0                 
+max_grad_norm: 0.5          
+normalize_advantage: true
+
+policy_kwargs:
+  activation_fn: "nn.ELU"
+  share_features_extractor: True
+
+  net_arch:
+    pi: [512, 256, 128]
+    vf: [512, 256, 128]
+
+  # custom dual encoder
+  features_extractor_class: "rrlab_tasks.manager_based.manipulation.obstacle_avoidance.config.mulag.agents.sb3.encoders:MultiBranchExtractor"
+  features_extractor_kwargs:
+    fusion: "concat"
+    branches:
+      state:
+        type: "mlp"
+        keys: ["tcp_height", "distance_data", "joint_pos", "joint_vel", "distance_to_goal", "contact_force", "contact_time", "joint_torques", "last_action", "unimog_pose", "unimog_pose_dot"]
+        layers: [512, 256, 128]
+        activation: "elu"
+      height:
+        type: "cnn"
+        keys: ["height_map"]
+        channel_order: "chw"         # "chw" or "hwc"
+        img_height_width: [21, 41] # comes from env observation space
+        conv_channels: [32, 64, 64]
+        kernels: [5, 3, 3]
+        strides: [2, 2, 1]
+        paddings: [2, 1, 0]
+        activation: "elu"
+        head_layers: []
+        out_dim: 512
+        head_final_activation: "tanh"

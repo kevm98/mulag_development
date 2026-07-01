@@ -1,0 +1,53 @@
+seed: 42
+
+policy: "MultiInputPolicy"
+n_timesteps: 36000
+
+# --- PPO core (skrl-equivalent) ---
+n_steps: 24                 # skrl rollouts
+n_epochs: 5                 # skrl learning_epochs
+n_minibatches: 4            # skrl mini_batches  -> IsaacLab will compute batch_size
+gamma: 0.99                 # skrl discount_factor
+gae_lambda: 0.95            # skrl lambda
+learning_rate: 1e-3         # skrl learning_rate
+clip_range: 0.2             # skrl ratio_clip
+clip_range_vf: 0.2          # skrl value_clip + clip_predicted_values
+ent_coef: 0.01              # skrl entropy_loss_scale
+vf_coef: 1.0                # skrl value_loss_scale
+max_grad_norm: 1.0          # skrl grad_norm_clip
+normalize_advantage: true   # default SB3 is True; keep explicit if you like
+
+policy_kwargs:
+  activation_fn: "nn.ELU"
+  share_features_extractor: True
+
+  net_arch:
+    pi: [512, 256, 128]
+    vf: [512, 256, 128]
+
+  # custom dual encoder
+  features_extractor_class: "rrlab_tasks.manager_based.locomotion.velocity.config.go2.agents.sb3.encoders:MultiBranchExtractor"
+  features_extractor_kwargs:
+    fusion: "concat"
+    branches:
+      height:
+        type: "mlp"
+        keys: ["height_scan"]
+        layers: [128, 64]
+        activation: "elu"
+      state:
+        type: "mlp"
+        keys: ["base_lin_vel", "base_ang_vel", "projected_gravity", "velocity_commands", "joint_pos", "joint_vel", "actions"]
+        layers: [128, 64]
+        activation: "elu"
+
+# height:
+#         type: "cnn"
+#         keys: ["height_scan"]
+#         channel_order: "chw"         # "chw" or "hwc"
+#         conv_channels: [32, 64, 64]
+#         kernels: [8, 4, 3]
+#         strides: [4, 2, 1]
+#         activation: "relu"
+#         head_layers: []
+#         out_dim: 64

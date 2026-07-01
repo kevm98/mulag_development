@@ -1,0 +1,114 @@
+seed: 42
+
+models:
+  separate: False
+  policy: 
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    initial_log_std: 0.0
+    
+    network:
+      - name: vision_encoder
+        # (N, 861, 3) -> (N, 3, 861)
+        # (-1, 3, 21, 41) 
+        input: OBSERVATIONS["height_map"]
+        layers:
+          - conv2d: {out_channels: 32, kernel_size: 5, stride: 2, padding: 2} 
+          - conv2d: {out_channels: 64, kernel_size: 3, stride: 2, padding: 1}
+          - conv2d: {out_channels: 64, kernel_size: 3, stride: 1, padding: 0}
+          - flatten 
+          - linear: 512 
+        activations: [elu, elu, elu, null, tanh] 
+
+      - name: proprio_encoder
+        input: concatenate([  
+            OBSERVATIONS["tcp_height"],
+            OBSERVATIONS["distance_data"],
+            OBSERVATIONS["joint_pos"], 
+            OBSERVATIONS["joint_vel"],
+            OBSERVATIONS["distance_to_goal"], 
+            OBSERVATIONS["contact_force"],
+            OBSERVATIONS["contact_time"],
+            OBSERVATIONS["joint_torques"],    
+            OBSERVATIONS["last_action"],   
+            OBSERVATIONS["unimog_pose"],    
+            OBSERVATIONS["unimog_pose_dot"],       
+          ])
+        layers: [512, 256, 128]
+        activations: elu
+
+      - name: policy_head
+        input: concatenate([vision_encoder, proprio_encoder])
+        layers: [512, 256, 128] 
+        activations: elu
+    output: ACTIONS
+
+  value:  # Critic 
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: value_head
+        input: concatenate([vision_encoder, proprio_encoder])
+        layers: [512, 256, 128] 
+        activations: elu
+    output: ONE
+
+
+# Rollout memory
+# https://skrl.readthedocs.io/en/latest/api/memories/random.html
+memory:
+  class: RandomMemory
+  memory_size: -1 
+
+
+# PPO agent configuration 
+# https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
+agent:
+  class: PPO
+  rollouts: 512
+  learning_epochs: 4
+  mini_batches: 32
+  discount_factor: 0.99 
+  lambda: 0.95
+  learning_rate: 3.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs: 
+    kl_threshold: 0.01 
+
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+
+  random_timesteps: 0
+  learning_starts: 0
+
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+
+  entropy_loss_scale: 0.005
+  value_loss_scale: 1.0
+  
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: True
+
+  mixed_precision: True
+
+  experiment:
+    directory: "reach_mulag_teacher"
+    experiment_name: ""
+    write_interval: 500
+    checkpoint_interval: 10000
+    logging:
+      tensorboard: true   
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 6000000
+  environment_info: log

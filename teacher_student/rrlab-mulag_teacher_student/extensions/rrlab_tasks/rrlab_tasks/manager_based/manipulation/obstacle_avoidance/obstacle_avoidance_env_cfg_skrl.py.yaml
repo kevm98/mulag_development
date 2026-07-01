@@ -1,0 +1,519 @@
+# Copyright (c) 2022-2024, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+from dataclasses import MISSING
+import math
+
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import ActionTermCfg as ActionTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
+from isaaclab.managers import DatasetExportMode, RecorderManagerBaseCfg, RecorderTerm, RecorderTermCfg
+from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
+from .mdp.recorders_cfg import PostStepNormalizedJointPositionActionsRecorderCfg
+
+import rrlab_tasks.manager_based.manipulation.obstacle_avoidance.mdp as mdp
+from rrlab_tasks.manager_based.manipulation.obstacle_avoidance.envs.terrains import CustomTerrainImporterCfg
+from rrlab_tasks.manager_based.manipulation.obstacle_avoidance.mdp.commands_cfg import CustomUniformPoseCommandCfg
+from rrlab_tasks.manager_based.manipulation.obstacle_avoidance.envs.terrain import UNIMOG_TERRAIN_CFG, UNIMOG_TERRAIN_EVAL_CFG
+##
+# Scene definition
+##
+
+
+@configclass
+class ObstacleAvoidanceSceneCfg(InteractiveSceneCfg):
+    """Configuration for the scene with a robotic arm."""
+
+    # lights
+    light = AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=2500.0),
+    )
+
+    
+    # terrain
+    terrain = CustomTerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=UNIMOG_TERRAIN_CFG, 
+        max_init_terrain_level=None, 
+        collision_group=0, # -1: collides with all assets in the scene, 0: collides with other assets in the same environment
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0, 
+            dynamic_friction=1.0,
+        ),
+        debug_vis=False,  
+    )
+    
+    """
+    # eval terrain
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=UNIMOG_TERRAIN_EVAL_CFG, 
+        max_init_terrain_level=None, 
+        collision_group=0, # -1: collides with all assets in the scene, 0: collides with other assets in the same environment
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0, 
+            dynamic_friction=1.0,
+        ),
+        debug_vis=False,  
+    )
+    """
+
+    # robots
+    robot: ArticulationCfg = MISSING
+
+##
+# MDP settings
+##
+
+@configclass
+class CommandsCfg:
+    """Command terms for the MDP."""
+
+    ee_pose = CustomUniformPoseCommandCfg(
+        asset_name="robot",
+        body_name=MISSING,
+        resampling_time_range=(10.0, 12.0),
+        debug_vis=True,
+        ranges=CustomUniformPoseCommandCfg.Ranges(
+            pos_x=(6.5, 7.5),
+            pos_y=(0.7, 2.2), # at which pos the arm should mow 
+            pos_z=(0.5, 0.5),
+            roll=(0.0, 0.0),
+            pitch=MISSING,  # depends on end-effector axis
+            yaw=(180* math.pi/180, 180 * math.pi/180), 
+        ),
+    )
+
+
+@configclass
+class ActionsCfg:
+    """Action specifications for the MDP."""
+
+    arm_action: ActionTerm = MISSING
+
+
+@configclass
+class ObservationsCfg:
+    """Observation specifications for the MDP."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for policy group."""
+
+        height_map = ObsTerm(func=mdp.map_data, history_length=3)
+        tcp_height = ObsTerm(func=mdp.height_data, history_length=3) # [left, right]
+        distance_data = ObsTerm(func=mdp.normalized_distance_data)
+        
+        joint_pos = ObsTerm(func=mdp.joint_pos_limit_normalized, history_length=3, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
+                "Drehzapfen_joint",
+                "Ausleger_I_joint",
+                "Ausleger_II_joint",
+                "Messerkopf_Schwenk_joint",
+                "Messerkopf_joint"
+            ])}) # all joints
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, history_length=3) # all joints
+        distance_to_goal = ObsTerm(func=mdp.distance_to_goal, history_length=3) # [X, Y]
+
+        contact_force = ObsTerm(func=mdp.normalized_contact_force) # [N] is clipped to max = 10k else NaN values in policy 
+        contact_time = ObsTerm(func=mdp.contact_time) # [s]
+        joint_torques = ObsTerm(func=mdp.normalized_joint_effort, params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
+                "Drehzapfen_joint",
+                "Ausleger_I_joint",
+                "Ausleger_II_joint",
+                "Messerkopf_Schwenk_joint",
+                "Messerkopf_joint"
+            ])})
+        last_action = ObsTerm(func=mdp.last_processed_action, params={"action_name": "arm_action"})
+
+        unimog_pose = ObsTerm(func=mdp.normalized_unimog_pose) # [X, Y, Yaw] and Yaw in rad with bounds [-pi, pi]
+        unimog_pose_dot = ObsTerm(func=mdp.custom_unimog_pose_dot) # [X_dot, Y_dot, Yaw_dot] and Yaw_dot in rad/s
+        camera = ObsTerm(func=mdp.normalized_depth_image, noise=Gnoise(mean=0.0, std=0.2))
+        
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    # observation groups
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class EventCfg:
+    """Configuration for events."""
+
+    reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True,})
+
+    # ---------------------------------- CPU Randomizers at/after episode end ------------------------------------------------
+    
+    randomize_joint_friction = EventTerm(func=mdp.randomize_joint_parameters, mode="reset", params={"friction_distribution_params": (0.8, 1.2),
+                                                                                          "operation": "scale",
+                                                                                          "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                              "Drehzapfen_joint",
+                                                                                              "Ausleger_I_joint",
+                                                                                              "Ausleger_II_joint",
+                                                                                              "Messerkopf_Schwenk_joint",
+                                                                                              "Messerkopf_joint"
+                                                                                              ])})
+    randomize_link_mass = EventTerm(func=mdp.randomize_rigid_body_mass, mode="reset", params={"mass_distribution_params": (0.8, 1.2),
+                                                                                          "operation": "scale",
+                                                                                          "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                              "Drehzapfen_joint",
+                                                                                              "Ausleger_I_joint",
+                                                                                              "Ausleger_II_joint",
+                                                                                              "Messerkopf_Schwenk_joint",
+                                                                                              "Messerkopf_joint"
+                                                                                              ])})
+    """
+    randomize_com = EventTerm(func=mdp.randomize_rigid_body_com, mode="reset", params={"com_range": {key: (0.5, 1.5) for key in ["x", "y", "z"]},
+                                                                                       "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                              "Drehzapfen_joint",
+                                                                                              "Ausleger_I_joint",
+                                                                                              "Ausleger_II_joint",
+                                                                                              "Messerkopf_Schwenk_joint",
+                                                                                              "Messerkopf_joint"
+                                                                                              ])})
+    """
+    randomize_gains = EventTerm(func=mdp.randomize_actuator_gains, mode="reset", params={"stiffness_distribution_params": (0.8, 1.2),
+                                                                                        "damping_distribution_params": (0.8, 1.2),
+                                                                                        "operation": "scale",
+                                                                                        "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                              "Drehzapfen_joint",
+                                                                                              "Ausleger_I_joint",
+                                                                                              "Ausleger_II_joint",
+                                                                                              "Messerkopf_Schwenk_joint",
+                                                                                              "Messerkopf_joint"
+                                                                                              ])})
+    
+    # ---------------------------------- GPU Randomizers at/after episode end ------------------------------------------------
+
+    randomize_tcp_pose = EventTerm(func=mdp.reset_joints_by_offset, mode="reset", params={"position_range": (-0.2, 0.2),
+                                                                                        "velocity_range": (0.0, 0.0),
+                                                                                        "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                            "Messerkopf_Schwenk_joint",
+                                                                                            "Messerkopf_joint"
+                                                                                            ])})
+    randomize_arm_pose = EventTerm(func=mdp.reset_joints_by_offset, mode="reset", params={"position_range": (-0.2, 0.2),
+                                                                                          "velocity_range": (0.0, 0.0),
+                                                                                          "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                                                                                              "Drehzapfen_joint",
+                                                                                              "Ausleger_II_joint",
+                                                                                              ])})
+    randomize_unimog_pos = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {
+                                                                                                "x": (-0.1, 0.1), 
+                                                                                                "y": (0.0, 0.0), 
+                                                                                                "yaw": (-0.0, 0.0)},
+                                                                                              "velocity_range": {},
+                                                                                              })
+    
+
+    randomize_driving_speed = EventTerm(func=mdp.random_driving_speed, mode="interval", interval_range_s=(0.1, 0.1), params={
+                                                                                                "joint_names": [
+                                                                                                    "Wheel_Front_Left_joint",
+                                                                                                    "Wheel_Front_Right_joint",
+                                                                                                    "Wheel_Rear_Left_joint",
+                                                                                                    "Wheel_Rear_Right_joint"
+                                                                                                ],
+                                                                                                "velocity_range": (3.0, 8.0) # km/h
+                                                                                                })
+
+
+@configclass
+class RewardsCfg:
+    """Reward terms for the MDP."""
+
+    # task terms
+    end_effector_height_to_terrain = RewTerm(
+        func=mdp.tcp_height_to_terrain,
+        weight=-40, # penalize average deviation from ground
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "target_height": 0.05, 
+        },
+    )
+
+    end_effector_height_to_terrain_tanh = RewTerm(
+        func=mdp.tcp_height_to_terrain_tanh,
+        weight=20, 
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "target_height": 0.05, 
+        },
+    )
+
+    end_effector_height_to_terrain_abs = RewTerm(
+        func=mdp.tcp_height_to_terrain_abs,
+        weight=-40, # penalize absolute deviation from ground
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "threshold": 0.1
+        },
+    )
+
+    end_effector_height_to_terrain_abs_tanh = RewTerm(
+        func=mdp.tcp_height_to_terrain_abs_tanh,
+        weight=20, 
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "std": 0.1
+        },
+    )
+
+    distance_to_obstacle = RewTerm(
+        func=mdp.distance_to_obstacle,
+        weight=-10,
+        params={
+            "safe_distance": 1.0,
+            "std": 0.2,
+        }
+    )
+    """
+    end_effector_contact = RewTerm(
+        func=mdp.contact_detection,
+        weight=-20,
+    )
+    """
+
+    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10)
+
+    undesired_collision = RewTerm(
+        func=mdp.lateral_impact_penalty, 
+        weight=20, 
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_sensor_head"), 
+            "threshold": 100.0, # only penalize collision with forces > threshold
+        },
+    )
+
+    
+    end_effector_position_tracking = RewTerm(
+        func=mdp.position_command_error,
+        weight=-12,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"), # missing tcp
+            "command_name": "ee_pose",
+            "offset": 0.4,},
+    )
+    
+
+    end_effector_position_tracking_fine_grained = RewTerm(
+        func=mdp.position_command_error_tanh,
+        weight=30, 
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"), "std": 0.4, "command_name": "ee_pose"}, # missing tcp
+    )
+    
+    
+    end_effector_orientation_tracking = RewTerm(
+        func=mdp.orientation_command_error,
+        weight=-12,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"), "command_name": "ee_pose", "offset_deg": 30}, # missing tcp
+    )
+    
+
+    end_effector_orientation_tracking_fine_grained = RewTerm(
+        func=mdp.orientation_command_error_tanh,
+        weight=10, 
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"), "std_deg": 30, "command_name": "ee_pose"}, # missing tcp
+    )
+
+    tcp_ahead_of_arm_base = RewTerm(
+        func=mdp.tcp_ahead_of_arm_base,
+        weight=2,
+        params={"tcp_cfg": SceneEntityCfg("robot", body_names=["Messerkopf"]), 
+                "arm_base_cfg": SceneEntityCfg("robot", body_names=["Drehzapfen"]),
+                "threshold": -0.1},
+    )
+
+    tcp_hovering_above_terrain = RewTerm(
+        func=mdp.tcp_hovering_above_terrain,
+        weight=-30,
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "height_threshold": 0.15,
+            "hysteresis": 0.05,
+            "time_threshold_sec":1.0
+        }
+    )
+
+    tcp_off_working_space = RewTerm(
+        func=mdp.tcp_off_working_space,
+        weight=-30,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"),
+            "threshold": -1.7, # in y axis
+            "hysteresis": 0.2,
+            "time_threshold_sec":3
+        }
+    )
+
+    tcp_off_working_space_tanh = RewTerm(
+        func=mdp.tcp_off_working_space_tanh,
+        weight=-30,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"),
+            "threshold": -1.7, # in y axis
+            "std": 0.2,
+        }
+    )
+
+    finish_on_limited_contacts = RewTerm(
+        func=mdp.finish_on_limited_contacts,
+        weight= 10,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"),
+            "sensor_cfg": SceneEntityCfg("contact_sensor_head"),
+            "traj_length_x":40,
+            "contact_force_threshold": 10000,
+            "max_contacts_count": 20,
+            "release_ratio": 0.5,
+            "impact_beta": 0.2,
+            "impact_cap": 10,
+            "finish_bonus_weight": 2.0
+        }
+    )
+
+    # smoothing rewards
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.6)
+    joint_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        weight=-0.7,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+
+
+@configclass
+class TerminationsCfg:
+    """Termination terms for the MDP."""
+
+    unimog_of_course = DoneTerm(func=mdp.unimog_lateral_deviation,
+                                params={"deviation_threshold" : 0.4} # reset if unimog > deviation_threshold (m) of course
+                                )
+    unimog_end_of_lane = DoneTerm(func=mdp.unimog_end_of_lane, time_out=True)
+
+    time_out = DoneTerm(func=mdp.time_out, time_out=True) # end of episode
+
+    # impact_with_terrain = DoneTerm(func=mdp.impact_with_terrain, 
+    #                                params={"sensor_cfg": SceneEntityCfg("contact_sensor_head"), "threshold": 100000.0})
+
+    # tcp_height_to_terrain_abs_difference = DoneTerm(func=mdp.tcp_height_to_terrain_abs_difference,
+    #                                                 params={"sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+    #                                                         "sensor_two_cfg": SceneEntityCfg("height_sensor_right"), 
+    #                                                         "threshold": 0.5})
+    # tcp_face_backwards = DoneTerm(func=mdp.tcp_face_backwards, params={"asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"), 
+    #                                                                    "command_name": "ee_pose", 
+    #                                                                    "threshold": 1.6}) # end episode if tcp faces backwards (yaw error > threshold in rad)
+
+    unimog_flying = DoneTerm(func=mdp.unimog_flying, params={"threshold": 0.05}) # reset if unimog is flying (roll, pitch > threshold)
+
+    # tcp_above_ground = DoneTerm(func=mdp.tcp_above_ground, params={"asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"),
+    #                                                             "threshold": 1.8}) # reset if tcp is above certain height from ground
+    
+    undesired_collision_ausleger_2 = DoneTerm(func=mdp.undesired_collision, 
+                                   params={"sensor_cfg": SceneEntityCfg("contact_sensor_ausleger_2"), "threshold": 1000.0}) # reset if undesired collision with terrain is detected at Ausleger_II
+    
+    tcp_hovering_above_terrain = DoneTerm(
+        func=mdp.tcp_hovering_above_terrain_termination,
+        params={
+            "sensor_one_cfg": SceneEntityCfg("height_sensor_left"), 
+            "sensor_two_cfg": SceneEntityCfg("height_sensor_right"),
+            "height_threshold": 0.15,
+            "hysteresis": 0.05,
+            "time_threshold_sec":5
+        }
+    )
+
+    tcp_off_working_space = DoneTerm(
+        func=mdp.tcp_off_working_space_termination,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="Messerkopf"),
+            "threshold": -1.7, # in y axis
+            "hysteresis": 0.2,
+            "time_threshold_sec":5
+        }
+    )
+
+@configclass
+class RecordersCfg(RecorderManagerBaseCfg):
+    """Recorders terms for the MDP Evaluation"""
+
+    dataset_export_dir_path="/home/moe/IsaacLab-Extensions/rrlab/logs/mulag_eval"
+
+    @configclass
+    class EvaluationRecorderTermCfg(RecorderTermCfg):
+        """Configuration for the step recorder term."""
+
+        class_type: type[RecorderTerm] = mdp.EvaluationRecorderTerm
+    
+
+    record_step_term = EvaluationRecorderTermCfg()
+    dataset_export_mode = DatasetExportMode.EXPORT_ALL
+
+##
+# Environment configuration
+##
+
+
+@configclass
+class ObstacleAvoidanceCfg(ManagerBasedRLEnvCfg):
+    """Configuration for the reach end-effector pose tracking environment."""
+
+    # Scene settings
+    scene: ObstacleAvoidanceSceneCfg = ObstacleAvoidanceSceneCfg(num_envs=169, env_spacing=20)
+    # Basic settings
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
+    commands: CommandsCfg = CommandsCfg()
+    # MDP settings
+    rewards: RewardsCfg = RewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+    #recorders: RecordersCfg = RecordersCfg()
+
+    # Action
+    # self.actions.joint_pos = JointPositionNormalizedToLimitsActionCfg(asset_name="robot", joint_names=[".*"], scale=0.15)
+
+    # Recorder
+    recorders = ActionStateRecorderManagerCfg()
+    recorders.record_pre_step_actions = PostStepNormalizedJointPositionActionsRecorderCfg()
+    recorders.dataset_export_dir_path = "datasets"
+    recorders.dataset_filename = "mulag_teacher_lstm_dataset"
+
+    def __post_init__(self):
+        """Post initialization."""
+        # general settings
+        self.decimation = 2
+        self.sim.dt = 1.0 / 120.0
+        self.sim.render_interval = self.decimation
+        self.episode_length_s = 34.0
+        
+        self.viewer.eye = (12.8, -6.7, 3.3)
+        
+        # default friction material
+        self.sim.physics_material.static_friction = 1.0
+        self.sim.physics_material.dynamic_friction = 1.0
+        self.sim.physics_material.restitution = 0.0
+
