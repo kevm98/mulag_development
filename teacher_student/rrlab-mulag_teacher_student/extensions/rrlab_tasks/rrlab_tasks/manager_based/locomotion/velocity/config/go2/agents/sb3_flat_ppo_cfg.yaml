@@ -1,0 +1,92 @@
+# ================================
+# SB3 PPO rollout + update settings
+# ================================
+#
+# Notation:
+#   N = number of parallel environments (env.num_envs)
+#   T = n_steps (rollout horizon per env)
+#   B = batch_size (minibatch size for SGD)
+#   E = n_epochs (how many passes over the rollout buffer per update)
+#   total_timesteps = n_timesteps (total environment transitions to collect)
+#
+# 1) Data collected per PPO iteration (one rollout buffer):
+#       rollout_buffer_size = T * N
+#
+#    Because we do T environment steps and each step contains N transitions
+#    from the vectorized environments.
+#
+# 2) Number of PPO iterations (outer loop: collect_rollouts + train):
+#       num_iterations ≈ total_timesteps / (T * N)
+#
+# 3) Minibatches per epoch (SGD steps per epoch):
+#       num_minibatches = ceil((T * N) / B)
+#
+#    (Prefer choosing B such that (T * N) % B == 0 for clean splits.)
+#
+# 4) Gradient updates per PPO iteration:
+#       grad_updates_per_iteration = E * num_minibatches
+#
+# 5) Total gradient updates during training (approx):
+#       total_grad_updates ≈ num_iterations * E * num_minibatches
+#
+# ----------------
+# Practical rules:
+# ----------------
+# - n_steps (T): larger -> more stable advantage estimates, more memory + slower updates
+# - batch_size (B): usually pick a divisor of (T*N), e.g. 64,128,256,512,...
+# - n_epochs (E): more epochs -> more reuse of data (can help or overfit old rollouts)
+# - n_timesteps: total amount of interaction budget (main training length knob)
+#
+# Example:
+#   N=8 envs, T=64 -> rollout_buffer_size = 512 transitions per PPO iteration
+#   total_timesteps=16_384_000 -> num_iterations = 32_000 PPO updates
+#
+
+seed: 42
+
+policy: "MultiInputPolicy"
+n_timesteps: 48000000 # = n_steps * num_envs * num_iterations = 24 * 2000 * 1000 = 4800000
+
+# --- PPO core (skrl-equivalent) ---
+n_steps: 24                 
+n_epochs: 5
+batch_size: 2048  # num mini_batches = n_steps * num_envs / batch_size = 24 * 2000 / 2048 = 23.4375
+gamma: 0.99                  
+gae_lambda: 0.95             
+learning_rate: 1e-3          
+clip_range: 0.2              
+clip_range_vf: 0.2
+ent_coef: 0.01               
+vf_coef: 1.0                 
+max_grad_norm: 1.0           
+normalize_advantage: true
+
+policy_kwargs:
+  activation_fn: "nn.ELU"
+  share_features_extractor: True
+
+  net_arch:
+    pi: [128, 128, 128]
+    vf: [128, 128, 128]
+
+  # custom dual encoder
+  features_extractor_class: "rrlab_tasks.manager_based.locomotion.velocity.config.go2.agents.sb3.encoders:MultiBranchExtractor"
+  features_extractor_kwargs:
+    fusion: "concat"
+    branches:
+      state:
+        type: "mlp"
+        keys: ["base_lin_vel", "base_ang_vel", "projected_gravity", "velocity_commands", "joint_pos", "joint_vel", "actions"]
+        layers: [128, 64]
+        activation: "elu"
+
+# height:
+#         type: "cnn"
+#         keys: ["height_scan"]
+#         channel_order: "chw"         # "chw" or "hwc"
+#         conv_channels: [32, 64, 64]
+#         kernels: [8, 4, 3]
+#         strides: [4, 2, 1]
+#         activation: "relu"
+#         head_layers: []
+#         out_dim: 64

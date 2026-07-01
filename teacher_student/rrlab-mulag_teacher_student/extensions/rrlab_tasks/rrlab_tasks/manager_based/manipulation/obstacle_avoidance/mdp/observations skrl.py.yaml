@@ -1,0 +1,866 @@
+# Copyright (c) 2022-2024, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+
+import isaaclab.utils.math as math_utils
+from isaaclab.utils.math import quat_apply_inverse, euler_xyz_from_quat
+from isaaclab.managers.manager_base import ManagerTermBase
+from isaaclab.managers.manager_term_cfg import ObservationTermCfg
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import Camera, RayCasterCamera, TiledCamera
+from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
+
+
+class distance_to_goal(ManagerTermBase):
+    def __init__(self, cfg: SceneEntityCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        
+        self.tcp_transformer = env.scene["tcp_transformer"]
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+        tcp_pos_local = self.tcp_transformer.data.target_pos_source[:, 0, :] # unimog base coordinate system
+        command = env.command_manager.get_command("ee_pose") # unimog base coordinate system
+        
+        target_xy = command[:, :2]
+        current_xy_local = tcp_pos_local[:, :2]
+        difference_xy = target_xy - current_xy_local # maybe add torch.abs
+        
+        #print("target: ", target_xy)
+        #print("current: ", current_xy_local)
+        #print("difference (obs): ", difference_xy)
+        difference_xy = torch.nan_to_num(difference_xy, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(difference_xy).any() or torch.isinf(difference_xy).any():
+            raise RuntimeError(f"[OBS ERROR] distance_to_goal produced NaN/Inf")
+
+        max_abs = difference_xy.abs().max().item()
+        if max_abs > 25.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] distance_to_goal not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+        return difference_xy
+
+
+class contact_force(ManagerTermBase):
+    def __init__(self, cfg: SceneEntityCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        
+        self.tcp_transformer = env.scene["tcp_transformer"]
+        self.contact_sensor = env.scene["contact_sensor_head"]
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+
+        forces = self.contact_sensor.data.net_forces_w # [N, 1, 3]
+
+        rotated_forces = quat_apply_inverse(self.tcp_transformer.data.target_quat_w, forces)
+        #print("rotated force: ", rotated_forces)
+
+        force_magnitude = torch.norm(rotated_forces, dim=-1) # maybe no norm
+        #print("Impact: ", torch.clamp(force_magnitude, max=10000.0)) 
+
+        return torch.clamp(force_magnitude, max=10000.0)
+    
+class normalized_contact_force(ManagerTermBase):
+    def __init__(
+        self,
+        cfg: SceneEntityCfg,
+        env: ManagerBasedRLEnv,
+        max_force: float = 10000.0,
+        eps: float = 1e-6,
+    ):
+        super().__init__(cfg, env)
+
+        self.tcp_transformer = env.scene["tcp_transformer"]
+        self.contact_sensor = env.scene["contact_sensor_head"]
+        self.max_force = max_force
+        self.eps = eps
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+        # raw world-frame forces
+        forces = self.contact_sensor.data.net_forces_w  # (N, 1, 3)
+
+        # rotate into TCP frame
+        rotated_forces = quat_apply_inverse(
+            self.tcp_transformer.data.target_quat_w,
+            forces,
+        )
+
+        # magnitude
+        force_mag = torch.norm(rotated_forces, dim=-1)  # (N, 1)
+
+        # normalize (stable version)
+        normalized_force = torch.tanh(force_mag / (self.max_force + self.eps))
+        normalized_force = torch.nan_to_num(normalized_force, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(normalized_force).any() or torch.isinf(normalized_force).any():
+            raise RuntimeError(f"[OBS ERROR] normalized_contact_force produced NaN/Inf")
+
+        max_abs = normalized_force.abs().max().item()
+        if max_abs > 5.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] normalized_contact_force not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+        return normalized_force
+
+
+class contact_time(ManagerTermBase):
+    def __init__(self, cfg: SceneEntityCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        
+        self.contact_sensor = env.scene["contact_sensor_head"]
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+
+        current_contact_time = self.contact_sensor.data.current_contact_time
+        #print("Contact Time: ", current_contact_time)
+        current_contact_time = torch.nan_to_num(current_contact_time, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(current_contact_time).any() or torch.isinf(current_contact_time).any():
+            raise RuntimeError(f"[OBS ERROR] contact_time produced NaN/Inf")
+
+        max_abs = current_contact_time.abs().max().item()
+        if max_abs > 25.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] contact_time not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+        return current_contact_time    
+    
+
+
+class custom_unimog_pose(ManagerTermBase): # combines pos. and orient. of unimog
+    def __init__(self, cfg: SceneEntityCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        
+        self.asset = env.scene["robot"]
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+
+        pos = self.asset.data.root_pos_w - env.scene.env_origins
+        orientation = torch.stack(euler_xyz_from_quat(self.asset.data.root_quat_w), dim=1)
+
+        combined = torch.cat((pos[:, :2], orientation[:, 2].unsqueeze(1)), dim=-1) # slice pos. to x,y and orient. to yaw
+
+        # print("Unimog Custom Pose: ", combined)
+        return combined
+
+def normalized_unimog_pose(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    x_center: float = -0.0,
+    x_half_range: float = 25.0,   # (15 - (-25)) / 2 = 20
+    y_center: float = 4.0,
+    y_half_range: float = 4.0,    # (8 - 0) / 2 = 4
+    yaw_scale: float = 0.15,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Return normalized (x,y,yaw) for Unimog-like base.
+
+    Output: (N, 4) = [x_norm, y_norm, sin(yaw), cos(yaw)]
+    """
+    robot = env.scene["robot"]
+
+    env_origins = env.scene.env_origins           # (N,3)
+    root_pos_w = robot.data.root_pos_w            # (N,3)
+    root_quat_w = robot.data.root_quat_w          # (N,4)
+
+    # local position
+    local_pos = root_pos_w - env_origins
+
+    x = local_pos[:, 0]
+    y = local_pos[:, 1]
+
+    # yaw
+    _, _, yaw = euler_xyz_from_quat(root_quat_w)
+
+
+    # normalize to about [-1, 1]
+    x_norm = (x - x_center) / (x_half_range + eps)
+    y_norm = (y - y_center) / (y_half_range + eps)
+
+    # keep yaw bounded + robust
+    sin_yaw = torch.sin(yaw)
+    cos_yaw = torch.cos(yaw)
+
+    # safety clamp on position norms (optional but good)
+    x_norm = torch.clamp(x_norm, -1.5, 1.5)
+    y_norm = torch.clamp(y_norm, -1.5, 1.5)
+
+    out = torch.stack([x_norm, y_norm, sin_yaw, cos_yaw], dim=-1)
+    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # ---- OBS NORMALIZATION CHECK ----
+    if torch.isnan(out).any() or torch.isinf(out).any():
+        raise RuntimeError(f"[OBS ERROR] normalized_unimog_pose produced NaN/Inf")
+
+    max_abs = out.abs().max().item()
+    if max_abs > 5.0:   # adjust threshold depending on expected scale
+        print(f"[OBS WARNING] normalized_unimog_pose not normalized, max|v|={max_abs:.3e}")
+    # ---------------------------------
+
+    return out
+    
+class custom_unimog_pose_dot(ManagerTermBase): # combines pos. and orient. of unimog (dot)
+    def __init__(self, cfg: SceneEntityCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        
+        self.asset = env.scene["robot"]
+
+    def __call__(self, env: ManagerBasedRLEnv) -> torch.Tensor:
+
+        pos_dot = self.asset.data.root_lin_vel_w
+        orientation_dot = self.asset.data.root_ang_vel_w
+
+        combined_dot = torch.cat((pos_dot[:, :2], orientation_dot[:, 2].unsqueeze(1)), dim=-1) # slice pos. to x,y and orient. to yaw
+
+        #print("Unimog Custom Pose (Dot): ", combined_dot)
+        combined_dot = torch.nan_to_num(combined_dot, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(combined_dot).any() or torch.isinf(combined_dot).any():
+            raise RuntimeError(f"[OBS ERROR] custom_unimog_pose_dot produced NaN/Inf")
+
+        max_abs = combined_dot.abs().max().item()
+        if max_abs > 5.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] custom_unimog_pose_dot not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+        return combined_dot
+
+
+
+class map_data(ManagerTermBase): # height map prep for observation
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+
+        self.enable_vis = False 
+        
+        if self.enable_vis:
+            plt.ion()
+            self.fig, self.ax = plt.subplots(figsize=(6, 5))
+            self.sc = self.ax.scatter([], [], c=[], cmap='viridis', s=5, vmin=-1.0, vmax=0.2) 
+            
+            plt.colorbar(self.sc, ax=self.ax, label='Height (Z)')
+            self.ax.set_title("Live Height Map in Base link frame")
+            self.ax.set_xlabel("X")
+            self.ax.set_ylabel("Y")
+            self.ax.axis('equal') 
+            self.ax.grid(True)
+
+            self.ax.set_xlim(0.0, 14.0)
+            self.ax.set_ylim(-6, 0.0)
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        height_limit: list[float] = [-2.0, 2.0],
+    ) -> torch.Tensor:
+        cfg = env.scene["height_sensor_base"].cfg
+        size_x, size_y = cfg.pattern_cfg.size
+        cx, cy, _ = cfg.offset.pos
+
+        xmin = cx - size_x / 2
+        xmax = cx + size_x / 2
+        ymin = cy - size_y / 2
+        ymax = cy + size_y / 2
+
+        map_height = env.scene["height_sensor_base"].data.ray_hits_w
+        # remove nan/inf immediately (MOST IMPORTANT)
+        map_height = torch.nan_to_num(map_height, nan=0.0, posinf=0.0, neginf=0.0)
+
+        frame_data = env.scene["tcp_transformer"].data
+        batch_size, num_rays, _ = map_height.shape # batch_size = #envs
+
+        translated_hits= map_height - frame_data.source_pos_w.unsqueeze(1) # translate coordinate of casted ray of world coordinate into local coordinate frame
+        translated_hits = torch.nan_to_num(translated_hits, nan=0.0, posinf=0.0, neginf=0.0)
+
+        quat = frame_data.source_quat_w
+        quat = torch.nan_to_num(quat, nan=0.0, posinf=0.0, neginf=0.0)
+
+        eps = 1e-6
+        quat_norm = torch.linalg.norm(quat, dim=-1, keepdim=True).clamp_min(eps)
+        quat = quat / quat_norm
+
+        quat_expanded = quat.unsqueeze(1).expand(-1, num_rays, -1)
+
+        transposed_hits = quat_apply_inverse(quat_expanded, translated_hits)
+        transposed_hits = torch.nan_to_num(transposed_hits, nan=0.0, posinf=0.0, neginf=0.0)
+        transposed_hits = torch.clamp(transposed_hits, -1e3, 1e3)
+
+        #print("Height Map (size): ", transposed_hits.shape)
+
+        if self.enable_vis and env.common_step_counter % 10 == 0:
+            
+            points = transposed_hits[0].detach().cpu().numpy()
+            x = points[:, 0]
+            y = points[:, 1]
+            z = points[:, 2]
+
+            self.sc.set_offsets(np.c_[x, y]) 
+            self.sc.set_array(z)             
+
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+        
+        # unpack height limits
+        zmin, zmax = height_limit
+
+        # split channels
+        x = transposed_hits[..., 0]
+        y = transposed_hits[..., 1]
+        z = transposed_hits[..., 2]
+
+        dx = max(xmax - xmin, 1e-6)
+        dy = max(ymax - ymin, 1e-6)
+        dz = max(zmax - zmin, 1e-6)
+
+        # normalize to [-1, 1]
+        x_norm = 2.0 * (x - xmin) / dx - 1.0
+        y_norm = 2.0 * (y - ymin) / dy - 1.0
+        z_norm = 2.0 * (z - zmin) / dz - 1.0
+
+        # stack back
+        normalized_hits = torch.stack((x_norm, y_norm, z_norm), dim=-1)
+        normalized_hits = torch.nan_to_num(normalized_hits, nan=0.0, posinf=0.0, neginf=0.0)
+        normalized_hits = torch.clamp(normalized_hits, -1.0, 1.0)
+
+        grid_map_reordered = normalized_hits.view(batch_size, 21, 41, 3) # (N, 21, 41, 3)
+        cnn_ready_map = grid_map_reordered.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+        cnn_ready_map = torch.nan_to_num(cnn_ready_map, nan=0.0, posinf=0.0, neginf=0.0)
+        #print(cnn_ready_map)
+        
+        # return cnn_ready_map
+        return cnn_ready_map[:, 2, :, :] # only z
+    
+def normalized_distance_data(env: ManagerBasedRLEnv, max_range: float = 15.0,):
+        distance_rays = env.scene["distance_scanner"].data.ray_hits_w
+        tcp_data = env.scene["tcp_transformer"].data
+        # print("observation, transposed hits: ", tcp_data)
+
+        # isaaclab.utils transform_points not working correctly
+        R = distance_rays.shape[1]
+        translated_hits = distance_rays - tcp_data.target_pos_w # translate coordinate of casted ray of world coordinate into local coordinate frame
+        # print("observation translated_hits shape: ", translated_hits.shape)
+        # print("observation tcp_data.target_quat_w shape: ", tcp_data.target_quat_w.shape)
+        transposed_hits = quat_apply_inverse(tcp_data.target_quat_w.expand(-1, R, -1), translated_hits) # rotate coordinate of casted ray of world coordinate into local coordinate frame
+        # print("observation, transposed hits: ", transposed_hits)
+        invalid = torch.isnan(transposed_hits).any(dim=-1)
+
+        distance = torch.norm(transposed_hits, dim=-1)                           # (N, R)
+        distance = torch.where(invalid, torch.full_like(distance, 15), distance)
+
+        # normalize to [0, 1]
+        distance_norm = torch.clamp(distance / max_range, 0.0, 1.0)
+        distance_norm = torch.nan_to_num(distance_norm, nan=0.0, posinf=0.0, neginf=0.0)
+        # print("observation, distance: ", distance)
+
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(distance_norm).any() or torch.isinf(distance_norm).any():
+            raise RuntimeError(f"[OBS ERROR] normalized_distance_data produced NaN/Inf")
+
+        max_abs = distance_norm.abs().max().item()
+        if max_abs > 5.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] normalized_distance_data not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+
+        return distance_norm
+
+class height_data(ManagerTermBase): # height Sensor prep for observation
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+    ) -> torch.Tensor:
+
+        left_height = env.scene["height_sensor_left"].data.ray_hits_w
+        right_height = env.scene["height_sensor_right"].data.ray_hits_w
+        tcp_data = env.scene["tcp_transformer"].data
+
+        # isaaclab.utils transform_points not working correctly
+        translated_hits_left = left_height - tcp_data.target_pos_w # translate coordinate of casted ray of world coordinate into local coordinate frame
+        transposed_hits_left = quat_apply_inverse(tcp_data.target_quat_w, translated_hits_left) # rotate coordinate of casted ray of world coordinate into local coordinate frame
+        
+        translated_hits_right = right_height - tcp_data.target_pos_w # translate coordinate of casted ray of world coordinate into local coordinate frame
+        transposed_hits_right = quat_apply_inverse(tcp_data.target_quat_w, translated_hits_right) # rotate coordinate of casted ray of world coordinate into local coordinate frame
+
+        # ---- extract z ----
+        left_z = transposed_hits_left[:, :, 2]
+        right_z = transposed_hits_right[:, :, 2]
+
+        heights = torch.cat([left_z, right_z], dim=1)
+
+        # Remove NaN / Inf
+        heights = torch.nan_to_num(heights, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Clamp to physical range (0–1 meter)
+        heights = torch.clamp(heights, 0.0, 1.0)
+
+        # ---- OBS NORMALIZATION CHECK ----
+        if torch.isnan(heights).any() or torch.isinf(heights).any():
+            raise RuntimeError(f"[OBS ERROR] height_data produced NaN/Inf")
+
+        max_abs = heights.abs().max().item()
+        if max_abs > 5.0:   # adjust threshold depending on expected scale
+            print(f"[OBS WARNING] height_data not normalized, max|v|={max_abs:.3e}")
+        # ---------------------------------
+
+        #print("heights (obs): ", heights)
+        return heights
+    
+
+
+class camera_data(ManagerTermBase): # camera data prep for observation (comments for visualisation of input image)
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+
+        #self.fig = None
+        #self.axs = None
+        #self.im_clean = None 
+        #self.im_noisy = None
+        
+        #plt.ion()
+        
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+    ) -> torch.Tensor:
+        
+        tiled_camera = env.scene["tiled_camera"]
+        data_type = "distance_to_camera"
+
+        if data_type == "rgb":
+            camera_data = tiled_camera.data.output[data_type] / 255.0
+            mean_tensor = torch.mean(camera_data, dim=(1, 2), keepdim=True)
+            camera_data -= mean_tensor
+        elif data_type == "depth" or data_type == "distance_to_camera":
+            camera_data = tiled_camera.data.output[data_type].clone()
+            camera_data[camera_data == float("inf")] = 10.0
+            # camera_data = camera_data / 10.0 
+
+        """
+        viz_frame_clean = camera_data[2].clone() # visualisation of 2 env
+        
+        std = 0.2
+        mean = 0.0
+        
+        noise = torch.randn_like(viz_frame_clean) * std + mean
+        
+        viz_frame_noisy = viz_frame_clean + noise
+        
+        viz_frame_noisy = torch.clamp(viz_frame_noisy, min=0.0, max=10.0)
+
+        if viz_frame_clean.dim() == 3:
+            viz_frame_clean = viz_frame_clean.squeeze(-1)
+            viz_frame_noisy = viz_frame_noisy.squeeze(-1)
+            
+        img_np_clean = viz_frame_clean.detach().cpu().numpy()
+        img_np_noisy = viz_frame_noisy.detach().cpu().numpy()
+
+        if self.fig is None:
+            self.fig, self.axs = plt.subplots(1, 2, figsize=(8, 4))
+            
+            self.im_clean = self.axs[0].imshow(img_np_clean, cmap='viridis', vmin=0, vmax=10.0)
+            self.axs[0].set_title("Original Depth Image")
+            plt.colorbar(self.im_clean, ax=self.axs[0], label='Distance (m)', fraction=0.046, pad=0.04)
+            
+            self.im_noisy = self.axs[1].imshow(img_np_noisy, cmap='viridis', vmin=0, vmax=10.0)
+            self.axs[1].set_title(f"Depth Image with Noise")
+            plt.colorbar(self.im_noisy, ax=self.axs[1], label='Distance (m)', fraction=0.046, pad=0.04)
+            
+            plt.show(block=False)
+        
+        self.im_clean.set_data(img_np_clean)
+        self.im_noisy.set_data(img_np_noisy)
+        
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events() 
+        """
+        
+        return camera_data
+  
+def normalized_depth_image(
+    env: ManagerBasedEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
+    convert_perspective_to_orthogonal: bool = False,
+    normalize: bool = True,
+):
+    # extract the used quantities (to enable type-hinting)
+    sensor: TiledCamera | Camera | RayCasterCamera = env.scene.sensors[sensor_cfg.name]
+
+    data_type = sensor.cfg.data_types[0]
+    assert data_type == "distance_to_camera", "data type must be distance_to_camera"
+
+    # obtain the input image
+    images = sensor.data.output[data_type]
+
+    # depth image conversion
+    if (data_type == "distance_to_camera") and convert_perspective_to_orthogonal:
+        images = math_utils.orthogonalize_perspective_depth(images, sensor.data.intrinsic_matrices)
+
+    # ------------------------------------------------
+    # DEPTH CLEANING (CRITICAL)
+    # ------------------------------------------------
+    clipping_range = sensor.cfg.spawn.clipping_range
+    min_d, max_d = clipping_range
+
+    images = torch.nan_to_num(images, nan=max_d, posinf=max_d, neginf=min_d)
+    images = torch.clamp(images, min_d, max_d)
+
+    # ------------------------------------------------
+    # NORMALIZATION (CRITICAL)
+    # ------------------------------------------------
+    if normalize:
+        # normalize to 0..1
+        images = (images - min_d) / (max_d - min_d)
+
+        # optional: map to [-1,1] (often better for RL)
+        images = images * 2.0 - 1.0
+
+    # add channel dimension for CNN
+    # print("observation images: ", images)
+    # print("observation images shape 1: ", images.shape)
+    images = images.permute(0, 3, 1, 2).contiguous()  # (N,1,H,W)
+    # print("observation images shape 2: ", images.shape)
+    images = torch.nan_to_num(images, nan=0.0, posinf=1.0, neginf=-1.0)
+    return images.float()
+
+
+
+def image(
+    env: ManagerBasedEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
+    data_type: str = "rgb",
+    convert_perspective_to_orthogonal: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Images of a specific datatype from the camera sensor.
+
+    If the flag :attr:`normalize` is True, post-processing of the images are performed based on their
+    data-types:
+
+    - "rgb": Scales the image to (0, 1) and subtracts with the mean of the current image batch.
+    - "depth" or "distance_to_camera" or "distance_to_plane": Replaces infinity values with zero.
+
+    Args:
+        env: The environment the cameras are placed within.
+        sensor_cfg: The desired sensor to read from. Defaults to SceneEntityCfg("tiled_camera").
+        data_type: The data type to pull from the desired camera. Defaults to "rgb".
+        convert_perspective_to_orthogonal: Whether to orthogonalize perspective depth images.
+            This is used only when the data type is "distance_to_camera". Defaults to False.
+        normalize: Whether to normalize the images. This depends on the selected data type.
+            Defaults to True.
+
+    Returns:
+        The images produced at the last time-step
+    """
+    # extract the used quantities (to enable type-hinting)
+    sensor: TiledCamera | Camera | RayCasterCamera = env.scene.sensors[sensor_cfg.name]
+
+    # obtain the input image
+    images = sensor.data.output[data_type]
+
+    # depth image conversion
+    if (data_type == "distance_to_camera") and convert_perspective_to_orthogonal:
+        images = math_utils.orthogonalize_perspective_depth(images, sensor.data.intrinsic_matrices)
+
+    # rgb/depth/normals image normalization
+    if normalize:
+        if data_type == "rgb":
+            images = images.float() / 255.0
+            mean_tensor = torch.mean(images, dim=(1, 2), keepdim=True)
+            images -= mean_tensor
+        elif "distance_to" in data_type or "depth" in data_type:
+            images[images == float("inf")] = 0
+        elif "normals" in data_type:
+            images = (images + 1.0) * 0.5
+
+    return images.clone()
+
+class image_features(ManagerTermBase):
+    """Extracted image features from a pre-trained frozen encoder.
+
+    This term uses models from the model zoo in PyTorch and extracts features from the images.
+
+    It calls the :func:`image` function to get the images and then processes them using the model zoo.
+
+    A user can provide their own model zoo configuration to use different models for feature extraction.
+    The model zoo configuration should be a dictionary that maps different model names to a dictionary
+    that defines the model, preprocess and inference functions. The dictionary should have the following
+    entries:
+
+    - "model": A callable that returns the model when invoked without arguments.
+    - "reset": A callable that resets the model. This is useful when the model has a state that needs to be reset.
+    - "inference": A callable that, when given the model and the images, returns the extracted features.
+
+    If the model zoo configuration is not provided, the default model zoo configurations are used. The default
+    model zoo configurations include the models from Theia :cite:`shang2024theia` and ResNet :cite:`he2016deep`.
+    These models are loaded from `Hugging-Face transformers <https://huggingface.co/docs/transformers/index>`_ and
+    `PyTorch torchvision <https://pytorch.org/vision/stable/models.html>`_ respectively.
+
+    Args:
+        sensor_cfg: The sensor configuration to poll. Defaults to SceneEntityCfg("tiled_camera").
+        data_type: The sensor data type. Defaults to "rgb".
+        convert_perspective_to_orthogonal: Whether to orthogonalize perspective depth images.
+            This is used only when the data type is "distance_to_camera". Defaults to False.
+        model_zoo_cfg: A user-defined dictionary that maps different model names to their respective configurations.
+            Defaults to None. If None, the default model zoo configurations are used.
+        model_name: The name of the model to use for inference. Defaults to "resnet18".
+        model_device: The device to store and infer the model on. This is useful when offloading the computation
+            from the environment simulation device. Defaults to the environment device.
+        inference_kwargs: Additional keyword arguments to pass to the inference function. Defaults to None,
+            which means no additional arguments are passed.
+
+    Returns:
+        The extracted features tensor. Shape is (num_envs, feature_dim).
+
+    Raises:
+        ValueError: When the model name is not found in the provided model zoo configuration.
+        ValueError: When the model name is not found in the default model zoo configuration.
+    """
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
+        # initialize the base class
+        super().__init__(cfg, env)
+
+        # extract parameters from the configuration
+        self.model_zoo_cfg: dict = cfg.params.get("model_zoo_cfg")  # type: ignore
+        self.model_name: str = cfg.params.get("model_name", "resnet18")  # type: ignore
+        self.model_device: str = cfg.params.get("model_device", env.device)  # type: ignore
+
+        # List of Theia models - These are configured through `_prepare_theia_transformer_model` function
+        default_theia_models = [
+            "theia-tiny-patch16-224-cddsv",
+            "theia-tiny-patch16-224-cdiv",
+            "theia-small-patch16-224-cdiv",
+            "theia-base-patch16-224-cdiv",
+            "theia-small-patch16-224-cddsv",
+            "theia-base-patch16-224-cddsv",
+        ]
+        # List of ResNet models - These are configured through `_prepare_resnet_model` function
+        default_resnet_models = ["resnet18", "resnet34", "resnet50", "resnet101"]
+
+        # Check if model name is specified in the model zoo configuration
+        if self.model_zoo_cfg is not None and self.model_name not in self.model_zoo_cfg:
+            raise ValueError(
+                f"Model name '{self.model_name}' not found in the provided model zoo configuration."
+                " Please add the model to the model zoo configuration or use a different model name."
+                f" Available models in the provided list: {list(self.model_zoo_cfg.keys())}."
+                "\nHint: If you want to use a default model, consider using one of the following models:"
+                f" {default_theia_models + default_resnet_models}. In this case, you can remove the"
+                " 'model_zoo_cfg' parameter from the observation term configuration."
+            )
+        if self.model_zoo_cfg is None:
+            if self.model_name in default_theia_models:
+                model_config = self._prepare_theia_transformer_model(self.model_name, self.model_device)
+            elif self.model_name in default_resnet_models:
+                model_config = self._prepare_resnet_model(self.model_name, self.model_device)
+            else:
+                raise ValueError(
+                    f"Model name '{self.model_name}' not found in the default model zoo configuration."
+                    f" Available models: {default_theia_models + default_resnet_models}."
+                )
+        else:
+            model_config = self.model_zoo_cfg[self.model_name]
+
+        # Retrieve the model, preprocess and inference functions
+        self._model = model_config["model"]()
+        self._reset_fn = model_config.get("reset")
+        self._inference_fn = model_config["inference"]
+
+    def reset(self, env_ids: torch.Tensor | None = None):
+        # reset the model if a reset function is provided
+        # this might be useful when the model has a state that needs to be reset
+        # for example: video transformers
+        if self._reset_fn is not None:
+            self._reset_fn(self._model, env_ids)
+
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
+        data_type: str = "rgb",
+        convert_perspective_to_orthogonal: bool = False,
+        model_zoo_cfg: dict | None = None,
+        model_name: str = "resnet18",
+        model_device: str | None = None,
+        inference_kwargs: dict | None = None,
+    ) -> torch.Tensor:
+        # obtain the images from the sensor
+        image_data = image(
+            env=env,
+            sensor_cfg=sensor_cfg,
+            data_type=data_type,
+            convert_perspective_to_orthogonal=convert_perspective_to_orthogonal,
+            normalize=False,  # we pre-process based on model
+        )
+        # store the device of the image
+        image_device = image_data.device
+        # forward the images through the model
+        features = self._inference_fn(self._model, image_data, **(inference_kwargs or {}))
+
+        # move the features back to the image device
+        return features.detach().to(image_device)
+
+    """
+    Helper functions.
+    """
+
+    def _prepare_theia_transformer_model(self, model_name: str, model_device: str) -> dict:
+        """Prepare the Theia transformer model for inference.
+
+        Args:
+            model_name: The name of the Theia transformer model to prepare.
+            model_device: The device to store and infer the model on.
+
+        Returns:
+            A dictionary containing the model and inference functions.
+        """
+        from transformers import AutoModel
+
+        def _load_model() -> torch.nn.Module:
+            """Load the Theia transformer model."""
+            model = AutoModel.from_pretrained(f"theaiinstitute/{model_name}", trust_remote_code=True).eval()
+            return model.to(model_device)
+
+        def _inference(model, images: torch.Tensor) -> torch.Tensor:
+            """Inference the Theia transformer model.
+
+            Args:
+                model: The Theia transformer model.
+                images: The preprocessed image tensor. Shape is (num_envs, height, width, channel).
+
+            Returns:
+                The extracted features tensor. Shape is (num_envs, feature_dim).
+            """
+            # Move the image to the model device
+            image_proc = images.to(model_device)
+            # permute the image to (num_envs, channel, height, width)
+            image_proc = image_proc.permute(0, 3, 1, 2).float() / 255.0
+            # Normalize the image
+            mean = torch.tensor([0.485, 0.456, 0.406], device=model_device).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=model_device).view(1, 3, 1, 1)
+            image_proc = (image_proc - mean) / std
+
+            # Taken from Transformers; inference converted to be GPU only
+            features = model.backbone.model(pixel_values=image_proc, interpolate_pos_encoding=True)
+            return features.last_hidden_state[:, 1:]
+
+        # return the model, preprocess and inference functions
+        return {"model": _load_model, "inference": _inference}
+
+    def _prepare_resnet_model(self, model_name: str, model_device: str) -> dict:
+        """Prepare the ResNet model for inference.
+
+        Args:
+            model_name: The name of the ResNet model to prepare.
+            model_device: The device to store and infer the model on.
+
+        Returns:
+            A dictionary containing the model and inference functions.
+        """
+        from torchvision import models
+
+        def _load_model() -> torch.nn.Module:
+            """Load the ResNet model."""
+            # map the model name to the weights
+            resnet_weights = {
+                "resnet18": "ResNet18_Weights.IMAGENET1K_V1",
+                "resnet34": "ResNet34_Weights.IMAGENET1K_V1",
+                "resnet50": "ResNet50_Weights.IMAGENET1K_V1",
+                "resnet101": "ResNet101_Weights.IMAGENET1K_V1",
+            }
+
+            # load the model
+            model = getattr(models, model_name)(weights=resnet_weights[model_name]).eval()
+            return model.to(model_device)
+
+        def _inference(model, images: torch.Tensor) -> torch.Tensor:
+            """Inference the ResNet model.
+
+            Args:
+                model: The ResNet model.
+                images: The preprocessed image tensor. Shape is (num_envs, channel, height, width).
+
+            Returns:
+                The extracted features tensor. Shape is (num_envs, feature_dim).
+            """
+            # move the image to the model device
+            image_proc = images.to(model_device)
+            # permute the image to (num_envs, channel, height, width)
+            image_proc = image_proc.permute(0, 3, 1, 2).float() / 255.0
+            # normalize the image
+            mean = torch.tensor([0.485, 0.456, 0.406], device=model_device).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=model_device).view(1, 3, 1, 1)
+            image_proc = (image_proc - mean) / std
+            image_proc[image_proc == float("inf")] = 10.0 # added preprocessing
+            return model(image_proc)
+
+        # return the model, preprocess and inference functions
+        return {"model": _load_model, "inference": _inference}
+
+
+def last_processed_action(env: ManagerBasedEnv, action_name: str | None = None) -> torch.Tensor:
+    assert action_name is not None, (
+        "last_processed_action requires action_name (e.g. 'arm_action'). "
+        "If you want the full action vector, use a different obs term."
+    )
+    last_action = env.action_manager.get_term(action_name).processed_actions
+    last_action = torch.nan_to_num(last_action, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # ---- OBS NORMALIZATION CHECK ----
+    if torch.isnan(last_action).any() or torch.isinf(last_action).any():
+        raise RuntimeError(f"[OBS ERROR] last_processed_action produced NaN/Inf")
+
+    max_abs = last_action.abs().max().item()
+    if max_abs > 50.0:   # adjust threshold depending on expected scale
+        print(f"[OBS WARNING] last_processed_action not normalized, max|v|={max_abs:.3e}")
+    # ---------------------------------
+
+    return last_action
+
+
+def normalized_joint_effort(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """
+    Normalized joint torques in [-1, 1].
+
+    τ_normalized = τ_applied / τ_limit
+
+    Uses actuator effort limits defined in the robot config.
+    """
+
+    asset = env.scene[asset_cfg.name]
+
+    # applied torques: (N_envs, n_joints)
+    tau = asset.data.applied_torque[:, asset_cfg.joint_ids]
+
+    # print("observation, applied torque: ", tau)
+
+    # actuator limits
+    # IsaacLab stores limits per joint
+    effort_limits = asset.data.joint_effort_limits[:, asset_cfg.joint_ids]
+
+    # avoid division by zero
+    effort_limits = torch.clamp(effort_limits, min=1e-6)
+
+    # normalize
+    tau_norm = tau / effort_limits
+
+    # clip for safety
+    tau_norm = torch.clamp(tau_norm, -1.0, 1.0)
+    tau_norm = torch.nan_to_num(tau_norm, nan=0.0, posinf=1.0, neginf=-1.0)
+
+    # ---- OBS NORMALIZATION CHECK ----
+    if torch.isnan(tau_norm).any() or torch.isinf(tau_norm).any():
+        raise RuntimeError(f"[OBS ERROR] normalized_joint_effort produced NaN/Inf")
+
+    max_abs = tau_norm.abs().max().item()
+    if max_abs > 5.0:   # adjust threshold depending on expected scale
+        print(f"[OBS WARNING] normalized_joint_effort not normalized, max|v|={max_abs:.3e}")
+    # ---------------------------------
+
+    return tau_norm

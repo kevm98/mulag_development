@@ -1,0 +1,84 @@
+seed: 42
+device: "cuda"
+
+env:
+  id: "RRLAB-Velocity-Rough-Unitree-Go2-v0"
+  num_envs: 64
+  vecnormalize:
+    enabled: true
+    path: "/home/qili/Software/IsaacSim_Extensions/rrlab/logs/sb3/RRLAB-Velocity-Rough-Unitree-Go2-v0/2026-02-02_16-52-49/model_vecnormalize.pkl"
+    # teacher inference wants env.training=False, but DAgger rollout uses the env for collecting
+    # so we keep training=True for the collector; just disable reward norm.
+    training: true
+    norm_reward: false
+
+teacher:
+  # load SB3 teacher policy (BasePolicy) from PPO checkpoint
+  checkpoint: "/home/qili/Software/IsaacSim_Extensions/rrlab/logs/sb3/RRLAB-Velocity-Rough-Unitree-Go2-v0/2026-02-02_16-52-49/model.zip"
+  algo_cls: "stable_baselines3:PPO"  # optional if you want algo-specific load; otherwise use imitation.load_policy
+  use_policy_only: true             # if true -> teacher_algo.policy; else -> teacher_algo
+  deterministic: true
+
+student:
+  # choose policy type here (must be importable)
+  policy_cls: "stable_baselines3.ppo.policies:MultiInputActorCriticPolicy"
+  # alternative examples:
+  # policy_cls: "stable_baselines3.common.policies:ActorCriticPolicy"
+  # policy_cls: "my_pkg.my_policies:MyCustomPolicy"
+
+  # everything below is passed to the SB3 policy constructor
+  policy_kwargs:
+    # SB3 requires lr_schedule callable; we create it from config
+    lr_schedule:
+      type: "constant"  # constant | linear
+      value: 3.0e-4     # used by the policy's optimizer; BC will override via its optimizer anyway
+
+    net_arch:
+      pi: [512, 256, 128]
+      vf: [512, 256, 128]
+
+    activation_fn: "nn.ELU"
+    ortho_init: true
+    use_sde: false
+    log_std_init: 0.0
+    full_std: true
+    use_expln: false
+    squash_output: false
+    share_features_extractor: true
+    normalize_images: true
+
+    # encoder/feature extractor is fully config-driven
+    features_extractor_class: "rrlab_tasks.manager_based.locomotion.velocity.config.go2.agents.sb3.encoders:MultiBranchExtractor"
+    features_extractor_kwargs:
+      fusion: "concat"
+      post_fusion_layers: [256, 128]
+      post_fusion_activation: "elu"
+      branches:
+        state:
+          type: "mlp"
+          keys: ["base_lin_vel", "base_ang_vel", "projected_gravity", "velocity_commands", "joint_pos", "joint_vel", "actions"]
+          layers: [256, 128]
+          activation: "elu"
+        height:
+          type: "mlp"
+          keys: ["height_scan"]
+          layers: [256, 128]
+          activation: "elu"
+
+bc:
+  batch_size: 4096
+  minibatch_size: 256
+  optimizer_cls: "torch.optim:Adam"
+  optimizer_kwargs:
+    lr: 3.0e-4
+    weight_decay: 0.0
+  ent_weight: 0.0
+  l2_weight: 0.0
+  grad_clip_norm: 1.0
+  log_interval_updates: 50
+
+dagger:
+  total_timesteps: 2_000_000
+  rollout_round_min_episodes: 3
+  rollout_round_min_timesteps: 500
+  scratch_dir: "outputs/dagger/${now:%Y-%m-%d_%H-%M-%S}"
