@@ -1,0 +1,416 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from isaaclab.assets import ArticulationCfg
+from isaaclab.envs import DirectRLEnvCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.utils import configclass
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
+from kevin_integration.tasks.rrlab_reference_conventions import (
+    OBSTACLE_ARM_JOINT_NAMES,
+    OBSTACLE_DRIVING_SPEED_RANGE_KMH,
+    OBSTACLE_DRIVING_SPEED_RESAMPLE_STEP_THRESHOLD,
+    OBSTACLE_DRIVING_SPEED_UPDATE_INTERVAL_S,
+    OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES,
+    OBSTACLE_WHEEL_JOINT_NAMES,
+    OBSTACLE_WHEEL_RADIUS_M,
+)
+from rrlab_assets import MULAG_CFG
+
+_MODELS_DIR = str(Path(__file__).resolve().parents[2] / "models")
+_MODELS_CYLINDER_DIR = str(Path(__file__).resolve().parent / "Models_cylinder ")
+_CYLINDER_MAPPING_PATH = str(Path(__file__).resolve().parents[2] / "rom_cylinders" / "cylinder_coordinate_mapping.json")
+
+# -- Observation dimension constants -------------------------------------------------
+ARM_JOINT_DIM = 5
+DISTANCE_TO_GOAL_DIM = 2
+UNIMOG_POSE_DIM = 4
+UNIMOG_POSE_DOT_DIM = 3
+HISTORY_STEPS = 3
+
+# Compact observation: only live data (no placeholder zeros for missing sensors)
+# joint_pos(5*h), joint_vel(5*h), distance_to_goal(2*h), joint_torques(5),
+# last_action(5), unimog_pose(4), unimog_pose_dot(3)
+OBS_DIM = (
+    ARM_JOINT_DIM * HISTORY_STEPS  # 15
+    + ARM_JOINT_DIM * HISTORY_STEPS  # 15
+    + DISTANCE_TO_GOAL_DIM * HISTORY_STEPS  # 6
+    + ARM_JOINT_DIM  # 5
+    + ARM_JOINT_DIM  # 5
+    + UNIMOG_POSE_DIM  # 4
+    + UNIMOG_POSE_DOT_DIM  # 3
+)  # = 53
+
+
+@configclass
+class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
+    # -- Core --
+    decimation = 2
+    episode_length_s = 34.0
+    action_scale = 0.02  # PPO reference increment; large enough for visible cylinder motion.
+    action_space = 5
+    observation_space = OBS_DIM
+    state_space = 0
+
+    sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=2)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=169, env_spacing=20.0, replicate_physics=False)
+    robot_cfg: ArticulationCfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    models_dir = _MODELS_DIR
+
+    # -- Arm joint names and end-effector --
+    arm_joint_names: tuple[str, ...] = tuple(OBSTACLE_ARM_JOINT_NAMES)
+    cylinder_joint_names: tuple[str, ...] = tuple(OBSTACLE_HYDRAULIC_COMMAND_JOINT_NAMES)
+    task_space_ee_body_name = "Messerkopf"
+
+    # -- PPO -> cylinder-space ID -> learned dynamics -> PhysX pipeline --
+    use_cylinder_id_pipeline = True
+    cylinder_models_root = _MODELS_CYLINDER_DIR
+    id_cylinder_checkpoint = "id_cylinder_space /runs_id_cylinder/id_cylinder_prevcmd_delta_v2/best_id_cylinder.pt"
+    id_checkpoint_override_path = ""  # path to fine-tuned ID checkpoint
+    rom_cylinder_checkpoint = "latest"
+    fd_cylinder_checkpoint = "fd_cylinder_space /runs_fd_cylinder/fd_cylinder_rollout_v2/best_fd_cylinder.pt"
+    # "fd" follows PPO -> ID -> FD -> delta extension -> PhysX. Set to "rom"
+    # to compare against the learned cylinder ROM path.
+    cylinder_dynamics_model = "fd"
+    cylinder_coordinate_mapping = _CYLINDER_MAPPING_PATH
+    cylinder_coordinate_mapping_mode = "nominal_sign_offset"
+    enable_cylinder_space_scaling = True
+    allow_provisional_nominal_reference = True
+    allow_provisional_range_mapping = False
+    strict_cylinder_usd_scaling = True
+    strict_cylinder_usd_delta_scale = True
+    cylinder_usd_limit_tolerance_m = 1.0e-5
+    cylinder_usd_delta_scale_tolerance = 1.0e-4
+    max_abs_valve = 1.0
+    cylinder_rom_delta_clip_m = 0.02
+    cylinder_fd_delta_clip_m = 0.02
+    cylinder_fd_scale_delta_by_sample_time = True
+    cylinder_fd_sample_time_s = 0.0  # 0 means use checkpoint metadata.
+    cylinder_fd_delta_gain = 1.0
+    cylinder_learned_model_dt_s = 0.0  # 0 means use FD checkpoint sample_time_s when available.
+    clip_target_delta_xdot_to_training_range = True
+    target_delta_xdot_clip_std = 3.0
+    log_target_delta_xdot_clipping = True
+    target_delta_xdot_clip_log_first_n = 20
+    cylinder_hydraulic_feature_mode = "training_mean"  # "zero", "training_mean", or "fd_dp_state".
+    cylinder_neutral_hold_deadband_m = 1.0e-5
+    cylinder_neutral_hold_velocity_deadband_mps = 1.0e-5
+    ppo_neutral_action_deadband = 1.0e-6
+    direct_valve_position_scale = 0.005
+    joint_reference_velocity_clip = 0.8
+    tool_joint_control_mode = "direct_position"
+    # "position": position targets (implicit actuator drives).
+    # "velocity": velocity targets -- maps learned vel to USD vel via velocity scale.
+    cylinder_actuation_mode = "position"
+    cylinder_velocity_target_scale = 1.0
+    enable_joint6_coupling = True
+    joint6_coupling_a = 1.0
+    joint6_coupling_b = 0.0
+    joint6_coupling_source_joint_name = ""
+    joint6_coupling_target_joint_name = ""
+    enable_console_debug: bool = False
+    enable_sequence_tick_debug: bool = False
+    enable_reset_debug: bool = False
+    enable_pipeline_debug: bool = False
+    enable_startup_summary: bool = True
+    enable_verbose_startup: bool = False
+    debug_log_interval: int = 1000
+    debug_env_ids: tuple[int, ...] = (0,)
+    debug_max_envs_to_print: int = 1
+    write_debug_csv: bool = False
+    debug_csv_path: str = "outputs/cylinder_diagnostics/runtime_pipeline_debug.csv"
+    console_log_level: str = "summary"
+    pipeline_debug_prints = False
+    pipeline_debug_first_steps = 5
+    pipeline_debug_interval = 1000
+    allow_debug_manual_cylinder_targets = True
+
+    # -- Sequence cylinder model config (HistoryGRU ID + FD) --
+    use_sequence_cylinder_models = True
+    sequence_id_checkpoint = "id_cylinder_space /runs_id_cylinder/id_cylinder_sequence_delta_clean_v1/best_id_cylinder_sequence_delta_clean_v1.pt"
+    sequence_fd_checkpoint = "fd_cylinder_space /runs_fd_cylinder/fd_cylinder_sequence_motion_v1/best_fd_cylinder_sequence_motion_v1.pt"
+    sequence_history_length = "auto_from_metadata"
+    sequence_model_dt = "auto_from_metadata"
+    enable_sequence_runtime_debug = False
+    sequence_runtime_log_interval = 1000
+    sequence_model_decimation = "auto"
+    sequence_history_update_mode = "model_dt"
+    sequence_command_hold_mode = "distribute_fd_delta"
+    sequence_fd_delta_gain = 1.0
+    sequence_fd_residual_over_zero_valve = False
+    fd_output_gain = 1.0
+    fd_residual_blend = 0.0
+    fd_correction_mode = "none"
+    fd_calibration_path = ""
+    fd_checkpoint_override = ""
+
+    # -- Lower-level cylinder velocity servo --
+    # "none": existing ID -> FD feedforward path.
+    # "cylinder_velocity_pid": PID valve command only.
+    # "id_ff_plus_cylinder_velocity_pid": learned ID feedforward plus PID residual.
+    low_level_servo_mode = "none"
+    cyl_vel_kp = [6.0, 6.0, 6.0, 6.0]
+    cyl_vel_ki = [2.0, 2.0, 2.0, 2.0]
+    cyl_vel_kd = [0.0, 0.0, 0.0, 0.0]
+    cyl_vel_integral_limit = 0.2
+    cyl_vel_cmd_limit = 0.05
+    valve_cmd_limit = 1.0
+    servo_deadband_mps = 1.0e-4
+    servo_rate_limit = 0.0
+    servo_use_fd_prediction = True
+    servo_tracking_delta_gain = 0.0
+
+    # -- FD servo usage mode (paper-matched pipeline) --
+    # "prediction_only":                delta_x_cmd = FD(valve_total)
+    # "prediction_plus_feedback_delta": delta_x_cmd = FD(valve_total) + Kx * e * dt
+    # "bypass_for_diagnostic_only":     delta_x_cmd = v_des * dt (DIAGNOSTIC ONLY)
+    fd_servo_usage = "prediction_only"
+
+    # -- FD correction gain (used when fd_servo_usage = "prediction_plus_feedback_delta") --
+    servo_fd_correction_gain = 0.0
+
+    # -- Servo step dt override (0 = use env step_dt) --
+    servo_dt = 0.0
+
+    # -- FD tracking servo gains (deployment mode: fd_tracking_servo / id_pid_fd_tracking_servo) --
+    fd_gain = 1.0  # multiplier on original FD delta output
+    tracking_gain = 0.0  # velocity error -> delta correction factor
+    tracking_delta_clip_m = 0.01  # clip on tracking delta correction
+    tracking_kp = 40.0  # valve-space P gain for velocity tracking PID
+    tracking_ki = 15.0  # valve-space I gain
+    tracking_kd = 2.0  # valve-space D gain
+    tracking_integral_limit = 0.5  # anti-windup on valve integral
+
+    # -- Position-ramp PI gains (used when low_level_servo_mode = "position_ramp_pi") --
+    pos_pi_kp = [0.5, 0.5, 0.5, 0.5]
+    pos_pi_ki = [0.2, 0.2, 0.2, 0.2]
+    pos_pi_kd = [0.0, 0.0, 0.0, 0.0]
+    pos_pi_integral_limit_m = 0.01
+    pos_pi_delta_clip_m = 0.005
+
+    # -- Scripted vehicle motion --
+    enable_scripted_vehicle_motion = True
+    vehicle_speed_min_kmh = 3.0  # moving (teacher-student range) (was OBSTACLE_DRIVING_SPEED_RANGE_KMH[0])
+    vehicle_speed_max_kmh = 8.0  # moving (teacher-student range) (was OBSTACLE_DRIVING_SPEED_RANGE_KMH[1])
+    vehicle_wheel_joint_names = tuple(OBSTACLE_WHEEL_JOINT_NAMES)
+    vehicle_wheel_radius_m = OBSTACLE_WHEEL_RADIUS_M
+    vehicle_speed_update_interval_s = OBSTACLE_DRIVING_SPEED_UPDATE_INTERVAL_S
+    vehicle_speed_resample_step_threshold = OBSTACLE_DRIVING_SPEED_RESAMPLE_STEP_THRESHOLD
+
+    # -- Task-space command ranges (in base frame, reachable workspace) --
+    command_pos_x_range = (4.0, 6.0)  # forward reach in base frame
+    command_pos_y_range = (-1.5, 1.5)  # lateral reach in base frame
+    command_pos_z = 0.3  # low to ground in base frame
+    command_yaw_rad = 0.0     # match default initial cutter yaw (0 rad = aligned with vehicle forward)
+    command_resample_time_s_range = (10.0, 12.0)
+
+    # -- Terrain / physics --
+    enable_mathbox_ground: bool = True
+    ground_color = (0.0, 0.0, 0.0)
+    lane_line_color = (1.0, 1.0, 1.0)
+    lane_line_width_m = 0.08
+    disable_heavy_terrain = True
+    terrain_static_friction = 1.0
+    terrain_dynamic_friction = 1.0
+    terrain_restitution = 0.0
+
+    # -- Reward weights (simplified — core mowing only, no collision avoidance) --
+    rew_position_tracking_linear = -12.0
+    rew_position_tracking_tanh = 30.0
+    rew_tcp_ahead = 2.0
+    rew_yaw_tracking = -15.0
+    rew_finish_progress = 10.0
+    rew_action_rate = -0.06
+    rew_joint_vel = -0.7
+
+    # -- Reward params --
+    position_tracking_offset = 0.4
+    position_tracking_std = 0.4
+    yaw_tracking_offset_deg = 30.0    # tolerance before yaw penalty starts
+    tcp_ahead_threshold = -0.1
+    finish_traj_length_x = 40.0
+    finish_bonus_weight = 2.0
+
+    # -- Termination --
+    joint_limit_margin = 0.15  # relaxed from 0.05 for debugging
+    unimog_flying_roll_pitch_threshold = 1.0  # relaxed from ~28 deg to ~57 deg
+    unimog_lateral_deviation_threshold = 8.0  # relaxed from 4m to 8m
+    tcp_face_backwards_yaw_threshold = 3.14   # pi — only terminate if fully backwards
+    tcp_above_ground_height_threshold = 3.0   # relaxed from 1.8m to 3m
+
+    # -- Stubs for train script compatibility (all unused in upper-level mode) --
+    control_mode = "joint_space_validation"
+    low_level_control_mode = "position_delta"
+    reference_mode = "joint_space_validation"
+    position_delta_source = "direct_action"
+    use_sd_observer = False
+    use_sd_feedback = False
+    sd_feedback_beta = 0.01
+    sd_dP_rate_limit = 100000.0
+    sd_fnet_rate_limit = 10000.0
+    use_reduced_hydraulic_rom = False
+    use_final_causal_cylinder_rom = False
+    final_causal_rom_export_dir = ""
+    rom_output_mode = "velocity_to_position_target"
+    rom_use_sd_feedback = False
+    rom_use_id_valve_cmd = True
+    rom_dt = 0.01
+    rom_xdot_max = [0.8, 0.8, 0.8, 0.8]
+    rom_dx_max = [0.0005, 0.0005, 0.0005, 0.0005]
+    use_fd_effort = False
+    use_fd_residual_alpha = False
+    fd_residual_alpha = 0.002
+    max_abs_torque = 5.0
+    torque_ramp_steps = 1000
+    torque_safety_scale = 1.0
+    torque_adapter_mode = "scale_bias"
+    torque_adapter_preset = "conservative"
+    torque_adapter_scale = [0.0001, 0.001, 0.0005, 0.0001]
+    torque_adapter_bias = [0.0, 0.0, 0.0, 0.0]
+    action_to_qddot_scale = 0.5
+    qddot_cmd_clip = 5.0
+    use_q_ref_ramp = False
+    q_ref_ramp_time_s = 2.0
+    q_ref_ramp_profile = "smoothstep"
+    use_q_ref_curriculum = False
+    q_ref_target_scale_initial = 0.25
+    q_ref_target_scale_final = 1.0
+    q_ref_curriculum_steps = 20000
+    enable_goal_difficulty_curriculum = False
+    goal_curriculum_stage_scales = [0.1, 0.25, 0.6, 1.0]
+    task_space_observation_space = OBS_DIM
+    use_joint5_coupling = False
+    joint5_coupling_source_joint = 3
+    joint5_coupling_target_joint = 4
+    joint5_coupling_gain = 1.0
+    joint5_coupling_bias = 0.0
+    q_tracking_reward_joint_weights = [1.0, 1.0, 1.0, 1.0, 0.0]
+    q_tracking_debug_joint_weights = [1.0, 1.0, 1.0, 1.0, 0.0]
+    q_tracking_joint_weights = [1.0, 1.0, 1.0, 1.0, 0.0]
+    kevin_fixed_pose_contract_version = ""
+    reward_contract_version = ""
+    rew_q_tracking = 0.0
+    rew_qdot = 0.0
+    rew_alive = 0.0
+    rew_termination = 0.0
+    rew_fd_load = 0.0
+    rew_progress = 0.0
+    rew_action_saturation = 0.0
+    action_saturation_threshold = 0.9
+    rew_action_magnitude = 0.0
+    progress_ema_alpha = 0.1
+    use_settle_tracking_reward = False
+    settle_ramp_progress_threshold = 0.95
+    rew_settle_tracking = 0.0
+    use_joint1_settle_tracking_reward = False
+    rew_joint1_settle_tracking = 0.0
+    joint1_settle_error_deadband = 0.005
+    log_full_pipeline_debug = False
+    debug_reward_terms = False
+    verbose_reset_logging = False
+
+    def __post_init__(self):
+        apply_kevin_sim_memory_optimizations(self.sim)
+
+        # Override prim_path and add PD gains (local to this task, does not modify MULAG_CFG)
+        self.robot_cfg = self.robot_cfg.replace(prim_path="/World/envs/env_.*/Robot")
+        from isaaclab.actuators import ImplicitActuatorCfg
+        self.robot_cfg.actuators = {
+            "drehzapfen_cylinder": ImplicitActuatorCfg(
+                joint_names_expr=["Drehzapfen_joint"],
+                stiffness=15000000.0,
+                damping=1000000.0,
+                effort_limit_sim=100000000.0,
+            ),
+            "ausleger_i_cylinder": ImplicitActuatorCfg(
+                joint_names_expr=["Ausleger_I_joint"],
+                stiffness=6000000.0,
+                damping=600000.0,
+                effort_limit_sim=10000000.0,
+            ),
+            "ausleger_ii_cylinder": ImplicitActuatorCfg(
+                joint_names_expr=["Ausleger_II_joint"],
+                stiffness=1000000.0,
+                damping=500000.0,
+                effort_limit_sim=1000000.0,
+            ),
+            "messerkopf_schwenk_cylinder": ImplicitActuatorCfg(
+                joint_names_expr=["Messerkopf_Schwenk_joint"],
+                stiffness=1000000.0,
+                damping=500000.0,
+                effort_limit_sim=100000.0,
+            ),
+            "messerkopf_passive_coupled": ImplicitActuatorCfg(
+                joint_names_expr=["Messerkopf_joint"],
+                stiffness=6000.0,
+                damping=6000.0,
+                effort_limit_sim=100000.0,
+            ),
+            "mulag_wheels": ImplicitActuatorCfg(
+                joint_names_expr=[
+                    "Wheel_Front_Left_joint", "Wheel_Front_Right_joint",
+                    "Wheel_Rear_Left_joint", "Wheel_Rear_Right_joint",
+                    "Wheel_Front_Left_Steering_joint", "Wheel_Front_Right_Steering_joint",
+                ],
+                stiffness=10000.0, damping=1000.0,
+                effort_limit_sim=100000.0,
+            ),
+        }
+        # The cylinder-actuator USD is authored with its lowest geometry at root z ~= 0.
+        # Keep a small clearance so the truck is not visually sunk, without spawning it
+        # high enough to drop/tip before the hydraulic pipeline starts controlling.
+        self.robot_cfg.init_state.pos = (-25.4, 4.3, 1.11)
+
+
+@configclass
+class MulagUpperLevelEnvCfg_PLAY(MulagUpperLevelEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class MulagUpperLevelPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    num_steps_per_env = 24
+    max_iterations = 2000
+    save_interval = 100
+    experiment_name = "mulag_upper_level"
+    run_name = ""
+    resume = False
+    empirical_normalization = True
+    obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[256, 256, 128],
+        activation="elu",
+        obs_normalization=True,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[256, 256, 128],
+        activation="elu",
+        obs_normalization=True,
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
+
+    def __post_init__(self):
+        for model_cfg in (self.actor, self.critic):
+            for attr_name in ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"):
+                if attr_name in getattr(model_cfg, "__dict__", {}):
+                    delattr(model_cfg, attr_name)

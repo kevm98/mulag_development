@@ -335,7 +335,7 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self):
         self.robot_cfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-        self.robot_cfg.init_state.pos = (-25.4, 4.3, 0.0)
+        self.robot_cfg.init_state.pos = (-25.4, 4.3, 1.11)
         apply_kevin_sim_memory_optimizations(self.sim)
 
 

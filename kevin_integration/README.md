@@ -349,7 +349,6 @@ These commands do not start IsaacLab:
 ```bash
 python kevin_integration/tasks/test_aam_runtime_wiring_contract.py
 python kevin_integration/tasks/test_fixed_final_pose_task.py
-python kevin_integration/tasks/test_curriculum_learnability_repair.py
 python kevin_integration/tasks/test_preflight_observation_contract.py
 python kevin_integration/tasks/test_asset_preflight_classifier.py
 python kevin_integration/tasks/test_mechanical_constraint_resolver.py

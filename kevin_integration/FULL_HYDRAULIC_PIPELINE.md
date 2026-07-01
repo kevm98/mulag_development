@@ -171,7 +171,6 @@ Isaac runtime validation.
 Focused offline contracts:
 
 ```bash
-python kevin_integration/tasks/test_curriculum_learnability_repair.py
 python kevin_integration/tasks/test_fixed_final_pose_task.py
 python kevin_integration/tasks/test_aam_runtime_wiring_contract.py
 ```
