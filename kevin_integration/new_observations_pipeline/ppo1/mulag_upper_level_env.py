@@ -128,6 +128,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._target_delta_xdot_clip_log_count = 0
         self._cylinder_pos_target = torch.zeros((self.num_envs, 4), device=self.device)
         self._neutral_hold_cylinder_pos_target = torch.zeros((self.num_envs, 4), device=self.device)
+        self._explicit_pid_integral_error = torch.zeros((self.num_envs, 4), device=self.device)
+        self._explicit_force_bias = torch.zeros((self.num_envs, 4), device=self.device)
+        self._explicit_bias_calibrated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._explicit_bias_calib_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._explicit_force_bias_accum = torch.zeros((self.num_envs, 4), device=self.device)
+        self._last_force_cmd = torch.zeros((self.num_envs, 4), device=self.device)
+        self._qd_filt = torch.zeros((self.num_envs, 4), device=self.device)
+        self._prev_force_cmd = torch.zeros((self.num_envs, 4), device=self.device)
+        self._explicit_bias_window_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._bias_shapes_printed = False
         self._neutral_hold_prev_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._prev_valve_cmd = torch.zeros((self.num_envs, 4), device=self.device)
         self._id_prev_valve_cmd_input = torch.zeros_like(self._prev_valve_cmd)
@@ -1313,7 +1323,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
         ground_color = tuple(getattr(self.cfg, "ground_color", (0.0, 0.0, 0.0)))
         ground_cfg = sim_utils.MeshCuboidCfg(
             size=(200.0, 200.0, 0.02),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                contact_offset=0.02,  # 2cm contact offset to prevent penetration
+                rest_offset=0.0,      # Contact starts at surface
+            ),
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 static_friction=float(getattr(self.cfg, "terrain_static_friction", 1.0)),
                 dynamic_friction=float(getattr(self.cfg, "terrain_dynamic_friction", 1.0)),
@@ -1643,6 +1656,14 @@ class MulagUpperLevelEnv(DirectRLEnv):
 
         terminated = joint_limit_violation | flying | lateral_deviation | tcp_face_backwards | nonfinite
         truncated = timeout | end_of_lane
+        self._last_done_cause_masks = {
+            "timeout": timeout.detach().clone(),
+            "joint_limit": joint_limit_violation.detach().clone(),
+            "base_flying": flying.detach().clone(),
+            "workspace_violation": lateral_deviation.detach().clone() | tcp_face_backwards.detach().clone(),
+            "NaN/nonfinite": nonfinite.detach().clone(),
+            "success": end_of_lane.detach().clone(),
+        }
 
         return terminated, truncated
 
@@ -1658,6 +1679,14 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 f"PPO action must have shape ({self.num_envs}, {self.cfg.action_space}), "
                 f"got {tuple(self._ppo_raw_action.shape)}."
             )
+        if self._debug_manual_cylinder_position_target is not None:
+            self._current_action = torch.zeros_like(self._ppo_raw_action)
+            self._action_hydraulic.zero_()
+            self._action_target_delta_x_learned.zero_()
+            self._action_target_delta_xdot_learned.zero_()
+            self._neutral_hold_mask[:] = True
+            self._neutral_hold_prev_mask[:] = True
+            return
         if bool(getattr(self.cfg, "use_cylinder_id_pipeline", False)):
             self._current_action = torch.clamp(self._ppo_raw_action, -1.0, 1.0)
             self._run_cylinder_id_pipeline()
@@ -2249,19 +2278,243 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 f"  ROM input/output shape: {self._cylinder_rom.last_input_shape} -> {self._cylinder_rom.last_output_shape}",
                 flush=True,
             )
-        if self._cylinder_fd is not None:
-            print(
-                f"  FD input/output shape: {self._cylinder_fd.last_input_shape} -> {self._cylinder_fd.last_output_shape}",
-                flush=True,
-            )
 
+    def _ensure_batched_cylinder_target(self, q_des):
+        """Ensure cylinder target tensor has shape [B, 4].
+
+        Handles:
+          [4]       -> expand to [B, 4]
+          [1, 4]    -> expand to [B, 4]
+          [B, 4]    -> pass through
+        """
+        import torch as _torch
+        B = self.num_envs
+        q_des = _torch.as_tensor(q_des, device=self.device, dtype=_torch.float32)
+        if q_des.ndim == 1:
+            if q_des.numel() != 4:
+                raise RuntimeError(f"Expected [4], got {q_des.shape}")
+            q_des = q_des.unsqueeze(0).expand(B, -1).clone()
+        elif q_des.ndim == 2:
+            if q_des.shape == (1, 4) and B > 1:
+                q_des = q_des.expand(B, -1).clone()
+            elif q_des.shape != (B, 4):
+                raise RuntimeError(f"Bad q_des shape: {q_des.shape}, expected {(B, 4)}")
+        else:
+            raise RuntimeError(f"Bad q_des ndim: {q_des.ndim}, shape={q_des.shape}")
+        return q_des
+
+    def _explicit_effort_target(self, q_des: torch.Tensor) -> None:
+        """Apply explicit PD/PID/bias effort to track cylinder position targets.
+
+        Backends:
+          explicit_effort_pd:  force = kp*error - kd*qdot
+          explicit_effort_pid: force = kp*error + ki*integral - kd*qdot (with anti-windup)
+          explicit_effort_pid_bias:
+            Calibration phase: PID with ki_calib, capture mean force_cmd as bias
+            Runtime phase:     force = bias + kp*error - kd*qdot
+        """
+        cfg = self.cfg
+        backend = str(getattr(cfg, "lowlevel_actuator_backend", "implicit_position"))
+        # --- shape guard ---
+        q_des = self._ensure_batched_cylinder_target(q_des)
+        B_sh = self.num_envs
+        use_pid = (backend in ("explicit_effort_pid", "explicit_effort_pid_bias"))
+        use_bias = (backend == "explicit_effort_pid_bias")
+
+        # --- debug: print bias shapes once ---
+        if getattr(cfg, "debug_bias_shapes", False) and use_bias:
+            if not getattr(self, "_bias_shapes_printed", False):
+                self._bias_shapes_printed = True
+                print(f"[BIAS_SHAPES] num_envs={self.num_envs}", flush=True)
+                print(f"[BIAS_SHAPES] q_des.shape={q_des.shape}", flush=True)
+                print(f"[BIAS_SHAPES] _explicit_force_bias.shape={self._explicit_force_bias.shape}", flush=True)
+                print(f"[BIAS_SHAPES] _explicit_bias_calibrated.shape={self._explicit_bias_calibrated.shape}", flush=True)
+                print(f"[BIAS_SHAPES] _explicit_bias_calib_step.shape={self._explicit_bias_calib_step.shape}", flush=True)
+                print(f"[BIAS_SHAPES] cylinder_pos.shape={self.robot.data.joint_pos[:, self._cylinder_joint_ids].shape}", flush=True)
+                print(f"[BIAS_SHAPES] cylinder_vel.shape={self.robot.data.joint_vel[:, self._cylinder_joint_ids].shape}", flush=True)
+                if self._debug_manual_cylinder_position_target is not None:
+                    print(f"[BIAS_SHAPES] _debug_manual_cylinder_position_target.shape={self._debug_manual_cylinder_position_target.shape}", flush=True)
+
+        kps = float(getattr(cfg, "explicit_pid_kp_scale" if use_pid else "explicit_pd_gain_scale", 1.0))
+        kds = float(getattr(cfg, "explicit_pid_kd_scale" if use_pid else "explicit_pd_damping_scale", 1.0))
+        ess = float(getattr(cfg, "explicit_pid_effort_scale" if use_pid else "explicit_pd_effort_scale", 1.0))
+
+        kp = torch.tensor([
+            getattr(cfg, "explicit_pd_kp_drehzapfen", 1.5e7),
+            getattr(cfg, "explicit_pd_kp_ausleger_i", 6.0e6),
+            getattr(cfg, "explicit_pd_kp_ausleger_ii", 1.0e6),
+            getattr(cfg, "explicit_pd_kp_messerkopf", 1.0e6),
+        ], device=self.device, dtype=torch.float32) * kps
+
+        kd = torch.tensor([
+            getattr(cfg, "explicit_pd_kd_drehzapfen", 3.0e6),
+            getattr(cfg, "explicit_pd_kd_ausleger_i", 1.8e6),
+            getattr(cfg, "explicit_pd_kd_ausleger_ii", 1.5e6),
+            getattr(cfg, "explicit_pd_kd_messerkopf", 1.5e6),
+        ], device=self.device, dtype=torch.float32) * kds
+
+        effort_lim = torch.tensor([
+            getattr(cfg, "explicit_pd_effort_limit_drehzapfen", 1.0e8),
+            getattr(cfg, "explicit_pd_effort_limit_ausleger_i", 1.0e7),
+            getattr(cfg, "explicit_pd_effort_limit_ausleger_ii", 1.0e6),
+            getattr(cfg, "explicit_pd_effort_limit_messerkopf", 1.0e5),
+        ], device=self.device, dtype=torch.float32) * ess
+
+        cyl_ids = self._cylinder_joint_ids
+        q = self.robot.data.joint_pos[:, cyl_ids]
+        qd = self.robot.data.joint_vel[:, cyl_ids]
+        # Velocity filtering for D term
+        vf_beta = float(getattr(cfg, "explicit_pd_velocity_filter_beta", 0.8))
+        self._qd_filt = vf_beta * self._qd_filt + (1.0 - vf_beta) * qd
+        qd_use = self._qd_filt  # use filtered velocity for D term
+        error = q_des - q
+        dt = max(float(getattr(self, "step_dt", float(cfg.sim.dt) * float(cfg.decimation))), 1.0e-6)
+
+        if use_bias:
+            # ---- Bias calibration: accumulate force_cmd over window ----
+            calib_time_s = float(getattr(cfg, "bias_calibration_time_s", 2.0))
+            window_s = float(getattr(cfg, "bias_average_window_s", 0.5))
+            calib_steps = int(calib_time_s / (dt / float(cfg.decimation)))
+            window_steps = int(window_s / dt)
+
+            # Check calibration state BEFORE incrementing
+            in_calib = self._explicit_bias_calib_step < calib_steps
+            self._explicit_bias_calib_step += 1
+
+            # Calibration phase: PID only (use calibration ki, not runtime ki)
+            if in_calib.any():
+                self._explicit_pid_integral_error[in_calib] += error[in_calib] * dt
+                i_limit = float(getattr(cfg, "explicit_pid_integral_limit_m", 0.01))
+                self._explicit_pid_integral_error = torch.clamp(
+                    self._explicit_pid_integral_error, -i_limit, i_limit)
+                ki_calib_scale = float(getattr(cfg, "bias_calibration_ki_scale", 3.0))
+                ki = torch.tensor([
+                    getattr(cfg, "explicit_pid_ki_drehzapfen", 1.0e6),
+                    getattr(cfg, "explicit_pid_ki_ausleger_i", 5.0e5),
+                    getattr(cfg, "explicit_pid_ki_ausleger_ii", 1.0e5),
+                    getattr(cfg, "explicit_pid_ki_messerkopf", 1.0e5),
+                ], device=self.device, dtype=torch.float32) * ki_calib_scale
+                force_raw = (kp.unsqueeze(0) * error
+                             + ki.unsqueeze(0) * self._explicit_pid_integral_error
+                             - kd.unsqueeze(0) * qd_use)
+                # Force rate limiting
+                rate_frac = float(getattr(cfg, "explicit_force_rate_limit_fraction", 0.01))
+                max_delta = rate_frac * effort_lim.unsqueeze(0)
+                force_delta = force_raw - self._prev_force_cmd
+                force_delta = torch.clamp(force_delta, -max_delta, max_delta)
+                force_raw_limited = self._prev_force_cmd + force_delta
+                force_cmd = torch.clamp(force_raw_limited, -effort_lim.unsqueeze(0), effort_lim.unsqueeze(0))
+
+                # Accumulate force_cmd over final window for bias capture
+                in_window = in_calib & (self._explicit_bias_calib_step >= calib_steps - window_steps)
+                requires_static = bool(getattr(cfg, "bias_calibration_requires_static", True))
+                static_vel_thresh = float(getattr(cfg, "bias_static_velocity_threshold_mps", 0.02))
+                static_err_thresh = float(getattr(cfg, "bias_static_error_threshold_m", 0.02))
+                if requires_static:
+                    is_static = (qd_use.abs().mean(dim=-1) < static_vel_thresh) & (error.abs().mean(dim=-1) < static_err_thresh)
+                    is_static_4d = is_static.unsqueeze(-1).expand(-1, 4)
+                    in_window_use = in_window & is_static_4d
+                else:
+                    in_window_use = in_window
+                if in_window_use.any():
+                    self._explicit_force_bias_accum[in_window_use] += force_cmd[in_window_use]
+                    self._explicit_bias_window_count[in_window_use] += 1
+
+            # Transition: capture bias from accumulated force_cmd
+            just_finished = ~in_calib & ~self._explicit_bias_calibrated
+            if just_finished.any():
+                counts = self._explicit_bias_window_count[just_finished].clamp(min=1)
+                self._explicit_force_bias[just_finished] = (
+                    self._explicit_force_bias_accum[just_finished] / counts.unsqueeze(-1))
+                self._explicit_pid_integral_error[just_finished] = 0.0
+                self._explicit_bias_calibrated[just_finished] = True
+
+            # Runtime phase: bias + P+D (no integral, or very small ki)
+            runtime_ki_scale = float(getattr(cfg, "bias_runtime_ki_scale", 0.0))
+            force_raw = self._explicit_force_bias + kp.unsqueeze(0) * error - kd.unsqueeze(0) * qd_use
+            if runtime_ki_scale > 0:
+                self._explicit_pid_integral_error += error * dt
+                i_limit = float(getattr(cfg, "explicit_pid_integral_limit_m", 0.01))
+                self._explicit_pid_integral_error = torch.clamp(
+                    self._explicit_pid_integral_error, -i_limit, i_limit)
+                ki_runtime = torch.tensor([
+                    getattr(cfg, "explicit_pid_ki_drehzapfen", 1.0e6),
+                    getattr(cfg, "explicit_pid_ki_ausleger_i", 5.0e5),
+                    getattr(cfg, "explicit_pid_ki_ausleger_ii", 1.0e5),
+                    getattr(cfg, "explicit_pid_ki_messerkopf", 1.0e5),
+                ], device=self.device, dtype=torch.float32) * runtime_ki_scale
+                force_raw = force_raw + ki_runtime.unsqueeze(0) * self._explicit_pid_integral_error
+            force_cmd = torch.clamp(force_raw, -effort_lim.unsqueeze(0), effort_lim.unsqueeze(0))
+
+            # Online slow bias update (when nearly static)
+            update_rate = float(getattr(cfg, "bias_online_update_rate", 0.005))
+            err_thresh = float(getattr(cfg, "bias_online_error_threshold_m", 0.001))
+            vel_thresh = float(getattr(cfg, "bias_online_velocity_threshold_mps", 0.01))
+            static = (error.abs() < err_thresh) & (qd_use.abs() < vel_thresh)
+            static = static.bool()
+            calibrated = self._explicit_bias_calibrated.bool()
+            if calibrated.ndim == 1:
+                calibrated = calibrated.unsqueeze(-1).expand_as(static)
+            elif calibrated.ndim == 2 and calibrated.shape != static.shape:
+                raise RuntimeError(
+                    f"Bad calibrated shape: {calibrated.shape}, static shape: {static.shape}"
+                )
+            update_mask = static & calibrated
+            if static.any() and self._explicit_bias_calibrated.any():
+                # belt-and-suspenders shape check
+                if update_mask.shape != (B_sh, 4):
+                    raise RuntimeError(
+                        f"Bad update_mask shape: {update_mask.shape}, expected {(B_sh, 4)}"
+                    )
+                self._explicit_force_bias[update_mask] = (
+                    (1.0 - update_rate) * self._explicit_force_bias[update_mask]
+                    + update_rate * force_cmd[update_mask])
+
+        elif use_pid:
+            # Standard PID with anti-windup
+            self._explicit_pid_integral_error += error * dt
+            i_limit = float(getattr(cfg, "explicit_pid_integral_limit_m", 0.01))
+            self._explicit_pid_integral_error = torch.clamp(
+                self._explicit_pid_integral_error, -i_limit, i_limit)
+            kis = float(getattr(cfg, "explicit_pid_ki_scale", 1.0))
+            ki = torch.tensor([
+                getattr(cfg, "explicit_pid_ki_drehzapfen", 1.0e6),
+                getattr(cfg, "explicit_pid_ki_ausleger_i", 5.0e5),
+                getattr(cfg, "explicit_pid_ki_ausleger_ii", 1.0e5),
+                getattr(cfg, "explicit_pid_ki_messerkopf", 1.0e5),
+            ], device=self.device, dtype=torch.float32) * kis
+            force_raw = (kp.unsqueeze(0) * error
+                         + ki.unsqueeze(0) * self._explicit_pid_integral_error
+                         - kd.unsqueeze(0) * qd_use)
+            force_cmd = torch.clamp(force_raw, -effort_lim.unsqueeze(0), effort_lim.unsqueeze(0))
+            # Anti-windup: freeze integral when saturated
+            saturated = (force_raw.abs() >= effort_lim.unsqueeze(0))
+            pushing_same = (torch.sign(force_raw) == torch.sign(error))
+            freeze = saturated & pushing_same
+            self._explicit_pid_integral_error = torch.where(
+                freeze, self._explicit_pid_integral_error - error * dt, self._explicit_pid_integral_error)
+        else:
+            # Pure PD
+            force_cmd = torch.clamp(kp.unsqueeze(0) * error - kd.unsqueeze(0) * qd_use,
+                                    -effort_lim.unsqueeze(0), effort_lim.unsqueeze(0))
+
+        force_cmd = torch.nan_to_num(force_cmd, nan=0.0, posinf=0.0, neginf=0.0)
+        self.robot.set_joint_effort_target(force_cmd, joint_ids=cyl_ids)
+
+        # Store for logging
+        self._last_force_cmd = force_cmd.detach().clone()
+        self._prev_force_cmd = force_cmd.detach().clone()
+        return force_cmd, error
     def _apply_action(self):
         """Apply either learned cylinder targets or the legacy direct joint targets."""
         if self._debug_manual_cylinder_position_target is not None:
-            self.robot.set_joint_position_target(
-                self._debug_manual_cylinder_position_target,
-                joint_ids=self._cylinder_joint_ids,
-            )
+            if str(getattr(self.cfg, "lowlevel_actuator_backend", "implicit_position")) in ("explicit_effort_pd", "explicit_effort_pid", "explicit_effort_pid_bias"):
+                self._explicit_effort_target(self._debug_manual_cylinder_position_target)
+            else:
+                self.robot.set_joint_position_target(
+                    self._debug_manual_cylinder_position_target,
+                    joint_ids=self._cylinder_joint_ids,
+                )
             if self._debug_manual_tool_position_target is not None:
                 self.robot.set_joint_position_target(
                     self._debug_manual_tool_position_target,
@@ -2277,7 +2530,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     v_des_usd * vel_scale, joint_ids=self._cylinder_joint_ids
                 )
             else:
-                self.robot.set_joint_position_target(self._cylinder_pos_target, joint_ids=self._cylinder_joint_ids)
+                if str(getattr(self.cfg, "lowlevel_actuator_backend", "implicit_position")) in ("explicit_effort_pd", "explicit_effort_pid", "explicit_effort_pid_bias"):
+                    self._explicit_effort_target(self._cylinder_pos_target)
+                else:
+                    self.robot.set_joint_position_target(self._cylinder_pos_target, joint_ids=self._cylinder_joint_ids)
             if self._joint6_coupling_target_ref_index is not None and self._joint6_coupling_target_joint_id is not None:
                 tool_target = self._joint_ref[:, self._joint6_coupling_target_ref_index : self._joint6_coupling_target_ref_index + 1]
                 self.robot.set_joint_position_target(tool_target, joint_ids=[self._joint6_coupling_target_joint_id])
@@ -2428,6 +2684,14 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._fd_delta_raw[env_ids] = 0.0
         self._fd_delta_corrected[env_ids] = 0.0
         self.clear_debug_manual_cylinder_targets()
+        self._explicit_pid_integral_error[env_ids] = 0.0
+        self._explicit_force_bias[env_ids] = 0.0
+        self._explicit_bias_calibrated[env_ids] = False
+        self._explicit_bias_calib_step[env_ids] = 0
+        self._explicit_force_bias_accum[env_ids] = 0.0
+        self._explicit_bias_window_count[env_ids] = 0
+        self._qd_filt[env_ids] = 0.0
+        self._prev_force_cmd[env_ids] = 0.0
         self.clear_debug_cylinder_velocity_target()
         self._neutral_hold_mask[env_ids] = False
         self._neutral_hold_prev_mask[env_ids] = False

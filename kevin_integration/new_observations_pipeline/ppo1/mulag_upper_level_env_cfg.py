@@ -5,7 +5,7 @@ from pathlib import Path
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import SimulationCfg
+from isaaclab.sim import SimulationCfg, PhysxCfg
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 from kevin_integration.utils.sim_memory import apply_kevin_sim_memory_optimizations
@@ -55,7 +55,19 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     observation_space = OBS_DIM
     state_space = 0
 
-    sim: SimulationCfg = SimulationCfg(dt=1 / 120, render_interval=2)
+    sim: SimulationCfg = SimulationCfg(
+        dt=1 / 120, 
+        render_interval=2,
+        physx=PhysxCfg(
+            min_position_iteration_count=16,  # Increased from default 1 for better contact
+            max_position_iteration_count=32,  # Increased from default 255 (effective max)
+            min_velocity_iteration_count=2,   # Increased from default 0 for stability
+            max_velocity_iteration_count=2,   # Keep same as min
+            bounce_threshold_velocity=0.2,    # Threshold for bounce
+            friction_offset_threshold=0.04,   # Friction offset
+            friction_correlation_distance=0.025, # Friction correlation
+        )
+    )
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=169, env_spacing=20.0, replicate_physics=False)
     robot_cfg: ArticulationCfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
@@ -208,6 +220,139 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     command_yaw_rad = 0.0     # match default initial cutter yaw (0 rad = aligned with vehicle forward)
     command_resample_time_s_range = (10.0, 12.0)
 
+    # -- Horizon PPO reset/hold and workspace guards --
+    horizon_pin_root_pose = False
+    horizon_reset_settle_steps = 0
+    horizon_zero_action_deadband = 1.0e-5
+    horizon_delta_cmd_clip_m = 0.02
+    horizon_cylinder_limit_margin = 0.002
+    enable_horizon_workspace_guard = True
+    enable_horizon_cab_guard = True
+    horizon_workspace_x_range = (-0.5, 7.0)
+    horizon_workspace_y_range = (-3.6, 3.0)
+    horizon_workspace_z_range = (-0.4, 3.0)
+    horizon_cab_x_range = (-2.5, 1.0)
+    horizon_cab_y_range = (-1.35, 1.35)
+    horizon_cab_z_range = (-0.1, 2.4)
+    horizon_guard_penalty_weight = 0.5
+    horizon_hydraulic_consistency_weight = 5.0
+    horizon_failure_termination_penalty = 20.0
+    horizon_success_bonus = 20.0
+    horizon_success_tolerance_m = 0.05
+    horizon_success_required_hold_steps = 10
+    horizon_min_success_steps = 30
+    # -- Stage-0 local reach curriculum --
+    ppo_stage = "local_reach_stage0"  # "local_reach_stage0" or "full_mowing"
+    stage0_level = 0  # 0, 1, or 2 (curriculum progression)
+    # --- Level 0: easiest ---
+    stage0_l0_target_box_dx = (-0.05, 0.05)
+    stage0_l0_target_box_dy = (-0.05, 0.05)
+    stage0_l0_target_box_dz = (-0.02, 0.02)
+    stage0_l0_success_tolerance_m = 0.10
+    stage0_l0_required_hold_steps = 3
+    stage0_l0_min_episode_steps = 10
+    # --- Level 1: medium ---
+    stage0_l1_target_box_dx = (-0.10, 0.10)
+    stage0_l1_target_box_dy = (-0.10, 0.10)
+    stage0_l1_target_box_dz = (-0.03, 0.03)
+    stage0_l1_success_tolerance_m = 0.08
+    stage0_l1_required_hold_steps = 5
+    stage0_l1_min_episode_steps = 20
+    # --- Level 2: hardest (original) ---
+    stage0_l2_target_box_dx = (-0.15, 0.15)
+    stage0_l2_target_box_dy = (-0.15, 0.15)
+    stage0_l2_target_box_dz = (-0.05, 0.05)
+    stage0_l2_success_tolerance_m = 0.08
+    stage0_l2_required_hold_steps = 5
+    stage0_l2_min_episode_steps = 20
+    # --- Shared Stage-0 params ---
+    stage0_max_episode_steps = 100
+    # -- Workspace violation: soft penalty for Stage 0 --
+    workspace_violation_soft = True   # penalty, not immediate termination
+    workspace_violation_penalty = -5.0  # per-horizon penalty when violating
+    workspace_violation_done_after_consecutive_steps = 20  # increased from 10
+    severe_cab_collision_done = True
+    nonfinite_done = True
+    # -- Guard/clipping penalty weights --
+    horizon_guard_penalty_weight = 5.0   # increased from 0.5
+    horizon_clip_penalty_weight = 3.0    # new
+    # -- Reward config --
+    horizon_success_bonus = 5.0   # reduced from 20.0
+    horizon_failure_termination_penalty = 20.0
+    # -- EE task-space action mode --
+    ee_action_mode = "task_space_delta"  # "task_space_delta" or "cylinder_space"
+    ee_action_scale_m = 0.05  # max EE displacement per horizon step
+    ee_action_dim = 3  # dx, dy, dz in base frame
+    ee_jacobian_eps = 0.001  # perturbation for J_eff measurement
+    ee_k_p = 0.15  # proportional gain for damped LS
+    ee_lam = 1e-2  # damping for damped LS
+    ee_per_cyl_clip_m = 0.0015  # per-cylinder delta clip
+    ee_global_clip_m = 0.003  # global norm clip
+    ee_smooth_alpha = 0.7  # EMA smoothing factor
+    # -- Target sampling for high-level EE reach --
+    target_offset_radius_min_m = 0.06
+    target_offset_radius_max_m = 0.12
+    target_offset_z_range_m = (-0.02, 0.02)
+
+    # -- Explicit effort PD backend (replaces implicit position drives) --
+    lowlevel_actuator_backend = "explicit_effort_pd"  # "explicit_effort_pd" or "implicit_position"
+    explicit_pd_kp_drehzapfen = 1.5e7
+    explicit_pd_kp_ausleger_i = 6.0e6
+    explicit_pd_kp_ausleger_ii = 1.0e6
+    explicit_pd_kp_messerkopf = 1.0e6
+    explicit_pd_kd_drehzapfen = 1.0e6
+    explicit_pd_kd_ausleger_i = 6.0e5
+    explicit_pd_kd_ausleger_ii = 5.0e5
+    explicit_pd_kd_messerkopf = 5.0e5
+    explicit_pd_effort_limit_drehzapfen = 1.0e8
+    explicit_pd_effort_limit_ausleger_i = 1.0e7
+    explicit_pd_effort_limit_ausleger_ii = 1.0e6
+    explicit_pd_effort_limit_messerkopf = 1.0e5
+    explicit_pd_gain_scale = 1.0
+    explicit_pd_damping_scale = 1.0
+    explicit_pd_effort_scale = 1.0
+
+    # -- PID integral gains (for explicit_effort_pid backend) --
+    explicit_pid_ki_drehzapfen = 1.0e6
+    explicit_pid_ki_ausleger_i = 5.0e5
+    explicit_pid_ki_ausleger_ii = 1.0e5
+    explicit_pid_ki_messerkopf = 1.0e5
+    explicit_pid_ki_scale = 1.0
+    explicit_pid_integral_limit_m = 0.01  # max integral windup per cylinder (meters)
+    # -- Bias calibration (for explicit_effort_pid_bias backend) --
+    bias_calibration_ki_scale = 3.0  # ki during calibration phase
+    bias_runtime_ki_scale = 0.0  # ki during runtime (0 = frozen bias)
+    bias_calibration_time_s = 2.0  # PID calibration duration
+    bias_average_window_s = 0.5  # force_cmd averaging window
+    bias_calibration_requires_static = True  # only capture bias when arm is settled
+    bias_static_velocity_threshold_mps = 0.02  # max velocity for static check
+    bias_static_error_threshold_m = 0.02  # max error for static check
+    bias_calibration_failed_behavior = "extend"  # "extend" or "retry" or "use_anyway"
+    bias_runtime_retarget_to_calibrated_pose = True  # hold calibrated equilibrium
+
+    # -- Debug --
+    debug_bias_shapes: bool = False  # print bias tensor shapes at startup and first update
+
+    # -- Online bias adaptation --
+    bias_online_update_rate = 0.005  # slow online adaptation
+    bias_online_error_threshold_m = 0.001
+    bias_online_velocity_threshold_mps = 0.01
+
+    # -- Force rate limiting --
+    explicit_force_rate_limit_fraction = 0.01  # per-step max force delta / effort_limit
+
+    # -- Velocity filtering for D term --
+    explicit_pd_velocity_filter_beta = 0.8  # EMA filter for qdot
+
+    # -- Per-cylinder gain overrides (1.0 = use global scale) --
+    explicit_pid_kp_per_cylinder = [1.0, 1.0, 1.0, 1.0]
+    explicit_pid_kd_per_cylinder = [1.0, 1.0, 1.0, 1.0]
+    explicit_force_rate_limit_per_cylinder = [1.0, 1.0, 1.0, 1.0]
+
+    # -- Global scales --
+    explicit_pid_kp_scale = 1.0
+    explicit_pid_kd_scale = 1.0
+
     # -- Terrain / physics --
     enable_mathbox_ground: bool = True
     ground_color = (0.0, 0.0, 0.0)
@@ -346,8 +491,8 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
             ),
             "messerkopf_passive_coupled": ImplicitActuatorCfg(
                 joint_names_expr=["Messerkopf_joint"],
-                stiffness=6000.0,
-                damping=6000.0,
+                stiffness=1000000.0,
+                damping=500000.0,
                 effort_limit_sim=100000.0,
             ),
             "mulag_wheels": ImplicitActuatorCfg(
@@ -387,7 +532,7 @@ class MulagUpperLevelPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         hidden_dims=[256, 256, 128],
         activation="elu",
         obs_normalization=True,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.15),
     )
     critic = RslRlMLPModelCfg(
         hidden_dims=[256, 256, 128],
