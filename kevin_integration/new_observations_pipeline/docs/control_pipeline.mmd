@@ -1,0 +1,18 @@
+flowchart LR
+    PPO["PPO policy\nDelta EE command"]
+    JEFF["Empirical J_eff\nmeasured through deployment"]
+    DES["Cylinder-space\ndesired motion"]
+    IDFD["ID/FD horizon rollout\nID valve estimate + FD motion"]
+    TARGETS["Cylinder position targets\nsmooth horizon ramp"]
+    PID["explicit_effort_pid_bias\ncalibrated effort PID"]
+    PHYSX["PhysX articulation"]
+    EE["EE/tool motion\ntracking reward + safety logs"]
+
+    PPO --> JEFF
+    JEFF --> DES
+    DES --> IDFD
+    IDFD --> TARGETS
+    TARGETS --> PID
+    PID --> PHYSX
+    PHYSX --> EE
+    EE -. observation/reward .-> PPO

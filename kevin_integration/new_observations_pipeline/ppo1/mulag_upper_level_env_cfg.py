@@ -56,7 +56,7 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     state_space = 0
 
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 120, 
+        dt=1 / 120,
         render_interval=2,
         physx=PhysxCfg(
             min_position_iteration_count=16,  # Increased from default 1 for better contact
@@ -294,8 +294,30 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     target_offset_radius_max_m = 0.12
     target_offset_z_range_m = (-0.02, 0.02)
 
+    # -- Ground trajectory debug/training targets --
+    trajectory_mode = "none"  # "none", "ground_semicircle", "ground_straight_line", "ground_mower_sweep"
+    trajectory_plane = "ground_xy"  # "ground_xy" or "base_yz"
+    ground_workspace_json = "outputs/ppo1_horizon_idfd/ground_workspace.json"
+    ground_z = 0.0
+    tool_contact_mode = "geometry_aabb"  # "geometry_aabb", "manual_offset", or "ee_origin"
+    tool_ground_clearance = 0.03
+    min_arm_ground_clearance = 0.02
+    ee_frame_clearance_when_tool_offset_unknown = 0.05
+    tool_tip_local_offset = (0.0, 0.0, 0.0)
+    tool_tip_local_offset_x = 0.0
+    tool_tip_local_offset_y = 0.0
+    tool_tip_local_offset_z = 0.0
+    use_tool_tip_offset = False
+    trajectory_scale = 0.8
+    visualize_target_trajectory = False
+    visualize_actual_ee_trail = False
+    debug_draw_tool_aabb = False
+    debug_draw_tool_contact_point = False
+    ground_trajectory_points = 200
+    ground_actual_trail_length = 100
+
     # -- Explicit effort PD backend (replaces implicit position drives) --
-    lowlevel_actuator_backend = "explicit_effort_pd"  # "explicit_effort_pd" or "implicit_position"
+    lowlevel_actuator_backend = "explicit_effort_pid_bias"  # active PPO1 backend
     explicit_pd_kp_drehzapfen = 1.5e7
     explicit_pd_kp_ausleger_i = 6.0e6
     explicit_pd_kp_ausleger_ii = 1.0e6

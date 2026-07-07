@@ -1,6 +1,6 @@
 # PPO1 vs PPO1_Adapter: Architecture Comparison
 
-**Date:** 2026-07-04  
+**Date:** 2026-07-04
 **Status:** Use PPO1 (with ID/FD), abandon PPO1_Adapter
 
 ---
@@ -12,7 +12,7 @@
 **Concept**: Learn simple task→cylinder mapping without hydraulic models
 
 ```
-PPO action (2D task) 
+PPO action (2D task)
     ↓
 [Learned MLP Adapter]  ← This failed
     ↓
@@ -169,10 +169,10 @@ PhysX
    ```bash
    # Check ID model exists
    ls -lh kevin_integration/models/id.pth
-   
-   # Check FD model exists  
+
+   # Check FD model exists
    ls -lh kevin_integration/models/fd.pth
-   
+
    # Check config
    grep "ee_action_mode" kevin_integration/new_observations_pipeline/ppo1/mulag_upper_level_env_cfg.py
    ```
@@ -264,8 +264,8 @@ PhysX
 
 ## Decision
 
-**Use PPO1 (ppo1/ folder) with ID/FD.**  
-**Abandon PPO1_Adapter (ppo1_adapter/ folder).**  
+**Use PPO1 (ppo1/ folder) with ID/FD.**
+**Abandon PPO1_Adapter (ppo1_adapter/ folder).**
 **Save ROM for PPO2.**
 
 The infrastructure is already built and working. We just need to use it!

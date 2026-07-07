@@ -2,7 +2,7 @@
 
 **Issue:** End effector sinking into ground during PPO1 training
 
-**Date:** 2026-07-04  
+**Date:** 2026-07-04
 **Status:** ✅ FIXED
 
 ---
@@ -38,7 +38,7 @@ With 4 cylinders, 21 joints, and aggressive hydraulic forces, the solver couldn'
 **Lines 58-68:**
 ```python
 sim: SimulationCfg = SimulationCfg(
-    dt=1 / 120, 
+    dt=1 / 120,
     render_interval=2,
     physx=PhysxCfg(
         solver_position_iteration_count=16,  # 4 → 16 (4x improvement)
@@ -188,7 +188,7 @@ After applying the fix:
 - Penetration: 30-50% of steps
 
 **After fix:**
-- Solver iterations: 16 pos / 2 vel  
+- Solver iterations: 16 pos / 2 vel
 - Simulation: ~700 FPS (empty env)
 - Penetration: < 5% of steps
 
@@ -228,7 +228,7 @@ But current fix should be sufficient for PPO1 training! 🎯
 
 **The fix:**
 - 16 position iterations (was 4)
-- 2 velocity iterations (was 1)  
+- 2 velocity iterations (was 1)
 - 2cm contact offset on ground (was none)
 
 **Result:**

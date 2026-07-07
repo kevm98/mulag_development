@@ -1,6 +1,6 @@
 # PPO1 Complete Pipeline Documentation
 
-**Date:** 2026-07-04  
+**Date:** 2026-07-04
 **Status:** ✅ WORKING & TESTED
 
 ---
@@ -10,7 +10,7 @@
 **PPO1 uses task-space actions (2D: ΔY, ΔZ) with Kevin's ID/FD hydraulic models integrated through an empirically-measured Jacobian controller.**
 
 ```
-User/PPO → Task Space (2D) → Jacobian Controller → Cylinder Goals (4D) 
+User/PPO → Task Space (2D) → Jacobian Controller → Cylinder Goals (4D)
     → Kevin's ID Model → Valve Commands (4D) → Kevin's FD Model (prediction)
     → Closed-Loop Rollout → PhysX Simulation → Robot Motion
 ```
@@ -65,23 +65,23 @@ env = HorizonIDFDRslRlVecEnvWrapper(base_env)
 #### A. Initialization (Lines 70-160)
 ```python
 class HorizonIDFDEnv:
-    def __init__(self, base_cfg, horizon_steps=10, action_scale_m=0.01, 
+    def __init__(self, base_cfg, horizon_steps=10, action_scale_m=0.01,
                  fd_gains=None, device="cuda:0"):
         self._H = int(horizon_steps)  # Horizon steps (e.g., 10)
         self._action_scale = float(action_scale_m)  # 0.01m
-        
+
         # Determine action mode
         self._ee_mode = str(getattr(base_cfg, "ee_action_mode", "cylinder_space"))
         self._is_task_space = self._ee_mode == "task_space_delta"
-        
+
         # Build base environment (IsaacLab simulation)
         self._env = MulagUpperLevelEnv(cfg=base_cfg)
-        
+
         # Load Kevin's ID/FD models
         self._id_model = ...  # Inverse dynamics model
         self._sequence_fd = ...  # Forward dynamics sequence tracker
         self._sequence_id = ...  # ID sequence tracker
-        
+
         # Initialize high-level EE controller (task-space mode only)
         if self._is_task_space:
             self._ee_controller = HighLevelEEController(device=device)
@@ -91,7 +91,7 @@ class HorizonIDFDEnv:
 ```python
 def reset(self):
     obs = self._env.reset()
-    
+
     if self._is_task_space and self._ee_controller is not None:
         # CRITICAL: Measure effective Jacobian empirically
         self._ee_controller.measure_effective_jacobian(
@@ -111,7 +111,7 @@ def reset(self):
 ```python
 def step(self, action):
     # action shape: (B, 2) for task-space or (B, 4) for cylinder-space
-    
+
     if self._is_task_space:
         # 1. Map task-space action to cylinder goals using measured Jacobian
         desired_ee_delta = action * self._ee_action_scale  # (B, 2)
@@ -120,29 +120,29 @@ def step(self, action):
     else:
         # Direct cylinder-space actions
         delta_x_des_H = action * self._action_scale
-    
+
     # 2. Closed-loop ID/FD rollout (predict H-step motion)
     delta_fd_H = closed_loop_idfd_rollout(
-        delta_x_des_H, x0, xd0, 
+        delta_x_des_H, x0, xd0,
         self._H, self._id_model, X_mean, X_std,
         self._sequence_fd, self._sequence_id,
         model_dt=0.05
     )
     # This runs: ID→FD→ID→FD... for H steps internally
-    
+
     # 3. Scale predicted motion by FD gains
     delta_cmd_H = self._fd_gains * delta_fd_H  # (B, 4)
-    
+
     # 4. Execute over H physics steps with smooth ramping
     for h in range(self._H):
         target_fraction = (h + 1) / self._H
         cylinder_targets = x_init + target_fraction * delta_cmd_H
-        
+
         # Send to PhysX simulation
         obs, rewards, terminated, truncated, info = self._env.step(
             action=build_cylinder_action(cylinder_targets)
         )
-    
+
     # 5. Return horizon-level observation and reward
     return obs, rewards, terminated, truncated, info
 ```
@@ -158,13 +158,13 @@ def step(self, action):
 ```python
 def measure_effective_jacobian(self, deploy_fn, B):
     """Measure J_eff = d(EE_motion) / d(cylinder_cmd) through full chain.
-    
+
     Uses central finite difference:
     For each cylinder c:
         1. Perturb +ε: send [0,0,+ε,0] → measure EE_pos
         2. Perturb -ε: send [0,0,-ε,0] → measure EE_neg
         3. J[:, :, c] = (EE_pos - EE_neg) / (2ε)
-    
+
     This captures EVERYTHING:
         - Kevin's ID model (cylinder → valve)
         - Kevin's FD model (valve → predicted motion)
@@ -177,14 +177,14 @@ def measure_effective_jacobian(self, deploy_fn, B):
         dx_pos[:, c] = self._eps  # Small perturbation (0.001m)
         ee_pos, restore_pos = deploy_fn(dx_pos)
         restore_pos()
-        
+
         dx_neg = torch.zeros((B, 4), device=self._device)
         dx_neg[:, c] = -self._eps
         ee_neg, restore_neg = deploy_fn(dx_neg)
         restore_neg()
-        
+
         J[:, :, c] = (ee_pos - ee_neg) / (2.0 * self._eps)
-    
+
     self._J_eff = J  # Store for later use
     return J
 ```
@@ -199,16 +199,16 @@ def measure_effective_jacobian(self, deploy_fn, B):
 ```python
 def map_ee_to_cylinder(self, desired_ee_delta):
     """Map desired EE motion to cylinder commands.
-    
+
     Uses damped least-squares:
         Δcyl = k_p * J^T * (J*J^T + λ*I)^(-1) * ΔEE_desired
-    
+
     With temporal smoothing:
         Δcyl = α*Δcyl_prev + (1-α)*Δcyl_new
     """
     J = self._J_eff  # (B, 3, 4)
     ee = desired_ee_delta  # (B, 3) or (B, 2) for Y,Z only
-    
+
     # Damped least-squares inverse
     JT = J.transpose(1, 2)
     JJT = torch.bmm(J, JT)
@@ -216,18 +216,18 @@ def map_ee_to_cylinder(self, desired_ee_delta):
     A = JJT + self._lam * eye  # Damping factor λ = 0.01
     w = torch.linalg.solve(A.float(), ee.unsqueeze(-1).float()).squeeze(-1)
     delta_raw = self._k_p * torch.bmm(JT, w.unsqueeze(-1)).squeeze(-1)
-    
+
     # Clip per-cylinder and globally
     delta = torch.clamp(delta_raw, -self._per_cyl_clip, self._per_cyl_clip)
     norms = torch.norm(delta, dim=-1, keepdim=True).clamp(min=1e-9)
     scale = torch.clamp(self._global_clip / norms, max=1.0)
     delta = delta * scale
-    
+
     # Temporal smoothing (α = 0.7)
     if self._prev_delta is not None:
         delta = self._smooth_alpha * self._prev_delta + (1.0 - self._smooth_alpha) * delta
     self._prev_delta = delta.detach().clone()
-    
+
     return delta  # (B, 4) cylinder commands
 ```
 
@@ -250,7 +250,7 @@ def closed_loop_idfd_rollout(
     model_dt=0.05   # Model timestep (50ms)
 ):
     """Run H-step closed-loop prediction.
-    
+
     For each step h in [1, 2, ..., H]:
         1. Compute step command: dx_step = delta_x_des_H / H
         2. Compute velocity: v_step = dx_step / dt
@@ -260,40 +260,40 @@ def closed_loop_idfd_rollout(
         6. FD model → predicted delta_extension
         7. Update state: x_current += delta_extension
         8. Accumulate: delta_fd_sum += delta_extension
-    
+
     Returns: Accumulated predicted cylinder motion over H steps
     """
     # Clone GRU histories (don't mutate live state)
     id_hist = sequence_id._step_history.detach().clone()
     fd_hist = sequence_fd._step_history.detach().clone()
-    
+
     x_r = x0.detach().clone()
     xd_r = xd0.detach().clone()
     fd_sum = torch.zeros_like(delta_x_des_H)
-    
+
     for _ in range(horizon_steps):
         # Step command
         dx_step = delta_x_des_H / horizon_steps
         v_step = dx_step / model_dt
-        
+
         # ID model
         id_in = torch.cat([dx_step, v_step, x_r, xd_r], dim=-1)
         with torch.no_grad():
             valve = id_model((id_in - X_mean) / X_std)
-        
+
         # FD model
         sequence_fd.push_current_state(valve, x_r, xd_r)
         fd_d = sequence_fd.predict_delta_extension().delta_extension_raw
-        
+
         # Accumulate
         fd_sum += fd_d
         x_r += fd_d
         xd_r[:, :] = v_step
-    
+
     # Restore GRU histories
     sequence_id._step_history = id_hist
     sequence_fd._step_history = fd_hist
-    
+
     return fd_sum  # Total predicted motion
 ```
 
@@ -315,12 +315,12 @@ def closed_loop_idfd_rollout(
 ```python
 class InverseDynamicsModel(nn.Module):
     """Learned from Simscape data, fine-tuned on IsaacLab PhysX.
-    
+
     Input: x_hist (B, T, 19) where 19 = [q(5), qdot(5), qddot(5), dP(4)]
            z_arm (B, 24) - arm configuration context
-    
+
     Output: valve_cmd (B, 4) - valve commands [0, 1]
-    
+
     Captures:
         - Valve response characteristics
         - Pressure-flow relationships
@@ -344,7 +344,7 @@ class InverseDynamicsModel(nn.Module):
 - Original: Simscape hydraulic simulation (validated physics)
 - Fine-tuned: IsaacLab PhysX data for domain adaptation
 
-**Checkpoint:** 
+**Checkpoint:**
 `outputs/cylinder_diagnostics/paper_matched_pipeline/model_finetune/id_physx_finetuned_best.pt`
 
 ---
@@ -359,11 +359,11 @@ class InverseDynamicsModel(nn.Module):
 ```python
 class ForwardDynamicsModel(nn.Module):
     """Predict cylinder displacement from valve commands.
-    
+
     Input: x_hist (B, T, 18) where 18 = [valve_cmd(4), x_cyl(4), xdot_cyl(4), ...]
-    
+
     Output: delta_extension (B, 4) - predicted cylinder displacement
-    
+
     Captures:
         - Pressure buildup dynamics
         - Force generation from pressure
@@ -444,15 +444,15 @@ task_space_ee_body_name = "Messerkopf"  # Tool head
        dx_step = delta_x_des_H / H
        v_step = dx_step / dt
        id_input = [dx_step, v_step, x_current, xdot_current]
-       
+
        valve_cmd = Kevin_ID_Model(id_input)  ← Simscape-trained!
-       
+
        FD_sequence.push(valve_cmd, x_current, xdot_current)
        predicted_delta = Kevin_FD_Model.predict()  ← Hydraulics!
-       
+
        x_current += predicted_delta
        fd_sum += predicted_delta
-   
+
    Output: delta_fd_H (B, 4) - total predicted motion
    ↓
 
