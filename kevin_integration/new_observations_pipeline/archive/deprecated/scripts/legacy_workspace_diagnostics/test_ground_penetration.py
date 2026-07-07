@@ -64,21 +64,21 @@ for step in range(args_cli.num_steps):
     # Random actions pushing down (to stress test ground contact)
     actions = torch.randn((args_cli.num_envs, 2), device=device)
     actions[:, 1] = -1.0  # Push -Z (down)
-    
+
     obs, rewards, terminated, truncated, info = base_env.step(actions)
-    
+
     # Get EE position from base env
     if hasattr(base_env._env, '_ee_pos_w'):
         ee_pos_w = base_env._env._ee_pos_w
         ee_z = ee_pos_w[:, 2]
-        
+
         # Track minimum height
         min_ee_z = torch.minimum(min_ee_z, ee_z)
-        
+
         # Count penetrations (below 0cm - ground is at -1cm)
         penetrations = ee_z < 0.0
         penetration_count += penetrations.long()
-        
+
         if step % 20 == 0:
             print(f"  Step {step:3d}: "
                   f"EE_Z min={ee_z.min().item()*1000:+.1f}mm, "
