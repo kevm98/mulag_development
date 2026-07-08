@@ -315,9 +315,21 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     debug_draw_tool_contact_point = False
     ground_trajectory_points = 200
     ground_actual_trail_length = 100
+    # PPO trajectory training: episode timeout in wrapper steps (0 = no timeout,
+    # legacy diagnostic behavior) and whether the shared path index wraps around
+    # instead of clamping at the final point.
+    ground_max_episode_steps = 0
+    ground_path_loop = False
 
-    # -- Explicit effort PD backend (replaces implicit position drives) --
-    lowlevel_actuator_backend = "explicit_effort_pid_bias"  # active PPO1 backend
+    # -- Low-level actuation backend --
+    # "implicit_position": PhysX implicit drives close the cylinder position loop
+    # (unconditionally stable at the configured stiffness); hydraulic realism comes
+    # from the ID/FD models upstream, force saturation from effort_limit_sim.
+    # "explicit_effort_pid_bias": hand-written explicit force PID + calibrated bias.
+    # Measured 2026-07-07: dynamically unstable on this plant (limit cycles, ~0.35-1.7 m
+    # tool drift, cylinder-limit hits within 3 s across a 22-trial gain sweep) — keep
+    # only for effort-level experiments, not for training.
+    lowlevel_actuator_backend = "implicit_position"
     explicit_pd_kp_drehzapfen = 1.5e7
     explicit_pd_kp_ausleger_i = 6.0e6
     explicit_pd_kp_ausleger_ii = 1.0e6
@@ -486,44 +498,71 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
         # Override prim_path and add PD gains (local to this task, does not modify MULAG_CFG)
         self.robot_cfg = self.robot_cfg.replace(prim_path="/World/envs/env_.*/Robot")
         from isaaclab.actuators import ImplicitActuatorCfg
+        # Implicit drive stiffness models hydraulic lock (closed valve ~= rigid oil
+        # column). Stiffness values from the 2026-07-07 drive-stiffness bracket
+        # (outputs/ppo1_horizon_idfd/drive_stiffness_bracket_results.json): the x5
+        # ladder minimizes hold drift; softer sags under gravity, stiffer excites
+        # the solver. Effort limits and velocity limits follow the teacher-student
+        # asset tuning (~1e5 effort scale, velocity_limit 1.0): with the earlier
+        # 1e7-1e8 limits the arm's reaction forces dragged the free-standing truck
+        # ~0.5 m during greedy tracking ("mulag starts flying" in teacher-student
+        # notes). The truck must dominate because the arm is force-capped at
+        # hydraulic scale, not because the base is pinned. Measured masses: truck
+        # 6.8 t, arm 542 kg -- effort caps sized so the arm cannot beat the
+        # truck's friction budget (mu*m*g ~ 7e4 N lateral, ~1e5 N*m yaw).
         self.robot_cfg.actuators = {
             "drehzapfen_cylinder": ImplicitActuatorCfg(
                 joint_names_expr=["Drehzapfen_joint"],
-                stiffness=15000000.0,
-                damping=1000000.0,
-                effort_limit_sim=100000000.0,
+                stiffness=75000000.0,
+                damping=2240000.0,
+                effort_limit_sim=50000.0,
+                velocity_limit_sim=1.0,
             ),
             "ausleger_i_cylinder": ImplicitActuatorCfg(
                 joint_names_expr=["Ausleger_I_joint"],
-                stiffness=6000000.0,
-                damping=600000.0,
-                effort_limit_sim=10000000.0,
+                stiffness=30000000.0,
+                damping=1340000.0,
+                effort_limit_sim=100000.0,
+                velocity_limit_sim=1.0,
             ),
             "ausleger_ii_cylinder": ImplicitActuatorCfg(
                 joint_names_expr=["Ausleger_II_joint"],
-                stiffness=1000000.0,
-                damping=500000.0,
-                effort_limit_sim=1000000.0,
+                stiffness=5000000.0,
+                damping=1120000.0,
+                effort_limit_sim=50000.0,
+                velocity_limit_sim=1.0,
             ),
             "messerkopf_schwenk_cylinder": ImplicitActuatorCfg(
                 joint_names_expr=["Messerkopf_Schwenk_joint"],
-                stiffness=1000000.0,
-                damping=500000.0,
-                effort_limit_sim=100000.0,
+                stiffness=5000000.0,
+                damping=1120000.0,
+                effort_limit_sim=20000.0,
+                velocity_limit_sim=1.0,
             ),
             "messerkopf_passive_coupled": ImplicitActuatorCfg(
                 joint_names_expr=["Messerkopf_joint"],
-                stiffness=1000000.0,
-                damping=500000.0,
-                effort_limit_sim=100000.0,
+                stiffness=5000000.0,
+                damping=1120000.0,
+                effort_limit_sim=20000.0,
+                velocity_limit_sim=1.0,
             ),
+            # Parking-brake wheels (teacher-student values): the truck resists the
+            # arm's reaction forces through braked wheels + tire friction. For the
+            # scripted-driving stage these gains must be switched to velocity-drive
+            # (stiffness 0, high damping) before wheel velocity targets can act.
             "mulag_wheels": ImplicitActuatorCfg(
                 joint_names_expr=[
                     "Wheel_Front_Left_joint", "Wheel_Front_Right_joint",
                     "Wheel_Rear_Left_joint", "Wheel_Rear_Right_joint",
+                ],
+                stiffness=600000000.0, damping=2000000.0,
+                effort_limit_sim=100000.0,
+            ),
+            "mulag_steering": ImplicitActuatorCfg(
+                joint_names_expr=[
                     "Wheel_Front_Left_Steering_joint", "Wheel_Front_Right_Steering_joint",
                 ],
-                stiffness=10000.0, damping=1000.0,
+                stiffness=10.0, damping=1000000000.0,
                 effort_limit_sim=100000.0,
             ),
         }

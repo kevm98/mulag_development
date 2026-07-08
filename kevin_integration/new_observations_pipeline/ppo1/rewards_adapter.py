@@ -16,11 +16,23 @@ def _tcp_pos_base_frame(uw) -> torch.Tensor:
     return quat_apply_inverse(base_quat_w, ee_pos_w - base_pos_w)
 
 
+def _tracking_pos_base_frame(uw) -> torch.Tensor:
+    if hasattr(uw, "_ppo1_tracking_point_pos_b"):
+        return uw._ppo1_tracking_point_pos_b
+    return _tcp_pos_base_frame(uw)
+
+
+def _target_pos_base_frame(uw) -> torch.Tensor:
+    if hasattr(uw, "_ppo1_target_point_pos_b"):
+        return uw._ppo1_target_point_pos_b
+    return uw._command_pos_w[:, :3]
+
+
 def compute_tracking_error(uw) -> torch.Tensor:
-    """Return TCP-to-command distance in the base frame."""
-    tcp_pos_b = _tcp_pos_base_frame(uw)
-    target_pos_b = uw._command_pos_w[:, :3]
-    return torch.norm(tcp_pos_b - target_pos_b, dim=-1)
+    """Return active tracking-point-to-command distance in the base frame."""
+    tracking_pos_b = _tracking_pos_base_frame(uw)
+    target_pos_b = _target_pos_base_frame(uw)
+    return torch.norm(tracking_pos_b - target_pos_b, dim=-1)
 
 
 def _yaw_error(uw) -> torch.Tensor:

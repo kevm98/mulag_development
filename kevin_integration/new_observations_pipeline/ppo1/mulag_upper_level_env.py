@@ -1321,8 +1321,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
     def _setup_scene(self):
         self.robot = Articulation(self.cfg.robot_cfg)
         ground_color = tuple(getattr(self.cfg, "ground_color", (0.0, 0.0, 0.0)))
+        # Ground must cover the whole env grid: origins span ~spacing*sqrt(N)/2 and
+        # the truck spawns ~20 m from its origin. A fixed 200 m plate ends at x=±100,
+        # and at 64 envs the far-corner trucks straddled that edge and fell off the
+        # world (observed: envs 62/63 in endless free fall -> invalid J_eff).
+        _n = int(getattr(self.scene.cfg, "num_envs", 1))
+        _spacing = float(getattr(self.scene.cfg, "env_spacing", 20.0))
+        _grid_half_span = _spacing * (math.ceil(math.sqrt(max(_n, 1))) / 2.0)
+        _ground_size = max(200.0, 2.0 * (_grid_half_span + 60.0))
         ground_cfg = sim_utils.MeshCuboidCfg(
-            size=(200.0, 200.0, 0.02),
+            size=(_ground_size, _ground_size, 0.02),
             collision_props=sim_utils.CollisionPropertiesCfg(
                 contact_offset=0.02,  # 2cm contact offset to prevent penetration
                 rest_offset=0.0,      # Contact starts at surface
@@ -1622,6 +1630,9 @@ class MulagUpperLevelEnv(DirectRLEnv):
             (jpos < limits[..., 0] - cfg.joint_limit_margin)
             | (jpos > limits[..., 1] + cfg.joint_limit_margin)
         ).any(dim=-1)
+        horizon_owns_resets = bool(getattr(cfg, "disable_base_workspace_termination", False))
+        if horizon_owns_resets:
+            joint_limit_violation = torch.zeros_like(joint_limit_violation)
 
         # Flying (roll/pitch)
         root_q = robot.data.root_quat_w
@@ -1630,6 +1641,8 @@ class MulagUpperLevelEnv(DirectRLEnv):
         flying = (torch.abs(roll) > cfg.unimog_flying_roll_pitch_threshold) | (
             torch.abs(pitch) > cfg.unimog_flying_roll_pitch_threshold
         )
+        if horizon_owns_resets:
+            flying = torch.zeros_like(flying)
 
         # Lateral deviation (vehicle drifts off mowing lane)
         local_y = robot.data.root_pos_w[:, 1] - env_origins[:, 1] - 4.3  # centre at y=4.3
@@ -1642,10 +1655,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
         _, _, ee_yaw = euler_xyz_from_quat(ee_q)
         yaw_err = torch.abs(torch.atan2(torch.sin(ee_yaw - cmd_yaw), torch.cos(ee_yaw - cmd_yaw)))
         tcp_face_backwards = yaw_err > cfg.tcp_face_backwards_yaw_threshold
+        if horizon_owns_resets:
+            lateral_deviation = torch.zeros_like(lateral_deviation)
+            tcp_face_backwards = torch.zeros_like(tcp_face_backwards)
+            timeout = torch.zeros_like(timeout)
 
         # End of lane (x-direction progress)
         dx = robot.data.root_pos_w[:, 0] - env_origins[:, 0] + 25.0
         end_of_lane = dx >= cfg.finish_traj_length_x
+        if horizon_owns_resets:
+            end_of_lane = torch.zeros_like(end_of_lane)
 
         # NaN/inf guard
         nonfinite = ~(
@@ -2345,6 +2364,11 @@ class MulagUpperLevelEnv(DirectRLEnv):
             getattr(cfg, "explicit_pd_kp_ausleger_ii", 1.0e6),
             getattr(cfg, "explicit_pd_kp_messerkopf", 1.0e6),
         ], device=self.device, dtype=torch.float32) * kps
+        kp = kp * torch.as_tensor(
+            getattr(cfg, "explicit_pid_kp_per_cylinder", [1.0, 1.0, 1.0, 1.0]),
+            device=self.device,
+            dtype=torch.float32,
+        )
 
         kd = torch.tensor([
             getattr(cfg, "explicit_pd_kd_drehzapfen", 3.0e6),
@@ -2352,6 +2376,11 @@ class MulagUpperLevelEnv(DirectRLEnv):
             getattr(cfg, "explicit_pd_kd_ausleger_ii", 1.5e6),
             getattr(cfg, "explicit_pd_kd_messerkopf", 1.5e6),
         ], device=self.device, dtype=torch.float32) * kds
+        kd = kd * torch.as_tensor(
+            getattr(cfg, "explicit_pid_kd_per_cylinder", [1.0, 1.0, 1.0, 1.0]),
+            device=self.device,
+            dtype=torch.float32,
+        )
 
         effort_lim = torch.tensor([
             getattr(cfg, "explicit_pd_effort_limit_drehzapfen", 1.0e8),
@@ -2399,7 +2428,12 @@ class MulagUpperLevelEnv(DirectRLEnv):
                              - kd.unsqueeze(0) * qd_use)
                 # Force rate limiting
                 rate_frac = float(getattr(cfg, "explicit_force_rate_limit_fraction", 0.01))
-                max_delta = rate_frac * effort_lim.unsqueeze(0)
+                rate_scale = torch.as_tensor(
+                    getattr(cfg, "explicit_force_rate_limit_per_cylinder", [1.0, 1.0, 1.0, 1.0]),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                max_delta = rate_frac * rate_scale.unsqueeze(0) * effort_lim.unsqueeze(0)
                 force_delta = force_raw - self._prev_force_cmd
                 force_delta = torch.clamp(force_delta, -max_delta, max_delta)
                 force_raw_limited = self._prev_force_cmd + force_delta
@@ -2413,12 +2447,15 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 if requires_static:
                     is_static = (qd_use.abs().mean(dim=-1) < static_vel_thresh) & (error.abs().mean(dim=-1) < static_err_thresh)
                     is_static_4d = is_static.unsqueeze(-1).expand(-1, 4)
-                    in_window_use = in_window & is_static_4d
+                    in_window_use = in_window.unsqueeze(-1).expand_as(is_static_4d) & is_static_4d
+                    count_mask = in_window & is_static
                 else:
-                    in_window_use = in_window
+                    in_window_use = in_window.unsqueeze(-1).expand_as(error)
+                    count_mask = in_window
                 if in_window_use.any():
                     self._explicit_force_bias_accum[in_window_use] += force_cmd[in_window_use]
-                    self._explicit_bias_window_count[in_window_use] += 1
+                if count_mask.any():
+                    self._explicit_bias_window_count[count_mask] += 1
 
             # Transition: capture bias from accumulated force_cmd
             just_finished = ~in_calib & ~self._explicit_bias_calibrated

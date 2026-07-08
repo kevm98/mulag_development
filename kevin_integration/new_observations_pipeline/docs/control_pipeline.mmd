@@ -4,7 +4,7 @@ flowchart LR
     DES["Cylinder-space\ndesired motion"]
     IDFD["ID/FD horizon rollout\nID valve estimate + FD motion"]
     TARGETS["Cylinder position targets\nsmooth horizon ramp"]
-    PID["explicit_effort_pid_bias\ncalibrated effort PID"]
+    DRIVE["PhysX implicit position drives\nhydraulic-lock stiffness + force caps"]
     PHYSX["PhysX articulation"]
     EE["EE/tool motion\ntracking reward + safety logs"]
 
@@ -12,7 +12,7 @@ flowchart LR
     JEFF --> DES
     DES --> IDFD
     IDFD --> TARGETS
-    TARGETS --> PID
-    PID --> PHYSX
+    TARGETS --> DRIVE
+    DRIVE --> PHYSX
     PHYSX --> EE
     EE -. observation/reward .-> PPO

@@ -46,6 +46,20 @@ def _tcp_pos_base_frame(uw) -> torch.Tensor:
     return quat_apply_inverse(base_quat_w, ee_pos_w - base_pos_w)
 
 
+def _tracking_pos_base_frame(uw) -> torch.Tensor:
+    if hasattr(uw, "_ppo1_tracking_point_pos_b"):
+        return uw._ppo1_tracking_point_pos_b
+    return _tcp_pos_base_frame(uw)
+
+
+def _target_pos_base_frame(uw, device) -> torch.Tensor:
+    if hasattr(uw, "_ppo1_target_point_pos_b"):
+        return uw._ppo1_target_point_pos_b
+    if hasattr(uw, "_command_pos_w") and uw._command_pos_w is not None:
+        return uw._command_pos_w[:, :3]
+    return torch.zeros((uw.num_envs, 3), device=device)
+
+
 def _unimog_pose(uw) -> tuple[torch.Tensor, torch.Tensor]:
     env_origins = uw.scene.env_origins
     local_pos = uw.robot.data.root_pos_w - env_origins
@@ -67,11 +81,8 @@ def build_high_level_observation(uw, prev_hl_action: torch.Tensor) -> torch.Tens
     PPO sees only task-space robot/EE/goal state.
     """
     ee_state = uw.robot.data.body_link_state_w[:, uw._ee_body_id, :7]
-    ee_pos_b = _tcp_pos_base_frame(uw)
-    if hasattr(uw, "_command_pos_w") and uw._command_pos_w is not None:
-        target_pos_b = uw._command_pos_w[:, :3]
-    else:
-        target_pos_b = torch.zeros((uw.num_envs, 3), device=ee_state.device)
+    ee_pos_b = _tracking_pos_base_frame(uw)
+    target_pos_b = _target_pos_base_frame(uw, ee_state.device)
     ee_pos_error_b = target_pos_b - ee_pos_b
     ee_error_norm = torch.norm(ee_pos_error_b, dim=-1, keepdim=True)
     joint_pos = uw.robot.data.joint_pos[:, uw._arm_joint_ids]
@@ -96,12 +107,9 @@ def build_horizon_observation(uw, prev_action, prev_delta_x_des_H,
     DEPRECATED: Use build_high_level_observation() for new high-level PPO.
     """
     ee_state = uw.robot.data.body_link_state_w[:, uw._ee_body_id, :7]
-    ee_pos_b = _tcp_pos_base_frame(uw)
+    ee_pos_b = _tracking_pos_base_frame(uw)
     ee_quat_w = _normalized_quat(ee_state[:, 3:7])
-    if hasattr(uw, "_command_pos_w") and uw._command_pos_w is not None:
-        target_pos_b = uw._command_pos_w[:, :3]
-    else:
-        target_pos_b = torch.zeros((uw.num_envs, 3), device=ee_state.device)
+    target_pos_b = _target_pos_base_frame(uw, ee_state.device)
     ee_pos_error_b = target_pos_b - ee_pos_b
     joint_pos = uw.robot.data.joint_pos[:, uw._arm_joint_ids]
     joint_vel = uw.robot.data.joint_vel[:, uw._arm_joint_ids]
