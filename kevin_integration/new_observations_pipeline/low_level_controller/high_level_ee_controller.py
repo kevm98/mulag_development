@@ -52,6 +52,15 @@ class HighLevelEEController:
         self._prev_delta = torch.zeros((B, 4), device=self._device)
         return J, self._condition_number, S
 
+    def set_jacobian(self, J: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replace the stored Jacobian (e.g. after cross-env outlier filtering) and
+        recompute singular values / condition numbers. Returns (cond, S)."""
+        self._J_eff = J
+        S = torch.linalg.svdvals(J.float())
+        self._singular_values = S
+        self._condition_number = S[:, 0] / S[:, -1].clamp(min=1e-9)
+        return self._condition_number, S
+
     def map_ee_to_cylinder(self, desired_ee_delta):
         """Damped least-squares with temporal smoothing."""
         if self._J_eff is None:

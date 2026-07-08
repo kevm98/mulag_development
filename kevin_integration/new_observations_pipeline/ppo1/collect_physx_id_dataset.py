@@ -25,6 +25,12 @@ parser.add_argument("--ki", type=float, default=15.0)
 parser.add_argument("--kd", type=float, default=2.0)
 parser.add_argument("--integral_limit", type=float, default=0.5)
 parser.add_argument("--output_dir", type=str, default="outputs/cylinder_diagnostics/paper_matched_pipeline/model_finetune")
+# Start each episode from a random dynamically-holdable pose so the dataset covers
+# the whole workspace instead of the default-pose neighborhood (the original
+# finetuned ID had extension-feature std of only 4-17 mm around one pose).
+parser.add_argument("--start_pose_records_json", type=str, nargs="*", default=[])
+parser.add_argument("--settle_steps", type=int, default=60)
+parser.add_argument("--random_seed", type=int, default=7)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0], *hydra_args]
@@ -50,6 +56,51 @@ env = MulagUpperLevelEnv(cfg=cfg)
 uw = env.unwrapped if hasattr(env, "unwrapped") else env
 dt = float(uw.step_dt); dev = uw.device
 za = torch.zeros((uw.num_envs, uw.cfg.action_space), device=dev)
+
+# -- Workspace start poses (accepted dynamic-hold candidates) --
+import json as _json
+_start_poses: list[list[float]] = []
+for rec_path in args_cli.start_pose_records_json:
+    payload = _json.loads(Path(rec_path).read_text(encoding="utf-8"))
+    for rec in payload.get("records", []):
+        if rec.get("accepted"):
+            _start_poses.append(rec["cylinder_q_settled"])
+_pose_rng = np.random.RandomState(int(args_cli.random_seed))
+print(f"[collect] workspace start poses available: {len(_start_poses)}", flush=True)
+
+
+def _reset_to_workspace_pose() -> None:
+    """Write a random dynamically-holdable cylinder pose and settle briefly."""
+    if not _start_poses:
+        return
+    picks = _pose_rng.randint(0, len(_start_poses), size=uw.num_envs)
+    q = torch.tensor([_start_poses[i] for i in picks], dtype=torch.float32, device=dev)
+    env_ids = torch.arange(uw.num_envs, device=dev)
+    joint_pos = uw.robot.data.default_joint_pos[: uw.num_envs].detach().clone()
+    joint_pos[:, uw._cylinder_joint_ids] = q
+    joint_vel = torch.zeros_like(joint_pos)
+    root = uw.robot.data.default_root_state[: uw.num_envs].detach().clone()
+    root[:, :3] += uw.scene.env_origins[: uw.num_envs]
+    uw.robot.write_root_pose_to_sim(root[:, :7], env_ids)
+    uw.robot.write_root_velocity_to_sim(torch.zeros((uw.num_envs, 6), device=dev), env_ids)
+    uw.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+    tool_q = joint_pos[:, uw._tool_joint_id].detach().clone().unsqueeze(-1)
+    uw.set_debug_manual_cylinder_targets(q.detach().clone(), tool_position_target=tool_q)
+    for _ in range(max(int(args_cli.settle_steps), 0)):
+        env.step(za)
+    uw.clear_debug_manual_cylinder_targets()
+
+
+# Per-cylinder extension bounds from soft joint limits (adapter space), for the
+# anti-drift bias; the old hard-coded 0.35/0.60 only fit the default pose region.
+_lims = uw.robot.data.soft_joint_pos_limits[0, uw._cylinder_joint_ids]
+_zero4 = torch.zeros((1, 4), device=dev)
+_x_a, _ = uw._cylinder_adapter.current_from_cylinder_joints(_lims[:, 0].unsqueeze(0), _zero4)
+_x_b, _ = uw._cylinder_adapter.current_from_cylinder_joints(_lims[:, 1].unsqueeze(0), _zero4)
+EXT_LO = torch.minimum(_x_a, _x_b)[0].cpu().numpy()
+EXT_HI = torch.maximum(_x_a, _x_b)[0].cpu().numpy()
+EXT_MARGIN = 0.15 * (EXT_HI - EXT_LO)
+print(f"[collect] extension bounds lo={EXT_LO.round(3).tolist()} hi={EXT_HI.round(3).tolist()}", flush=True)
 
 VELS = [-0.04, -0.03, -0.02, -0.01, -0.005, 0.005, 0.01, 0.02, 0.03, 0.04]
 N_V = len(VELS)
@@ -92,13 +143,13 @@ def _target_velocity(step, ep, ext_cur):
             v_des = _target_velocity._last.copy()
     
     elif step < 400:
-        # Random velocity with anti-drift: push cylinders away from edges
+        # Random velocity with anti-drift: push cylinders away from their limits
         rng = np.random.RandomState(step + ep * 10000)
         for ci in range(4):
-            e = ext_cur[0, ci] if len(ext_cur) > 0 else 0.5
-            if e < 0.35:
+            e = ext_cur[0, ci] if len(ext_cur) > 0 else 0.5 * (EXT_LO[ci] + EXT_HI[ci])
+            if e < EXT_LO[ci] + EXT_MARGIN[ci]:
                 bias = 0.02  # Push positive to expand range
-            elif e > 0.60:
+            elif e > EXT_HI[ci] - EXT_MARGIN[ci]:
                 bias = -0.02  # Push negative to expand range
             else:
                 bias = 0.0
@@ -127,6 +178,7 @@ def _target_velocity(step, ep, ext_cur):
 
 for ep in range(args_cli.episodes):
     obs, _ = env.reset()
+    _reset_to_workspace_pose()
     uw.set_debug_valve_cmd(torch.zeros((uw.num_envs, 4), device=dev))
     e_int.zero_(); e_prev.zero_()
     ext_current = np.zeros((uw.num_envs, 4), dtype=np.float32)
@@ -171,18 +223,17 @@ for ep in range(args_cli.episodes):
         ], axis=1)
         Y_id = valve_teacher.detach().cpu().numpy()
         
-        # Track sign correctness per cylinder
+        # Track sign correctness per cylinder; filter per env row (multi-env safe)
         signs_correct = (np.sign(delta_x_meas.detach().cpu().numpy()) == np.sign(v_des_np)) | (np.abs(v_des_np) < 0.002)
-        all_good = signs_correct.all(axis=1)[0]
-        sign_per_cyl.append(signs_correct[0])
-        
-        # Only save good samples for ID training
-        if all_good:
-            X_id_batches.append(X_id)
-            Y_id_batches.append(Y_id)
-        good_flags.append(all_good)
+        good_rows = signs_correct.all(axis=1)
+        sign_per_cyl.append(signs_correct.mean(axis=0))
+
+        if good_rows.any():
+            X_id_batches.append(X_id[good_rows])
+            Y_id_batches.append(Y_id[good_rows])
+        good_flags.append(float(good_rows.mean()))
     
-    good_ns = len(X_id_batches)
+    good_ns = int(sum(len(b) for b in X_id_batches))
     # Incremental save
     if good_ns > 0:
         try:
@@ -195,6 +246,17 @@ for ep in range(args_cli.episodes):
     spc = np.mean(sign_per_cyl[-args_cli.steps_per_ep:], axis=0) if sign_per_cyl else [0]*4
     print(f"ID collect ep {ep+1}/{args_cli.episodes} (good={good_ns} samples, frac={frac:.2f}, sign_per_cyl={[f'{s:.2f}' for s in spc]})", flush=True)
 
+if X_id_batches:
+    X_all = np.concatenate(X_id_batches, axis=0).astype(np.float32)
+    Y_all = np.concatenate(Y_id_batches, axis=0).astype(np.float32)
+    np.savez(outdir / "id_physx_dynamic_dataset.npz", X=X_all, Y=Y_all)
+    ext = X_all[:, 8:12]
+    print(
+        f"[collect] merged dataset: {X_all.shape[0]} samples -> {outdir / 'id_physx_dynamic_dataset.npz'}\n"
+        f"[collect] extension coverage per cylinder: min={ext.min(axis=0).round(3).tolist()} "
+        f"max={ext.max(axis=0).round(3).tolist()} std={ext.std(axis=0).round(4).tolist()}",
+        flush=True,
+    )
 env.close()
 simulation_app.close()
 print("ID collection complete.", flush=True)
