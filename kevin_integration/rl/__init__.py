@@ -6,6 +6,7 @@ from .observation_builder import (
     build_id_input,
     build_rl_obs,
     build_sd_input,
+    build_task_space_id_fd_rl_obs,
     build_task_space_rl_obs,
 )
 from .torque_adapter import (
@@ -36,6 +37,7 @@ __all__ = [
     "build_id_input",
     "build_rl_obs",
     "build_sd_input",
+    "build_task_space_id_fd_rl_obs",
     "build_task_space_rl_obs",
     "clamp_and_sanitize",
     "expand_action_to_id",

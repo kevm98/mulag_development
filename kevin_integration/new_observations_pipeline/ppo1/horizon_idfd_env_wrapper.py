@@ -222,9 +222,23 @@ class HorizonIDFDEnv:
         self._ground_z = float(getattr(base_cfg, "ground_z", 0.0))
         self._trajectory_scale = float(getattr(base_cfg, "trajectory_scale", 0.8))
         self._ground_path_world: torch.Tensor | None = None
+        self._ground_path_base: torch.Tensor | None = None
         self._ground_target_tool_bottom_world = torch.zeros((B, 3), device=self._device)
+        self._ground_target_tool_bottom_base = torch.zeros((B, 3), device=self._device)
         self._ground_path_index = 0
         self._ground_path_completion = torch.zeros(B, device=self._device)
+        self._ground_path_pacing = str(getattr(base_cfg, "ground_path_pacing", "fixed"))
+        self._ground_path_capture_radius_m = float(getattr(base_cfg, "ground_path_capture_radius_m", 0.20))
+        self._ground_path_capture_required_hold_steps = int(
+            getattr(base_cfg, "ground_path_capture_required_hold_steps", 1)
+        )
+        self._ground_capture_hold_steps = torch.zeros(B, dtype=torch.long, device=self._device)
+        self._ground_initial_target_mode = str(getattr(base_cfg, "ground_initial_target_mode", "path_start"))
+        self._ground_initial_target_offset_m = float(getattr(base_cfg, "ground_initial_target_offset_m", 0.08))
+        self._ground_initial_target_capture_radius_m = float(
+            getattr(base_cfg, "ground_initial_target_capture_radius_m", 0.03)
+        )
+        self._ground_local_target_active = torch.zeros(B, dtype=torch.bool, device=self._device)
         self._ground_tracking_clearance = self._tool_ground_clearance
         self._ground_limitation = ""
         self._ground_path_params: dict[str, float | int | str | list] = {}
@@ -257,6 +271,23 @@ class HorizonIDFDEnv:
         self._last_delta_cmd_H = torch.zeros((B, 4), device=self._device)
         self._last_final_cylinder_target = torch.zeros((B, 4), device=self._device)
         self._last_horizon_target_source = "none"
+        self._last_target_delta_norm = torch.zeros(B, device=self._device)
+        self._last_tool_delta_norm = torch.zeros(B, device=self._device)
+        self._last_relative_motion_ratio = torch.zeros(B, device=self._device)
+        self._last_error_reduction_tool_motion = torch.zeros(B, device=self._device)
+        self._last_error_reduction_target_motion = torch.zeros(B, device=self._device)
+        self._last_ground_target_advanced = torch.zeros(B, device=self._device)
+        self._last_action_y = torch.zeros(B, device=self._device)
+        self._last_action_z = torch.zeros(B, device=self._device)
+        self._last_desired_ee_delta_norm = torch.zeros(B, device=self._device)
+        self._last_dx_des_norm = torch.zeros(B, device=self._device)
+        self._last_fd_delta_norm = torch.zeros(B, device=self._device)
+        self._last_final_cmd_norm = torch.zeros(B, device=self._device)
+        self._last_measured_cylinder_delta_norm = torch.zeros(B, device=self._device)
+        self._last_measured_cylinder_joint_delta_norm = torch.zeros(B, device=self._device)
+        self._last_tool_command_ratio = torch.zeros(B, device=self._device)
+        self._last_initial_target_distance = torch.zeros(B, device=self._device)
+        self._last_initial_target_is_local = torch.zeros(B, device=self._device)
 
         self._refresh_root_hold_from_current()
         self._refresh_hold_target_from_current()
@@ -321,13 +352,17 @@ class HorizonIDFDEnv:
 
     def _controlled_point_base_frame(self) -> torch.Tensor:
         if self._trajectory_mode.startswith("ground_"):
-            return self._world_to_base(self.get_tool_bottom_world_pos())
+            return self._world_to_tracking_frame(self.get_tool_bottom_world_pos())
         return self._tcp_pos_base_frame()
 
     def _publish_tracking_point_state(self) -> None:
         if self._trajectory_mode.startswith("ground_"):
-            actual_b = self._world_to_base(self.get_tool_bottom_world_pos())
-            target_b = self._world_to_base(self.current_ground_target_world())
+            actual_b = self._world_to_tracking_frame(self.get_tool_bottom_world_pos())
+            self._sync_ground_command_from_target()
+            if self._trajectory_plane == "base_yz":
+                target_b = self._ground_target_tool_bottom_base.detach().clone()
+            else:
+                target_b = self._world_to_tracking_frame(self.current_ground_target_world())
             point_kind = "tool_contact_bottom"
         else:
             actual_b = self._tcp_pos_base_frame()
@@ -685,7 +720,7 @@ class HorizonIDFDEnv:
         return {
             "active_architecture": (
                 "PPO delta-EE command -> empirical J_eff -> cylinder-space desired motion -> "
-                "ID/FD horizon rollout -> cylinder targets -> explicit_effort_pid_bias -> PhysX"
+                "ID/FD horizon rollout -> cylinder targets -> PhysX implicit position drives"
             ),
             "ee_action_mode": self._ee_mode,
             "ppo_action_is_upper_level_delta_ee": bool(self._is_task_space),
@@ -743,6 +778,42 @@ class HorizonIDFDEnv:
             pos_b = pos_b.expand(self.num_envs, -1)
         return base_pos_w + quat_apply(base_quat_w, pos_b)
 
+    def _use_root_hold_frame_for_ground(self) -> bool:
+        return bool(
+            self._trajectory_mode.startswith("ground_")
+            and getattr(self.cfg, "ground_use_root_hold_frame", True)
+        )
+
+    def _world_to_tracking_frame(self, pos_w: torch.Tensor) -> torch.Tensor:
+        if not self._use_root_hold_frame_for_ground():
+            return self._world_to_base(pos_w)
+        base_pos_w = self._root_hold_pose[:, :3]
+        base_quat_w = self._root_hold_pose[:, 3:7]
+        base_quat_w = base_quat_w / base_quat_w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        if pos_w.ndim == 1:
+            pos_w = pos_w.unsqueeze(0)
+        if pos_w.shape[0] == 1 and self.num_envs > 1:
+            pos_w = pos_w.expand(self.num_envs, -1)
+        if base_pos_w.shape[0] == 1 and pos_w.shape[0] != 1:
+            base_pos_w = base_pos_w.expand(pos_w.shape[0], -1)
+            base_quat_w = base_quat_w.expand(pos_w.shape[0], -1)
+        return quat_apply_inverse(base_quat_w, pos_w - base_pos_w)
+
+    def _tracking_frame_to_world(self, pos_b: torch.Tensor) -> torch.Tensor:
+        if not self._use_root_hold_frame_for_ground():
+            return self._base_to_world(pos_b)
+        base_pos_w = self._root_hold_pose[:, :3]
+        base_quat_w = self._root_hold_pose[:, 3:7]
+        base_quat_w = base_quat_w / base_quat_w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        if pos_b.ndim == 1:
+            pos_b = pos_b.unsqueeze(0)
+        if pos_b.shape[0] == 1 and self.num_envs > 1:
+            pos_b = pos_b.expand(self.num_envs, -1)
+        if base_pos_w.shape[0] == 1 and pos_b.shape[0] != 1:
+            base_pos_w = base_pos_w.expand(pos_b.shape[0], -1)
+            base_quat_w = base_quat_w.expand(pos_b.shape[0], -1)
+        return base_pos_w + quat_apply(base_quat_w, pos_b)
+
     def discover_controlled_frame(self) -> dict[str, object]:
         geom = self.tool_geometry_report()
         ee_world = self.get_tool_origin_world_pos()[0].detach().cpu().tolist()
@@ -752,8 +823,12 @@ class HorizonIDFDEnv:
         root_p = self._uw.robot.data.root_pos_w[0].detach().cpu().tolist()
         if self._is_task_space:
             if self.num_actions == 2:
-                controlled_axes = "base_frame_YZ"
-                can_ground_xy = False
+                if self._trajectory_plane == "ground_xy":
+                    controlled_axes = "base_frame_XY"
+                    can_ground_xy = True
+                else:
+                    controlled_axes = "base_frame_YZ"
+                    can_ground_xy = False
             elif self.num_actions >= 3:
                 controlled_axes = "base_frame_XYZ"
                 can_ground_xy = True
@@ -790,13 +865,23 @@ class HorizonIDFDEnv:
             return action
         if action.shape[-1] == 2:
             expanded = torch.zeros((action.shape[0], 3), dtype=action.dtype, device=action.device)
-            expanded[:, 1:3] = action
+            if self._trajectory_plane == "ground_xy":
+                expanded[:, 0:2] = action
+            else:
+                expanded[:, 1:3] = action
             return expanded
         if action.shape[-1] > 3:
             return action[:, :3]
         expanded = torch.zeros((action.shape[0], 3), dtype=action.dtype, device=action.device)
         expanded[:, : action.shape[-1]] = action
         return expanded
+
+    def _controlled_axis_indices(self) -> list[int] | None:
+        if not self._is_task_space or self.num_actions != 2:
+            return None
+        if self._trajectory_plane == "ground_xy":
+            return [0, 1]
+        return [1, 2]
 
     def _coerce_action_dim(self, action: torch.Tensor) -> torch.Tensor:
         """Pad or trim caller-provided actions to the configured action space."""
@@ -807,35 +892,64 @@ class HorizonIDFDEnv:
         fixed[:, :n] = action[:, :n]
         return fixed
 
-    def set_ground_target_world(self, target_world: torch.Tensor) -> None:
+    def _sync_ground_command_from_target(self) -> None:
+        """Publish the current tool/contact target as an EE-origin command in base frame."""
+        if not self._trajectory_mode.startswith("ground_"):
+            return
+        target_world = self.current_ground_target_world()
+        offset = self.get_tool_bottom_offset_world().detach()
+        ee_origin_target_world = target_world - offset
+        target_base = self._world_to_tracking_frame(ee_origin_target_world)
+        self._uw._command_pos_w[:, :3] = target_base[:, :3]
+        self._uw._command_quat_w[:, 0] = 1.0
+        self._uw._command_quat_w[:, 1:] = 0.0
+
+    def set_ground_target_world(self, target_world: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
         """Set target tool/contact-bottom world point and command the required EE origin."""
         target_world = target_world.to(device=self._device, dtype=torch.float32)
         if target_world.ndim == 1:
             target_world = target_world.unsqueeze(0)
-        if target_world.shape[0] == 1 and self.num_envs > 1:
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self._device)
+        else:
+            env_ids = env_ids.to(device=self._device, dtype=torch.long).reshape(-1)
+        if target_world.shape[0] == 1:
             # A single path point is in canonical world coordinates (the zero-origin
             # env frame the workspace JSONs are built in — observe runs use one env
             # whose origin is (0,0,0)). Shift by each env's absolute grid origin,
             # otherwise every env tracks a target tens of meters away.
-            origins = self._uw.scene.env_origins[: self.num_envs]
-            target_world = target_world + origins
-        target_world = target_world.clone()
+            target_world = target_world.expand(env_ids.numel(), -1).clone()
+            if self.num_envs > 1:
+                origins = self._uw.scene.env_origins[env_ids, :3].to(device=self._device, dtype=torch.float32)
+                target_world = target_world + origins
+        elif target_world.shape[0] == self.num_envs:
+            target_world = target_world[env_ids].clone()
+        elif target_world.shape[0] != env_ids.numel():
+            raise ValueError(
+                f"target_world rows must be 1, num_envs ({self.num_envs}), or len(env_ids) "
+                f"({env_ids.numel()}), got {target_world.shape[0]}"
+            )
+        else:
+            target_world = target_world.clone()
         min_z = self._ground_z + self._tool_ground_clearance
         target_world[:, 2] = torch.clamp(target_world[:, 2], min=min_z)
-        self._ground_target_tool_bottom_world = target_world.detach().clone()
-        offset = self.get_tool_bottom_offset_world().detach()
-        ee_origin_target_world = target_world - offset
-        target_base = self._world_to_base(ee_origin_target_world)
-        self._uw._command_pos_w[:, :3] = target_base[:, :3]
-        self._uw._command_quat_w[:, 0] = 1.0
-        self._uw._command_quat_w[:, 1:] = 0.0
+        target_all = self._ground_target_tool_bottom_world.detach().clone()
+        target_all[env_ids] = target_world
+        self._ground_target_tool_bottom_world = target_all.detach().clone()
+        if self._trajectory_plane == "base_yz":
+            target_base_all = self._ground_target_tool_bottom_base.detach().clone()
+            target_base_all[env_ids] = self._world_to_tracking_frame(self._ground_target_tool_bottom_world)[env_ids]
+            self._ground_target_tool_bottom_base = target_base_all.detach().clone()
+        self._sync_ground_command_from_target()
         self._publish_tracking_point_state()
 
     def current_ground_target_world(self) -> torch.Tensor:
+        if self._trajectory_mode.startswith("ground_") and self._trajectory_plane == "base_yz":
+            return self._tracking_frame_to_world(self._ground_target_tool_bottom_base).detach().clone()
         return self._ground_target_tool_bottom_world.detach().clone()
 
     def current_ee_origin_target_world(self) -> torch.Tensor:
-        return self._base_to_world(self._uw._command_pos_w[:, :3])
+        return self._tracking_frame_to_world(self._uw._command_pos_w[:, :3])
 
     def configure_ground_trajectory(
         self,
@@ -879,11 +993,19 @@ class HorizonIDFDEnv:
             points,
         )
         self._ground_path_world = torch.as_tensor(path_np, dtype=torch.float32, device=self._device)
-        self._ground_path_index = 0
-        self._ground_path_completion.zero_()
+        self._ground_path_base = None
+        if self._trajectory_plane == "base_yz" and self._ground_path_world.numel() > 0:
+            base_pos = self._uw.robot.data.root_pos_w[0:1].detach()
+            base_quat = self._uw.robot.data.root_quat_w[0:1].detach()
+            base_quat = base_quat / base_quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-8)
+            n_path = self._ground_path_world.shape[0]
+            self._ground_path_base = quat_apply_inverse(
+                base_quat.expand(n_path, -1),
+                self._ground_path_world - base_pos.expand(n_path, -1),
+            ).detach().clone()
         self._ground_limitation = limitation
         self._ground_path_params = params
-        self.set_ground_target_world(self._ground_path_world[0])
+        self._apply_ground_initial_target()
         vis_target = bool(
             getattr(self.cfg, "visualize_target_trajectory", False)
             if visualize_target_trajectory is None
@@ -898,6 +1020,114 @@ class HorizonIDFDEnv:
             self._setup_ground_visualization(vis_target, vis_trail)
             self._update_ground_visualization()
         return self._ground_path_world
+
+    def _set_ground_path_index(self, index: int) -> None:
+        if self._ground_path_world is None or self._ground_path_world.numel() == 0:
+            self._ground_path_index = 0
+            self._ground_path_completion.zero_()
+            self._ground_capture_hold_steps.zero_()
+            return
+        last = self._ground_path_world.shape[0] - 1
+        self._ground_path_index = int(max(-1, min(int(index), last)))
+        self._ground_path_completion[:] = max(float(self._ground_path_index), 0.0) / max(float(last), 1.0)
+        self._ground_capture_hold_steps.zero_()
+
+    def _ground_path_points_world_all_envs(self) -> torch.Tensor:
+        if self._ground_path_world is None or self._ground_path_world.numel() == 0:
+            return self.current_ground_target_world().unsqueeze(1)
+        path = self._ground_path_world.to(device=self._device, dtype=torch.float32)
+        path = path.unsqueeze(0).expand(self.num_envs, -1, -1).clone()
+        if self.num_envs > 1:
+            origins = self._uw.scene.env_origins[: self.num_envs, :3].to(device=self._device, dtype=torch.float32)
+            path = path + origins.unsqueeze(1)
+        return path
+
+    def _ground_path_points_base_all_envs(self) -> torch.Tensor:
+        if self._trajectory_plane == "base_yz" and self._ground_path_base is not None:
+            path_b = self._ground_path_base.to(device=self._device, dtype=torch.float32)
+            return path_b.unsqueeze(0).expand(self.num_envs, -1, -1).clone()
+        path_w = self._ground_path_points_world_all_envs()
+        n_env, n_path, _ = path_w.shape
+        base_pos = self._uw.robot.data.root_pos_w[:, None, :].expand(n_env, n_path, 3)
+        base_quat = self._uw.robot.data.root_quat_w
+        if self._use_root_hold_frame_for_ground():
+            base_pos = self._root_hold_pose[:, None, :3].expand(n_env, n_path, 3)
+            base_quat = self._root_hold_pose[:, 3:7]
+        base_quat = base_quat / base_quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-8)
+        base_quat = base_quat[:, None, :].expand(n_env, n_path, 4)
+        return quat_apply_inverse(
+            base_quat.reshape(-1, 4),
+            (path_w - base_pos).reshape(-1, 3),
+        ).reshape(n_env, n_path, 3)
+
+    def _nearest_ground_path_indices(self) -> torch.Tensor:
+        path_b = self._ground_path_points_base_all_envs()
+        actual_b = self._controlled_point_base_frame().detach().unsqueeze(1)
+        delta = path_b - actual_b
+        if self._trajectory_plane == "base_yz":
+            delta = delta.clone()
+            delta[:, :, 0] = 0.0
+        elif self._trajectory_plane == "ground_xy":
+            delta = delta.clone()
+            delta[:, :, 2] = 0.0
+        return torch.argmin(torch.sum(delta * delta, dim=-1), dim=1)
+
+    def _apply_ground_initial_target(self, env_ids: torch.Tensor | None = None) -> None:
+        if self._ground_path_world is None or self._ground_path_world.numel() == 0:
+            return
+        mode = str(getattr(self.cfg, "ground_initial_target_mode", self._ground_initial_target_mode)).lower()
+        offset_m = float(getattr(self.cfg, "ground_initial_target_offset_m", self._ground_initial_target_offset_m))
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self._device)
+        else:
+            env_ids = env_ids.to(device=self._device, dtype=torch.long).reshape(-1)
+        self._last_initial_target_is_local[env_ids] = 0.0
+        self._ground_capture_hold_steps[env_ids] = 0
+
+        if mode in ("path_start", "start", "legacy"):
+            self._ground_local_target_active[env_ids] = False
+            self._set_ground_path_index(0)
+            target = self._ground_path_target_world_for_index(0)
+            self.set_ground_target_world(target, env_ids=env_ids)
+        elif mode in ("nearest_path", "nearest"):
+            self._ground_local_target_active[env_ids] = False
+            nearest = self._nearest_ground_path_indices()
+            idx0 = int(nearest[0].detach().item())
+            self._set_ground_path_index(idx0)
+            path_w = self._ground_path_points_world_all_envs()
+            target = path_w[torch.arange(self.num_envs, device=self._device), nearest]
+            self.set_ground_target_world(target, env_ids=env_ids)
+        elif mode in ("local_offset", "local", "near_tool"):
+            nearest = self._nearest_ground_path_indices()
+            idx0 = int(nearest[0].detach().item())
+            self._set_ground_path_index(idx0 - 1)
+            path_b = self._ground_path_points_base_all_envs()
+            actual_b = self._controlled_point_base_frame().detach()
+            nearest_b = path_b[torch.arange(self.num_envs, device=self._device), nearest]
+            delta_b = nearest_b - actual_b
+            if self._trajectory_plane == "base_yz":
+                delta_b = delta_b.clone()
+                delta_b[:, 0] = 0.0
+            elif self._trajectory_plane == "ground_xy":
+                delta_b = delta_b.clone()
+                delta_b[:, 2] = 0.0
+            dist = torch.linalg.norm(delta_b, dim=-1).clamp(min=1.0e-9)
+            step = delta_b * (torch.minimum(dist, torch.full_like(dist, max(offset_m, 0.0))) / dist).unsqueeze(-1)
+            target = self._tracking_frame_to_world(actual_b + step)
+            target[:, 2] = torch.clamp(target[:, 2], min=self._ground_z + self._tool_ground_clearance)
+            self._last_initial_target_is_local[env_ids] = 1.0
+            self._ground_local_target_active[env_ids] = True
+            self.set_ground_target_world(target, env_ids=env_ids)
+        else:
+            raise ValueError(
+                "ground_initial_target_mode must be 'path_start', 'nearest_path', or "
+                f"'local_offset', got {mode!r}"
+            )
+        target_now = self.current_ground_target_world()
+        tool_now = self.get_tool_bottom_world_pos().detach()
+        self._last_initial_target_distance[env_ids] = torch.linalg.norm(
+            target_now[env_ids] - tool_now[env_ids], dim=-1
+        ).detach()
 
     def _load_ground_workspace(self, workspace_json: str) -> dict:
         path = Path(workspace_json)
@@ -929,6 +1159,97 @@ class HorizonIDFDEnv:
             "mower_sweep_amplitude": 0.25 * span,
             "mower_sweep_length": 1.2 * span,
         }
+
+    def _ground_xy_conditioned_basis(self) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+        """Pick a local ground-XY direction that preserves Z under the measured J_eff.
+
+        The controller is unchanged. This only conditions the first stationary-arm
+        trajectory so the requested horizontal motion follows the best local
+        direction after projecting cylinder motion into the Z-hold nullspace.
+        """
+        direction = np.asarray([1.0, 0.0], dtype=np.float64)
+        perp = np.asarray([0.0, 1.0], dtype=np.float64)
+        info: dict[str, object] = {
+            "path_conditioned_to_j_eff": False,
+            "condition_reason": "disabled_or_unavailable",
+            "conditioned_xy_direction": direction.tolist(),
+            "conditioned_xy_perp": perp.tolist(),
+        }
+        if not bool(getattr(self.cfg, "ground_xy_condition_path_to_j_eff", True)):
+            info["condition_reason"] = "disabled"
+            return direction, perp, info
+        if self._ee_controller is None or self._ee_controller.jacobian is None:
+            info["condition_reason"] = "j_eff_unavailable"
+            return direction, perp, info
+
+        try:
+            J = self._ee_controller.jacobian[0].detach().to(device=self._device, dtype=torch.float32)
+            if not bool(torch.isfinite(J).all().item()):
+                info["condition_reason"] = "j_eff_nonfinite"
+                return direction, perp, info
+            Jz = J[2:3, :]
+            eye_cyl = torch.eye(J.shape[1], device=self._device, dtype=torch.float32)
+            lam = max(float(getattr(self.cfg, "ee_lam", 1.0e-2)), 1.0e-8)
+            A = torch.mm(Jz, Jz.transpose(0, 1)) + lam * torch.eye(1, device=self._device)
+            pinv_z = torch.mm(Jz.transpose(0, 1), torch.linalg.inv(A))
+            null_z = eye_cyl - torch.mm(pinv_z, Jz)
+            horizontal_after_z_hold = torch.mm(J[0:2, :], null_z)
+            U, S, _ = torch.linalg.svd(horizontal_after_z_hold)
+            min_sv = float(getattr(self.cfg, "ground_xy_condition_path_min_sv", 1.0e-5))
+            if not bool(torch.isfinite(S).all().item()) or float(S[0].item()) < min_sv:
+                info.update(
+                    {
+                        "condition_reason": "horizontal_z_nullspace_too_weak",
+                        "horizontal_z_nullspace_singular_values": [float(v) for v in S.detach().cpu().tolist()],
+                    }
+                )
+                return direction, perp, info
+            vec = U[:, 0]
+            if abs(float(vec[0].item())) < 1.0e-6 and float(vec[1].item()) < 0.0:
+                vec = -vec
+            elif float(vec[0].item()) < 0.0:
+                vec = -vec
+            direction = vec.detach().cpu().numpy().astype(np.float64)
+            norm = float(np.linalg.norm(direction))
+            if norm < 1.0e-9:
+                info["condition_reason"] = "horizontal_direction_zero"
+                return np.asarray([1.0, 0.0], dtype=np.float64), np.asarray([0.0, 1.0], dtype=np.float64), info
+            direction = direction / norm
+            perp = np.asarray([-direction[1], direction[0]], dtype=np.float64)
+            info.update(
+                {
+                    "path_conditioned_to_j_eff": True,
+                    "condition_reason": "ok",
+                    "conditioned_xy_direction": [float(direction[0]), float(direction[1])],
+                    "conditioned_xy_perp": [float(perp[0]), float(perp[1])],
+                    "horizontal_z_nullspace_singular_values": [float(v) for v in S.detach().cpu().tolist()],
+                }
+            )
+            return direction, perp, info
+        except Exception as exc:
+            info["condition_reason"] = f"exception:{type(exc).__name__}"
+            info["condition_exception"] = str(exc)
+            return direction, perp, info
+
+    @staticmethod
+    def _positive_span_in_xy_box(
+        x: float,
+        y: float,
+        direction: np.ndarray,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+    ) -> float:
+        spans: list[float] = []
+        dx = float(direction[0])
+        dy = float(direction[1])
+        if abs(dx) > 1.0e-9:
+            spans.append(((x_max - x) / dx) if dx > 0.0 else ((x_min - x) / dx))
+        if abs(dy) > 1.0e-9:
+            spans.append(((y_max - y) / dy) if dy > 0.0 else ((y_min - y) / dy))
+        spans = [v for v in spans if np.isfinite(v) and v >= 0.0]
+        return float(min(spans)) if spans else 0.0
 
     def _generate_ground_path_np(
         self,
@@ -962,6 +1283,94 @@ class HorizonIDFDEnv:
             if z1 <= z0:
                 mid_z = max(z, z0)
                 z0, z1 = mid_z - 0.05, mid_z + 0.05
+            if bool(getattr(self.cfg, "ground_anchor_path_to_current_tool", False)):
+                base_pos = self._uw.robot.data.root_pos_w[0:1].detach()
+                base_quat = self._uw.robot.data.root_quat_w[0:1].detach()
+                base_quat = base_quat / base_quat.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                corners_w = torch.tensor(
+                    [
+                        [fixed_x, y0, z0],
+                        [fixed_x, y0, z1],
+                        [fixed_x, y1, z0],
+                        [fixed_x, y1, z1],
+                    ],
+                    dtype=torch.float32,
+                    device=self._device,
+                )
+                corners_b = quat_apply_inverse(
+                    base_quat.expand(corners_w.shape[0], -1),
+                    corners_w - base_pos.expand(corners_w.shape[0], -1),
+                )
+                by0 = float(corners_b[:, 1].min().detach().cpu().item())
+                by1 = float(corners_b[:, 1].max().detach().cpu().item())
+                bz0 = float(corners_b[:, 2].min().detach().cpu().item())
+                bz1 = float(corners_b[:, 2].max().detach().cpu().item())
+                margin = max(float(getattr(self.cfg, "ground_anchor_margin_m", 0.05)), 0.0)
+                max_span = max(float(getattr(self.cfg, "ground_anchor_max_span_m", 0.30)), 0.01)
+                static_sag = max(float(getattr(self.cfg, "ground_anchor_static_sag_m", 0.03)), 0.0)
+                actual_b = self._controlled_point_base_frame()[0].detach()
+                anchor_y = float(torch.clamp(actual_b[1], by0 + margin, by1 - margin).detach().cpu().item())
+                anchor_z_raw = actual_b[2] - static_sag
+                anchor_z = float(torch.clamp(anchor_z_raw, bz0 + margin, bz1 - margin).detach().cpu().item())
+                anchor_x = float(actual_b[0].detach().cpu().item())
+                half_y_max = max(min(anchor_y - (by0 + margin), (by1 - margin) - anchor_y), 0.01)
+                half_z_up = max((bz1 - margin) - anchor_z, 0.01)
+                half_z_down = max(anchor_z - (bz0 + margin), 0.01)
+                local_half_y = max(0.005, min(half_y_max, max_span) * max(float(scale), 0.0))
+                local_half_z = max(0.005, min(half_z_up, half_z_down, max_span) * max(float(scale), 0.0))
+                n = max(int(points), 2)
+                s = np.linspace(0.0, 1.0, n)
+                x_b = np.full(n, anchor_x, dtype=np.float64)
+                if mode == "ground_straight_line":
+                    # Anchored diagnostics/training should begin at the settled
+                    # tool point, not at a path edge. Starting at the edge can
+                    # create a large first target in a weak local direction.
+                    y_b = anchor_y + local_half_y * s
+                    z_b = np.full(n, anchor_z, dtype=np.float64)
+                elif mode == "ground_semicircle":
+                    theta = np.linspace(0.0, math.pi, n)
+                    radius = max(0.005, min(0.5 * local_half_y, local_half_z))
+                    y_b = anchor_y + radius * (1.0 - np.cos(theta))
+                    z_b = anchor_z + radius * np.sin(theta)
+                elif mode == "ground_mower_sweep":
+                    y_b = anchor_y + local_half_y * s
+                    # In this base_yz pose the sustained combined Y/Z correction
+                    # is poorly conditioned. For the first reliable ground mower
+                    # task, keep tool height fixed and sweep the reachable base-Y
+                    # row; vertical motion remains a clearance/guard variable.
+                    z_b = np.full(n, anchor_z, dtype=np.float64)
+                else:
+                    raise ValueError(f"Unsupported trajectory_mode={mode!r}")
+                y_b = np.clip(y_b, by0 + margin, by1 - margin)
+                z_b = np.clip(z_b, bz0 + margin, bz1 - margin)
+                path_b = torch.as_tensor(
+                    np.stack([x_b, y_b, z_b], axis=-1),
+                    dtype=torch.float32,
+                    device=self._device,
+                )
+                path_w = base_pos.expand(n, -1) + quat_apply(base_quat.expand(n, -1), path_b)
+                path = path_w.detach().cpu().numpy().astype(np.float32)
+                params = {
+                    "mode": mode,
+                    "trajectory_plane": trajectory_plane,
+                    "reduced_to_single_horizontal_axis": False,
+                    "target_world_z": float(np.mean(path[:, 2])),
+                    "tracking_point": "tool_bottom_contact",
+                    "anchored_to_current_tool": True,
+                    "anchor_base_y": anchor_y,
+                    "anchor_base_z": anchor_z,
+                    "local_half_y_m": float(local_half_y),
+                    "local_half_z_m": float(local_half_z),
+                    "starts_at_anchor": True,
+                    "static_sag_compensation_m": float(static_sag),
+                    "y_min": float(np.min(path[:, 1])),
+                    "y_max": float(np.max(path[:, 1])),
+                    "z_min": float(np.min(path[:, 2])),
+                    "z_max": float(np.max(path[:, 2])),
+                    "points": int(n),
+                }
+                limitation = "Using local tool-anchored path clamped inside sampled reachable base-frame Y/Z slice."
+                return path, params, limitation
             center = yz.get("center", [fixed_x, 0.5 * (y0 + y1), 0.5 * (z0 + z1)])
             cy_yz = float(center[1])
             cz_yz = float(center[2])
@@ -1031,6 +1440,83 @@ class HorizonIDFDEnv:
             )
 
         n = max(int(points), 2)
+        if trajectory_plane == "ground_xy" and bool(getattr(self.cfg, "ground_anchor_path_to_current_tool", False)):
+            actual_w = self.get_tool_bottom_world_pos()[0].detach()
+            margin = max(float(getattr(self.cfg, "ground_anchor_margin_m", 0.05)), 0.0)
+            max_span = max(float(getattr(self.cfg, "ground_anchor_max_span_m", 0.30)), 0.01)
+            ax = float(torch.clamp(actual_w[0], x_min + margin, x_max - margin).detach().cpu().item())
+            ay = float(torch.clamp(actual_w[1], y_min + margin, y_max - margin).detach().cpu().item())
+            az = max(float(actual_w[2].detach().cpu().item()), self._ground_z + self._tool_ground_clearance)
+            bx0 = x_min + margin
+            bx1 = x_max - margin
+            by0 = y_min + margin
+            by1 = y_max - margin
+            dir_xy, perp_xy, basis_info = self._ground_xy_conditioned_basis()
+            fwd_span = self._positive_span_in_xy_box(ax, ay, dir_xy, bx0, bx1, by0, by1)
+            back_span = self._positive_span_in_xy_box(ax, ay, -dir_xy, bx0, bx1, by0, by1)
+            if back_span > fwd_span:
+                dir_xy = -dir_xy
+                perp_xy = -perp_xy
+                fwd_span = back_span
+                basis_info["conditioned_xy_direction"] = [float(dir_xy[0]), float(dir_xy[1])]
+                basis_info["conditioned_xy_perp"] = [float(perp_xy[0]), float(perp_xy[1])]
+                basis_info["conditioned_xy_direction_flipped_for_workspace_room"] = True
+            perp_pos_span = self._positive_span_in_xy_box(ax, ay, perp_xy, bx0, bx1, by0, by1)
+            perp_neg_span = self._positive_span_in_xy_box(ax, ay, -perp_xy, bx0, bx1, by0, by1)
+            perp_span = max(min(perp_pos_span, perp_neg_span), 0.0)
+            local_span = max(0.005, min(max(fwd_span, 0.005), max_span) * max(float(scale), 0.0))
+            perp_scale = max(float(getattr(self.cfg, "ground_xy_condition_path_perp_scale", 0.15)), 0.0)
+            local_perp = max(0.0, min(perp_span, local_span * perp_scale))
+            s = np.linspace(0.0, 1.0, n)
+            if mode == "ground_semicircle":
+                # This is intentionally a small, local arc: forward motion follows
+                # the best Z-preserving direction, and the perpendicular component
+                # is heavily reduced for the stationary-arm starting curriculum.
+                wiggle = local_perp * np.sin(math.pi * s)
+                x = ax + dir_xy[0] * local_span * s + perp_xy[0] * wiggle
+                y = ay + dir_xy[1] * local_span * s + perp_xy[1] * wiggle
+            elif mode == "ground_straight_line":
+                x = ax + dir_xy[0] * local_span * s
+                y = ay + dir_xy[1] * local_span * s
+            elif mode == "ground_mower_sweep":
+                wiggle = local_perp * np.sin(2.0 * math.pi * 2 * s)
+                x = ax + dir_xy[0] * local_span * s + perp_xy[0] * wiggle
+                y = ay + dir_xy[1] * local_span * s + perp_xy[1] * wiggle
+            else:
+                raise ValueError(f"Unsupported trajectory_mode={mode!r}")
+            x = np.clip(x, bx0, bx1)
+            y = np.clip(y, by0, by1)
+            z_arr = np.full(n, az, dtype=np.float64)
+            path = np.stack([x, y, z_arr], axis=-1).astype(np.float32)
+            params = {
+                "mode": mode,
+                "trajectory_plane": trajectory_plane,
+                "reduced_to_single_horizontal_axis": bool(basis_info.get("path_conditioned_to_j_eff", False)),
+                "tracking_point": "tool_bottom_contact",
+                "anchored_to_current_tool": True,
+                "starts_at_anchor": True,
+                "z_held_constant": True,
+                "anchor_world_x": ax,
+                "anchor_world_y": ay,
+                "anchor_world_z": az,
+                "local_forward_span_m": float(local_span),
+                "local_perp_span_m": float(local_perp),
+                "perp_scale": float(perp_scale),
+                "target_world_z": az,
+                "x_min": float(np.min(x)),
+                "x_max": float(np.max(x)),
+                "y_min": float(np.min(y)),
+                "y_max": float(np.max(y)),
+                "z_min": az,
+                "z_max": az,
+                "points": int(n),
+                **basis_info,
+            }
+            limitation = (
+                "Using local tool-anchored ground-XY path with constant tool/contact height, "
+                "conditioned by the measured Z-preserving horizontal J_eff direction."
+            )
+            return path, params, limitation
         if mode == "ground_semicircle":
             theta = np.linspace(0.0, math.pi, n)
             if reduced:
@@ -1103,21 +1589,98 @@ class HorizonIDFDEnv:
         err = target_base - actual_base
         desired = torch.clamp(err * float(gain) / max(self._ee_action_scale, 1.0e-6), -1.0, 1.0)
         if self.num_actions == 2:
+            if self._trajectory_plane == "ground_xy":
+                return desired[:, 0:2]
             return desired[:, 1:3]
         if self.num_actions >= 3:
             return desired[:, : self.num_actions]
         return desired[:, : self.num_actions]
 
-    def advance_ground_trajectory(self, steps: int = 1) -> None:
+    def _ground_path_target_world_for_index(self, index: int) -> torch.Tensor:
         if self._ground_path_world is None or self._ground_path_world.numel() == 0:
-            return
+            return self.current_ground_target_world()
+        idx = int(max(0, min(int(index), self._ground_path_world.shape[0] - 1)))
+        if self._trajectory_plane == "base_yz" and self._ground_path_base is not None:
+            target_base = self._ground_path_base[idx].to(device=self._device, dtype=torch.float32).reshape(1, 3)
+            target_base = target_base.expand(self.num_envs, -1).clone()
+            target_world = self._tracking_frame_to_world(target_base)
+            min_z = float(self._ground_z + self._tool_ground_clearance)
+            target_world[:, 2] = torch.clamp(target_world[:, 2], min=min_z)
+            return target_world
+        target_world = self._ground_path_world[idx].to(device=self._device, dtype=torch.float32).reshape(1, 3)
+        if self.num_envs > 1:
+            origins = self._uw.scene.env_origins[:, :3].to(device=self._device, dtype=torch.float32)
+            target_world = target_world + origins
+        target_world = target_world.expand(self.num_envs, -1).clone()
+        min_z = float(self._ground_z + self._tool_ground_clearance)
+        target_world[:, 2] = torch.clamp(target_world[:, 2], min=min_z)
+        return target_world
+
+    def _next_ground_path_index(self, steps: int = 1) -> int:
+        if self._ground_path_world is None or self._ground_path_world.numel() == 0:
+            return int(self._ground_path_index)
         last = self._ground_path_world.shape[0] - 1
         if bool(getattr(self.cfg, "ground_path_loop", False)) and last > 0:
-            self._ground_path_index = (self._ground_path_index + int(steps)) % (last + 1)
-        else:
-            self._ground_path_index = min(last, self._ground_path_index + int(steps))
+            return int((self._ground_path_index + int(steps)) % (last + 1))
+        return int(min(last, self._ground_path_index + int(steps)))
+
+    def _should_advance_ground_target(self, tracking_error: torch.Tensor | None = None) -> bool:
+        if bool(getattr(self.cfg, "ground_hold_target", False)):
+            self._ground_capture_hold_steps.zero_()
+            return False
+        mode = str(getattr(self.cfg, "ground_path_pacing", self._ground_path_pacing)).lower()
+        self._ground_path_pacing = mode
+        self._ground_path_capture_radius_m = float(
+            getattr(self.cfg, "ground_path_capture_radius_m", self._ground_path_capture_radius_m)
+        )
+        self._ground_path_capture_required_hold_steps = int(
+            getattr(self.cfg, "ground_path_capture_required_hold_steps", self._ground_path_capture_required_hold_steps)
+        )
+        if mode in ("fixed", "unconditional", "step"):
+            self._ground_capture_hold_steps.zero_()
+            return True
+        if mode in ("capture", "carrot"):
+            if tracking_error is None:
+                tracking_error = self.ground_safety_metrics()["tracking_error"]
+            capture_radius = self._ground_path_capture_radius_m
+            if bool(self._ground_local_target_active.any().item()):
+                capture_radius = min(
+                    capture_radius,
+                    float(getattr(self.cfg, "ground_initial_target_capture_radius_m", self._ground_initial_target_capture_radius_m)),
+                )
+            captured = torch.nan_to_num(tracking_error.detach(), nan=float("inf")).mean() <= capture_radius
+            if bool(captured.item()):
+                self._ground_capture_hold_steps += 1
+            else:
+                self._ground_capture_hold_steps.zero_()
+            required = max(int(self._ground_path_capture_required_hold_steps), 1)
+            return bool(self._ground_capture_hold_steps.min().item() >= required)
+        raise ValueError(f"ground_path_pacing must be 'fixed' or 'capture', got {mode!r}")
+
+    def advance_ground_trajectory(
+        self,
+        steps: int = 1,
+        *,
+        tracking_error: torch.Tensor | None = None,
+        prechecked: bool = False,
+    ) -> bool:
+        if self._ground_path_world is None or self._ground_path_world.numel() == 0:
+            return False
+        if not prechecked and not self._should_advance_ground_target(tracking_error):
+            return False
+        self._ground_path_index = self._next_ground_path_index(steps)
+        last = self._ground_path_world.shape[0] - 1
         self._ground_path_completion[:] = float(self._ground_path_index) / max(float(last), 1.0)
-        self.set_ground_target_world(self._ground_path_world[self._ground_path_index])
+        if self._trajectory_plane == "base_yz" and self._ground_path_base is not None:
+            target_base = self._ground_path_base[self._ground_path_index].to(device=self._device).reshape(1, 3)
+            self._ground_target_tool_bottom_base = target_base.expand(self.num_envs, -1).detach().clone()
+            self._sync_ground_command_from_target()
+            self._publish_tracking_point_state()
+        else:
+            self.set_ground_target_world(self._ground_path_world[self._ground_path_index])
+        self._ground_local_target_active.zero_()
+        self._ground_capture_hold_steps.zero_()
+        return True
 
     def ground_safety_metrics(self, target_world: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         if target_world is None:
@@ -1452,7 +2015,22 @@ class HorizonIDFDEnv:
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Execute smooth position ramp over H steps and keep final hold target live."""
         dx_isaac = self._uw._cylinder_adapter.simscape_delta_to_isaac_delta(delta_cmd_H)
-        raw_final_target = cq0 + dx_isaac
+        # Reference-space vs measured-space command integration.
+        # Measured-space (legacy): target = cq0 + dx. Because the implicit position
+        # drives settle at target - tau/K (finite-stiffness gravity sag), anchoring
+        # the next target to the sagged measurement ratchets the reference downward
+        # by the static sag every step (~13 mm/step at the tool in the axis_probe),
+        # which swamps command authority and makes upward Z tracking impossible.
+        # Reference-space (fix): accumulate the command onto the persistent
+        # reference target and let the drive hold it (target = ref + dx). With zero
+        # command the reference stays fixed, so there is no ratchet; the plant sits
+        # at a constant static offset the drive balances against gravity. ID/FD still
+        # see the true measured state (cq0/x0) — only the target integration frame
+        # changes.
+        if bool(getattr(self.cfg, "horizon_reference_space_target", False)):
+            raw_final_target = self._cylinder_hold_target + dx_isaac
+        else:
+            raw_final_target = cq0 + dx_isaac
         raw_final_target = torch.where(
             neutral_action.unsqueeze(-1),
             self._cylinder_hold_target,
@@ -1627,13 +2205,16 @@ class HorizonIDFDEnv:
                 _restore_low_level_bias_state()
 
             def _deploy(dx_des_H):
-                """Apply delta_x_des_H through ID/FD and the smooth PhysX deployment."""
+                """Apply delta_x_des_H through the same ID/FD -> command -> smooth PhysX path as step()."""
                 cq0 = self._uw.robot.data.joint_pos[:, self._uw._cylinder_joint_ids].detach().clone()
                 x0, xd0 = self._uw._cylinder_adapter.current_from_cylinder_joints(
                     cq0,
                     self._uw.robot.data.joint_vel[:, self._uw._cylinder_joint_ids],
                 )
-                delta_cmd = self._idfd_rollout(dx_des_H, x0, xd0)
+                delta_fd = self._idfd_rollout(dx_des_H, x0, xd0)
+                delta_cmd_raw = self._fd_gains * delta_fd
+                clip_m = float(getattr(self.cfg, "horizon_delta_cmd_clip_m", 0.02))
+                delta_cmd = torch.clamp(delta_cmd_raw, -clip_m, clip_m)
                 final_target, _, _, _ = self._smooth_ramp(
                     delta_cmd, cq0,
                     torch.zeros(self.num_envs, dtype=torch.bool, device=self._device))
@@ -1956,6 +2537,15 @@ class HorizonIDFDEnv:
             "Diagnostics/reward_guard": self._last_reward_terms.get("guard_fraction", torch.zeros_like(final_ee_error)).mean(),
             "Diagnostics/reward_clip": self._last_reward_terms.get("clipping_fraction", torch.zeros_like(final_ee_error)).mean(),
             "Diagnostics/reward_do_no_harm": self._last_reward_terms.get("do_no_harm", torch.zeros_like(final_ee_error)).mean(),
+            "Authority/action_y": self._last_action_y.detach().mean(),
+            "Authority/action_z": self._last_action_z.detach().mean(),
+            "Authority/desired_ee_delta_norm": self._last_desired_ee_delta_norm.detach().mean(),
+            "Authority/dx_des_norm": self._last_dx_des_norm.detach().mean(),
+            "Authority/fd_delta_norm": self._last_fd_delta_norm.detach().mean(),
+            "Authority/final_cmd_norm": self._last_final_cmd_norm.detach().mean(),
+            "Authority/measured_cylinder_delta_norm": self._last_measured_cylinder_delta_norm.detach().mean(),
+            "Authority/measured_cylinder_joint_delta_norm": self._last_measured_cylinder_joint_delta_norm.detach().mean(),
+            "Authority/tool_delta_over_command": self._last_tool_command_ratio.detach().mean(),
         }
 
     def step(self, action: torch.Tensor):
@@ -1965,11 +2555,13 @@ class HorizonIDFDEnv:
         prev_action = self._prev_action.detach().clone()
 
         # -- Task-space: map EE action to cylinder delta via Jacobian --
+        # Plain resolved-rate DLS (Whitney/Nakamura). The task-priority/nullspace
+        # Z-hold + conditioned-path variants regressed the response (wrong-signed,
+        # vibrating) and were reverted 2026-07-09 per the axis_probe evidence.
+        desired_ee_delta = torch.zeros((self.num_envs, 3), device=self._device)
         if self._is_task_space:
             desired_ee_delta = self._expand_task_action(action) * self._ee_action_scale
-            # Neutral detection: small actions are treated as hold
             neutral_action = action.abs().amax(dim=-1) <= float(getattr(self.cfg, "horizon_zero_action_deadband", 1.0e-5))
-            # Map to cylinder space
             delta_x_des_H, _ = self._ee_controller.map_ee_to_cylinder(desired_ee_delta)
             delta_x_des_H = torch.where(neutral_action.unsqueeze(-1), torch.zeros_like(delta_x_des_H), delta_x_des_H)
         else:
@@ -1980,8 +2572,26 @@ class HorizonIDFDEnv:
             delta_x_des_H = torch.where(neutral_action.unsqueeze(-1), torch.zeros_like(delta_x_des_H), delta_x_des_H)
 
 
+        if self._is_task_space and self.num_actions == 2:
+            self._last_action_y = action[:, 0].detach().clone()
+            self._last_action_z = action[:, 1].detach().clone()
+        elif self._is_task_space and self.num_actions >= 3:
+            self._last_action_y = action[:, 1].detach().clone()
+            self._last_action_z = action[:, 2].detach().clone()
+        else:
+            self._last_action_y.zero_()
+            self._last_action_z.zero_()
+        self._last_desired_ee_delta_norm = torch.linalg.norm(desired_ee_delta, dim=-1).detach()
+        self._last_dx_des_norm = torch.linalg.norm(delta_x_des_H, dim=-1).detach()
+
         self._publish_tracking_point_state()
         error_before = compute_tracking_error(self._uw).detach()
+        ground_target_before_world: torch.Tensor | None = None
+        ground_tool_before_world: torch.Tensor | None = None
+        ground_should_advance = False
+        if self._trajectory_mode.startswith("ground_"):
+            ground_target_before_world = self.current_ground_target_world()
+            ground_tool_before_world = self.get_tool_bottom_world_pos().detach().clone()
         cq0 = self._uw.robot.data.joint_pos[:, self._uw._cylinder_joint_ids].detach().clone()
         if bool(getattr(self.cfg, "bias_runtime_retarget_to_calibrated_pose", True)):
             use_bias = (
@@ -2012,12 +2622,14 @@ class HorizonIDFDEnv:
 
         delta_fd_H = self._idfd_rollout(delta_x_des_H, x0, xd0)
         delta_fd_H = torch.where(neutral_action.unsqueeze(-1), torch.zeros_like(delta_fd_H), delta_fd_H)
+        self._last_fd_delta_norm = torch.linalg.norm(delta_fd_H, dim=-1).detach()
         delta_cmd_raw_H = self._fd_gains * delta_fd_H
         clip_m = float(getattr(self.cfg, "horizon_delta_cmd_clip_m", 0.02))
         delta_cmd_H = torch.clamp(delta_cmd_raw_H, -clip_m, clip_m)
         clipping_fraction = (delta_cmd_H - delta_cmd_raw_H).abs().gt(1.0e-8).float().mean(dim=-1)
         delta_cmd_H = torch.where(neutral_action.unsqueeze(-1), torch.zeros_like(delta_cmd_H), delta_cmd_H)
         self._last_delta_cmd_H = delta_cmd_H.detach().clone()
+        self._last_final_cmd_norm = torch.linalg.norm(delta_cmd_H, dim=-1).detach()
 
         final_target, guard_flags, terminated, truncated = self._smooth_ramp(delta_cmd_H, cq0, neutral_action)
         base_masks = self._base_done_masks()
@@ -2028,6 +2640,8 @@ class HorizonIDFDEnv:
             self._uw.robot.data.joint_vel[:, self._uw._cylinder_joint_ids],
         )
         delta_x_meas_H = x1 - x0
+        self._last_measured_cylinder_delta_norm = torch.linalg.norm(delta_x_meas_H, dim=-1).detach()
+        self._last_measured_cylinder_joint_delta_norm = torch.linalg.norm(cq1 - cq0, dim=-1).detach()
         self._publish_tracking_point_state()
         error_after = compute_tracking_error(self._uw).detach()
 
@@ -2094,6 +2708,42 @@ class HorizonIDFDEnv:
             root_bad = ground_metrics_now["root_motion_norm"] > 100.0
             finite_bad = ground_metrics_now["nan_inf_count"] > 0
             ground_hard_fail = target_bad | ee_bad | arm_bad | huge_bad | root_bad | finite_bad
+            if ground_target_before_world is None:
+                ground_target_before_world = self.current_ground_target_world()
+            if ground_tool_before_world is None:
+                ground_tool_before_world = self.get_tool_bottom_world_pos().detach().clone()
+            ground_tool_after_world = self.get_tool_bottom_world_pos().detach().clone()
+            ground_should_advance = self._should_advance_ground_target(ground_metrics_now["tracking_error"])
+            if ground_should_advance:
+                next_index = self._next_ground_path_index(1)
+                ground_target_after_world = self._ground_path_target_world_for_index(next_index)
+            else:
+                ground_target_after_world = ground_target_before_world
+            target_delta_norm = torch.linalg.norm(ground_target_after_world - ground_target_before_world, dim=-1)
+            tool_delta_norm = torch.linalg.norm(ground_tool_after_world - ground_tool_before_world, dim=-1)
+            self._last_target_delta_norm = target_delta_norm.detach()
+            self._last_tool_delta_norm = tool_delta_norm.detach()
+            self._last_relative_motion_ratio = torch.where(
+                target_delta_norm > 1.0e-9,
+                tool_delta_norm / target_delta_norm.clamp(min=1.0e-9),
+                torch.zeros_like(tool_delta_norm),
+            ).detach()
+            self._last_tool_command_ratio = torch.where(
+                self._last_desired_ee_delta_norm > 1.0e-9,
+                tool_delta_norm / self._last_desired_ee_delta_norm.clamp(min=1.0e-9),
+                torch.zeros_like(tool_delta_norm),
+            ).detach()
+            err_before_tool_motion = torch.linalg.norm(ground_tool_before_world - ground_target_before_world, dim=-1)
+            err_after_tool_motion = torch.linalg.norm(ground_tool_after_world - ground_target_before_world, dim=-1)
+            err_after_target_motion = torch.linalg.norm(ground_tool_after_world - ground_target_after_world, dim=-1)
+            self._last_error_reduction_tool_motion = (err_before_tool_motion - err_after_tool_motion).detach()
+            self._last_error_reduction_target_motion = (err_after_tool_motion - err_after_target_motion).detach()
+            self._last_ground_target_advanced = torch.full(
+                (self.num_envs,),
+                1.0 if ground_should_advance else 0.0,
+                dtype=torch.float32,
+                device=self._device,
+            )
 
         # -- Stage-0: track consecutive workspace violations --
         ws_consecutive_threshold = int(getattr(self.cfg, "workspace_violation_done_after_consecutive_steps", 10))
@@ -2249,6 +2899,32 @@ class HorizonIDFDEnv:
                 ).detach().sum().float(),
                 "Trajectory/cylinder_limit_fraction": ground_metrics["cylinder_limit_fraction"].detach().mean(),
                 "Trajectory/path_completion_fraction": ground_metrics["path_completion_fraction"].detach().mean(),
+                "Trajectory/ground_path_pacing_capture": torch.tensor(
+                    1.0 if str(getattr(self.cfg, "ground_path_pacing", self._ground_path_pacing)).lower() in ("capture", "carrot") else 0.0,
+                    device=self._device,
+                ),
+                "Trajectory/ground_path_capture_radius_m": torch.tensor(
+                    float(getattr(self.cfg, "ground_path_capture_radius_m", self._ground_path_capture_radius_m)),
+                    device=self._device,
+                ),
+                "Trajectory/ground_path_capture_hold_steps": self._ground_capture_hold_steps.float().detach().mean(),
+                "Trajectory/ground_path_capture_required_hold_steps": torch.tensor(
+                    float(getattr(self.cfg, "ground_path_capture_required_hold_steps", self._ground_path_capture_required_hold_steps)),
+                    device=self._device,
+                ),
+                "Trajectory/ground_initial_target_mode_local": self._last_initial_target_is_local.detach().mean(),
+                "Trajectory/ground_initial_target_active": self._ground_local_target_active.float().detach().mean(),
+                "Trajectory/ground_initial_target_distance": self._last_initial_target_distance.detach().mean(),
+                "Trajectory/ground_initial_target_capture_radius_m": torch.tensor(
+                    float(getattr(self.cfg, "ground_initial_target_capture_radius_m", self._ground_initial_target_capture_radius_m)),
+                    device=self._device,
+                ),
+                "Trajectory/ground_target_advanced": self._last_ground_target_advanced.detach().mean(),
+                "Trajectory/target_delta_norm": self._last_target_delta_norm.detach().mean(),
+                "Trajectory/tool_delta_norm": self._last_tool_delta_norm.detach().mean(),
+                "Trajectory/relative_motion_ratio": self._last_relative_motion_ratio.detach().mean(),
+                "Trajectory/error_reduction_tool_motion": self._last_error_reduction_tool_motion.detach().mean(),
+                "Trajectory/error_reduction_target_motion": self._last_error_reduction_target_motion.detach().mean(),
                 "Trajectory/root_motion_norm": ground_metrics["root_motion_norm"].detach().max(),
             })
         self._record_done_episodes(done, cause_masks, reward, error_after)
@@ -2278,10 +2954,15 @@ class HorizonIDFDEnv:
             if self._is_stage0():
                 self._resample_stage0_target(done_env_ids)
             if self._trajectory_mode.startswith("ground_") and self._ground_path_world is not None:
-                self.set_ground_target_world(self._ground_path_world[self._ground_path_index])
+                self._apply_ground_initial_target(done_env_ids)
 
         if self._trajectory_mode.startswith("ground_") and not bool(getattr(self.cfg, "ground_hold_target", False)):
-            self.advance_ground_trajectory(1)
+            if ground_should_advance:
+                self.advance_ground_trajectory(
+                    1,
+                    tracking_error=ground_metrics_now["tracking_error"] if ground_metrics_now is not None else None,
+                    prechecked=True,
+                )
             self._update_ground_visualization()
         elif self._trajectory_mode.startswith("ground_"):
             self._update_ground_visualization()

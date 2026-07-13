@@ -54,6 +54,8 @@ class MulagAdaptiveRLJointReachEnvCfg(DirectRLEnvCfg):
     use_fd_safety_limits = True
     use_fd_auxiliary_reward = True
     use_fd_effort_actuation = False
+    use_aam_adaptation = True
+    use_sd_model = True
     fd_torque_soft_limit = "fd_output_std"
     fd_torque_hard_limit = "fd_output_3std"
     rew_fd_load = 0.01

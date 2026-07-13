@@ -61,14 +61,19 @@ class HighLevelEEController:
         self._condition_number = S[:, 0] / S[:, -1].clamp(min=1e-9)
         return self._condition_number, S
 
-    def map_ee_to_cylinder(self, desired_ee_delta):
-        """Damped least-squares with temporal smoothing."""
+    def map_ee_to_cylinder(self, desired_ee_delta, **_ignored):
+        """Damped least-squares with temporal smoothing (Whitney resolved-rate +
+        Nakamura DLS). Plain, full-3-row solve — the standard, well-behaved form.
+
+        `**_ignored` absorbs legacy axis_indices/secondary kwargs from callers that
+        experimented with task-priority/nullspace variants; those regressed the
+        low-level response (wrong-signed, oscillating) and were reverted 2026-07-09.
+        """
         if self._J_eff is None:
             raise RuntimeError("Jacobian not measured.")
         B = desired_ee_delta.shape[0]
         J = self._J_eff
         ee = desired_ee_delta
-
         JT = J.transpose(1, 2)
         JJT = torch.bmm(J, JT)
         eye = torch.eye(3, device=self._device).unsqueeze(0).expand(B, -1, -1)

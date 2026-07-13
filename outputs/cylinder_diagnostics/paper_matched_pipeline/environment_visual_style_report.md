@@ -19,3 +19,8 @@
    - Heavy/generated terrain is disabled for PPO1 via the lightweight direct cuboid ground and `disable_heavy_terrain = True`.
    - PPO1 does not add RTX cameras.
    - PPO1 does not add raycasters.
+
+5. Current visual default:
+   - Keep the first visual signal simple and inspectable: black ground, white lane lines, sparse gray math-box grid.
+   - Keep heavy terrain and sensor visuals off by default for horizon PPO reset/hold and control debugging.
+   - The teacher-student reference terrain/camera/raycaster stack remains reference-only and is not part of PPO1 defaults.

@@ -1,0 +1,215 @@
+"""Reusable online 4x4 cylinder DLS controller."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+
+@dataclass
+class CylinderDLSConfig:
+    # These were throttled so hard that the controller could never reach a setpoint
+    # more than a few cm away: max_desired_delta_m=5e-4 caps cylinder motion at
+    # 0.5 mm/step (30 mm/s), and max_action=0.2 gave away 80% of the actuator.
+    # Measured symptom: |cyl_ref - cyl_meas| stuck at 0.07-0.13 m regardless of path
+    # speed. The old <0.01 m gate only ever tested small, static, settled setpoints.
+    jac_eps: float = 0.005
+    error_gain: float = 0.08          # was 0.02
+    max_desired_delta_m: float = 1.5e-3  # was 5.0e-4 (0.5 -> 1.5 mm/step)
+    damping_smax_ratio: float = 0.10
+    max_action: float = 0.5           # was 0.2
+    action_smoothing: float = 0.2
+    invert_learned_pipeline: bool = True
+
+
+class CylinderDLSController:
+    """Close the learned FD target integrator on a cylinder extension setpoint."""
+
+    def __init__(self, env, config: CylinderDLSConfig | None = None):
+        self.env = env
+        self.config = config or CylinderDLSConfig()
+        self.previous_action = torch.zeros((env.num_envs, 4), dtype=torch.float32, device=env.device)
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        if env_ids is None:
+            self.previous_action.zero_()
+        else:
+            self.previous_action[env_ids.to(device=self.env.device, dtype=torch.long)] = 0.0
+
+    @torch.no_grad()
+    def target_x(self) -> torch.Tensor:
+        zero_velocity = torch.zeros_like(self.env._cylinder_pos_target)
+        x, _ = self.env._cylinder_adapter.current_from_cylinder_joints(
+            self.env._cylinder_pos_target, zero_velocity
+        )
+        return x
+
+    @torch.no_grad()
+    def predict_fd_delta(self, action: torch.Tensor) -> torch.Tensor:
+        env = self.env
+        x, xdot = env._refresh_cylinder_state()
+        converted = env._action_to_cylinder_target_adapter.convert(
+            action=action, x_current=x, xdot_current=xdot
+        )
+        previous_valve = env._prev_valve_cmd.detach().clone()
+        model_input = env._cylinder_adapter.build_id_input(
+            converted.reference,
+            dP=env._dP,
+            force=env._force,
+            prev_valve_cmd=previous_valve,
+            input_dim=env._cylinder_id.input_dim,
+        )
+        valve = env._cylinder_id.predict(model_input, prev_valve_cmd=previous_valve)
+        baseline_valve = torch.zeros_like(valve)
+        if bool(getattr(env.cfg, "id_residual_over_zero_target", False)):
+            zero_input = model_input.detach().clone()
+            zero_input[:, 16:24] = 0.0
+            zero_valve = env._cylinder_id.predict(zero_input, prev_valve_cmd=previous_valve)
+            if bool(getattr(env.cfg, "paired_id_fd_residual", False)):
+                baseline_valve = zero_valve
+            else:
+                valve = valve - zero_valve
+        valve = torch.clamp(valve, -float(env.cfg.max_abs_valve), float(env.cfg.max_abs_valve))
+        baseline_valve = torch.clamp(
+            baseline_valve, -float(env.cfg.max_abs_valve), float(env.cfg.max_abs_valve)
+        )
+        fd = env._cylinder_fd.step(
+            valve_cmd=valve, extension=x, extension_velocity=xdot, dP=env._dP, force=env._force
+        ).delta_extension
+        paired_residual = bool(getattr(env.cfg, "paired_id_fd_residual", False))
+        if paired_residual:
+            fd_zero = env._cylinder_fd.step(
+                valve_cmd=baseline_valve,
+                extension=x,
+                extension_velocity=xdot,
+                dP=env._dP,
+                force=env._force,
+            ).delta_extension
+            fd = fd - fd_zero
+        elif bool(getattr(env.cfg, "fd_residual_over_zero_valve", False)):
+            fd_zero = env._cylinder_fd.step(
+                valve_cmd=torch.zeros_like(valve),
+                extension=x,
+                extension_velocity=xdot,
+                dP=env._dP,
+                force=env._force,
+            ).delta_extension
+            fd = fd - fd_zero
+        if paired_residual or bool(getattr(env.cfg, "fd_residual_over_zero_valve", False)):
+            residual_gain = env._cfg_cyl_vector(
+                "cylinder_fd_residual_output_gain", 1.0
+            )
+            fd = fd * residual_gain
+        scale = float(getattr(env.cfg, "cylinder_fd_delta_gain", 1.0))
+        if bool(getattr(env.cfg, "cylinder_fd_scale_delta_by_sample_time", False)):
+            fd_dt = float(getattr(env.cfg, "cylinder_fd_sample_time_s", 0.0))
+            if fd_dt <= 0.0:
+                fd_dt = float(env._cylinder_fd.sample_time_s)
+            scale *= float(env.step_dt) / max(fd_dt, 1.0e-6)
+        return fd * scale
+
+    @torch.no_grad()
+    def local_model(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        columns = []
+        batch = self.env.num_envs
+        midpoint = torch.zeros((batch, 4), dtype=torch.float32, device=self.env.device)
+        for column in range(4):
+            plus = torch.zeros((batch, 4), dtype=torch.float32, device=self.env.device)
+            minus = torch.zeros_like(plus)
+            plus[:, column] = self.config.jac_eps
+            minus[:, column] = -self.config.jac_eps
+            y_plus = self.predict_fd_delta(plus)
+            y_minus = self.predict_fd_delta(minus)
+            columns.append((y_plus - y_minus) / (2.0 * self.config.jac_eps))
+            midpoint += (y_plus + y_minus) / 8.0
+        jacobian = torch.stack(columns, dim=2)
+        # CUDA's batched SVD can terminate the Isaac process on the very
+        # ill-conditioned action->FD Jacobian seen off the tiny old gate
+        # (condition O(1e3)).  Eigenvalues of J J^T give the same singular
+        # values for damping/diagnostics without that fragile solver path.
+        # Keep the tiny diagnostic decomposition on CPU.  cuSOLVER has been
+        # observed to abort the entire Kit process (without a Python exception)
+        # for these ill-conditioned 4x4 batches.
+        singular_values = torch.stack(
+            [torch.linalg.svdvals(matrix.detach().cpu()) for matrix in jacobian], dim=0
+        ).to(device=jacobian.device, dtype=jacobian.dtype)
+        return jacobian, midpoint, singular_values
+
+    @torch.no_grad()
+    def action(self, cylinder_goal: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        goal = cylinder_goal.reshape(self.env.num_envs, 4)
+        # Close the loop on the MEASURED cylinder state, not on the commanded
+        # target. Using target_x() (env._cylinder_pos_target) made this an OPEN loop
+        # on the plant: the controller drove the *target* to the goal, saw its error
+        # go to zero, and stopped acting while the actual arm was still ~0.1 m behind
+        # (measured |cyl_ref - cyl_meas| = 0.07-0.13 m, independent of path speed).
+        measured, _ = self.env._refresh_cylinder_state()
+        error = goal - measured
+        direct_target_action = (
+            self.env._low_level_servo_mode() in ("position_ramp_pi", "direct_position_delta")
+            or not self.config.invert_learned_pipeline
+        )
+        if direct_target_action:
+            # The environment's position-ramp servo is already a closed-loop
+            # cylinder controller and deliberately bypasses the under-authority
+            # ID/FD residual. Feed it a bounded cylinder-space increment rather
+            # than inverting action->FD a second time.
+            # Both backends integrate increments into a persistent PhysX target.
+            # Close that inner integrator on target error so it cannot wind past
+            # the goal while the fast physical plant catches the held target.
+            control_error = goal - self.target_x()
+            desired_learned = torch.clamp(
+                self.config.error_gain * control_error,
+                -self.config.max_desired_delta_m,
+                self.config.max_desired_delta_m,
+            )
+            scaling = self.env._cylinder_adapter.scaling
+            desired_usd = scaling.learned_delta_to_usd_delta(desired_learned)
+            action_scale = max(float(self.env.cfg.action_scale), 1.0e-9)
+            raw = torch.clamp(
+                desired_usd / action_scale,
+                -self.config.max_action,
+                self.config.max_action,
+            )
+            alpha = self.config.action_smoothing
+            action = alpha * raw + (1.0 - alpha) * self.previous_action
+            self.previous_action = action.detach().clone()
+            singular_values = torch.ones(
+                (self.env.num_envs, 4), device=self.env.device, dtype=torch.float32
+            )
+            return action, singular_values
+        jacobian, midpoint, singular_values = self.local_model()
+        desired = torch.clamp(
+            self.config.error_gain * error,
+            -self.config.max_desired_delta_m,
+            self.config.max_desired_delta_m,
+        ) - midpoint
+        damping = torch.clamp(
+            self.config.damping_smax_ratio * singular_values[:, 0], min=1.0e-7
+        )
+        # Damped least squares: J^T (J J^T + lambda^2 I)^-1 desired.
+        # This is algebraically equivalent to the SVD form. Keep the tiny 4x4
+        # solve on CPU too: cuSOLVER can terminate Kit on this matrix family.
+        raw_rows = []
+        identity_cpu = torch.eye(4, dtype=torch.float32)
+        for matrix, rhs, damp in zip(jacobian, desired, damping, strict=True):
+            matrix_cpu = matrix.detach().cpu().float()
+            rhs_cpu = rhs.detach().cpu().float().unsqueeze(-1)
+            lhs_cpu = matrix_cpu @ matrix_cpu.transpose(0, 1)
+            lhs_cpu = lhs_cpu + float(damp.item()) ** 2 * identity_cpu
+            dual_cpu = torch.linalg.solve(lhs_cpu, rhs_cpu)
+            raw_rows.append((matrix_cpu.transpose(0, 1) @ dual_cpu).squeeze(-1))
+        raw = torch.stack(raw_rows, dim=0).to(device=jacobian.device, dtype=jacobian.dtype)
+        raw = torch.clamp(raw, -self.config.max_action, self.config.max_action)
+        alpha = self.config.action_smoothing
+        action = alpha * raw + (1.0 - alpha) * self.previous_action
+        self.previous_action = action.detach().clone()
+        return action, singular_values
+
+    @torch.no_grad()
+    def step(self, cylinder_goal: torch.Tensor):
+        action, singular_values = self.action(cylinder_goal)
+        self.env._cylinder_goal_x[:] = cylinder_goal.reshape(self.env.num_envs, 4)
+        transition = self.env.step(action)
+        return transition, action, singular_values

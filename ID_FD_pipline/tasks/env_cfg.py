@@ -1,0 +1,306 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from isaaclab.utils import configclass
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
+
+from ID_FD_pipline.models import CYLINDER_MODELS_ROOT, OLD_FD_CHECKPOINT, OLD_ID_CHECKPOINT
+from ID_FD_pipline.mdp.ee_observations import EE_TRACKING_OBS_DIM
+from ID_FD_pipline.mdp.observations import CYLINDER_OBS_DIM
+from kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg import (
+    MulagUpperLevelEnvCfg,
+    MulagUpperLevelEnvCfg_PLAY,
+    MulagUpperLevelPPORunnerCfg,
+)
+
+
+def _obs_dim_for_task(cfg) -> int:
+    """Return observation dimension based on task_type."""
+    task_type = str(getattr(cfg, "task_type", "cylinder")).lower()
+    if task_type == "ee_tracking":
+        return EE_TRACKING_OBS_DIM
+    return CYLINDER_OBS_DIM
+
+
+@configclass
+class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
+    """Cylinder-space task using the causally calibrated ID/FD pair.
+    Supports task_type = 'cylinder' | 'ee_tracking'."""
+
+    task_type: str = "cylinder"
+
+    # The mowing control point is the cutter bottom, not the Messerkopf body
+    # origin.  The parent config explicitly sets this to 0.0, so relying on a
+    # getattr fallback silently disabled the measured -0.79 m offset.
+    tool_tip_local_offset_z = -0.79
+
+    action_space = 4
+    episode_length_s = 12.0
+    # action_scale 0.003 + leak 0.05 starved cylinder authority -> hold-still
+    # collapse. Step-1 authority probe (leak=0, action_scale=0.02): every cylinder
+    # reaches both directions well past the +-0.035 m goal range. Restore authority.
+    action_scale = 0.02
+
+    use_cylinder_id_pipeline = True
+    use_sequence_cylinder_models = False
+    cylinder_dynamics_model = "fd"
+    cylinder_models_root = str(CYLINDER_MODELS_ROOT)
+    # OLD_ID_CHECKPOINT and the rank-4 FD remain untouched for A/B tests.
+    id_cylinder_checkpoint = str(
+        Path(__file__).resolve().parents[1]
+        / "models/id/best_id_cylinder_control.pt"
+    )
+    fd_cylinder_checkpoint = str(
+        Path(__file__).resolve().parents[1]
+        / "models/fd/best_fd_cylinder_control.pt"
+    )
+    rom_cylinder_checkpoint = "disabled"
+    low_level_servo_mode = "none"
+    fd_servo_usage = "prediction_only"
+    # Paired residualization below supersedes the old FD(valve)-FD(zero-valve)
+    # rule; keep that legacy switch off so the active contract is unambiguous.
+    fd_residual_over_zero_valve = False
+    # Preserve the absolute valve operating point learned jointly by ID and FD:
+    # FD(ID(target)) - FD(ID(zero target)).
+    paired_id_fd_residual = True
+    cylinder_fd_command_direction_guard = True
+    cylinder_fd_command_max_ratio = 1.5
+    cylinder_actuation_mode = "position"
+    max_abs_valve = 1.0
+    # The delta-valve ID has a state-dependent nonzero output at zero target,
+    # while neutral hold forces exactly zero valve.  Residualizing over the same
+    # state with zero target removes that discontinuity and preserves the learned
+    # differential target->valve map used by DLS.
+    id_residual_over_zero_target = True
+    enable_mathbox_ground = False
+    mowing_terrain_enable = False
+
+    # Integrate the PhysX joint target in REFERENCE space (target += fd_delta)
+    # instead of re-anchoring to the measured joint pos every step
+    # (target = measured + fd_delta). The default (False) is the "tracking
+    # ratchet": between steps gravity sags the arm, the measured pos drops, and
+    # the target follows the sag down, so the small (1-4 mm) commanded delta is
+    # washed out and the arm drifts to gravity equilibrium REGARDLESS of the
+    # action sign (verified: constant action +1 and -1 both end at the same
+    # pose). That removes the policy's authority -> no PPO gradient -> flat error,
+    # zero success. Reference integration lets commanded deltas accumulate so the
+    # action direction actually determines where the arm goes. _cylinder_pos_target
+    # is re-seeded to the reset pose in _reset_idx, so integration starts clean.
+    cylinder_target_integrates_from_previous_target = True
+
+    # Leaky integration (anti-runaway). Pure reference integration is a velocity
+    # integrator: target += fd_delta. To hold at a goal the policy must output
+    # EXACTLY zero, so any small action bias integrates into runaway (verified:
+    # deterministic policy starts at the goal then ramps away to 0.6-0.9 m). The
+    # leak pulls the target gently back toward the measured joint pos each step:
+    #   target = prev_target + fd_delta + leak * (measured_q - prev_target)
+    # so a persistent bias reaches a BOUNDED steady offset (fd_delta / leak)
+    # instead of running to the joint limit. leak=0 reproduces pure integration;
+    # ~0.1 gives a stable regulator the policy can learn quickly. Only applied
+    # when cylinder_target_integrates_from_previous_target is True.
+    # ID and FD are residualized around neutral below, so the target integrator no
+    # longer receives a state-driven zero-command bias.  The former leak now only
+    # creates steady-state tracking error for the DLS setpoint controller.
+    cylinder_target_leak = 0.0
+
+    enable_scripted_vehicle_motion = True
+    vehicle_speed_min_kmh = 3.0
+    vehicle_speed_max_kmh = 8.0
+
+    enable_startup_summary = False
+    enable_verbose_startup = False
+    enable_console_debug = False
+    enable_sequence_tick_debug = False
+    enable_reset_debug = False
+    enable_pipeline_debug = False
+    write_debug_csv = False
+    log_target_delta_xdot_clipping = False
+    pipeline_debug_prints = False
+
+    # Cylinder tracking params
+    cylinder_goal_delta_range_m = 0.035
+    cylinder_tracking_std_m = 0.04
+    cylinder_progress_weight = 4.0
+    cylinder_action_rate_weight = 0.02
+    cylinder_valve_weight = 0.01
+    cylinder_fd_delta_weight = 0.1
+    cylinder_success_tolerance_m = 0.01
+    cylinder_success_hold_steps = 10
+    cylinder_limit_margin_m = 0.002
+
+    # EE tracking params
+    ee_goal_delta_range_m = 0.15
+    ee_tracking_std_m = 0.05
+    ee_progress_weight = 10.0
+    ee_action_rate_weight = 0.02
+    ee_valve_weight = 0.01
+    ee_fd_delta_weight = 0.1
+    ee_success_tolerance_m = 0.02
+    ee_success_hold_steps = 10
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 64
+        self.scene.replicate_physics = True
+        self.observation_space = _obs_dim_for_task(self)
+
+        # Make the wheels a VELOCITY drive so scripted driving can actually act.
+        # The parent configures them as a position drive (stiffness 6e8 = parking
+        # brake), so wheel velocity commands were fighting a stiff position hold:
+        # measured 3.68 km/h commanded (~1.0 m/s, i.e. ~10 m over a 10 s run) but the
+        # truck moved only 0.25 m. The parent's own comment says these gains "must be
+        # switched to velocity-drive (stiffness 0, high damping) before wheel velocity
+        # targets can act" -- that switch was never actually made.
+        wheels = self.robot_cfg.actuators.get("mulag_wheels")
+        if wheels is not None:
+            wheels.stiffness = 0.0
+            wheels.damping = 1.0e6
+
+        # Ground the truck. The MULAG articulation root origin is authored ~1.11 m
+        # ABOVE wheel contact, so the parent's __post_init__ spawn of z=0.05 does
+        # not put "the wheels just above ground" — it buries the whole truck ~1.06 m
+        # into the ground plane (z=0). That is the sunken-truck/sunken-tool symptom.
+        # Measured settled height in this env (num_envs=1, ground-cuboid contact at
+        # z=0, 250-step settle): root_pos_w.z == 1.2538, base_link +0.14, wheels
+        # +0.73, tool +1.09 — the truck rests fully above ground. Spawn just above
+        # that settled root height so the wheels drop cleanly onto the plane instead
+        # of spawning penetrated and lurching up via depenetration every reset.
+        self.robot_cfg.init_state.pos = (-25.4, 4.3, 1.26)
+
+
+@configclass
+class IDFDCylinderSpaceEnvCfg_PLAY(IDFDCylinderSpaceEnvCfg, MulagUpperLevelEnvCfg_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class IDFDEETrackingEnvCfg(IDFDCylinderSpaceEnvCfg):
+    """EE-tracking PPO variant using the same ID/FD pipeline."""
+    task_type: str = "ee_tracking"
+    episode_length_s = 12.0
+    action_scale = 0.003          # reference-integration is velocity-style: smaller scale = less drift per unit action bias
+
+    # Reward-shaping tweaks after the Stage-1 "point" run plateaued at ~0.24 m
+    # error with 0% success: the exp(-err/std) reward was flat (~0) beyond
+    # ~0.15 m, so there was no gradient pulling the EE closer once it stalled.
+    ee_tracking_std_m = 0.12       # was 0.05: reward gradient out to ~0.2-0.3 m error
+    ee_success_tolerance_m = 0.05  # was 0.02: 2 cm is below this pipeline's precision
+
+    # Break the "hold still" collapse. Across every prior config the policy froze
+    # (fd_delta~0) at ~0.12-0.14 m -- WORSE than the 0.08 m do-nothing baseline --
+    # because motion was penalized while the tracking gradient near the goal was
+    # weak, so "freeze" out-scored "servo". Remove the motion penalties and pull
+    # harder toward the goal so active servoing wins.
+    ee_fd_delta_weight = 0.0       # was 0.1: directly penalized moving
+    ee_valve_weight = 0.0          # was 0.01: penalized the effort needed to hold/servo
+    ee_progress_weight = 20.0      # was 10.0: reward closing distance harder
+
+    # Isolate EE-tracking learning: freeze the truck. The goal is anchored in the
+    # ROOT (truck) frame, so a driving truck (3-8 km/h + periodic speed resample)
+    # makes the arm lag/sway in that frame -> a persistent goal-independent error
+    # floor. Learn the arm's inverse map on a stationary base first; re-enable
+    # driving as a later curriculum stage once tracking works.
+    enable_scripted_vehicle_motion = False
+
+    # Goal-size curriculum: start with small, near-linear goals so the policy can
+    # actually close the gap (escapes the "hold still" optimum), then ramp
+    # 0.05 -> 0.10 -> 0.15 across runs as success climbs.
+    ee_goal_delta_range_m = 0.05   # was 0.15 (base); ramp up once success > 0
+
+    # -- EE trajectory tracking (moving goal) --
+    # "point" keeps the legacy static random-goal behavior (reach + hold one
+    # point). The other modes move _ee_goal_local along a base-frame path so the
+    # policy learns to FOLLOW a trajectory, not just reach a point. Nothing else
+    # in the pipeline changes: the same 30-D observation (ee_error, ee_goal, ...)
+    # and the same reward (tracking exp + progress) act on whatever the goal is.
+    # The goal advances at a fixed path speed so it stays trackable by the arm.
+    ee_trajectory_mode = "point"            # "point" | "line" | "curve" | "sweep"
+    ee_trajectory_speed_mps = 0.03          # slow goal: easy to catch when warm-starting from a coarse point policy
+    ee_trajectory_length_m = 0.30           # line length / sweep forward span (ping-pongs, stays bounded)
+    ee_trajectory_sweep_amp_m = 0.15        # sweep lateral half-amplitude
+    ee_trajectory_sweep_wavelength_m = 0.30 # sweep period in path length
+    ee_trajectory_radius_m = 0.15           # curve arc radius
+
+
+@configclass
+class IDFDEETrackingEnvCfg_PLAY(IDFDEETrackingEnvCfg, MulagUpperLevelEnvCfg_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class IDFDCylinderSpacePPORunnerCfg(MulagUpperLevelPPORunnerCfg):
+    experiment_name = "id_fd_cylinder_space"
+    num_steps_per_env = 128
+    max_iterations = 2000
+    save_interval = 100
+    empirical_normalization = True
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=True,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.20),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[128, 128],
+        activation="elu",
+        obs_normalization=True,
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.003,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.02,
+        max_grad_norm=1.0,
+    )
+
+
+@configclass
+class IDFDEETrackingPPORunnerCfg(MulagUpperLevelPPORunnerCfg):
+    experiment_name = "id_fd_ee_tracking"
+    num_steps_per_env = 128
+    max_iterations = 2000
+    save_interval = 100
+    empirical_normalization = True
+    # Bigger net for the 4-cylinder -> 3D-EE inverse map. LOW exploration is
+    # essential here: with reference-space (velocity-style) integration, high
+    # action noise random-walks the target AWAY from the goal, so the policy never
+    # experiences being at the goal and learns to ramp away instead of holding.
+    # NOTE: changing hidden_dims makes prior checkpoints incompatible -> train
+    # fresh (no --checkpoint) when this changes.
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[256, 256, 128],
+        activation="elu",
+        obs_normalization=True,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.15),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[256, 256, 128],
+        activation="elu",
+        obs_normalization=True,
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.003,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.02,
+        max_grad_norm=1.0,
+    )
