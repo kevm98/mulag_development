@@ -2279,6 +2279,17 @@ class MulagUpperLevelEnv(DirectRLEnv):
         leak = float(getattr(self.cfg, "cylinder_target_leak", 0.0))
         if integrates_from_prev and leak > 0.0:
             new_target = new_target + leak * (cylinder_q - target_base)
+        # Anti-windup: the reference integrator must not run arbitrarily far ahead of the
+        # plant. The drive is a position servo with a ~0.2 s lag, so while the arm is
+        # still catching up the integrator keeps adding delta and the target sails past
+        # the goal -- the arm then overshoots by exactly the accumulated lead. Bounding
+        # the lead bounds the overshoot without touching the learned FD delta itself.
+        lead_m = float(getattr(self.cfg, "cylinder_target_max_lead_m", 0.0))
+        if lead_m > 0.0:
+            lead_usd = self._cylinder_adapter.simscape_delta_to_isaac_delta(
+                torch.full_like(new_target, lead_m)
+            ).abs()
+            new_target = torch.clamp(new_target, cylinder_q - lead_usd, cylinder_q + lead_usd)
         self._cylinder_pos_target = torch.clamp(new_target, lower, upper)
         if neutral_hold_mask.any():
             if neutral_hold_target_mode in {"current", "current_position", "current_joint_position"}:

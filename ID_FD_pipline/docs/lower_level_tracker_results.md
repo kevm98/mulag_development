@@ -188,6 +188,105 @@ while §2 stands.
 5. **Double time-scaling in the arc trajectory** + velocity fields carrying `d/ds`, not
    `d/dt`.
 
+---
+
+# PART II — after the plant fix
+
+## 10. Actuator fix  [RUNTIME TESTED]
+
+`effort_limit_sim` × 16 on the four cylinder actuators (+ the coupled passive tool joint);
+stiffness and damping unchanged. `ID_FD_pipline/tasks/env_cfg.py`.
+
+Chosen by measurement (`ppo1/tests/actuator_tuning_probe.py`), not preference:
+
+| candidate | step gain | overshoot | settle | ripple | saturation |
+|---|---|---|---|---|---|
+| authored | 0.79–1.01 | 0.72 | 0.87 s | 0.176 mm | 0.25 |
+| K/10, E×16 | −0.82 … 1.18 | 0.37 | 4.2 s | 0.88 mm | 0.02 |
+| K/100, E×16 | 0.00–0.47 | 0.00 | 4.7 s | 2.37 mm | 0.98 |
+| **E×16, K unchanged** | **0.83–1.00** | 0.30 | **0.17–0.25 s** | **0.003–0.04 mm** | **0.00** |
+
+Lowering stiffness (the intuitive fix) makes it strictly worse — step gain collapses and
+hold error blows out to 30–160 mm. Only the effort limit was wrong. Behaviour is identical
+from ×8 to ×128; ×16 is the smallest that also reaches the *extended* pose.
+
+Plant response after the fix, at the reset pose (`--mode plant --pose reset`):
+
+```
+d(measured)/d(target), +-5 / +-10 / +-50 mm:
+cyl1: 0.994 - 1.006      cyl2: 0.888 - 1.000
+cyl3: 0.987 - 0.995      cyl4: 0.991 - 0.995
+```
+
+Unity gain, both directions, no saturation. **The plant is now a genuine force-limited
+position servo.**
+
+## 11. Re-derived workspace  [RUNTIME TESTED]
+
+`ppo1/tests/workspace_rederive.py` → `models/commandable_workspace.json`. 5⁴ = 625 cylinder
+commands, each executed and checked for *reached* (`|x_meas − x_cmd| < 5 mm`), *unsaturated*
+and *holdable* (drift < 2 mm):
+
+* **153 / 625 poses are genuinely executed and holdable.**
+* Cutter reaches truck-frame x ∈ [2.33, 7.12], y ∈ [−4.30, −1.53], world z ∈ [−0.115, 2.841]
+  — the ground **is** reachable, over a wide band (x ∈ [3.20, 6.71], y ∈ [−4.30, −1.70]).
+
+The old `ground_band_map.json` is superseded. Its `target_x` column is not a set of valid
+commands.
+
+## 12. The real mowing arc
+
+Ground-contacting poses share a boom configuration: cylinders (2,3,4) = (0.577, 0.463,
+0.651) puts the cutter on the ground across most of cylinder 1's (Drehzapfen slew) range.
+That *is* the mowing arc — a slew at fixed boom — and it is much larger than the old fit:
+
+| | old (sag-derived) | new (commandable) |
+|---|---|---|
+| arc length | 0.88 m | **~3.5 m chord** (see `models/mowing_arc.json`) |
+
+## 13. ID→FD control law is the next failure  [RUNTIME TESTED]
+
+On the repaired plant the ID→FD chain finally *moves* the arm — and immediately overshoots.
+`--mode cyl --pose reset`, ±5/±10 mm steps, PPO zero, truck frozen:
+
+| probe | p95 | final err | goal |
+|---|---|---|---|
+| cyl1 −5 mm step | 78.7 mm | −81.9 mm | −5 mm |
+| cyl2 +5 mm step | 96.3 mm | −84.9 mm | +5 mm |
+| cyl2 sine 0.10 Hz | 121.3 mm | −43.1 mm | ±10 mm |
+| cyl3 −5 mm step | 15.4 mm | −17.6 mm | −5 mm |
+
+Every cylinder ends far on the *wrong side* of its goal. Mechanism: the control law is
+**pure proportional on position error, feeding a target integrator, in series with a plant
+that lags ~0.2 s**. While the arm is still catching up the integrator keeps adding delta, so
+the target sails past the goal and the arm overshoots by exactly the accumulated lead.
+There is no derivative term anywhere in the loop.
+
+Fixes applied (`dls_solver/cylinder.py`, `mulag_upper_level_env.py`):
+1. `velocity_damping` — the missing derivative term, subtracts motion already in flight.
+2. `velocity_feedforward` — lets a moving reference command its own speed instead of being
+   dragged by position error (the brief's §12; `EECascadeController.velocity_feedforward`
+   existed as a field but was never used in the control calculation).
+3. `cylinder_target_max_lead_m` — anti-windup bounding how far the reference integrator may
+   lead the measured cylinder.
+
+Gains are being selected by sweep, not by preference (`--mode gains`).
+
+## 14. Trajectory profile fixed  [SYNTAX CHECKED + finite-difference verified]
+
+`trajectories/time_scaling.py::cruise_profile` and `trajectories/arc_cruise.py`: jerk-limited
+accelerate–cruise–decelerate in **time**, emitting physical position [m], velocity [m/s] and
+acceleration [m/s²].
+
+Verified against finite differences: `max|v − ds/dt| ≈ 3e-4`, endpoints exact, zero velocity
+at both endpoints and at the reversal, constant 0.05 m/s through the cruise.
+
+* 0.88 m @ 0.05 m/s → **18.35 s one-way, 36.7 s for A→B→A** (the old 10 s run was ~0 mowing).
+* Displacement at 5 % of stroke time: **23.5 mm**, vs **1.1 mm** under the old double-scaled
+  quintic.
+
+---
+
 ## 9. Answers to the 12 required questions (as far as evidence currently supports)
 
 1. *Apparent freeze mainly caused by short run + time profile?* **Partly.** The profile bug is

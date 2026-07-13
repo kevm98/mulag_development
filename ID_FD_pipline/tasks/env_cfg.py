@@ -109,6 +109,11 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
     # creates steady-state tracking error for the DLS setpoint controller.
     cylinder_target_leak = 0.0
 
+    # Anti-windup on the reference integrator: how far the commanded PhysX target may
+    # lead the measured cylinder. 0 disables. Tuned on the repaired plant -- see
+    # ppo1/tests/lower_level_bench.py --mode gains.
+    cylinder_target_max_lead_m = 0.010
+
     enable_scripted_vehicle_motion = True
     vehicle_speed_min_kmh = 3.0
     vehicle_speed_max_kmh = 8.0
