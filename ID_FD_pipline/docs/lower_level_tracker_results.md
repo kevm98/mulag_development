@@ -270,7 +270,57 @@ Fixes applied (`dls_solver/cylinder.py`, `mulag_upper_level_env.py`):
 3. `cylinder_target_max_lead_m` — anti-windup bounding how far the reference integrator may
    lead the measured cylinder.
 
-Gains are being selected by sweep, not by preference (`--mode gains`).
+**Gain tuning does not fix it.** Swept Kp ∈ {0.05, 0.10, 0.20} × Kd ∈ {0, 1, 3, 8} with the
+anti-windup active, on ±10 mm bidirectional cylinder steps:
+
+```
+kp=0.05 kd=0.0  p95=128.7mm  overshoot=11.4      kp=0.10 kd=0.0  p95=118.9mm  overshoot=11.8
+kp=0.05 kd=3.0  p95=118.1mm  overshoot= 9.1      kp=0.10 kd=3.0  p95= 95.4mm  overshoot= 9.1
+kp=0.05 kd=8.0  p95=129.2mm  overshoot=10.1      kp=0.10 kd=8.0  p95= 97.3mm  overshoot= 7.6
+```
+
+Every combination overshoots 7–11× and runs away. Damping helps only marginally, which
+rules out the outer loop as the sole cause.
+
+## 15. The composite ID→FD map is cross-coupling-dominated  [RUNTIME TESTED]
+
+`--mode jac` at the reset pose. `J = ∂(FD delta)/∂(action)`:
+
+```
+         a1        a2        a3        a4
+fd1   -0.0115   -0.0000   -0.0007   -0.0002
+fd2   -0.0073   -0.0007   +0.0002   -0.0037
+fd3   -0.0208   -0.0027   -0.0046   -0.0062
+fd4   +0.0165   +0.0039   +0.0033   -0.0065
+
+singular values: [0.0306, 0.0097, 0.0025, 0.0012]   rank 4   condition 26.3
+```
+
+The map is **not** rank-deficient — but it is dominated by cross-coupling:
+
+* Action 1 drives cylinder 3 (−0.0208) and cylinder 4 (+0.0165) **more strongly than it
+  drives cylinder 1** (−0.0115).
+* Cylinder 2's own-axis gain (−0.0007) is **16× weaker** than the cross-terms landing on it.
+
+Consequence: a per-cylinder command produces mostly motion in *other* cylinders. The
+per-cylinder direction guard then compares each FD output's sign against *that cylinder's
+own* commanded delta and zeroes anything that disagrees — killing 20–63 % of FD outputs
+(measured). The DLS inversion is supposed to handle coupling, but it is inverting a map
+whose off-diagonal terms are the dominant ones while a guard downstream is deleting
+components of the result.
+
+**This is where the lower-level tracker still fails, and it is the correct place to resume.**
+
+### Why the checkpoints are now the prime suspect
+
+The ID/FD checkpoints were fitted/fine-tuned **against the saturated plant** (see the prior
+work's note that the workspace ID re-finetune achieved "training parity" because the
+effective Jacobian absorbed the ID error). On that plant the true `d(measured)/d(target)`
+was ~0, so whatever composite map the models learned encodes zero-authority dynamics. Now
+that the drives actually work, the checkpoints are operating out of distribution.
+
+This is the first point in the investigation where **model fine-tuning is genuinely
+indicated** — and it must be done against the repaired plant, not the old data.
 
 ## 14. Trajectory profile fixed  [SYNTAX CHECKED + finite-difference verified]
 
