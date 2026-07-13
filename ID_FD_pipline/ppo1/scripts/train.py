@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Train the active 2-D EE Y/Z residual policy.
-Stages A-D: enriched obs, restructured reward, truck curriculum.
+"""Train the stop-and-mow residual PPO policy.
+
+Arm-only mowing with bounded residual corrections.  The deterministic state
+machine handles phase transitions; PPO is active only during mowing.
 """
 
 from __future__ import annotations
@@ -27,9 +29,10 @@ parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--checkpoint", type=str, default=None)
 parser.add_argument("--preflight_only", action="store_true", default=False)
 parser.add_argument("--debug_startup_stack", action="store_true", default=False)
-# Stage D: curriculum phase boundaries (override from CLI)
-parser.add_argument("--phase1_iters", type=int, default=100, help="Iterations for phase 0 (arm only)")
-parser.add_argument("--phase2_iters", type=int, default=200, help="Additional iterations for phase 1 (slow truck)")
+parser.add_argument("--shape", type=str, default="arc", choices=["arc", "line", "bowed_curve", "sine_sweep"])
+parser.add_argument("--speed", type=float, default=0.05, help="Path speed [m/s]")
+parser.add_argument("--span", type=float, default=None, help="Lateral span [m]")
+parser.add_argument("--min_path", type=float, default=5.0, help="Min accumulated cutter path [m]")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.debug_startup_stack:
@@ -72,31 +75,27 @@ def main() -> None:
 
     total_iters = int(args_cli.max_iterations) if args_cli.max_iterations is not None else int(agent_cfg.max_iterations)
     agent_cfg.max_iterations = total_iters
-    # Stage D: curriculum boundaries
-    phase1_end = int(args_cli.phase1_iters)
-    phase2_end = phase1_end + int(args_cli.phase2_iters)
-    # Phase 2 runs from phase2_end to total_iters
+
+    # Apply CLI overrides
+    env_cfg.residual_mow_shape = args_cli.shape
+    env_cfg.residual_path_speed_mps = float(args_cli.speed)
+    env_cfg.residual_min_accumulated_path_m = float(args_cli.min_path)
+    if args_cli.span is not None:
+        env_cfg.residual_lateral_span_m = float(args_cli.span)
 
     run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name, run_stamp))
 
     print(
-        "[ID_FD] train "
-        f"task={task_id} envs={env_cfg.scene.num_envs} obs={env_cfg.observation_space} action={env_cfg.action_space} "
+        f"[ID_FD] train task={task_id} envs={env_cfg.scene.num_envs} "
+        f"obs={env_cfg.observation_space} action={env_cfg.action_space} "
+        f"shape={env_cfg.residual_mow_shape} speed={env_cfg.residual_path_speed_mps} m/s "
+        f"span={env_cfg.residual_lateral_span_m}m min_path={env_cfg.residual_min_accumulated_path_m}m "
         f"iters={total_iters} log_dir={log_dir}",
         flush=True,
     )
     print(
-        "[ID_FD] models "
-        f"id={env_cfg.id_cylinder_checkpoint} fd={env_cfg.fd_cylinder_checkpoint} "
-        "disabled=ROM,AAM,SD,sequence",
-        flush=True,
-    )
-    print(
-        "[ID_FD] curriculum: "
-        f"phase0(arm-only)=0..{phase1_end-1}, "
-        f"phase1(slow-truck)={phase1_end}..{phase2_end-1}, "
-        f"phase2(full-truck)={phase2_end}..{total_iters-1}",
+        f"[ID_FD] models id={env_cfg.id_cylinder_checkpoint} fd={env_cfg.fd_cylinder_checkpoint}",
         flush=True,
     )
 
@@ -111,7 +110,10 @@ def main() -> None:
             _finite("reset observation", policy_obs)
             expected_shape = (env.unwrapped.num_envs, int(env_cfg.observation_space))
             if tuple(policy_obs.shape) != expected_shape:
-                raise RuntimeError(f"policy observation shape must be {expected_shape}, got {tuple(policy_obs.shape)}")
+                raise RuntimeError(
+                    f"policy observation shape must be {expected_shape}, "
+                    f"got {tuple(policy_obs.shape)}"
+                )
             print("[ID_FD] preflight passed", flush=True)
             return
 
@@ -123,47 +125,18 @@ def main() -> None:
             print(f"[ID_FD] loading checkpoint {args_cli.checkpoint}", flush=True)
             runner.load(args_cli.checkpoint)
         else:
-            # The residual policy has a safe, useful identity: zero action is the
-            # verified classical controller.  Start PPO exactly at that identity.
             output_layer = next(
-                module for module in reversed(runner.alg.actor.mlp) if isinstance(module, torch.nn.Linear)
+                module for module in reversed(runner.alg.actor.mlp)
+                if isinstance(module, torch.nn.Linear)
             )
             torch.nn.init.zeros_(output_layer.weight)
             torch.nn.init.zeros_(output_layer.bias)
             print("[ID_FD] residual actor initialized to exact zero-action baseline", flush=True)
 
-        # Stage D: three-phase truck-speed curriculum
-        # Phase 0: truck disabled (arm-only tracking)
-        # Phase 1: slow truck (2.0 km/h span)
-        # Phase 2: full truck (4.5 km/h span)
-        remaining = total_iters
-        cum_iter = 0
-
-        # Phase 0: arm-only
-        phase0_iters = min(phase1_end, remaining)
-        if phase0_iters > 0:
-            env_cfg.residual_truck_curriculum_phase = 0
-            print(f"[ID_FD] Phase 0 (arm-only): {phase0_iters} iterations", flush=True)
-            runner.learn(num_learning_iterations=phase0_iters, init_at_random_ep_len=False)
-            cum_iter += phase0_iters
-            remaining -= phase0_iters
-
-        # Phase 1: slow truck
-        if remaining > 0:
-            phase1_iters = min(phase2_end - phase1_end, remaining)
-            if phase1_iters > 0:
-                env_cfg.residual_truck_curriculum_phase = 1
-                print(f"[ID_FD] Phase 1 (slow truck, 2.0 km/h): {phase1_iters} iterations", flush=True)
-                runner.learn(num_learning_iterations=phase1_iters, init_at_random_ep_len=False)
-                cum_iter += phase1_iters
-                remaining -= phase1_iters
-
-        # Phase 2: full truck
-        if remaining > 0:
-            env_cfg.residual_truck_curriculum_phase = 2
-            print(f"[ID_FD] Phase 2 (full truck, {env_cfg.residual_truck_span_kmh} km/h): {remaining} iterations", flush=True)
-            runner.learn(num_learning_iterations=remaining, init_at_random_ep_len=False)
-            cum_iter += remaining
+        print("[ID_FD] starting arm-only PPO learn", flush=True)
+        runner.learn(
+            num_learning_iterations=total_iters, init_at_random_ep_len=False
+        )
     finally:
         env.close()
 

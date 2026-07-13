@@ -1,5 +1,6 @@
-"""Environment and PPO configuration owned by the residual policy.
-Stages A-D: enriched obs, restructured reward, truck curriculum.
+"""Environment and PPO configuration for the stop-and-mow residual policy.
+
+rebuild: state-machine-driven arm-only mowing with bounded PPO residual.
 """
 
 from __future__ import annotations
@@ -17,44 +18,58 @@ from kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg 
 
 @configclass
 class IDFDEEResidualEnvCfg(IDFDCylinderSpaceEnvCfg):
-    """Two-dimensional Y/Z residual over the verified classical cascade."""
+    """Bounded Y/Z residual + speed scale over stop-and-mow deterministic controller."""
 
     task_type: str = "ee_tracking"
-    action_space = 3  # (dy, dz, truck-speed)
+    action_space = 3  # (dy, dz, speed_scale)
     observation_space = EE_RESIDUAL_OBS_DIM
     action_scale = 0.02
-    episode_length_s = 35.0
-    # Truck speed is a POLICY action (teacher_student-style direct wheel write);
-    # scripted driving off. Zero action = parked truck = stationary baseline.
+    episode_length_s = 60.0
     enable_scripted_vehicle_motion = False
-    # Same learned ID/FD backend as the passing trajectory gate.
     low_level_servo_mode = "none"
 
-    residual_action_scale_m = 0.05
-    residual_error_reward_scale = 20.0
-    residual_settle_steps = 400  # unscored cascade descent to the mapped path start (~1 cm/step measured)
-    # Nominal path = the PHYSICS-MAPPED ground arc (same branch the passing
-    # long-trajectory gate tracks), sampled at a fixed path speed.
-    residual_path_speed_mps = 0.045
-    residual_ee_correction_gain = 0.40
-    # action[2] in [-1,1] -> truck speed kmh = clamp(base + a*span, 0, max)
-    residual_truck_base_kmh = 0.0
-    residual_truck_span_kmh = 4.5
-    residual_truck_max_kmh = 6.0
-    # Stage D: truck-speed curriculum. Phase 0=disabled, 1=slow(2.0kmh), 2=full(4.5kmh).
-    residual_truck_curriculum_phase: int = 0
-    # Stage B: ungated progress reward with exponential weight
-    residual_progress_weight = 1.5
-    residual_progress_gate_m = 0.05      # unused now (kept for compatibility)
-    # Stage B: action-smoothing penalty scale
-    residual_action_smooth_weight = 0.01
-    # Stage B: progress decay constant (larger = wider credit window)
-    residual_progress_decay_m = 0.10
+    # --- Stop-and-mow configuration ---
+    residual_mow_shape: str = "arc"          # "arc" | "line" | "bowed_curve" | "sine_sweep"
+    residual_lateral_span_m: float = 1.00    # unique lateral span
+    residual_forward_bow_m: float = 0.14     # bowed_curve forward bow
+    residual_forward_amplitude_m: float = 0.06  # sine_sweep forward amplitude
+    residual_sweep_lobes: int = 3            # sine_sweep lobes per stroke
+
+    # --- Arc (Drehzapfen-centered slewing arc) ---
+    residual_arc_center_x: float = 4.327      # Drehzapfen X in truck base_link
+    residual_arc_center_y: float = -3.224     # Drehzapfen Y in truck base_link
+    residual_arc_radius_m: float = 1.286      # constant horizontal radius
+    residual_arc_theta_a_deg: float = -26.7   # start angle [deg]
+    residual_arc_theta_b_deg: float = 9.3     # end angle [deg]
+    residual_min_accumulated_path_m: float = 5.0  # min accumulated cutter travel
+
+    # --- Speed ---
+    residual_path_speed_mps: float = 0.05    # m/s along the path
+
+    # --- PPO residual bounds ---
+    residual_action_scale_m: float = 0.03    # ±0.03 m lateral/height
+    residual_action_smooth_weight: float = 0.01
+
+    # --- Reward ---
+    residual_error_reward_scale: float = 20.0
+    residual_progress_weight: float = 1.5
+    residual_progress_gate_m: float = 0.05   # unused for arm-only
+    residual_progress_decay_m: float = 0.10
+
+    # --- Settle / deploy / stow ---
+    residual_settle_steps: int = 300
+    residual_deploy_hold_steps: int = 60
+    residual_stow_steps: int = 300
+
+    # --- Ground following ---
+    residual_target_clearance_m: float = 0.05
+    residual_max_height_correction_m: float = 0.12
+    residual_height_correction_gain: float = 0.5
 
     def __post_init__(self):
         super().__post_init__()
         self.observation_space = EE_RESIDUAL_OBS_DIM
-        self.action_space = 3  # (dy, dz, truck-speed)
+        self.action_space = 3
 
 
 @configclass
@@ -71,12 +86,11 @@ class IDFDEEResidualPPORunnerCfg(MulagUpperLevelPPORunnerCfg):
     max_iterations = 500
     save_interval = 25
     empirical_normalization = True
-    # Stage A: larger net, wider init, exploration pressure, higher LR
     actor = RslRlMLPModelCfg(
         hidden_dims=[128, 64],
         activation="elu",
         obs_normalization=True,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.15),
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.10),
     )
     critic = RslRlMLPModelCfg(
         hidden_dims=[128, 64],
@@ -94,7 +108,7 @@ class IDFDEEResidualPPORunnerCfg(MulagUpperLevelPPORunnerCfg):
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=0.008,
+        desired_kl=0.02,
         max_grad_norm=1.0,
     )
 
