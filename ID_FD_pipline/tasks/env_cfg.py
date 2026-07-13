@@ -15,6 +15,11 @@ from kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg 
 )
 
 
+# Cylinder actuator effort headroom. See IDFDCylinderSpaceEnvCfg.__post_init__ for the
+# measurement that fixes this at 16.
+CYLINDER_EFFORT_SCALE = 16.0
+
+
 def _obs_dim_for_task(cfg) -> int:
     """Return observation dimension based on task_type."""
     task_type = str(getattr(cfg, "task_type", "cylinder")).lower()
@@ -144,6 +149,37 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
         self.scene.num_envs = 64
         self.scene.replicate_physics = True
         self.observation_space = _obs_dim_for_task(self)
+
+        # Give the cylinder drives enough force to actually execute a position target.
+        # As authored, stiffness (3e7-7.5e7) dwarfs effort_limit (5e4-1e5), so the
+        # implicit PD clips to MAX FORCE beyond effort/stiffness = 0.7-10 mrad of error.
+        # Every cylinder was therefore a saturated bang-bang actuator:
+        #   * holding still at the reset pose already pinned cylinder 2 at its limit;
+        #   * at the mowing pose cylinder 1 demanded 1.46e7 N.m against a 5e4 limit (293x)
+        #     and d(measured)/d(target) measured ~0.00 out to +-50 mm, in BOTH directions.
+        # The arm did not track a target, it sagged to a gravity/constraint equilibrium --
+        # which is also what ground_band_map.json actually recorded (its target_x and
+        # cylinder_x columns differ by up to 0.25 m). No controller, learned or classical,
+        # has authority on that plant.
+        # Measured (ppo1/tests/actuator_tuning_probe.py): raising effort alone fixes it.
+        # Lowering stiffness instead makes it worse (step gain collapses to 0.0-0.47,
+        # hold error 30-160 mm). At x16 the drive is a clean force-limited position servo:
+        # step gain 0.83-1.02, settle 0.17-0.25 s, ripple <0.07 mm, ZERO saturation, and it
+        # is the smallest multiplier that also reaches the extended (mowing) pose.
+        for name in (
+            "drehzapfen_cylinder",
+            "ausleger_i_cylinder",
+            "ausleger_ii_cylinder",
+            "messerkopf_schwenk_cylinder",
+            "messerkopf_passive_coupled",
+        ):
+            # NOTE: the parent's __post_init__ rebuilds robot_cfg.actuators from scratch,
+            # so this must run after super().__post_init__(). The limit that PhysX actually
+            # enforces is effort_limit_sim; effort_limit is None here.
+            actuator = self.robot_cfg.actuators.get(name)
+            if actuator is None or actuator.effort_limit_sim is None:
+                raise RuntimeError(f"cylinder actuator {name!r} missing effort_limit_sim")
+            actuator.effort_limit_sim = float(actuator.effort_limit_sim) * CYLINDER_EFFORT_SCALE
 
         # Make the wheels a VELOCITY drive so scripted driving can actually act.
         # The parent configures them as a position drive (stiffness 6e8 = parking
