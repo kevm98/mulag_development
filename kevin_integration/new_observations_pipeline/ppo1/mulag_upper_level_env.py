@@ -142,6 +142,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._prev_valve_cmd = torch.zeros((self.num_envs, 4), device=self.device)
         self._id_prev_valve_cmd_input = torch.zeros_like(self._prev_valve_cmd)
         self._current_valve_cmd = torch.zeros_like(self._prev_valve_cmd)
+        self._fd_baseline_valve_cmd = torch.zeros_like(self._prev_valve_cmd)
         self._id_input_tensor = torch.zeros((self.num_envs, 24), device=self.device)
         self._dP = torch.zeros((self.num_envs, 4), device=self.device)
         self._force = torch.zeros_like(self._dP)
@@ -306,7 +307,15 @@ class MulagUpperLevelEnv(DirectRLEnv):
 
     def _low_level_servo_mode(self) -> str:
         mode = str(getattr(self.cfg, "low_level_servo_mode", "none")).lower()
-        valid = {"none", "cylinder_velocity_pid", "id_ff_plus_cylinder_velocity_pid", "position_ramp_pi", "fd_tracking_servo", "id_pid_fd_tracking_servo"}
+        valid = {
+            "none",
+            "cylinder_velocity_pid",
+            "id_ff_plus_cylinder_velocity_pid",
+            "position_ramp_pi",
+            "direct_position_delta",
+            "fd_tracking_servo",
+            "id_pid_fd_tracking_servo",
+        }
         if mode not in valid:
             raise ValueError(f"low_level_servo_mode must be one of {sorted(valid)}, got {mode!r}.")
         return mode
@@ -455,6 +464,29 @@ class MulagUpperLevelEnv(DirectRLEnv):
         step_dt: float,
     ) -> torch.Tensor:
         mode = self._low_level_servo_mode()
+
+        # -- Direct measured-error position increment -----------------------
+        # The rank-promoted FD is retained for diagnostics, but its residual
+        # valve effect is too small for large excursions and its full output
+        # incorrectly injects state dynamics into the position-target
+        # integrator.  In this mode the upstream cylinder controller owns the
+        # closed loop and action_target already is the desired bounded learned
+        # cylinder increment. PhysX remains the plant.
+        if mode == "direct_position_delta":
+            dx_cmd = reference.target_delta_x.to(device=self.device, dtype=torch.float32)
+            clip_m = max(float(getattr(self.cfg, "direct_position_delta_clip_m", 0.0015)), 0.0)
+            if clip_m > 0.0:
+                dx_cmd = torch.clamp(dx_cmd, -clip_m, clip_m)
+            if neutral_hold_mask.any():
+                dx_cmd = dx_cmd.clone()
+                dx_cmd[neutral_hold_mask] = 0.0
+            self._servo_position_delta = dx_cmd.detach().clone()
+            self._cyl_vel_desired = dx_cmd.detach().clone() / max(float(step_dt), 1.0e-9)
+            self._cyl_vel_measured = reference.xdot_current.detach().clone()
+            self._valve_ff.zero_()
+            self._valve_pid.zero_()
+            self._valve_total.zero_()
+            return self._valve_total
 
         # -- Position-ramp PI mode: directly produces position deltas, bypasses ID/FD --
         if mode == "position_ramp_pi":
@@ -1065,6 +1097,28 @@ class MulagUpperLevelEnv(DirectRLEnv):
             self._id_input_tensor = torch.zeros(
                 (self.num_envs, self._cylinder_id.input_dim), device=self.device
             )
+            dynamics_model = str(self.cfg.cylinder_dynamics_model).lower()
+            if dynamics_model == "fd":
+                self._cylinder_fd = CylinderFDRuntime(
+                    models_root=self.cfg.cylinder_models_root,
+                    checkpoint=self.cfg.fd_cylinder_checkpoint,
+                    device=self.device,
+                )
+                self._load_fd_correction()
+            elif dynamics_model == "rom":
+                self._cylinder_rom = CylinderROMRuntime(
+                    models_root=self.cfg.cylinder_models_root,
+                    checkpoint=self.cfg.rom_cylinder_checkpoint,
+                    num_envs=self.num_envs,
+                    device=self.device,
+                )
+            elif dynamics_model in {"direct_valve", "direct"}:
+                pass
+            else:
+                raise ValueError(
+                    "cylinder_dynamics_model must be 'rom', 'fd', or 'direct_valve', "
+                    f"got {self.cfg.cylinder_dynamics_model!r}."
+                )
         self._configure_id_feature_ranges()
         self._action_to_cylinder_target_adapter = PPOActionToCylinderTargetAdapter(
             mapping=mapping if bool(getattr(self.cfg, "enable_cylinder_space_scaling", True)) else None,
@@ -1348,8 +1402,45 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self.scene.clone_environments(copy_from_source=False)
         self.scene.filter_collisions(global_prim_paths=[])
         self.scene.articulations["robot"] = self.robot
+        if bool(getattr(self.cfg, "mowing_terrain_enable", False)):
+            self._spawn_mowing_terrain()
         light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+    def _spawn_mowing_terrain(self) -> None:
+        """Per-env mowable shelf at the tool's lowest reachable band (embankment).
+        The main ground stays at z=0 for the wheels; this shelf sits beside the
+        truck where the arm reaches. Visual-only unless mowing_terrain_collision."""
+        half_x = float(getattr(self.cfg, "mowing_terrain_half_x", 0.7))
+        half_y = float(getattr(self.cfg, "mowing_terrain_half_y", 0.9))
+        thickness = float(getattr(self.cfg, "mowing_terrain_thickness", 0.04))
+        z_top = float(getattr(self.cfg, "mowing_terrain_z", 1.08))
+        local = (
+            float(getattr(self.cfg, "mowing_terrain_local_x", -19.528)),
+            float(getattr(self.cfg, "mowing_terrain_local_y", 1.38)),
+            z_top - 0.5 * thickness,
+        )
+        color = tuple(getattr(self.cfg, "mowing_terrain_color", (0.20, 0.45, 0.18)))
+        with_collision = bool(getattr(self.cfg, "mowing_terrain_collision", False))
+        kwargs = dict(
+            size=(2.0 * half_x, 2.0 * half_y, thickness),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+        )
+        if with_collision:
+            kwargs["collision_props"] = sim_utils.CollisionPropertiesCfg(contact_offset=0.02, rest_offset=0.0)
+            kwargs["physics_material"] = sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0, dynamic_friction=1.0, restitution=0.0,
+            )
+        shelf_cfg = sim_utils.MeshCuboidCfg(**kwargs)
+        origins = self.scene.env_origins.detach().cpu().numpy()
+        origin0 = origins[0]
+        for env_id in range(origins.shape[0]):
+            pos = (
+                float(origins[env_id][0] - origin0[0] + local[0]),
+                float(origins[env_id][1] - origin0[1] + local[1]),
+                float(local[2]),
+            )
+            shelf_cfg.func(f"/World/mowing_terrain/shelf_{env_id}", shelf_cfg, translation=pos)
 
     def _spawn_mathbox_ground_visuals(self) -> None:
         line_color = tuple(getattr(self.cfg, "lane_line_color", (1.0, 1.0, 1.0)))
@@ -1882,11 +1973,30 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 self._id_input_tensor,
                 prev_valve_cmd=self._id_prev_valve_cmd_input,
             )
+            if bool(getattr(self.cfg, "id_residual_over_zero_target", False)):
+                zero_target_input = self._id_input_tensor.detach().clone()
+                zero_target_input[:, 16:24] = 0.0
+                zero_target_valve = self._cylinder_id.predict(
+                    zero_target_input,
+                    prev_valve_cmd=self._id_prev_valve_cmd_input,
+                )
+                if bool(getattr(self.cfg, "paired_id_fd_residual", False)):
+                    self._fd_baseline_valve_cmd = zero_target_valve.detach().clone()
+                else:
+                    self._current_valve_cmd = self._current_valve_cmd - zero_target_valve
             self._current_valve_cmd = torch.clamp(
                 self._current_valve_cmd, -float(self.cfg.max_abs_valve), float(self.cfg.max_abs_valve)
             )
+            if bool(getattr(self.cfg, "paired_id_fd_residual", False)):
+                self._fd_baseline_valve_cmd = torch.clamp(
+                    self._fd_baseline_valve_cmd,
+                    -float(self.cfg.max_abs_valve),
+                    float(self.cfg.max_abs_valve),
+                )
             if neutral_hold_mask.any():
                 self._current_valve_cmd[neutral_hold_mask] = 0.0
+                if bool(getattr(self.cfg, "paired_id_fd_residual", False)):
+                    self._fd_baseline_valve_cmd[neutral_hold_mask] = 0.0
                 self._cylinder_id.reset(torch.where(neutral_hold_mask)[0])
 
         step_dt = max(float(getattr(self, "step_dt", float(self.cfg.sim.dt) * float(self.cfg.decimation))), 1.0e-6)
@@ -2020,6 +2130,49 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     dP=self._dP,
                     force=self._force,
                 )
+                paired_residual = bool(getattr(self.cfg, "paired_id_fd_residual", False))
+                if paired_residual:
+                    fd_zero = self._cylinder_fd.step(
+                        valve_cmd=self._fd_baseline_valve_cmd,
+                        extension=reference.x_current,
+                        extension_velocity=reference.xdot_current,
+                        dP=self._dP,
+                        force=self._force,
+                    )
+                    fd_out = type(fd_out)(
+                        delta_extension=fd_out.delta_extension - fd_zero.delta_extension,
+                        delta_extension_velocity=(
+                            fd_out.delta_extension_velocity - fd_zero.delta_extension_velocity
+                        ),
+                        delta_dP=fd_out.delta_dP - fd_zero.delta_dP,
+                        raw_output=fd_out.raw_output - fd_zero.raw_output,
+                    )
+                elif bool(getattr(self.cfg, "fd_residual_over_zero_valve", False)):
+                    fd_zero = self._cylinder_fd.step(
+                        valve_cmd=torch.zeros_like(self._current_valve_cmd),
+                        extension=reference.x_current,
+                        extension_velocity=reference.xdot_current,
+                        dP=self._dP,
+                        force=self._force,
+                    )
+                    fd_out = type(fd_out)(
+                        delta_extension=fd_out.delta_extension - fd_zero.delta_extension,
+                        delta_extension_velocity=(
+                            fd_out.delta_extension_velocity - fd_zero.delta_extension_velocity
+                        ),
+                        delta_dP=fd_out.delta_dP - fd_zero.delta_dP,
+                        raw_output=fd_out.raw_output - fd_zero.raw_output,
+                    )
+                if paired_residual or bool(getattr(self.cfg, "fd_residual_over_zero_valve", False)):
+                    residual_gain = self._cfg_cyl_vector(
+                        "cylinder_fd_residual_output_gain", 1.0
+                    )
+                    fd_out = type(fd_out)(
+                        delta_extension=fd_out.delta_extension * residual_gain,
+                        delta_extension_velocity=fd_out.delta_extension_velocity * residual_gain,
+                        delta_dP=fd_out.delta_dP * residual_gain,
+                        raw_output=fd_out.raw_output,
+                    )
                 if self._low_level_servo_enabled() and not bool(getattr(self.cfg, "servo_use_fd_prediction", True)):
                     fd_out = type(fd_out)(
                         delta_extension=torch.zeros_like(fd_out.delta_extension),
@@ -2039,6 +2192,22 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     fd_scale *= step_dt / max(fd_sample_time, 1.0e-6)
                 self._fd_delta_scale = fd_scale
                 delta_extension = fd_out.delta_extension * fd_scale
+                if bool(getattr(self.cfg, "cylinder_fd_command_direction_guard", False)):
+                    # Paired residuals are intended to represent the causal
+                    # response to target_delta_x.  Keep the network's predicted
+                    # magnitude, but reject recursive state-leakage components
+                    # that reverse that command or exceed a modest envelope.
+                    # This is a safety contract, not a direct-drive bypass: a
+                    # zero learned response remains zero.
+                    command_delta = reference.target_delta_x
+                    same_direction = delta_extension * command_delta >= 0.0
+                    ratio = max(float(getattr(self.cfg, "cylinder_fd_command_max_ratio", 1.5)), 0.0)
+                    limit = ratio * command_delta.abs()
+                    delta_extension = torch.where(
+                        same_direction,
+                        torch.sign(delta_extension) * torch.minimum(delta_extension.abs(), limit),
+                        torch.zeros_like(delta_extension),
+                    )
                 if self._low_level_servo_enabled():
                     correction_gain = float(getattr(self.cfg, "servo_tracking_delta_gain", 0.0))
                     if correction_gain != 0.0:
@@ -2066,7 +2235,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         if servo_mode in ("fd_tracking_servo", "id_pid_fd_tracking_servo"):
             delta_extension = self._servo_fd_gain * delta_extension + self._servo_tracking_delta
             self._fd_delta_corrected = delta_extension.detach().clone()
-        elif servo_mode == "position_ramp_pi":
+        elif servo_mode in ("position_ramp_pi", "direct_position_delta"):
             delta_extension = self._servo_position_delta
             self._raw_delta_extension = self._servo_position_delta.detach().clone()
             self._fd_delta_raw = self._servo_position_delta.detach().clone()
@@ -2101,12 +2270,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._delta_isaac = delta_isaac.detach().clone()
         lower = self.robot.data.soft_joint_pos_limits[:, self._cylinder_joint_ids, 0]
         upper = self.robot.data.soft_joint_pos_limits[:, self._cylinder_joint_ids, 1]
-        target_base = (
-            previous_cylinder_pos_target
-            if bool(getattr(self.cfg, "cylinder_target_integrates_from_previous_target", False))
-            else cylinder_q
-        )
-        self._cylinder_pos_target = torch.clamp(target_base + delta_isaac, lower, upper)
+        integrates_from_prev = bool(getattr(self.cfg, "cylinder_target_integrates_from_previous_target", False))
+        target_base = previous_cylinder_pos_target if integrates_from_prev else cylinder_q
+        new_target = target_base + delta_isaac
+        # Leaky integration (anti-runaway): pull the reference target gently back
+        # toward the measured joint pos so a persistent action bias settles at a
+        # bounded offset (delta_isaac / leak) instead of integrating to the limit.
+        leak = float(getattr(self.cfg, "cylinder_target_leak", 0.0))
+        if integrates_from_prev and leak > 0.0:
+            new_target = new_target + leak * (cylinder_q - target_base)
+        self._cylinder_pos_target = torch.clamp(new_target, lower, upper)
         if neutral_hold_mask.any():
             if neutral_hold_target_mode in {"current", "current_position", "current_joint_position"}:
                 neutral_hold_target = self._neutral_hold_cylinder_pos_target[neutral_hold_mask]
@@ -2588,9 +2761,22 @@ class MulagUpperLevelEnv(DirectRLEnv):
             arm_targets, _ = self._apply_joint6_coupling_to_reference(arm_targets, arm_vel_targets)
             self.robot.set_joint_position_target(arm_targets, joint_ids=self._arm_joint_ids)
 
-        # Steering: hold at 0
+        # Steering: hold at the configured scripted target (zero by default).
+        # Stop-and-mow relocation updates this scalar with a small heading/lateral
+        # feedback correction; all existing tasks retain straight-ahead zero.
+        steering_override = getattr(self, "_scripted_steering_target", None)
+        if steering_override is None:
+            steering_target = torch.full(
+                (self.num_envs, 2),
+                float(getattr(self.cfg, "vehicle_steering_target_rad", 0.0)),
+                device=self.device,
+            )
+        else:
+            steering_target = torch.as_tensor(
+                steering_override, device=self.device, dtype=torch.float32
+            ).reshape(self.num_envs, 2)
         self.robot.set_joint_position_target(
-            torch.zeros((self.num_envs, 2), device=self.device),
+            steering_target,
             joint_ids=self._steering_joint_ids,
         )
 
@@ -2599,7 +2785,19 @@ class MulagUpperLevelEnv(DirectRLEnv):
             speed_rad_per_s = (
                 self._vehicle_speed_kmh / 3.6 / self.cfg.vehicle_wheel_radius_m
             )
+            speed_rad_per_s = speed_rad_per_s * float(
+                getattr(self.cfg, "vehicle_wheel_speed_gain", 1.0)
+            )
             wheel_vel = speed_rad_per_s.unsqueeze(-1).expand(-1, len(self._wheel_joint_ids))
+            left_scale = float(getattr(self.cfg, "vehicle_left_wheel_speed_scale", 1.0))
+            right_scale = float(getattr(self.cfg, "vehicle_right_wheel_speed_scale", 1.0))
+            if len(self._wheel_joint_ids) == 4:
+                wheel_scale = torch.tensor(
+                    [left_scale, right_scale, left_scale, right_scale],
+                    device=self.device,
+                    dtype=wheel_vel.dtype,
+                ).reshape(1, 4)
+                wheel_vel = wheel_vel * wheel_scale
         else:
             wheel_vel = torch.zeros((self.num_envs, len(self._wheel_joint_ids)), device=self.device)
         self.robot.write_joint_velocity_to_sim(wheel_vel, joint_ids=self._wheel_joint_ids)
@@ -2696,6 +2894,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._prev_valve_cmd[env_ids] = 0.0
         self._id_prev_valve_cmd_input[env_ids] = 0.0
         self._current_valve_cmd[env_ids] = 0.0
+        self._fd_baseline_valve_cmd[env_ids] = 0.0
         self._id_input_tensor[env_ids] = 0.0
         self._apply_hydraulic_feature_mode(env_ids)
         self._predicted_extension_velocity[env_ids] = 0.0

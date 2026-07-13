@@ -87,6 +87,8 @@ class AdaptiveRLLearnedControllerCfg:
     sd_output_mode: str = "state"
     sd_nan_guard: bool = True
     sd_clamp_outputs: bool = True
+    use_aam_model: bool = True
+    use_sd_model: bool = True
 
 
 @dataclass(frozen=True)
@@ -135,13 +137,15 @@ class AdaptiveRLLearnedController:
         models_dir = Path(cfg.models_dir)
         self._aam_checkpoint_path = (models_dir / "aam.pth").resolve()
 
-        self.aam = AAMModel(
-            checkpoint_path=self._aam_checkpoint_path,
-            activation=cfg.activation,
-            dropout=cfg.dropout,
-            map_location="cpu",
-            device=str(self.device),
-        )
+        self.aam = None
+        if cfg.use_aam_model:
+            self.aam = AAMModel(
+                checkpoint_path=self._aam_checkpoint_path,
+                activation=cfg.activation,
+                dropout=cfg.dropout,
+                map_location="cpu",
+                device=str(self.device),
+            )
         self.id = InverseDynamicsModel(
             checkpoint_path=models_dir / "id.pth",
             activation=cfg.activation,
@@ -157,23 +161,28 @@ class AdaptiveRLLearnedController:
             map_location="cpu",
             device=str(self.device),
         )
-        self.sd = SystemDynamicsModel(
-            checkpoint_path=models_dir / "sd.pth",
-            activation=cfg.activation,
-            dropout=cfg.dropout,
-            map_location="cpu",
-            device=str(self.device),
-        )
-        self._freeze_model(self.aam)
+        self.sd = None
+        if cfg.use_sd_model:
+            self.sd = SystemDynamicsModel(
+                checkpoint_path=models_dir / "sd.pth",
+                activation=cfg.activation,
+                dropout=cfg.dropout,
+                map_location="cpu",
+                device=str(self.device),
+            )
+        if self.aam is not None:
+            self._freeze_model(self.aam)
         self._freeze_model(self.id)
         self._freeze_model(self.fd)
-        self._freeze_model(self.sd)
-        self._assert_aam_frozen()
+        if self.sd is not None:
+            self._freeze_model(self.sd)
+        if self.aam is not None:
+            self._assert_aam_frozen()
 
         id_window = self.id.window_size or cfg.fallback_window
-        aam_window = self.aam.window_size or self.id.window_size or cfg.fallback_window
+        aam_window = self.aam.window_size if self.aam is not None else cfg.fallback_window
         fd_window = self.fd.window_size or cfg.fallback_window
-        sd_window = self.sd.window_size or cfg.fallback_window
+        sd_window = self.sd.window_size if self.sd is not None else cfg.fallback_window
 
         self._aam_history = TorchSequenceBuffer(
             num_envs=cfg.num_envs,
@@ -199,22 +208,24 @@ class AdaptiveRLLearnedController:
             device=self.device,
         )
         self._id_qddot_std = self._extract_id_qddot_std()
-        self._assert_aam_dimensions()
+        if self.aam is not None:
+            self._assert_aam_dimensions()
         self.runtime_contract = {
-            "aam_active": True,
-            "aam_checkpoint": str(self._aam_checkpoint_path),
+            "aam_active": bool(self.aam is not None),
+            "aam_checkpoint": str(self._aam_checkpoint_path) if self.aam is not None else None,
             "aam_frozen": self.aam_frozen,
             "aam_eval_mode": self.aam_eval_mode,
-            "aam_input": "[q5, qdot5, dP4, previous_applied_valve4]",
+            "aam_input": "[q5, qdot5, dP4, previous_applied_valve4]" if self.aam is not None else None,
             "aam_input_width": self.AAM_INPUT_WIDTH,
             "aam_window": aam_window,
-            "aam_output": "z_arm_hat[24]",
+            "aam_output": "z_arm_hat[24]" if self.aam is not None else None,
             "aam_output_width": self.AAM_OUTPUT_WIDTH,
-            "aam_history_valve_source": "applied ValveCmd",
-            "aam_ppo_observation_connection": True,
-            "aam_id_conditioning_connection": True,
+            "aam_history_valve_source": "applied ValveCmd" if self.aam is not None else None,
+            "aam_ppo_observation_connection": bool(self.aam is not None),
+            "aam_id_conditioning_connection": bool(self.aam is not None),
             "id_input": "[q5, qdot5, qddot_cmd5, dP4]",
             "id_window": id_window,
+            "id_context": "z_arm_hat[24]" if self.aam is not None else "zero_context[24]",
             "id_output": "ValveCmd[4]",
             "id_qddot_std": self._id_qddot_std.detach().cpu().tolist(),
             "fd_input": "[q5, qdot5, dP4, ValveCmd4]",
@@ -222,7 +233,8 @@ class AdaptiveRLLearnedController:
             "fd_output": "TauHat[4] Simscape-domain torque/load estimate",
             "fd_output_units": "checkpoint/scaler denormalized Simscape torque units",
             "fd_effort_actuation": "disabled in ROM position-target mode",
-            "sd_window": sd_window,
+            "sd_active": bool(self.sd is not None),
+            "sd_window": sd_window if self.sd is not None else None,
         }
 
     @staticmethod
@@ -244,10 +256,14 @@ class AdaptiveRLLearnedController:
 
     @property
     def aam_frozen(self) -> bool:
+        if self.aam is None:
+            return False
         return not any(parameter.requires_grad for parameter in self.aam.model.parameters())
 
     @property
     def aam_eval_mode(self) -> bool:
+        if self.aam is None:
+            return False
         return not self.aam.model.training
 
     def _assert_aam_frozen(self) -> None:
@@ -257,6 +273,8 @@ class AdaptiveRLLearnedController:
             raise RuntimeError("AAM must have zero trainable parameters.")
 
     def _assert_aam_dimensions(self) -> None:
+        if self.aam is None:
+            return
         input_width = int(self.aam.model.temporal_encoder.input_size)
         output_width = int(self.aam.model.head[-1].out_features)
         if input_width != self.AAM_INPUT_WIDTH:
@@ -312,6 +330,8 @@ class AdaptiveRLLearnedController:
         self._id_history.fill(id_x_t, env_ids)
         self._fd_history.fill(fd_x_t, env_ids)
         self._sd_history.fill(sd_x_t, env_ids)
+        if self.aam is None:
+            return torch.zeros((q.shape[0], self.AAM_OUTPUT_WIDTH), dtype=torch.float32, device=self.device)
         history = self._aam_history.data if env_ids is None else self._aam_history.data[env_ids]
         return self.run_aam(history)
 
@@ -328,6 +348,8 @@ class AdaptiveRLLearnedController:
         return self.run_aam(history)
 
     def run_aam(self, aam_history: torch.Tensor) -> torch.Tensor:
+        if self.aam is None:
+            return torch.zeros((aam_history.shape[0], self.AAM_OUTPUT_WIDTH), dtype=torch.float32, device=self.device)
         expected_history_tail = (self.aam_history_length, self.AAM_INPUT_WIDTH)
         if aam_history.ndim != 3 or tuple(aam_history.shape[1:]) != expected_history_tail:
             raise RuntimeError(
@@ -358,6 +380,8 @@ class AdaptiveRLLearnedController:
         *,
         update_history: bool = True,
     ) -> torch.Tensor:
+        if self.aam is None:
+            return torch.zeros((q.shape[0], self.AAM_OUTPUT_WIDTH), dtype=torch.float32, device=self.device)
         aam_x_t = build_aam_input(q, qdot, dP, prev_valve_cmd).to(self.device)
         if update_history:
             return self.update_aam_latent(aam_x_t)
@@ -396,6 +420,19 @@ class AdaptiveRLLearnedController:
             normalized = raw
         self._last_id_input_normalized[: raw.shape[0]] = normalized.detach().to(device=self.device, dtype=torch.float32)
         self._last_z_arm_hat[: z_arm_hat.shape[0]] = z_arm_hat.detach().to(device=self.device, dtype=torch.float32)
+
+    def _id_context(self, batch_size: int, z_arm_hat: torch.Tensor | None) -> torch.Tensor:
+        if z_arm_hat is None:
+            return torch.zeros((batch_size, self.AAM_OUTPUT_WIDTH), dtype=torch.float32, device=self.device)
+        z_arm_hat = z_arm_hat.to(self.device)
+        if tuple(z_arm_hat.shape) != (batch_size, self.AAM_OUTPUT_WIDTH):
+            raise RuntimeError(
+                f"ID conditioning context must have shape ({batch_size}, {self.AAM_OUTPUT_WIDTH}), "
+                f"got {tuple(z_arm_hat.shape)}."
+            )
+        if not torch.isfinite(z_arm_hat).all():
+            raise RuntimeError("ID conditioning context contains non-finite values.")
+        return z_arm_hat
 
     def debug_state(self) -> dict[str, torch.Tensor]:
         return {
@@ -507,18 +544,7 @@ class AdaptiveRLLearnedController:
         dP = dP.to(self.device)
         rl_action = rl_action.to(self.device)
         qddot_cmd = self.build_qddot_cmd(rl_action, action_to_qddot_scale, qddot_cmd_clip)
-        if z_arm_hat is None:
-            raise ValueError(
-                "z_arm_hat is required; ID must use the latent stored with the matching PPO observation."
-            )
-        z_arm_hat = z_arm_hat.to(self.device)
-        if tuple(z_arm_hat.shape) != (q.shape[0], self.AAM_OUTPUT_WIDTH):
-            raise RuntimeError(
-                f"ID conditioning latent must have shape ({q.shape[0]}, {self.AAM_OUTPUT_WIDTH}), "
-                f"got {tuple(z_arm_hat.shape)}."
-            )
-        if not torch.isfinite(z_arm_hat).all():
-            raise RuntimeError("ID conditioning latent contains non-finite values.")
+        z_arm_hat = self._id_context(q.shape[0], z_arm_hat)
 
         id_x_t = build_id_input(q, qdot, qddot_cmd, dP)
         self._record_id_debug(id_x_t, z_arm_hat)
@@ -574,18 +600,7 @@ class AdaptiveRLLearnedController:
         fnet = fnet.to(self.device)
         rl_action = rl_action.to(self.device)
         qddot_cmd = self.build_qddot_cmd(rl_action, action_to_qddot_scale, qddot_cmd_clip)
-        if z_arm_hat is None:
-            raise ValueError(
-                "z_arm_hat is required; ID must use the latent stored with the matching PPO observation."
-            )
-        z_arm_hat = z_arm_hat.to(self.device)
-        if tuple(z_arm_hat.shape) != (q.shape[0], self.AAM_OUTPUT_WIDTH):
-            raise RuntimeError(
-                f"ID conditioning latent must have shape ({q.shape[0]}, {self.AAM_OUTPUT_WIDTH}), "
-                f"got {tuple(z_arm_hat.shape)}."
-            )
-        if not torch.isfinite(z_arm_hat).all():
-            raise RuntimeError("ID conditioning latent contains non-finite values.")
+        z_arm_hat = self._id_context(q.shape[0], z_arm_hat)
 
         id_x_t = build_id_input(q, qdot, qddot_cmd, dP)
         self._record_id_debug(id_x_t, z_arm_hat)
@@ -677,14 +692,16 @@ class AdaptiveRLLearnedController:
         dP: torch.Tensor,
         fnet: torch.Tensor,
         valve_cmd: torch.Tensor,
-        z_arm_hat: torch.Tensor,
+        z_arm_hat: torch.Tensor | None,
     ) -> SDObserverOutput:
+        if self.sd is None:
+            raise RuntimeError("SD observer requested, but use_sd_model=False.")
         q = q.to(self.device)
         qdot = qdot.to(self.device)
         dP = dP.to(self.device)
         fnet = fnet.to(self.device)
         valve_cmd = valve_cmd.to(self.device)
-        z_arm_hat = clamp_and_sanitize(z_arm_hat.to(self.device), None)
+        z_arm_hat = clamp_and_sanitize(self._id_context(q.shape[0], z_arm_hat), None)
 
         sd_x_t = build_sd_input(q, qdot, dP, fnet, valve_cmd)
         sd_seq = self._sd_history.append(sd_x_t)

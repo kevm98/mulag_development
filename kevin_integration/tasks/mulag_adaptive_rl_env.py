@@ -28,7 +28,13 @@ from kevin_integration.rom_cylinders.cylinder_coordinate_adapter import (
 from kevin_integration.rom_cylinders.multirate_rom_wrapper import MultirateROMConfig, MultirateROMWrapper
 from kevin_integration.rom_cylinders.rom_data_contract import CORE_INPUT_FEATURE_NAMES, HISTORY_LENGTH
 from kevin_integration.rom_cylinders.valve_conditioned_causal_rom import ValveConditionedROMInference
-from kevin_integration.rl import AdaptiveRLLearnedController, AdaptiveRLLearnedControllerCfg, build_rl_obs, build_task_space_rl_obs
+from kevin_integration.rl import (
+    AdaptiveRLLearnedController,
+    AdaptiveRLLearnedControllerCfg,
+    build_rl_obs,
+    build_task_space_id_fd_rl_obs,
+    build_task_space_rl_obs,
+)
 from kevin_integration.rl.action_adapter import clamp_and_sanitize
 from kevin_integration.rl.reward_terms import (
     JointReachRewardWeights,
@@ -162,6 +168,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 sd_output_mode=self.cfg.sd_output_mode,
                 sd_nan_guard=self.cfg.sd_nan_guard,
                 sd_clamp_outputs=self.cfg.sd_clamp_outputs,
+                use_aam_model=bool(getattr(self.cfg, "use_aam_adaptation", True)),
+                use_sd_model=bool(getattr(self.cfg, "use_sd_model", True)),
             )
         )
         self._reduced_hydraulic_rom = ReducedHydraulicActuatorROM(
@@ -735,13 +743,15 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                     f"Task-space tracking requires exactly 4 command joints, got {len(self._command_joint_ids)}."
                 )
             # Observation dimension must match the task-space contract.
+            expected_task_obs_dim = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM))
             obs_dim = int(getattr(self.cfg, "observation_space", 0))
-            if obs_dim != TASK_SPACE_OBSERVATION_DIM:
+            if obs_dim != expected_task_obs_dim:
                 raise RuntimeError(
-                    f"Task-space observation dimension must be {TASK_SPACE_OBSERVATION_DIM}, "
+                    f"Task-space observation dimension must be {expected_task_obs_dim}, "
                     f"got {obs_dim}."
                 )
-            # AAM + ID pipeline: qddot → z_arm → ValveCmd.
+            # ID converts PPO qddot intent to ValveCmd. Some tasks add AAM
+            # context; strict ID-FD tasks use a zero ID context instead.
             # SD observer and SD feedback must be disabled in the canonical task.
             if bool(self.cfg.use_sd_observer):
                 raise RuntimeError(
@@ -844,27 +854,58 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             return
         MulagAdaptiveRLEnv._runtime_contract_printed = True
         contract = getattr(self._controller, "runtime_contract", {})
+        aam_active = bool(contract.get("aam_active", True))
+        sd_active = bool(contract.get("sd_active", True)) and bool(getattr(self.cfg, "use_sd_model", True))
+        rom_active = bool(self.cfg.use_final_causal_cylinder_rom or self.cfg.use_reduced_hydraulic_rom)
+        rom_pressure_source = str(self.cfg.final_causal_rom_pressure_source) if rom_active else "disabled"
         print("[INFO] Kevin active control contract:", flush=True)
         rows = [
             ("task_action", "4D normalized desired qddot for hydraulic families"),
             ("action_scale", str(self.cfg.action_to_qddot_scale)),
             ("qddot_clip", str(self.cfg.qddot_cmd_clip)),
-            ("AAM", f"{contract.get('aam_input')} -> {contract.get('aam_output')} window={contract.get('aam_window')}"),
-            ("ID", f"{contract.get('id_input')} -> {contract.get('id_output')} window={contract.get('id_window')}"),
+            (
+                "AAM",
+                (
+                    f"{contract.get('aam_input')} -> {contract.get('aam_output')} window={contract.get('aam_window')}"
+                    if aam_active
+                    else "disabled; ID uses zero_context[24]"
+                ),
+            ),
+            (
+                "ID",
+                f"{contract.get('id_input')} + {contract.get('id_context')} -> "
+                f"{contract.get('id_output')} window={contract.get('id_window')}",
+            ),
             ("ID_qddot_std", str(contract.get("id_qddot_std"))),
             ("FD", f"{contract.get('fd_input')} -> {contract.get('fd_output')} window={contract.get('fd_window')}"),
             ("FD_output_units", str(contract.get("fd_output_units"))),
             ("FD_effort_writer", str(contract.get("fd_effort_actuation"))),
             (
                 "SD",
-                "ROM pressure observer enabled"
-                if str(self.cfg.final_causal_rom_pressure_source) == "sd_observer"
-                else ("disabled in active hydraulic ROM task" if not self.cfg.use_sd_observer else "passive observer enabled"),
+                "disabled"
+                if not sd_active
+                else (
+                    "ROM pressure observer enabled"
+                    if rom_active and str(self.cfg.final_causal_rom_pressure_source) == "sd_observer"
+                    else ("passive observer enabled" if self.cfg.use_sd_observer else "loaded but observer disabled")
+                ),
             ),
-            ("ROM", f"{len(CORE_INPUT_FEATURE_NAMES)} features, dt={self.cfg.final_causal_rom_update_period}s, ratio={self.cfg.final_causal_rom_multirate_ratio}"),
+            (
+                "ROM",
+                (
+                    f"{len(CORE_INPUT_FEATURE_NAMES)} features, dt={self.cfg.final_causal_rom_update_period}s, "
+                    f"ratio={self.cfg.final_causal_rom_multirate_ratio}"
+                    if rom_active
+                    else "disabled"
+                ),
+            ),
             (
                 "ROM_command_coupling",
-                "deployed valve-conditioned causal ROM explicitly uses ValveCmd, ValveCmd*abs(ValveCmd), and ValveCmd*dP",
+                (
+                    "deployed valve-conditioned causal ROM explicitly uses ValveCmd, ValveCmd*abs(ValveCmd), and ValveCmd*dP"
+                    if rom_active
+                    else "disabled"
+                ),
             ),
             (
                 "vehicle_command",
@@ -872,7 +913,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 f"on {tuple(self.cfg.vehicle_wheel_joint_names)}",
             ),
             ("vehicle_joint_ids", str(self._vehicle_wheel_joint_ids)),
-            ("dP_source", str(self.cfg.final_causal_rom_pressure_source)),
+            ("dP_source", rom_pressure_source),
             ("coordinate_mapping", str(self.cfg.cylinder_coordinate_mapping_mode)),
             ("writer", "set_joint_position_target on four prismatic cylinder joints"),
             ("mechanical_joint_names", str(tuple(self.cfg.mechanical_joint_names))),
@@ -927,7 +968,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             (self.cfg.use_final_causal_cylinder_rom or self.cfg.use_reduced_hydraulic_rom)
             and (getattr(self.cfg, "use_fd_effort_actuation", False) or getattr(self.cfg, "use_fd_effort", False))
         )
-        obs_ok = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM)) == TASK_SPACE_OBSERVATION_DIM
+        expected_task_obs_dim = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM))
+        obs_ok = int(getattr(self.cfg, "observation_space", 0)) == expected_task_obs_dim
         reward_ok = float(getattr(self.cfg, "rew_fd_load", 0.0)) >= 0.0
         fd_input_contract_ok = "fd_input" in getattr(self._controller, "runtime_contract", {})
         fd_output_finite = bool(
@@ -2008,6 +2050,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         qdot: torch.Tensor,
         dP: torch.Tensor,
     ) -> None:
+        if not bool(getattr(self.cfg, "use_aam_adaptation", True)):
+            self._z_arm_hat.zero_()
+            self._aam_latent_state_version += 1
+            return
         # _prev_valve_cmd is the command that was supplied to FD and ROM on
         # the preceding control step, so it is the applied ValveCmd history.
         previous_applied_valve_cmd = self._prev_valve_cmd
@@ -2041,7 +2087,9 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         self._z_arm_hat.copy_(z_arm_hat_new)
         self._aam_latent_state_version += 1
 
-    def _id_conditioning_latent(self) -> torch.Tensor:
+    def _id_conditioning_latent(self) -> torch.Tensor | None:
+        if not bool(getattr(self.cfg, "use_aam_adaptation", True)):
+            return None
         if not torch.equal(
             self._observation_aam_state_version,
             self._aam_latent_state_version,
@@ -2392,7 +2440,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 dP,
                 self._fnet,
                 self._current_valve_cmd,
-                self._z_arm_hat,
+                self._id_conditioning_latent(),
             )
             self._store_sd_observer_output(sd_observer)
         else:
@@ -2457,7 +2505,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 dP,
                 self._fnet,
                 self._current_valve_cmd,
-                self._z_arm_hat,
+                self._id_conditioning_latent(),
             )
             self._store_sd_observer_output(sd_observer)
         else:
@@ -2773,7 +2821,7 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
                 dP,
                 self._fnet,
                 self._current_valve_cmd,
-                self._z_arm_hat,
+                self._id_conditioning_latent(),
             )
             self._store_sd_observer_output(sd_observer)
         else:
@@ -2895,32 +2943,56 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         cylinder_q, cylinder_qdot = self._read_cylinder_state()
         dP = self._read_pressure_delta()
         self._maybe_initialize_learned_control(q, qdot, dP)
-        self._update_aam_latent(q, qdot, dP)
+        if bool(getattr(self.cfg, "use_aam_adaptation", True)):
+            self._update_aam_latent(q, qdot, dP)
+        else:
+            self._z_arm_hat.zero_()
         if self._task_control_mode() == "rl_task_space_tracking":
             self._update_task_space_state()
-            obs = build_task_space_rl_obs(
-                self._final_pose_target(),
-                self._current_ee_pose,
-                self._ee_position_error,
-                self._ee_orientation_error,
-                q,
-                qdot,
-                cylinder_q,
-                cylinder_qdot,
-                self._prev_action,
-                self._prev_valve_cmd,
-                self._z_arm_hat,
-                self._fd_tau_hat if bool(getattr(self.cfg, "use_fd_in_policy_observation", True)) else torch.zeros_like(self._fd_tau_hat),
-                self._vehicle_commanded_speed_kmh.reshape(-1, 1),
+            fd_obs = (
+                self._fd_tau_hat
+                if bool(getattr(self.cfg, "use_fd_in_policy_observation", True))
+                else torch.zeros_like(self._fd_tau_hat)
             )
+            if bool(getattr(self.cfg, "use_aam_adaptation", True)):
+                obs = build_task_space_rl_obs(
+                    self._final_pose_target(),
+                    self._current_ee_pose,
+                    self._ee_position_error,
+                    self._ee_orientation_error,
+                    q,
+                    qdot,
+                    cylinder_q,
+                    cylinder_qdot,
+                    self._prev_action,
+                    self._prev_valve_cmd,
+                    self._z_arm_hat,
+                    fd_obs,
+                    self._vehicle_commanded_speed_kmh.reshape(-1, 1),
+                )
+            else:
+                obs = build_task_space_id_fd_rl_obs(
+                    self._final_pose_target(),
+                    self._current_ee_pose,
+                    self._ee_position_error,
+                    self._ee_orientation_error,
+                    q,
+                    qdot,
+                    cylinder_q,
+                    cylinder_qdot,
+                    self._prev_action,
+                    self._prev_valve_cmd,
+                    fd_obs,
+                    self._vehicle_commanded_speed_kmh.reshape(-1, 1),
+                )
             expected_obs = int(getattr(self.cfg, "task_space_observation_space", TASK_SPACE_OBSERVATION_DIM))
-            if tuple(obs.shape) != (self.num_envs, TASK_SPACE_OBSERVATION_DIM):
+            if tuple(obs.shape) != (self.num_envs, expected_obs):
                 raise RuntimeError(
                     "Task-space observation must have shape "
-                    f"({self.num_envs}, {TASK_SPACE_OBSERVATION_DIM}), got "
+                    f"({self.num_envs}, {expected_obs}), got "
                     f"{tuple(obs.shape)}"
                 )
-            if not torch.equal(obs[:, 41:65], self._z_arm_hat):
+            if bool(getattr(self.cfg, "use_aam_adaptation", True)) and not torch.equal(obs[:, 41:65], self._z_arm_hat):
                 raise RuntimeError(
                     "AAM latent must occupy task-space observation indices 41:65."
                 )
@@ -2933,7 +3005,8 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
             raise RuntimeError(
                 f"Observation size mismatch: got {obs.shape[-1]}, expected {expected_obs}"
             )
-        self._observation_aam_state_version.copy_(self._aam_latent_state_version)
+        if bool(getattr(self.cfg, "use_aam_adaptation", True)):
+            self._observation_aam_state_version.copy_(self._aam_latent_state_version)
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -3594,8 +3667,10 @@ class MulagAdaptiveRLEnv(DirectRLEnv):
         log["adaptation/history_valve_abs_mean"] = torch.mean(
             torch.abs(aam_history[:, :, 14:18])
         )
-        log["adaptation/aam_active"] = torch.ones(
-            (), dtype=torch.float32, device=self.device
+        log["adaptation/aam_active"] = torch.as_tensor(
+            float(bool(getattr(self.cfg, "use_aam_adaptation", True))),
+            dtype=torch.float32,
+            device=self.device,
         )
         log["adaptation/aam_frozen"] = torch.as_tensor(
             float(self._controller.aam_frozen),

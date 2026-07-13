@@ -51,3 +51,6 @@ gym.register(
         "rsl_rl_cfg_entry_point": "kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg:MulagUpperLevelPPORunnerCfg",
     },
 )
+
+# Clean post-PPO1 branch: standard task registration with ID/FD enabled and ROM disabled.
+import ID_FD_pipline.tasks  # noqa: F401,E402

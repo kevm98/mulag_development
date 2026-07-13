@@ -103,6 +103,16 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     cylinder_fd_scale_delta_by_sample_time = True
     cylinder_fd_sample_time_s = 0.0  # 0 means use checkpoint metadata.
     cylinder_fd_delta_gain = 1.0
+    # Optional output calibration applied only to FD(valve)-FD(zero valve).
+    # Kept separate from spatial/unit scaling because valve authority is
+    # strongly anisotropic across the four cylinders.
+    cylinder_fd_residual_output_gain = [1.0, 1.0, 1.0, 1.0]
+    # Optional causal safety envelope for paired ID/FD rollout.  Observational
+    # checkpoints can predict a large or sign-reversed increment after their
+    # own output changes the next state.  The envelope retains the learned
+    # magnitude but prevents recursive target-integrator runaway.
+    cylinder_fd_command_direction_guard = False
+    cylinder_fd_command_max_ratio = 1.5
     cylinder_learned_model_dt_s = 0.0  # 0 means use FD checkpoint sample_time_s when available.
     clip_target_delta_xdot_to_training_range = True
     target_delta_xdot_clip_std = 3.0
@@ -120,7 +130,10 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     cylinder_actuation_mode = "position"
     cylinder_velocity_target_scale = 1.0
     enable_joint6_coupling = True
-    joint6_coupling_a = 1.0
+    # Measured mechanical coupling q5 ~= 0.76 * q4 (extensive_debug test 7; the
+    # ratio is pose-dependent, 0.50-0.76 across tests). 1.0 made the passive-joint
+    # drive fight the mechanism by ~24% of q4's travel.
+    joint6_coupling_a = 0.76
     joint6_coupling_b = 0.0
     joint6_coupling_source_joint_name = ""
     joint6_coupling_target_joint_name = ""
@@ -154,6 +167,7 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     sequence_command_hold_mode = "distribute_fd_delta"
     sequence_fd_delta_gain = 1.0
     sequence_fd_residual_over_zero_valve = False
+    paired_id_fd_residual = False
     fd_output_gain = 1.0
     fd_residual_blend = 0.0
     fd_correction_mode = "none"
@@ -210,6 +224,7 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     vehicle_speed_max_kmh = 8.0  # moving (teacher-student range) (was OBSTACLE_DRIVING_SPEED_RANGE_KMH[1])
     vehicle_wheel_joint_names = tuple(OBSTACLE_WHEEL_JOINT_NAMES)
     vehicle_wheel_radius_m = OBSTACLE_WHEEL_RADIUS_M
+    vehicle_wheel_speed_gain = 1.0
     vehicle_speed_update_interval_s = OBSTACLE_DRIVING_SPEED_UPDATE_INTERVAL_S
     vehicle_speed_resample_step_threshold = OBSTACLE_DRIVING_SPEED_RESAMPLE_STEP_THRESHOLD
 
@@ -320,6 +335,52 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     # instead of clamping at the final point.
     ground_max_episode_steps = 0
     ground_path_loop = False
+    ground_path_pacing = "fixed"  # "fixed" or "capture"
+    ground_path_capture_radius_m = 0.20
+    ground_path_capture_required_hold_steps = 5
+    # "path_start": legacy path[0].
+    # "nearest_path": begin at the path point closest to the current tool/contact point.
+    # "local_offset": begin with a small local waypoint from the current tool/contact
+    # point toward the nearest path point, then advance onto the full path.
+    ground_initial_target_mode = "path_start"
+    ground_initial_target_offset_m = 0.08
+    ground_initial_target_capture_radius_m = 0.03
+    # -- Mowing terrain shelf (embankment) --
+    # OBSOLETED 2026-07-09 by grounding the truck (spawn 1.11 -> 0.05): with the
+    # wheels on the ground the tool reaches ~ground level, so the REAL ground plane
+    # (z=0) is the mowing surface and no shelf is needed. Kept for the raised-bank
+    # scenario; default OFF. If enabled, place it at the tool's reachable band.
+    mowing_terrain_enable = False
+    mowing_terrain_z = 0.05                      # world z of the shelf top
+    mowing_terrain_local_x = -19.528            # arm-reach center, relative to env-0 origin
+    mowing_terrain_local_y = 1.38
+    mowing_terrain_half_x = 0.7
+    mowing_terrain_half_y = 0.9
+    mowing_terrain_thickness = 0.04
+    mowing_terrain_color = (0.20, 0.45, 0.18)
+    mowing_terrain_collision = False
+    ground_anchor_path_to_current_tool = False
+    ground_anchor_margin_m = 0.05
+    ground_anchor_max_span_m = 0.30
+    ground_anchor_static_sag_m = 0.03
+    # Measure/control the tool in the LIVE base frame (False). The frozen root-hold
+    # frame variant (True) corrupted the empirical J_eff measurement -> wrong-signed
+    # DLS directions -> 7-13x clip saturation -> the "vibrating arm" symptom.
+    # axis_probe A/B 2026-07-09: frame ON = +Y FAIL (cos -0.75), violent 0.5-1.1 m
+    # responses; frame OFF = ALL axes PASS (+Y cos +1.00, symmetric +-0.15 m).
+    # De-rocking is fine for plots/diagnostics but must never sit inside the
+    # measurement/control loop.
+    ground_use_root_hold_frame = False
+    ground_xy_enable_z_hold = True
+    ground_xy_condition_z_first = True
+    ground_xy_condition_path_to_j_eff = True
+    ground_xy_condition_path_perp_scale = 0.15
+    ground_xy_condition_path_min_sv = 1.0e-5
+    ground_xy_conditioned_xy_clip_m = 0.003
+    ground_xy_z_hold_gain = 0.35
+    ground_xy_z_hold_clip_m = 0.012
+    ground_xy_z_hold_deadband_m = 0.015
+    ground_xy_z_hold_priority_threshold_m = 0.04
 
     # -- Low-level actuation backend --
     # "implicit_position": PhysX implicit drives close the cylinder position loop
@@ -566,10 +627,13 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
                 effort_limit_sim=100000.0,
             ),
         }
-        # The cylinder-actuator USD is authored with its lowest geometry at root z ~= 0.
-        # Keep a small clearance so the truck is not visually sunk, without spawning it
-        # high enough to drop/tip before the hydraulic pipeline starts controlling.
-        self.robot_cfg.init_state.pos = (-25.4, 4.3, 1.11)
+        # The USD is authored with its LOWEST geometry (wheels) at root z=0, and the
+        # articulation is held at spawn height (it does not fall to ground contact).
+        # A spawn-height sweep (2026-07-09) showed lowest_geom_z == spawn_z exactly and
+        # tool_bottom_z == spawn_z + 0.468, so the old 1.11 floated the whole truck
+        # 1.1 m in the air and lifted the arm out of ground reach. Spawn just above 0
+        # so the wheels sit on the ground and the tool reaches ~ground level.
+        self.robot_cfg.init_state.pos = (-25.4, 4.3, 0.05)
 
 
 @configclass
