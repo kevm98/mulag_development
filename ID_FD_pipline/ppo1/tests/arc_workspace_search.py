@@ -28,7 +28,7 @@ CX, CY = 4.327, -3.224
 R = 1.286
 THETA_CENTER_DEG = -8.7  # center of the verified ground-band arc
 
-CANDIDATES = [0.88, 1.00, 1.10, 1.20, 1.30, 1.40, 1.50]
+CANDIDATES = [0.88, 1.00, 1.10, 1.20]
 
 results = []
 
@@ -116,9 +116,7 @@ for target_L in CANDIDATES:
             "chord": chord, "span_x": xs, "span_y": ys,
         })
         
-        if not passed:
-            print(f"[ARC-SEARCH] Stopping: first failure at L={target_L:.2f}m", flush=True)
-            break
+        # Continue to next candidate even if this one failed
             
     finally:
         env.close()
