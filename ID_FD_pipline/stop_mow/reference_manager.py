@@ -97,9 +97,11 @@ class ReferenceManager:
         if self.ground_pinv is None:
             return None
         pinv = self.ground_pinv.to(device=goal_local.device, dtype=goal_local.dtype)
-        delta_ee = goal_local - self.sampler.anchor
-        seed = anchor_seed + delta_ee @ pinv.T
-        if self.head_down_seed is not None:
+        delta_ee = goal_local[:, :3] - self.sampler.anchor[:, :3]
+        delta_cyl = delta_ee @ pinv.T
+        seed = anchor_seed.clone()
+        seed[:, :3] = anchor_seed[:, :3] + delta_cyl
+        if self.head_down_seed is not None and float(self.head_down_seed) > 0:
             seed[:, 3] = float(self.head_down_seed)
         return seed
 

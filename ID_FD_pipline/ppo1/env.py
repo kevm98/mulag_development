@@ -100,8 +100,8 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         min_path = float(getattr(cfg, "residual_min_accumulated_path_m", 5.0))
         self._state_machine = StopMowStateMachine(
             self.num_envs, self.device, self._brake,
-            reset_settle_steps=int(getattr(cfg, "residual_settle_steps", 300)),
-            deploy_hold_steps=int(getattr(cfg, "residual_deploy_hold_steps", 60)),
+            reset_settle_steps=3000,  # 50s settle for arm descent from spawn pose
+            deploy_hold_steps=300,  # 5s deploy hold
             min_accumulated_path_m=min_path,
             stow_steps=int(getattr(cfg, "residual_stow_steps", 300)),
             step_dt=float(self.step_dt),
@@ -122,6 +122,7 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
 
         # --- Cylinder seed at anchor (computed at reset) ---
         self._anchor_cylinder_seed = torch.zeros((self.num_envs, 4), device=self.device)
+
 
     def _build_shape_kwargs(self, shape: str, cfg) -> dict:
         """Return shape-specific kwargs for the trajectory function."""
@@ -219,6 +220,7 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
 
         # --- Manage parking brake ---
         mowing = self._state_machine.is_mowing()
+        settling = self._state_machine.is_settling()
         if mowing.any():
             self._brake.engage()
 
@@ -228,11 +230,10 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         if (~mowing).any():
             self._residual_action[~mowing] = 0.0  # zero residual outside mowing
 
-        # --- Advance reference during mowing ---
+        # --- Advance reference only during mowing ---
+        # During settle/deploy, the sampler stays at the arc start.
         if mowing.any():
             ids = torch.where(mowing)[0]
-            # Apply speed scale from PPO action
-            speed_scale = 0.8 + 0.4 * (self._residual_action[ids, 2].clamp(-1.0, 1.0) * 0.5 + 0.5)
             base_speed = float(getattr(self.cfg, "residual_path_speed_mps", 0.05))
             self._sampler.set_speed(float(base_speed))
             self._ref_manager.step()
@@ -244,14 +245,24 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
             )
 
         # --- Compute corrected goal and cylinder targets ---
+        # Always track the nominal goal, even during settle/deploy.
         residual_m = torch.clamp(self._residual_action[:, :2], -1.0, 1.0) * self._residual_scale_m
         corrected_goal = self._compute_corrected_goal(residual_m)
         self._corrected_ee_goal_local = corrected_goal
-        cylinder_goal = self._ee_cascade.cylinder_goal(corrected_goal)
-        self._cylinder_goal_x[:] = cylinder_goal
-        cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
-        self._ppo_raw_action = cylinder_action
-        self._current_action = cylinder_action
+        # During RESET_SETTLE/DEPLOY, track the nominal arc goal without advancing
+        # the sampler. The cascade was reset in _reset_idx and tracks from there.
+        if settling.any():
+            cylinder_goal = self._ee_cascade.cylinder_goal(corrected_goal)
+            self._cylinder_goal_x[:] = cylinder_goal
+            cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
+            self._current_action[:] = cylinder_action
+            self._ppo_raw_action[:] = 0.0
+        else:
+            cylinder_goal = self._ee_cascade.cylinder_goal(corrected_goal)
+            self._cylinder_goal_x[:] = cylinder_goal
+            cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
+            self._ppo_raw_action = cylinder_action
+            self._current_action = cylinder_action
 
         # --- Run ID/FD pipeline ---
         self._run_cylinder_id_pipeline()
@@ -325,14 +336,37 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         self._brake.engage()
         self._state_machine.reset(env_ids)
 
-        # Reset trajectory sampler
+        # Reset trajectory sampler to the arc start (distance=0)
         self._ref_manager.reset(env_ids)
         ee = self._compute_ee_pos_local()
         x, _ = self._refresh_cylinder_state()
-        self._sampler.set_anchor(ee[env_ids], env_ids)
         self._anchor_cylinder_seed[env_ids] = x[env_ids]
+
+        # Set sampler anchor Z to ground-level from map (not spawn EE).
+        # The arc goals need to be at mowing height (~1.3m truck Z), not
+        # the spawn height (~1.8m truck Z).
+        import json, numpy as np
+        map_path = str(Path(__file__).resolve().parents[1] / "models/ground_band_map.json")
+        try:
+            with open(map_path) as fh:
+                bd = json.load(fh)
+            band = bd.get("ground_band", [])
+            if band:
+                cutters = np.array([s["cutter_truck"] for s in band])
+                nominal_start = self._get_nominal_goal()
+                start_xy = nominal_start[0, :2].detach().cpu().numpy()
+                dists = np.linalg.norm(cutters[:, :2] - start_xy, axis=1)
+                ground_z = float(cutters[int(np.argmin(dists)), 2])
+                self._sampler.anchor[env_ids, 2] = ground_z
+        except Exception:
+            self._sampler.anchor[env_ids, 2] = ee[env_ids, 2]  # fallback
 
         self._residual_action[env_ids] = 0.0
         self._previous_residual_action[env_ids] = 0.0
+
+        # Simple settle: let the cascade track the nominal goal.
+        # The arm descends from its spawn pose during the settle phase.
+
+        # Reset the cascade at the pre-positioned pose
         self._ee_cascade.reset(env_ids)
         self._corrected_ee_goal_local[env_ids] = self._get_nominal_goal()[env_ids]
