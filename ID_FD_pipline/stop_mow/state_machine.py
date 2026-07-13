@@ -43,7 +43,7 @@ class StopMowStateMachine:
         self.reset_settle_steps = int(reset_settle_steps)
         self.reset_settle_duration_s = float(reset_settle_duration_s)
         self.deploy_hold_steps = int(deploy_hold_steps)
-        self.min_accumulated_path_m = float(min_accumulated_path_m)
+        self.min_half_strokes = int(float(min_accumulated_path_m))
         self.stow_target_height_m = float(stow_target_height_m)
         self.stow_steps = int(stow_steps)
         self.step_dt = float(step_dt)
@@ -94,18 +94,16 @@ class StopMowStateMachine:
         if deploy_done.any():
             ids = torch.where(deploy_done)[0]
             self.state.to_phase(StopMowPhase.MOW_OUT, ids)
-            self.state.stroke_direction[ids] = 1.0
 
         # Phase: MOW_OUT -> MOW_RETURN
         in_mow_out = self.state.phase == int(StopMowPhase.MOW_OUT)
-        mow_out_done = in_mow_out & (self.state.path_progress >= 1.0)  # normalized_progress >= 1
+        mow_out_done = in_mow_out & (self.state.path_progress >= 1.0)
         if mow_out_done.any():
             ids = torch.where(mow_out_done)[0]
             self.state.path_progress[ids] = 0.0
             self.state.stroke_index[ids] += 1
             self.state.total_strokes[ids] += 1
             self.state.to_phase(StopMowPhase.MOW_RETURN, ids)
-            self.state.stroke_direction[ids] = -1.0
 
         # Phase: MOW_RETURN -> MOW_OUT (repeat) or STOW
         in_mow_return = self.state.phase == int(StopMowPhase.MOW_RETURN)
@@ -116,14 +114,13 @@ class StopMowStateMachine:
             self.state.stroke_index[ids] += 1
             self.state.total_strokes[ids] += 1
             # If accumulated enough, go to STOW; otherwise repeat
-            enough = self.state.accumulated_path[ids] >= self.min_accumulated_path_m
+            enough = self.state.accumulated_path[ids] >= self.min_half_strokes
             stow_ids = ids[enough]
             repeat_ids = ids[~enough]
             if len(stow_ids) > 0:
                 self.state.to_phase(StopMowPhase.STOW, stow_ids)
             if len(repeat_ids) > 0:
                 self.state.to_phase(StopMowPhase.MOW_OUT, repeat_ids)
-                self.state.stroke_direction[repeat_ids] = 1.0
 
         # Phase: STOW -> COMPLETE
         in_stow = self.state.phase == int(StopMowPhase.STOW)

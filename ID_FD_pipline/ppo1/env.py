@@ -98,12 +98,19 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         )
 
         # --- State machine ---
-        min_path = float(getattr(cfg, "residual_min_accumulated_path_m", 5.0))
+        # Compute target half-strokes from arc length and desired total path.
+        import math as _math
+        theta_a = float(getattr(cfg, "residual_arc_theta_a_deg", -26.7))
+        theta_b = float(getattr(cfg, "residual_arc_theta_b_deg", 9.3))
+        r_arc = float(getattr(cfg, "residual_arc_radius_m", 1.286))
+        L_arc = r_arc * abs(_math.radians(theta_b - theta_a))
+        min_path_m = float(getattr(cfg, "residual_min_accumulated_path_m", 5.0))
+        min_half_strokes = max(int(_math.ceil(min_path_m / L_arc)), 2)
         self._state_machine = StopMowStateMachine(
             self.num_envs, self.device, self._brake,
             reset_settle_steps=300,  # pre-positioned by DirectCylinderDriver
             deploy_hold_steps=60,  # 1s deploy hold
-            min_accumulated_path_m=min_path,
+            min_accumulated_path_m=float(min_half_strokes),
             stow_steps=int(getattr(cfg, "residual_stow_steps", 300)),
             step_dt=float(self.step_dt),
         )
@@ -112,7 +119,7 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         controller = CylinderDLSController(
             self,
             CylinderDLSConfig(
-                invert_learned_pipeline=False,
+                invert_learned_pipeline=True,  # Bug fix A: use measured cylinder state
                 error_gain=0.10,
                 max_desired_delta_m=0.01,
                 max_action=1.0,
@@ -210,15 +217,6 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         if action.shape != (self.num_envs, 3):
             raise RuntimeError(f"Residual action must be ({self.num_envs}, 3), got {tuple(action.shape)}")
 
-        # --- State machine step ---
-        cutter_z = self._compute_cutter_world_z()
-        _, cyl_vel = self._refresh_cylinder_state()
-        self._state_machine.step(
-            cutter_height=cutter_z,
-            cylinder_velocity=cyl_vel,
-            path_progress_delta=torch.zeros(self.num_envs, device=self.device),
-        )
-
         # --- Manage parking brake ---
         mowing = self._state_machine.is_mowing()
         settling = self._state_machine.is_settling()
@@ -231,39 +229,63 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         if (~mowing).any():
             self._residual_action[~mowing] = 0.0  # zero residual outside mowing
 
-        # --- Advance reference only during mowing ---
+        # --- Advance reference only during mowing (Bug fix H: wire speed action) ---
         # During settle/deploy, the sampler stays at the arc start.
         if mowing.any():
             ids = torch.where(mowing)[0]
             base_speed = float(getattr(self.cfg, "residual_path_speed_mps", 0.05))
-            self._sampler.set_speed(float(base_speed))
+            # Bug fix H: use PPO speed scaling action
+            speed_scale = 0.8 + 0.4 * (self._residual_action[ids, 2].clamp(-1.0, 1.0) * 0.5 + 0.5)
+            effective_speed = base_speed * speed_scale.mean()
+            self._sampler.set_speed(float(effective_speed))
             self._ref_manager.step()
-            delta = base_speed * float(self.step_dt)
-            self._state_machine.step(
-                cutter_height=cutter_z,
-                cylinder_velocity=cyl_vel,
-                path_progress_delta=torch.full_like(cutter_z, delta),
-            )
 
         # --- Compute corrected goal and cylinder targets ---
-        # Always track the nominal goal, even during settle/deploy.
         residual_m = torch.clamp(self._residual_action[:, :2], -1.0, 1.0) * self._residual_scale_m
         corrected_goal = self._compute_corrected_goal(residual_m)
         self._corrected_ee_goal_local = corrected_goal
-        # During RESET_SETTLE/DEPLOY, track the nominal arc goal without advancing
-        # the sampler. The cascade was reset in _reset_idx and tracks from there.
-        if settling.any():
-            cylinder_goal = self._ee_cascade.cylinder_goal(corrected_goal)
-            self._cylinder_goal_x[:] = cylinder_goal
-            cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
-            self._current_action[:] = cylinder_action
-            self._ppo_raw_action[:] = 0.0
+
+        # Bug fix C: use cylinder_goal_seeded for arc tracking
+        # The sampler provides a cylinder seed from the ground Jacobian pinv
+        sample = self._ref_manager.sample()
+        seed = self._ref_manager.compute_cylinder_seed(
+            corrected_goal, self._anchor_cylinder_seed
+        )
+        if seed is not None:
+            cylinder_goal = self._ee_cascade.cylinder_goal_seeded(
+                corrected_goal, seed,
+                correction_gain=float(getattr(self.cfg, "residual_ee_correction_gain", 0.40)),
+            )
         else:
             cylinder_goal = self._ee_cascade.cylinder_goal(corrected_goal)
-            self._cylinder_goal_x[:] = cylinder_goal
-            cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
-            self._ppo_raw_action = cylinder_action
-            self._current_action = cylinder_action
+
+        self._cylinder_goal_x[:] = cylinder_goal
+        cylinder_action, _ = self._ee_cascade.cylinder.action(cylinder_goal)
+        self._current_action[:] = cylinder_action
+        if settling.any():
+            self._ppo_raw_action[:] = 0.0
+        else:
+            self._ppo_raw_action[:] = cylinder_action
+
+        # Bug fix E+F: state machine step exactly ONCE, with normalized progress
+        cutter_z = self._compute_cutter_world_z()
+        _, cyl_vel = self._refresh_cylinder_state()
+        # Use normalized progress delta from the trajectory sample
+        progress_delta_normalized = torch.zeros(self.num_envs, device=self.device)
+        if mowing.any():
+            ids = torch.where(mowing)[0]
+            # delta_normalized ≈ speed * dt / L_arc
+            L_arc = float(getattr(self.cfg, "residual_arc_theta_b_deg", 9.3))
+            L_arc = abs(L_arc - float(getattr(self.cfg, "residual_arc_theta_a_deg", -26.7)))
+            L_arc = float(getattr(self.cfg, "residual_arc_radius_m", 1.286)) * abs(__import__("math").radians(L_arc))
+            base_speed = float(getattr(self.cfg, "residual_path_speed_mps", 0.05))
+            delta_norm = base_speed * float(self.step_dt) / max(L_arc, 1e-8)
+            progress_delta_normalized[ids] = delta_norm
+        self._state_machine.step(
+            cutter_height=cutter_z,
+            cylinder_velocity=cyl_vel,
+            path_progress_delta=progress_delta_normalized,
+        )
 
         # --- Run ID/FD pipeline ---
         self._run_cylinder_id_pipeline()
@@ -389,6 +411,14 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         except Exception:
             pass
 
-        # Reset the cascade at the pre-positioned pose
+        # Bug fix D: full resync after DirectCylinderDriver.
+        # Reset ALL learned-model state so scored tracking starts clean.
+        self._cylinder_pos_target[env_ids] = self.robot.data.joint_pos[:, self._cylinder_joint_ids][env_ids].detach().clone()
+        self._prev_valve_cmd[env_ids] = 0.0
+        self._current_valve_cmd[env_ids] = 0.0
+        if hasattr(self, '_cylinder_id') and self._cylinder_id is not None:
+            self._cylinder_id.reset()
+        if hasattr(self, '_cylinder_fd') and self._cylinder_fd is not None:
+            self._cylinder_fd.reset()
         self._ee_cascade.reset(env_ids)
         self._corrected_ee_goal_local[env_ids] = nominal_start[env_ids]
