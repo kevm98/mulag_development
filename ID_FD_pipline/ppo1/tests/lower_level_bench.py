@@ -371,8 +371,10 @@ def mode_plant(env):
     commanded_x, settled_x, _ = preposition(env)
     driver = DirectCylinderDriver(env)
     ids = env._cylinder_joint_ids
-    lim = env.robot.data.joint_effort_limits[0, ids].tolist() \
-        if hasattr(env.robot.data, "joint_effort_limits") else [float("nan")] * 4
+    lim = [float(a.effort_limit.flatten()[0]) for a in env.robot.actuators.values()
+           if a.joint_names and a.joint_names[0] in
+           ("Drehzapfen_joint", "Ausleger_I_joint", "Ausleger_II_joint",
+            "Messerkopf_Schwenk_joint")]
     tau0 = env.robot.data.applied_torque[0, ids].tolist()
     print(f"[PLANT] effort_limit={[f'{v:.3g}' for v in lim]}", flush=True)
     print(f"[PLANT] applied_torque@A={[f'{v:.3g}' for v in tau0]}", flush=True)
