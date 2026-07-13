@@ -58,6 +58,40 @@ saturated sag poses.
 15–107 mm on ±5–10 mm steps. The DLS inverts FD's predicted delta, not the plant's actual
 response to the integrated target; measured loop gain is ~2.6× what it assumes.
 
+## Step 7 — plant fix (authorised)
+`effort_limit_sim` x16 on the cylinder actuators; stiffness/damping untouched. Chosen by
+sweep (`actuator_tuning_probe.py`), not preference: lowering stiffness instead makes it
+strictly worse. Verified: `d(measured)/d(target)` = 0.99-1.00 on all four cylinders, both
+directions, 5-50 mm; settle 0.17-0.25 s; ripple <0.07 mm; zero saturation.
+
+## Step 8 — re-derive the workspace
+`workspace_rederive.py` -> `models/commandable_workspace.json`. 153/625 cylinder commands
+genuinely execute and hold. The ground is reachable over x[3.20,6.71], y[-4.30,-1.70].
+Ground poses share a boom triple (c2,c3,c4)=(0.577,0.463,0.651); sweeping cylinder 1 at that
+triple IS the mowing arc (`slew_arc_fit.py`), and its chord is ~3.5 m -- 4x the old 0.88 m
+"verified" arc, which was fitted to sag poses.
+
+## Step 9 — trajectory profile
+`cruise_profile` + `arc_cruise.py`: jerk-limited accel-cruise-decel in TIME, emitting
+physical m / m/s / m/s^2. Verified against finite differences. 0.88 m @ 0.05 m/s = 18.35 s
+one-way, 36.7 s A->B->A.
+
+## Step 10 — controller: still failing
+On the repaired plant the ID->FD chain moves the arm but overshoots 5-8x and runs away.
+Added velocity damping, velocity feedforward and target-lead anti-windup; swept
+Kp x Kd (12 combos). **Every combination overshoots 7-11x** -- so the outer gain is not the
+(only) cause.
+
+`--mode jac`: the composite d(FD delta)/d(action) map is full-rank (condition 26) but
+CROSS-COUPLING DOMINATED. Action 1 drives cylinders 3 and 4 harder than cylinder 1;
+cylinder 2's own-axis gain is 16x weaker than the cross-terms hitting it. The per-cylinder
+direction guard then zeroes 20-63% of FD outputs because it judges each cylinder's FD
+delta against that cylinder's own command.
+
+The ID/FD checkpoints were fine-tuned against the SATURATED plant (where the true
+target->motion gain was ~0), so they now sit out of distribution. This is the first point
+in the investigation where fine-tuning is genuinely indicated.
+
 ## Status
 Halted before controller redesign. Bottleneck #1 (actuator effort/stiffness) and #2
 (sag-derived arc + band map + Jacobian) are plant/artifact problems that sit upstream of
