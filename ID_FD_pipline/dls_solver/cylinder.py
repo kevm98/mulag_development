@@ -22,6 +22,17 @@ class CylinderDLSConfig:
     action_smoothing: float = 0.2
     invert_learned_pipeline: bool = True
 
+    # Proportional-only control of a TARGET INTEGRATOR in series with a lagging plant
+    # is unconditionally overshooting: the controller keeps pushing the target while the
+    # plant is still catching up, so by the time the measurement reaches the goal the
+    # target is already far past it. Measured on the repaired plant: +-5 mm steps ended
+    # 15-125 mm on the WRONG side of the goal, every cylinder, every direction.
+    # `velocity_damping` is the missing derivative term (it subtracts the motion already
+    # in flight), and `velocity_feedforward` lets a moving reference command its own speed
+    # instead of being dragged along by position error alone.
+    velocity_damping: float = 0.0      # [s] multiplies measured xdot
+    velocity_feedforward: float = 0.0  # [0..1] fraction of the reference's own velocity
+
 
 class CylinderDLSController:
     """Close the learned FD target integrator on a cylinder extension setpoint."""
@@ -137,14 +148,36 @@ class CylinderDLSController:
         return jacobian, midpoint, singular_values
 
     @torch.no_grad()
-    def action(self, cylinder_goal: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _desired_delta(
+        self, error: torch.Tensor, xdot_measured: torch.Tensor,
+        goal_velocity: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Per-step cylinder motion the plant should make: PD + velocity feedforward.
+
+        Returns a delta in metres-per-control-step, which is the unit the FD model and
+        the target integrator both speak.
+        """
+        dt = float(self.env.step_dt)
+        desired = self.config.error_gain * error
+        if self.config.velocity_damping != 0.0:
+            desired = desired - self.config.velocity_damping * xdot_measured * dt
+        if self.config.velocity_feedforward != 0.0 and goal_velocity is not None:
+            desired = desired + self.config.velocity_feedforward * goal_velocity * dt
+        return torch.clamp(desired, -self.config.max_desired_delta_m, self.config.max_desired_delta_m)
+
+    @torch.no_grad()
+    def action(
+        self,
+        cylinder_goal: torch.Tensor,
+        goal_velocity: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         goal = cylinder_goal.reshape(self.env.num_envs, 4)
         # Close the loop on the MEASURED cylinder state, not on the commanded
         # target. Using target_x() (env._cylinder_pos_target) made this an OPEN loop
         # on the plant: the controller drove the *target* to the goal, saw its error
         # go to zero, and stopped acting while the actual arm was still ~0.1 m behind
         # (measured |cyl_ref - cyl_meas| = 0.07-0.13 m, independent of path speed).
-        measured, _ = self.env._refresh_cylinder_state()
+        measured, xdot_measured = self.env._refresh_cylinder_state()
         error = goal - measured
         direct_target_action = (
             self.env._low_level_servo_mode() in ("position_ramp_pi", "direct_position_delta")
@@ -159,11 +192,7 @@ class CylinderDLSController:
             # Close that inner integrator on target error so it cannot wind past
             # the goal while the fast physical plant catches the held target.
             control_error = goal - self.target_x()
-            desired_learned = torch.clamp(
-                self.config.error_gain * control_error,
-                -self.config.max_desired_delta_m,
-                self.config.max_desired_delta_m,
-            )
+            desired_learned = self._desired_delta(control_error, xdot_measured, goal_velocity)
             scaling = self.env._cylinder_adapter.scaling
             desired_usd = scaling.learned_delta_to_usd_delta(desired_learned)
             action_scale = max(float(self.env.cfg.action_scale), 1.0e-9)
@@ -180,11 +209,7 @@ class CylinderDLSController:
             )
             return action, singular_values
         jacobian, midpoint, singular_values = self.local_model()
-        desired = torch.clamp(
-            self.config.error_gain * error,
-            -self.config.max_desired_delta_m,
-            self.config.max_desired_delta_m,
-        ) - midpoint
+        desired = self._desired_delta(error, xdot_measured, goal_velocity) - midpoint
         damping = torch.clamp(
             self.config.damping_smax_ratio * singular_values[:, 0], min=1.0e-7
         )

@@ -29,13 +29,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--mode", default="hold", choices=["truck", "hold", "cyl", "jac", "plant"])
+parser.add_argument("--mode", default="hold", choices=["truck", "hold", "cyl", "jac", "plant", "gains"])
 parser.add_argument("--seed", type=int, default=17)
 parser.add_argument("--hold_seconds", type=float, default=10.0)
 parser.add_argument("--truck_seconds", type=float, default=60.0)
 parser.add_argument("--handoff", default="target", choices=["target", "measured"],
                     help="what the PhysX target integrator is synced to at handoff")
 parser.add_argument("--out", default="outputs/lower_level_tracker")
+parser.add_argument("--kp", type=float, default=0.10)
+parser.add_argument("--kd", type=float, default=0.0)
+parser.add_argument("--lead", type=float, default=-1.0, help="cylinder_target_max_lead_m; <0 keeps cfg")
+parser.add_argument("--max_delta", type=float, default=0.01)
 parser.add_argument("--effort_mult", type=float, default=1.0,
                     help="DIAGNOSTIC: scale cylinder actuator effort limits")
 parser.add_argument("--pose", default="band", choices=["band", "reset"],
@@ -71,6 +75,8 @@ def build_env():
     cfg.enable_scripted_vehicle_motion = False   # hard-disable the truck
     cfg.episode_length_s = 10_000.0              # never time out mid-bench
     cfg.cylinder_success_hold_steps = 10**9      # never "succeed" -> never auto-reset
+    if args.lead >= 0.0:
+        cfg.cylinder_target_max_lead_m = float(args.lead)
     env = gym.make(TASK, cfg=cfg).unwrapped
     env.reset(seed=int(args.seed))
     if args.effort_mult != 1.0:
@@ -205,6 +211,16 @@ def handoff(env, controller, commanded_x, settled_x):
     controller.reset()
 
 
+def make_controller(env, kp=None, kd=None, max_delta=None):
+    return CylinderDLSController(env, CylinderDLSConfig(
+        invert_learned_pipeline=True,
+        error_gain=float(args.kp if kp is None else kp),
+        velocity_damping=float(args.kd if kd is None else kd),
+        max_desired_delta_m=float(args.max_delta if max_delta is None else max_delta),
+        max_action=1.0, action_smoothing=1.0,
+    ))
+
+
 def run_tracking(env, controller, goal_fn, steps, tag):
     tag = f"{tag}_{args.pose}_e{args.effort_mult:g}"
     """Drive the ID/FD chain toward goal_fn(step) -> (1,4) cylinder goal."""
@@ -226,8 +242,8 @@ def run_tracking(env, controller, goal_fn, steps, tag):
         )
         prev_x = x_now
         rows.append(row)
-    path = OUT / f"{tag}.json"
-    path.write_text(json.dumps(rows, indent=1))
+    if not tag.startswith("g_"):
+        (OUT / f"{tag}.json").write_text(json.dumps(rows, indent=1))
     return rows
 
 
@@ -282,11 +298,7 @@ def mode_hold(env):
     brake = ParkingBrake(env)
     brake.engage()
     commanded_x, settled_x, settled_ee = preposition(env)
-    controller = CylinderDLSController(
-        env, CylinderDLSConfig(invert_learned_pipeline=True, error_gain=0.10,
-                               max_desired_delta_m=0.01, max_action=1.0,
-                               action_smoothing=1.0),
-    )
+    controller = make_controller(env)
     handoff(env, controller, commanded_x, settled_x)
     goal = settled_x.clone()          # hold exactly where the plant settled
     steps = int(args.hold_seconds / float(env.step_dt))
@@ -300,11 +312,7 @@ def mode_cyl(env):
     brake = ParkingBrake(env)
     brake.engage()
     commanded_x, settled_x, _ = preposition(env)
-    controller = CylinderDLSController(
-        env, CylinderDLSConfig(invert_learned_pipeline=True, error_gain=0.10,
-                               max_desired_delta_m=0.01, max_action=1.0,
-                               action_smoothing=1.0),
-    )
+    controller = make_controller(env)
     handoff(env, controller, commanded_x, settled_x)
     base = settled_x.clone()
     fps = 1.0 / float(env.step_dt)
@@ -403,13 +411,59 @@ def mode_plant(env):
              effort_limit=lim, rows=rows), indent=2))
 
 
+# --------------------------------------------------------------------------- #
+def mode_gains(env):
+    """Sweep (Kp, Kd) on a bidirectional cylinder step and pick by measurement."""
+    brake = ParkingBrake(env)
+    brake.engage()
+    commanded_x, settled_x, _ = preposition(env)
+    fps = 1.0 / float(env.step_dt)
+    base = settled_x.clone()
+    grid = [(kp, kd) for kp in (0.05, 0.10, 0.20) for kd in (0.0, 1.0, 3.0, 8.0)]
+    rank = []
+    for kp, kd in grid:
+        controller = make_controller(env, kp=kp, kd=kd)
+        handoff(env, controller, commanded_x, settled_x)
+        per = []
+        for c in (0, 1):
+            for amp in (0.010, -0.010):
+                def goal_fn(i, c=c, amp=amp):
+                    g = base.clone()
+                    g[0, c] += amp
+                    return g
+                rows = run_tracking(env, controller, goal_fn, int(4.0 * fps), f"g_kp{kp}_kd{kd}_c{c}")
+                e = np.array([r["err"][c] for r in rows])
+                x = np.array([r["x"][c] for r in rows]) - float(base[0, c])
+                # overshoot past the goal, settle time into a 1 mm band, final error
+                over = float(max(0.0, (np.sign(amp) * x).max() - abs(amp)) / abs(amp))
+                idx = np.where(np.abs(e) > 0.001)[0]
+                settle = float(idx[-1] + 1) / fps if len(idx) else 0.0
+                per.append(dict(cyl=c + 1, amp=amp, p95=float(np.percentile(np.abs(e), 95)),
+                                final=float(e[-1]), overshoot=over, settle_s=settle))
+                run_tracking(env, controller, lambda i: base.clone(), int(2.0 * fps),
+                             f"g_kp{kp}_kd{kd}_c{c}_settle")
+        p95 = float(np.max([p["p95"] for p in per]))
+        fin = float(np.max([abs(p["final"]) for p in per]))
+        ov = float(np.max([p["overshoot"] for p in per]))
+        st = float(np.max([p["settle_s"] for p in per]))
+        rank.append(dict(kp=kp, kd=kd, worst_p95_mm=p95 * 1000, worst_final_mm=fin * 1000,
+                         worst_overshoot=ov, worst_settle_s=st, per=per))
+        print(f"[GAINS] kp={kp:<5} kd={kd:<4} p95={p95*1000:7.2f}mm final={fin*1000:7.2f}mm "
+              f"overshoot={ov:5.2f} settle={st:5.2f}s", flush=True)
+    rank.sort(key=lambda r: (r["worst_final_mm"], r["worst_p95_mm"]))
+    (OUT / "gain_sweep.json").write_text(json.dumps(rank, indent=2))
+    print("\n[GAINS] BEST:", json.dumps({k: rank[0][k] for k in
+          ("kp", "kd", "worst_p95_mm", "worst_final_mm", "worst_overshoot", "worst_settle_s")},
+          indent=2), flush=True)
+
+
 try:
     env = build_env()
     print(f"[BENCH] step_dt={float(env.step_dt):.6f}s  servo_mode={env._low_level_servo_mode()}  "
           f"guard={env.cfg.cylinder_fd_command_direction_guard} "
           f"ratio={env.cfg.cylinder_fd_command_max_ratio} "
           f"action_scale={env.cfg.action_scale}", flush=True)
-    {"truck": mode_truck, "hold": mode_hold, "cyl": mode_cyl, "jac": mode_jac, "plant": mode_plant}[args.mode](env)
+    {"truck": mode_truck, "hold": mode_hold, "cyl": mode_cyl, "jac": mode_jac, "plant": mode_plant, "gains": mode_gains}[args.mode](env)
 finally:
     try:
         env.close()
