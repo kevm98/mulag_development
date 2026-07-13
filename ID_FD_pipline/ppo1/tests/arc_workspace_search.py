@@ -85,7 +85,7 @@ for target_L in CANDIDATES:
         errs = np.array(errors)
         # Trim first 1000 steps (settle + deploy ~16.7s), only score mowing
         mow_mask = np.isin(phases, [2, 3])
-        settle_trim = 3400
+        settle_trim = 400
         if len(errs) > settle_trim:
             errs = errs[settle_trim:]
             mow_mask = mow_mask[settle_trim:]

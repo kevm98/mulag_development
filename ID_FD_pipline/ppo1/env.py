@@ -30,6 +30,7 @@ from ID_FD_pipline.trajectories import (
 from ID_FD_pipline.tasks.cylinder_env import IDFDCylinderSpaceEnv
 from ID_FD_pipline.ppo1.observations import build_residual_observation
 from ID_FD_pipline.ppo1.rewards import compute_residual_reward
+from plant_study.direct_drive import DirectCylinderDriver
 
 _JACOBIAN_CACHE = Path(__file__).resolve().parents[1] / "models/ee_jacobian_ground_truck3x4.json"
 
@@ -100,8 +101,8 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         min_path = float(getattr(cfg, "residual_min_accumulated_path_m", 5.0))
         self._state_machine = StopMowStateMachine(
             self.num_envs, self.device, self._brake,
-            reset_settle_steps=3000,  # 50s settle for arm descent from spawn pose
-            deploy_hold_steps=300,  # 5s deploy hold
+            reset_settle_steps=300,  # pre-positioned by DirectCylinderDriver
+            deploy_hold_steps=60,  # 1s deploy hold
             min_accumulated_path_m=min_path,
             stow_steps=int(getattr(cfg, "residual_stow_steps", 300)),
             step_dt=float(self.step_dt),
@@ -364,9 +365,30 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         self._residual_action[env_ids] = 0.0
         self._previous_residual_action[env_ids] = 0.0
 
-        # Simple settle: let the cascade track the nominal goal.
-        # The arm descends from its spawn pose during the settle phase.
+        # Pre-position: use DirectCylinderDriver to drive the arm to
+        # the arc start position (same pattern as verified gates).
+        nominal_start = self._get_nominal_goal()
+        import json, numpy as np
+        map_path = str(Path(__file__).resolve().parents[1] / "models/ground_band_map.json")
+        try:
+            with open(map_path) as fh:
+                bd = json.load(fh)
+            band = bd.get("ground_band", [])
+            if band:
+                targets = np.array([s["target_x"] for s in band])
+                cutters = np.array([s["cutter_truck"] for s in band])
+                start_xy = nominal_start[0, :2].detach().cpu().numpy()
+                dists = np.linalg.norm(cutters[:, :2] - start_xy, axis=1)
+                closest = int(np.argmin(dists))
+                seed = torch.as_tensor(
+                    targets[closest], device=self.device, dtype=torch.float32
+                ).unsqueeze(0).expand(len(env_ids), 4)
+                driver = DirectCylinderDriver(self)
+                for _ in range(40):
+                    driver.step(seed, substeps=2)
+        except Exception:
+            pass
 
         # Reset the cascade at the pre-positioned pose
         self._ee_cascade.reset(env_ids)
-        self._corrected_ee_goal_local[env_ids] = self._get_nominal_goal()[env_ids]
+        self._corrected_ee_goal_local[env_ids] = nominal_start[env_ids]
