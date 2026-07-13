@@ -34,6 +34,9 @@ class ReferenceManager:
         self.ground_follower = ground_follower or GroundFollower()
         self.ground_pinv = ground_pinv
         self.head_down_seed = head_down_cylinder_seed
+        # Bug fix 2: explicit seed anchors for IK, set externally after pre-positioning
+        self.seed_anchor_ee_b: torch.Tensor | None = None
+        self.seed_anchor_cylinder_x: torch.Tensor | None = None
 
     @torch.no_grad()
     def step(self) -> CutterTrajectorySample:

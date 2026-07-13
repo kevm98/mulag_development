@@ -54,6 +54,7 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         self._residual_scale_m = float(getattr(cfg, "residual_action_scale_m", 0.03))
         self._residual_action = torch.zeros((self.num_envs, 3), device=self.device)
         self._previous_residual_action = torch.zeros_like(self._residual_action)
+        self._step_counter = 0
         self._corrected_ee_goal_local = torch.zeros((self.num_envs, 3), device=self.device)
 
         # --- Parking brake ---
@@ -130,6 +131,9 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
 
         # --- Cylinder seed at anchor (computed at reset) ---
         self._anchor_cylinder_seed = torch.zeros((self.num_envs, 4), device=self.device)
+        # Bug fix 1+2: explicit IK seed anchors set AFTER pre-positioning
+        self._seed_anchor_ee_b = torch.zeros((self.num_envs, 3), device=self.device)
+        self._seed_anchor_cylinder_x = torch.zeros((self.num_envs, 4), device=self.device)
 
 
     def _build_shape_kwargs(self, shape: str, cfg) -> dict:
@@ -284,8 +288,31 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
         self._state_machine.step(
             cutter_height=cutter_z,
             cylinder_velocity=cyl_vel,
-            path_progress_delta=progress_delta_normalized,
+            normalized_progress_delta=progress_delta_normalized,
         )
+
+        # --- Diagnostic trace (every 60 steps for env 0) ---
+        self._step_counter += 1
+        if self._step_counter % 60 == 0:
+            sm = self._state_machine
+            phase_names = ["RESET_SETTLE","DEPLOY","MOW_OUT","MOW_RETURN","STOW","COMPLETE"]
+            phase_name = phase_names[int(sm.state.phase[0].item())]
+            ee = self._compute_ee_pos_local()
+            nominal = self._get_nominal_goal()
+            sample = self._ref_manager.sample()
+            print(
+                f"[DIAG] t={self._step_counter*float(self.step_dt):.1f}s "
+                f"phase={phase_name}({int(sm.state.phase[0].item())}) "
+                f"phase_step={int(sm.state.phase_step[0].item())} "
+                f"path_progress={float(sm.state.path_progress[0]):.4f} "
+                f"accum={float(sm.state.accumulated_path[0]):.2f} "
+                f"norm_prog={float(sample.normalized_progress[0]):.4f} "
+                f"stroke_dir={int(sample.stroke_direction[0].item())} "
+                f"goal=({float(nominal[0,0]):.2f},{float(nominal[0,1]):.2f},{float(nominal[0,2]):.2f}) "
+                f"ee=({float(ee[0,0]):.2f},{float(ee[0,1]):.2f},{float(ee[0,2]):.2f}) "
+                f"seed_anchor_ee=({float(self._seed_anchor_ee_b[0,0]):.2f},{float(self._seed_anchor_ee_b[0,1]):.2f},{float(self._seed_anchor_ee_b[0,2]):.2f})",
+                flush=True,
+            )
 
         # --- Run ID/FD pipeline ---
         self._run_cylinder_id_pipeline()
@@ -361,64 +388,55 @@ class IDFDEEResidualEnv(IDFDCylinderSpaceEnv):
 
         # Reset trajectory sampler to the arc start (distance=0)
         self._ref_manager.reset(env_ids)
-        ee = self._compute_ee_pos_local()
-        x, _ = self._refresh_cylinder_state()
-        self._anchor_cylinder_seed[env_ids] = x[env_ids]
-
-        # Set sampler anchor Z to ground-level from map (not spawn EE).
-        # The arc goals need to be at mowing height (~1.3m truck Z), not
-        # the spawn height (~1.8m truck Z).
-        import json, numpy as np
-        map_path = str(Path(__file__).resolve().parents[1] / "models/ground_band_map.json")
-        try:
-            with open(map_path) as fh:
-                bd = json.load(fh)
-            band = bd.get("ground_band", [])
-            if band:
-                cutters = np.array([s["cutter_truck"] for s in band])
-                nominal_start = self._get_nominal_goal()
-                start_xy = nominal_start[0, :2].detach().cpu().numpy()
-                dists = np.linalg.norm(cutters[:, :2] - start_xy, axis=1)
-                ground_z = float(cutters[int(np.argmin(dists)), 2])
-                self._sampler.anchor[env_ids, 2] = ground_z
-        except Exception:
-            self._sampler.anchor[env_ids, 2] = ee[env_ids, 2]  # fallback
 
         self._residual_action[env_ids] = 0.0
         self._previous_residual_action[env_ids] = 0.0
 
-        # Pre-position: use DirectCylinderDriver to drive the arm to
-        # the arc start position (same pattern as verified gates).
+        # --- Pre-position: DirectCylinderDriver to arc start ---
         nominal_start = self._get_nominal_goal()
         import json, numpy as np
         map_path = str(Path(__file__).resolve().parents[1] / "models/ground_band_map.json")
-        try:
-            with open(map_path) as fh:
-                bd = json.load(fh)
-            band = bd.get("ground_band", [])
-            if band:
-                targets = np.array([s["target_x"] for s in band])
-                cutters = np.array([s["cutter_truck"] for s in band])
-                start_xy = nominal_start[0, :2].detach().cpu().numpy()
-                dists = np.linalg.norm(cutters[:, :2] - start_xy, axis=1)
-                closest = int(np.argmin(dists))
-                seed = torch.as_tensor(
-                    targets[closest], device=self.device, dtype=torch.float32
-                ).unsqueeze(0).expand(len(env_ids), 4)
-                driver = DirectCylinderDriver(self)
-                for _ in range(40):
-                    driver.step(seed, substeps=2)
-        except Exception:
-            pass
+        targets_np = None; cutters_np = None
+        with open(map_path) as fh:
+            bd = json.load(fh)
+        band = bd.get("ground_band", [])
+        if band:
+            targets_np = np.array([s["cylinder_x"] for s in band])
+            cutters_np = np.array([s["cutter_truck"] for s in band])
+            start_xy = nominal_start[0, :2].detach().cpu().numpy()
+            dists = np.linalg.norm(cutters_np[:, :2] - start_xy, axis=1)
+            closest = int(np.argmin(dists))
+            dcd_cyl = torch.as_tensor(
+                targets_np[closest], device=self.device, dtype=torch.float32
+            ).unsqueeze(0).expand(len(env_ids), 4)
+            driver = DirectCylinderDriver(self)
+            for _ in range(40):
+                driver.step(dcd_cyl, substeps=2)
 
-        # Bug fix D: full resync after DirectCylinderDriver.
-        # Reset ALL learned-model state so scored tracking starts clean.
+        # --- Bug fix 1: capture anchor state AFTER pre-positioning ---
+        measured_ee_a = self._compute_ee_pos_local()
+        measured_x_a, _ = self._refresh_cylinder_state()
+        self._anchor_cylinder_seed[env_ids] = measured_x_a[env_ids]
+
+        # --- Bug fix 2: set explicit seed anchor at endpoint A ---
+        self._seed_anchor_ee_b[env_ids] = measured_ee_a[env_ids]
+        self._seed_anchor_cylinder_x[env_ids] = measured_x_a[env_ids]
+        # Wire into reference manager so cylinder seeds use endpoint A as origin
+        self._ref_manager.seed_anchor_ee_b = self._seed_anchor_ee_b
+        self._ref_manager.seed_anchor_cylinder_x = self._seed_anchor_cylinder_x
+
+        # --- Set sampler anchor to endpoint A (both XY and Z) ---
+        self._sampler.anchor[env_ids, :] = measured_ee_a[env_ids]
+        # Override Z to ground-level from map if available
+        if cutters_np is not None and len(cutters_np) > 0:
+            sx = nominal_start[0, :2].detach().cpu().numpy()
+            dz = np.linalg.norm(cutters_np[:, :2] - sx, axis=1)
+            ground_z = float(cutters_np[int(np.argmin(dz)), 2])
+            self._sampler.anchor[env_ids, 2] = ground_z
+
+        # --- Full resync after pre-positioning ---
         self._cylinder_pos_target[env_ids] = self.robot.data.joint_pos[:, self._cylinder_joint_ids][env_ids].detach().clone()
         self._prev_valve_cmd[env_ids] = 0.0
         self._current_valve_cmd[env_ids] = 0.0
-        if hasattr(self, '_cylinder_id') and self._cylinder_id is not None:
-            self._cylinder_id.reset()
-        if hasattr(self, '_cylinder_fd') and self._cylinder_fd is not None:
-            self._cylinder_fd.reset()
         self._ee_cascade.reset(env_ids)
         self._corrected_ee_goal_local[env_ids] = nominal_start[env_ids]

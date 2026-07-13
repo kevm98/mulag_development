@@ -43,7 +43,7 @@ class StopMowStateMachine:
         self.reset_settle_steps = int(reset_settle_steps)
         self.reset_settle_duration_s = float(reset_settle_duration_s)
         self.deploy_hold_steps = int(deploy_hold_steps)
-        self.min_half_strokes = int(float(min_accumulated_path_m))
+        self.required_half_strokes = int(float(min_accumulated_path_m))
         self.stow_target_height_m = float(stow_target_height_m)
         self.stow_steps = int(stow_steps)
         self.step_dt = float(step_dt)
@@ -59,14 +59,14 @@ class StopMowStateMachine:
         self,
         cutter_height: torch.Tensor,
         cylinder_velocity: torch.Tensor,
-        path_progress_delta: torch.Tensor,
+        normalized_progress_delta: torch.Tensor,
     ) -> None:
         """Advance the state machine by one control step.
 
         Args:
             cutter_height: world-Z of the cutter bottom ``(N,)`` [m].
             cylinder_velocity: learned cylinder velocities ``(N, 4)`` [m/s].
-            path_progress_delta: path distance advanced this step ``(N,)`` [m].
+            normalized_progress_delta: normalized progress increment ``(N,)`` [0,1].
         """
         N = self.num_envs
         dt = self.step_dt
@@ -114,7 +114,7 @@ class StopMowStateMachine:
             self.state.stroke_index[ids] += 1
             self.state.total_strokes[ids] += 1
             # If accumulated enough, go to STOW; otherwise repeat
-            enough = self.state.accumulated_path[ids] >= self.min_half_strokes
+            enough = self.state.accumulated_path[ids] >= self.required_half_strokes
             stow_ids = ids[enough]
             repeat_ids = ids[~enough]
             if len(stow_ids) > 0:
@@ -136,8 +136,8 @@ class StopMowStateMachine:
         )
         if active_mow.any():
             ids = torch.where(active_mow)[0]
-            self.state.path_progress[ids] += path_progress_delta[ids]
-            self.state.accumulated_path[ids] += path_progress_delta[ids]
+            self.state.path_progress[ids] += normalized_progress_delta[ids]
+            self.state.accumulated_path[ids] += normalized_progress_delta[ids]
 
     def is_mowing(self) -> torch.Tensor:
         """Return ``True`` for envs currently in a mowing phase (MOW_OUT or MOW_RETURN)."""
