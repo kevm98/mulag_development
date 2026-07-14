@@ -69,7 +69,18 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
     # Preserve the absolute valve operating point learned jointly by ID and FD:
     # FD(ID(target)) - FD(ID(zero target)).
     paired_id_fd_residual = True
-    cylinder_fd_command_direction_guard = True
+    # Build the ID's target features on the MODEL's sample time (the Simscape data is a
+    # constant 0.05 s), not on the 1/60 s control step. See docs/idfd_wiring_audit.md §2.
+    learned_model_dt_s = 0.05
+
+    # The per-axis direction guard is REMOVED from the main experiment (kept as a config
+    # switch for the ablation). Measured (docs/idfd_wiring_audit.md §4d): for a
+    # single-cylinder command every off-diagonal has cmd_i = 0, so limit = ratio * 0 = 0 and
+    # the guard zeroes ALL cross-axis response -- for any ratio. The composite is inherently
+    # cross-coupled, so a per-axis rule cannot be applied to it. The ratio cap never binds
+    # at all (1.5 / 2.0 / 3.0 give bit-identical matrices; the responses sit at 1-46% of
+    # command, far below the 150% cap). Raising the ratio, as previously proposed, is a no-op.
+    cylinder_fd_command_direction_guard = False
     cylinder_fd_command_max_ratio = 1.5
     cylinder_actuation_mode = "position"
     max_abs_valve = 1.0
