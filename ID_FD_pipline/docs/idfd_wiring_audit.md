@@ -223,3 +223,72 @@ routes valve→Δx *through FD itself*). So:
   fine-tuned with a valve-Jacobian loss against the source-data partials.
 * The **repaired plant** supplies the *state distribution* and the achievable Δx per step, and
   is the teacher for the identity-composition and rollout losses.
+
+---
+
+# 7. STOP: the valve is non-causal in the ID/FD source data
+
+The FD fine-tune was run with the valve-Jacobian loss (`scripts/finetune_fd_jacobian.py`).
+It **did** fix the gain — diag ratio vs the data went from `[18.3, 19.4, 11.5, 9.4]` to
+`[0.91, 0.81, 0.97, 0.89]` — but one-step R² collapsed from **0.99 → 0.14–0.19**.
+
+That tension is not a tuning problem. It exposed the real defect.
+
+## 7a. The valve command explains nothing
+
+Linear R² of each FD output block, with and without the valve inputs (411 840 samples):
+
+| FD output | R² all 20 inputs | R² **without valve** | valve's *unique* contribution |
+|---|---|---|---|
+| `DeltaExtension` | [0.978, 0.982, 0.967, 0.954] | [0.978, 0.982, 0.967, 0.954] | **[0.0001, 0.0, 0.0, 0.0001]** |
+| `DeltaExtensionVelocity` | [0.131, 0.159, 0.623, 0.474] | [0.125, 0.158, 0.622, 0.473] | **[0.0064, 0.001, 0.0003, 0.0013]** |
+| `DeltaDP` | [0.274, 0.223, 0.614, 0.485] | [0.272, 0.222, 0.614, 0.484] | **[0.0019, 0.0001, 0.0, 0.0005]** |
+
+**The valve's unique contribution is ≤ 0.6 % at every output.** Corroborating:
+
+* Feeding the trained FD a **zeroed** valve gives R² = **0.9959–0.9979** — *higher* than the
+  true valve (0.9923–0.9971). The network is better off ignoring it.
+* `ExtensionVelocity` alone explains **93–98 %** of `DeltaExtension`. That is kinematics
+  (`Δx ≈ ẋ·dt`), not hydraulics.
+* `dP` alone explains **44–87 %** of `DeltaExtension`. **dP is the actuation variable.**
+
+## 7b. It is not a time-misalignment bug
+
+Valve's unique R² on `DeltaExtensionVelocity`, sweeping the valve lag within each of the 936
+contiguous runs:
+
+```
+lag  -3    -2    -1     0    +1    +2    +3    +4    +6
+max .0049 .0051 .0065 .0064 .0059 .0060 .0056 .0053 .0050
+```
+
+Flat. No lag recovers causality. The valve is simply redundant given the state — consistent
+with the runs being **closed-loop** (valve computed *from* the state by a controller), and with
+the physical chain being `valve → dP → motion`, where within one 0.05 s step the pressure
+already present dominates the valve's fresh contribution.
+
+## 7c. Consequence
+
+`FD(ID(s, Δx)) ≈ Δx` is **mathematically unachievable** with these models and this data,
+because `∂FD/∂valve ≈ 0` in the data-generating process. The DLS has been inverting a
+near-null map. **No loss function, fine-tune or architecture tweak on the existing dataset can
+fix this** — the causal signal is not in the data.
+
+Compounding it: the runtime freezes `dP` and `force` at the training means
+(`cylinder_hydraulic_feature_mode = "training_mean"`), which severs the one channel (`dP`)
+that does carry actuation. An unused `"fd_dp_state"` mode exists — but it cannot help either,
+since valve→`DeltaDP` is also non-causal (unique R² 0.002).
+
+## 7d. Options
+
+1. **Re-generate the Simscape data with genuine open-loop valve excitation** (independent,
+   persistently-exciting valve signals, not a controller's output). This is the only route
+   that makes the ID→FD valve architecture physically identifiable.
+2. **Move the actuation interface to `dP`** — the variable that actually carries authority
+   (44–87 % of `DeltaExtension`) — i.e. ID outputs a pressure command, FD maps `dP → Δx`.
+   Requires Simscape to expose that mapping.
+3. **Drop the learned lower level.** The repaired plant is already a clean position servo
+   (`∂measured/∂target` = identity, cond 1.1). A deterministic cylinder-space controller would
+   track it trivially — but this abandons the ID→FD requirement.
+
+Not attempted, deliberately: further FD/ID training, gain tuning, tool-space trajectories.
