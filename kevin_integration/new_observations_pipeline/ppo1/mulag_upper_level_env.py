@@ -154,7 +154,14 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._id_target_delta_xdot_clip_max = torch.full((1, 4), float("inf"), device=self.device)
         self._physics_dt = float(self.cfg.sim.dt)
         self._control_dt = float(self.cfg.sim.dt) * float(self.cfg.decimation)
-        self._learned_model_dt = self._control_dt
+        # The ID's TargetDeltaExtension / TargetDeltaExtensionVelocity features are defined
+        # on the MODEL's sample time (the Simscape data is a constant 0.05 s), not on the
+        # control step. Building them at control_dt = 1/60 s makes both features wrong: TDX is
+        # 3x too small, and TDX/dt - xdot misses the data's TDXV by 407-729% of its std
+        # (measured: ppo1/tests/wiring_audit_offline.py). 0 keeps the legacy behaviour.
+        self._learned_model_dt = (
+            float(getattr(self.cfg, "learned_model_dt_s", 0.0)) or self._control_dt
+        )
         self._predicted_extension_velocity = torch.zeros_like(self._dP)
         self._raw_delta_extension = torch.zeros_like(self._dP)
         self._raw_delta_extension_velocity = torch.zeros_like(self._dP)
