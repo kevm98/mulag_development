@@ -1,10 +1,9 @@
 # MULAG ID-FD head-down arm controller
 
-This directory contains the maintained deterministic hydraulic-arm workflow. The truck is
-parked, the cutter follows a long ground-level arc from A to B and back to A, and the mower
-head remains facing down. The retired PPO residual controller, old stop/mow state machine,
-superseded workspace maps, experimental trajectories, and investigation reports have been
-removed.
+This directory contains the maintained deterministic hydraulic-arm workflow and the residual
+PPO task built above it. The truck is parked, the cutter follows a long ground-level arc from
+A to B and back to A, and the mower head remains facing down. The policy may add only small
+cylinder 1-3 setpoint corrections; it cannot command cylinder 4 or the vehicle.
 
 ## Validated behavior
 
@@ -112,7 +111,15 @@ point includes the measured `-0.79 m` mower-tip offset from the `Messerkopf` bod
 # Pure trajectory time-scaling tests
 /home/rrlab/miniconda3/envs/env_isaaclab/bin/python -m pytest \
   ID_FD_pipline/trajectories/tests/test_time_scaling.py -q
+
+# Residual policy: exact zero-action baseline contract
+/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
+  ID_FD_pipline/residual_policy/tests/zero_action_contract.py \
+  --headless --num_envs 1
 ```
+
+Residual PPO training, playback, and checkpoint evaluation are documented in
+[residual_policy/README.md](residual_policy/README.md).
 
 ## Directory layout
 
@@ -133,6 +140,7 @@ ID_FD_pipline/
 │   ├── mowing_arc_head_down.json
 │   ├── id/                           active control ID and source data
 │   └── fd/                           FD lineage, strict data, reports, active strict FD
+├── residual_policy/                  3-D residual PPO task, scripts, and contracts
 ├── scripts/                          retained model/data/reference builders
 ├── tasks/                            IsaacLab environments and active configuration
 ├── tests/rank_gate.py                learned-pipeline structural gate
@@ -142,3 +150,8 @@ ID_FD_pipline/
 
 See [TRAINING.md](TRAINING.md) for the complete model lineage, dataset contract, objectives,
 validation results, rejected approaches, and reproduction commands.
+
+`dls_solver/` and `mdp/` are active dependencies, not cleanup leftovers. The residual
+environment calls the DLS cylinder/cascade controllers every scored step and inherits the
+ID/FD task environment, which imports MDP action sanitization, observation/reward contracts,
+and pipeline reporting used by the retained deterministic gates.

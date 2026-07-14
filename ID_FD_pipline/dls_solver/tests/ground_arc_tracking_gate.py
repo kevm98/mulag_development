@@ -75,7 +75,7 @@ from ID_FD_pipline.dls_solver.cylinder import CylinderDLSConfig, CylinderDLSCont
 from ID_FD_pipline.dls_solver.ee_cascade import EECascadeController  # noqa: E402
 from ID_FD_pipline.trajectories.time_scaling import cruise_profile  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from plant_study.direct_drive import DirectCylinderDriver  # noqa: E402
+from ID_FD_pipline.dls_solver.direct_drive import DirectCylinderDriver  # noqa: E402
 
 torch.manual_seed(int(a.seed))
 np.random.seed(int(a.seed))

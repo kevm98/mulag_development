@@ -7,4 +7,5 @@ This installs the newest IsaacSim 5.1.0 and IsaacLab 2.3.0, which support the Un
 
 rrlab is a isaaclab extension, check the isaaclab extension template. It runs upound isaaclab, isolated from it, keep it clean.
 # Run RRLAB MULAG TASK  in Conda Env. (for other models change checkpoint)
-`python standalone/workflows/skrl/play.py --task RRLAB-Obstacle-Avoidance-Mulag-v0 --num_envs 12 --enable_cameras --checkpoint logs/skrl/reach_mulag/MulagMain2/checkpoints/best_agent.pt`
+The legacy standalone workflow referenced by this note has been removed. See `README.md` for
+the maintained ID/FD and ROM pipelines.

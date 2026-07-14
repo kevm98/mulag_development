@@ -59,7 +59,7 @@ torch.manual_seed(a.seed)
 import ID_FD_pipline.tasks  # noqa: E402,F401
 from ID_FD_pipline.dls_solver.cylinder import CylinderDLSConfig, CylinderDLSController  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from plant_study.direct_drive import DirectCylinderDriver  # noqa: E402
+from ID_FD_pipline.dls_solver.direct_drive import DirectCylinderDriver  # noqa: E402
 
 gains = [float(value) for value in a.residual_gains.split(",")]
 if len(gains) != 4:

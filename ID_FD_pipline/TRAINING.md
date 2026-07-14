@@ -357,9 +357,9 @@ All commands run from the repository root.
   ID_FD_pipline/scripts/build_head_down_arc.py --headless --num_envs 64
 ```
 
-The original model loaders currently live under the repository's
-`kevin_integration/new_observations_pipeline` model stack, with a local/archive fallback in
-`models/__init__.py`. Preserve that loader contract when moving the project to another host.
+The runtime wrappers now live in `ID_FD_pipline/runtime`, with the original ID/FD architecture
+loaders and baseline checkpoints under `ID_FD_pipline/models/vendor_models`. Preserve that
+self-contained loader contract when moving the project to another host.
 
 ## 9. Artifact checksums
 

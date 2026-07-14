@@ -41,7 +41,7 @@ import torch  # noqa: E402
 import gymnasium as gym  # noqa: E402
 import ID_FD_pipline.tasks  # noqa: E402,F401
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from plant_study.direct_drive import DirectCylinderDriver  # noqa: E402
+from ID_FD_pipline.dls_solver.direct_drive import DirectCylinderDriver  # noqa: E402
 
 TASK = "Kevin-Mulag-IDFD-CylinderSpace-PLAY-v0"
 cfg = parse_env_cfg(TASK, device=args.device, num_envs=args.num_envs)
