@@ -1,0 +1,28 @@
+{
+  "seed": 17,
+  "device": "cuda:0",
+  "batch_size": 512,
+  "validation_batch_size": 1024,
+  "rollout_batch_size": 128,
+  "excitation_source_weight": 1.0,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.00001,
+  "gradient_clip_norm": 5.0,
+  "num_workers": 4,
+  "stage_epochs": [30, 30, 30, 40],
+  "stage_rollout_horizons": [1, 5, 20, 50],
+  "validation_horizons": [1, 5, 10, 20, 50, 100],
+  "scheduled_sampling_start": 0.0,
+  "scheduled_sampling_end": 0.75,
+  "early_stopping_patience": 20,
+  "loss_weights": {
+    "pressure": 1.0,
+    "force": 1.0,
+    "velocity": 2.0,
+    "extension": 1.0,
+    "rollout": 2.0,
+    "command": 1.0,
+    "residual": 0.1,
+    "actuation": 0.5
+  }
+}

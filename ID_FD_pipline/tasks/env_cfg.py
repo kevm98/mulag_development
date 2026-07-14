@@ -5,10 +5,10 @@ from pathlib import Path
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
-from ID_FD_pipline.models import CYLINDER_MODELS_ROOT, OLD_FD_CHECKPOINT, OLD_ID_CHECKPOINT
+from ID_FD_pipline.models import CYLINDER_MODELS_ROOT
 from ID_FD_pipline.mdp.ee_observations import EE_TRACKING_OBS_DIM
 from ID_FD_pipline.mdp.observations import CYLINDER_OBS_DIM
-from kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env_cfg import (
+from ID_FD_pipline.runtime.mulag_upper_level_env_cfg import (
     MulagUpperLevelEnvCfg,
     MulagUpperLevelEnvCfg_PLAY,
     MulagUpperLevelPPORunnerCfg,

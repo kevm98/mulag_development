@@ -66,7 +66,7 @@ if torch.cuda.is_available():
 
 import ID_FD_pipline.tasks  # noqa: E402,F401
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from kevin_integration.new_observations_pipeline.ppo1.joint_to_cylinder_adapter import (  # noqa: E402
+from ID_FD_pipline.runtime.joint_to_cylinder_adapter import (  # noqa: E402
     CylinderReference,
 )
 

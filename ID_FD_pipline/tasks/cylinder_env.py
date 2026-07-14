@@ -12,7 +12,7 @@ from ID_FD_pipline.mdp.ee_rewards import compute_ee_tracking_reward
 from ID_FD_pipline.mdp.observations import CYLINDER_OBS_DIM, build_cylinder_observation
 from ID_FD_pipline.mdp.pipeline import pipeline_summary
 from ID_FD_pipline.mdp.rewards import compute_cylinder_reward
-from kevin_integration.new_observations_pipeline.ppo1.mulag_upper_level_env import MulagUpperLevelEnv
+from ID_FD_pipline.runtime.mulag_upper_level_env import MulagUpperLevelEnv
 
 
 class IDFDCylinderSpaceEnv(MulagUpperLevelEnv):
@@ -53,7 +53,7 @@ class IDFDCylinderSpaceEnv(MulagUpperLevelEnv):
 
         The controlled point is the CUTTER, not the Messerkopf body origin. The
         cutter geometry hangs 0.79 m BELOW that origin (measured:
-        plant_study/tool_tip_probe.py -- local AABB z in [-0.792, -0.234], head
+        the measured local AABB z in [-0.792, -0.234], head
         0.558 m tall). Commanding the origin put every trajectory 0.79 m above the
         grass, which is why the arm never mowed: the origin's lowest reach is
         world z=0.664 m, but the CUTTER at that pose is at z=-0.13 m, i.e. on/below
@@ -89,7 +89,7 @@ class IDFDCylinderSpaceEnv(MulagUpperLevelEnv):
 
         # !!! Reference frame = TRUCK CHASSIS (base_link), NOT root_pos_w. !!!
         # The articulation ROOT is the `Drehzapfen` -- the ARM'S OWN SLEW BASE (verified:
-        # plant_study/frame_check.py, root coincides with Drehzapfen at d=0.0000 m). Using
+        # root-frame calibration showed it coincides with Drehzapfen at d=0.0000 m. Using
         # the root meant every "base-frame" trajectory lived in a frame that ROTATES WITH
         # THE ARM, so:
         #   * EE-local x was IDENTICALLY 0 -> "base-X is null" / rank-2 EE Jacobian /

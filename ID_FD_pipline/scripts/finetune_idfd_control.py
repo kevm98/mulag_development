@@ -105,7 +105,7 @@ def main():
     fd_path = ROOT / "ID_FD_pipline/models/fd/best_fd_cylinder_rank4.pt"
     id_model, id_ckpt, id_stats = id_common.load_model_from_checkpoint(id_path, device=device)
     fd_model, fd_ckpt, fd_stats = fd_common.load_model_from_checkpoint(fd_path, device=device)
-    id_data = id_common.load_id_data(id_dir / "ID_cylinder_data.mat")
+    id_data = id_common.load_id_data(ROOT / "ID_FD_pipline/models/id/ID_cylinder_data.mat")
     fd_data = fd_common.load_fd_data(ROOT / "ID_FD_pipline/models/fd/FD_cylinder_data.mat")
     id_train_x = id_common.prepare_features_for_checkpoint(id_data, id_ckpt, split="train")
     id_val_x = id_common.prepare_features_for_checkpoint(id_data, id_ckpt, split="val")

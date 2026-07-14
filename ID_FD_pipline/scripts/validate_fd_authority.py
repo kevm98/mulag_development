@@ -40,8 +40,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 FDD = ROOT / "ID_FD_pipline/models/fd"
 CSV = ROOT / "ID_FD_pipline/training_data/Excitation_FD_Strict.csv"
-FD_DIR = Path("/home/rrlab/rrlab_mulag_newobs_pruned_20260701/kevin_integration/"
-              "new_observations_pipeline/Models_cylinder /fd_cylinder_space ")
+FD_DIR = ROOT / "ID_FD_pipline/models/vendor_models/fd_cylinder_space "
 
 p = argparse.ArgumentParser()
 p.add_argument("--models", nargs="+", default=[str(FDD / "best_fd_cylinder_control.pt"),

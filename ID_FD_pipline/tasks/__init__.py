@@ -10,6 +10,8 @@ TASK_ID = "Kevin-Mulag-IDFD-CylinderSpace-v0"
 PLAY_TASK_ID = "Kevin-Mulag-IDFD-CylinderSpace-PLAY-v0"
 EE_TASK_ID = "Kevin-Mulag-IDFD-EETracking-v0"
 EE_PLAY_TASK_ID = "Kevin-Mulag-IDFD-EETracking-PLAY-v0"
+RESIDUAL_TASK_ID = "Kevin-Mulag-IDFD-Residual-v0"
+RESIDUAL_PLAY_TASK_ID = "Kevin-Mulag-IDFD-Residual-PLAY-v0"
 
 
 def _register_once(
@@ -56,7 +58,22 @@ _register_once(
     runner_cfg="ID_FD_pipline.tasks.env_cfg:IDFDEETrackingPPORunnerCfg",
 )
 
+_register_once(
+    RESIDUAL_TASK_ID,
+    env_cfg="ID_FD_pipline.residual_policy.env_cfg:ResidualPolicyEnvCfg",
+    runner_cfg="ID_FD_pipline.residual_policy.env_cfg:ResidualPolicyPPORunnerCfg",
+    entry_point="ID_FD_pipline.residual_policy.env:ResidualPolicyEnv",
+)
+
+_register_once(
+    RESIDUAL_PLAY_TASK_ID,
+    env_cfg="ID_FD_pipline.residual_policy.env_cfg:ResidualPolicyEnvCfg_PLAY",
+    runner_cfg="ID_FD_pipline.residual_policy.env_cfg:ResidualPolicyPPORunnerCfg",
+    entry_point="ID_FD_pipline.residual_policy.env:ResidualPolicyEnv",
+)
+
 
 __all__ = [
     "TASK_ID", "PLAY_TASK_ID", "EE_TASK_ID", "EE_PLAY_TASK_ID",
+    "RESIDUAL_TASK_ID", "RESIDUAL_PLAY_TASK_ID",
 ]
