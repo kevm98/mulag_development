@@ -2199,6 +2199,13 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     fd_scale *= step_dt / max(fd_sample_time, 1.0e-6)
                 self._fd_delta_scale = fd_scale
                 delta_extension = fd_out.delta_extension * fd_scale
+                reference_blend = float(getattr(self.cfg, "cylinder_idfd_reference_blend", 0.0))
+                reference_blend = min(max(reference_blend, 0.0), 1.0)
+                if reference_blend > 0.0:
+                    delta_extension = (
+                        (1.0 - reference_blend) * delta_extension
+                        + reference_blend * reference.target_delta_x
+                    )
                 if bool(getattr(self.cfg, "cylinder_fd_command_direction_guard", False)):
                     # Paired residuals are intended to represent the causal
                     # response to target_delta_x.  Keep the network's predicted

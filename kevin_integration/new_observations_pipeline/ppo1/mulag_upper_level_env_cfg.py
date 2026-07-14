@@ -103,6 +103,12 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     cylinder_fd_scale_delta_by_sample_time = True
     cylinder_fd_sample_time_s = 0.0  # 0 means use checkpoint metadata.
     cylinder_fd_delta_gain = 1.0
+    # Blend the paired learned prediction with the requested cylinder-space increment:
+    #   applied_delta = (1-blend)*FD(ID(target)-ID(zero)) + blend*target_delta_x
+    # 0 preserves the historical pure learned path.  A nonzero value makes ID/FD a learned
+    # residual around an intuitive, full-rank cylinder command instead of allowing model
+    # cross-coupling to own all position-target authority.
+    cylinder_idfd_reference_blend = 0.0
     # Optional output calibration applied only to FD(valve)-FD(zero valve).
     # Kept separate from spatial/unit scaling because valve authority is
     # strongly anisotropic across the four cylinders.

@@ -27,13 +27,18 @@ def cosine_scaling(tau: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch
         Tuple ``(position_scale, velocity_scale, acceleration_scale)``, each
         ``(N,)``.
     """
+    # Evaluate the trigonometric identities in float64 even when the trajectory tensor is
+    # float32. This preserves complementary symmetry and exact zero endpoint velocity after
+    # casting, avoiding a one-ULP sine(pi) residue at tau=1.
+    dtype = tau.dtype
+    tau_eval = tau.to(torch.float64)
     pi = math.pi
-    cos_tau = torch.cos(pi * tau)
-    sin_tau = torch.sin(pi * tau)
+    cos_tau = torch.cos(pi * tau_eval)
+    sin_tau = torch.sin(pi * tau_eval)
     h_p = 0.5 * (1.0 - cos_tau)
     h_v = 0.5 * pi * sin_tau
     h_a = 0.5 * pi * pi * cos_tau
-    return h_p, h_v, h_a
+    return h_p.to(dtype), h_v.to(dtype), h_a.to(dtype)
 
 
 def cruise_profile(

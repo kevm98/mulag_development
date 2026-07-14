@@ -118,7 +118,12 @@ class CylinderDLSController:
             if fd_dt <= 0.0:
                 fd_dt = float(env._cylinder_fd.sample_time_s)
             scale *= float(env.step_dt) / max(fd_dt, 1.0e-6)
-        return fd * scale
+        fd = fd * scale
+        reference_blend = float(getattr(env.cfg, "cylinder_idfd_reference_blend", 0.0))
+        reference_blend = min(max(reference_blend, 0.0), 1.0)
+        if reference_blend > 0.0:
+            fd = (1.0 - reference_blend) * fd + reference_blend * converted.reference.target_delta_x
+        return fd
 
     @torch.no_grad()
     def local_model(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -209,7 +214,17 @@ class CylinderDLSController:
             )
             return action, singular_values
         jacobian, midpoint, singular_values = self.local_model()
-        desired = self._desired_delta(error, xdot_measured, goal_velocity) - midpoint
+        reference_blend = float(getattr(self.env.cfg, "cylinder_idfd_reference_blend", 0.0))
+        if reference_blend > 0.0:
+            # Reference-anchored ID/FD is required to behave like DirectCylinderDriver:
+            # smoothly move the commanded PhysX target to the cylinder goal, then stop.
+            # Closing this integrator on measured error instead drives the target past the
+            # goal to compensate linkage deflection, so it can never match direct-drive
+            # semantics and eventually winds against the target-lead clamp.
+            control_error = goal - self.target_x()
+        else:
+            control_error = error
+        desired = self._desired_delta(control_error, xdot_measured, goal_velocity) - midpoint
         damping = torch.clamp(
             self.config.damping_smax_ratio * singular_values[:, 0], min=1.0e-7
         )

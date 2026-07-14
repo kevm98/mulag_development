@@ -51,14 +51,15 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
     use_sequence_cylinder_models = False
     cylinder_dynamics_model = "fd"
     cylinder_models_root = str(CYLINDER_MODELS_ROOT)
-    # OLD_ID_CHECKPOINT and the rank-4 FD remain untouched for A/B tests.
+    # Keep the deployed control ID; use the strict FD that has measured valve authority.
+    # The historical checkpoints remain on disk for explicit A/B tests.
     id_cylinder_checkpoint = str(
         Path(__file__).resolve().parents[1]
         / "models/id/best_id_cylinder_control.pt"
     )
     fd_cylinder_checkpoint = str(
         Path(__file__).resolve().parents[1]
-        / "models/fd/best_fd_cylinder_control.pt"
+        / "models/fd/best_fd_cylinder_strict.pt"
     )
     rom_cylinder_checkpoint = "disabled"
     low_level_servo_mode = "none"
@@ -69,12 +70,18 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
     # Preserve the absolute valve operating point learned jointly by ID and FD:
     # FD(ID(target)) - FD(ID(zero target)).
     paired_id_fd_residual = True
+    # Stable hybrid contract: the requested cylinder increment guarantees intuitive direction
+    # and full-rank authority; the paired ID/FD map contributes a bounded learned residual.
+    # Verified against DirectCylinderDriver on fresh +/-10 mm, 80 mm, and same-process
+    # out-and-back gates. See TRAINING.md.
+    cylinder_idfd_reference_blend = 0.8
+    cylinder_fd_residual_output_gain = [1.0, 1.0, 1.0, 1.0]
     # Build the ID's target features on the MODEL's sample time (the Simscape data is a
-    # constant 0.05 s), not on the 1/60 s control step. See docs/idfd_wiring_audit.md §2.
+    # constant 0.05 s), not on the 1/60 s control step. See TRAINING.md.
     learned_model_dt_s = 0.05
 
     # The per-axis direction guard is REMOVED from the main experiment (kept as a config
-    # switch for the ablation). Measured (docs/idfd_wiring_audit.md §4d): for a
+    # switch for the ablation). The wiring audit showed that for a
     # single-cylinder command every off-diagonal has cmd_i = 0, so limit = ratio * 0 = 0 and
     # the guard zeroes ALL cross-axis response -- for any ratio. The composite is inherently
     # cross-coupled, so a per-axis rule cannot be applied to it. The ratio cap never binds
@@ -122,8 +129,10 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
 
     # Anti-windup on the reference integrator: how far the commanded PhysX target may
     # lead the measured cylinder. 0 disables. Tuned on the repaired plant -- see
-    # ppo1/tests/lower_level_bench.py --mode gains.
-    cylinder_target_max_lead_m = 0.010
+    # the retained idfd_step_gate.py diagnostics.
+    # 25 mm is needed only during the transient through a mechanically coupled configuration.
+    # Goal-anchored integration prevents the target from winding past the requested goal.
+    cylinder_target_max_lead_m = 0.025
 
     enable_scripted_vehicle_motion = True
     vehicle_speed_min_kmh = 3.0
@@ -174,10 +183,9 @@ class IDFDCylinderSpaceEnvCfg(MulagUpperLevelEnvCfg):
         #   * at the mowing pose cylinder 1 demanded 1.46e7 N.m against a 5e4 limit (293x)
         #     and d(measured)/d(target) measured ~0.00 out to +-50 mm, in BOTH directions.
         # The arm did not track a target, it sagged to a gravity/constraint equilibrium --
-        # which is also what ground_band_map.json actually recorded (its target_x and
-        # cylinder_x columns differ by up to 0.25 m). No controller, learned or classical,
-        # has authority on that plant.
-        # Measured (ppo1/tests/actuator_tuning_probe.py): raising effort alone fixes it.
+        # which was also observed in the superseded ground-map experiment: commanded and
+        # settled cylinder positions differed by up to 0.25 m. No controller, learned or
+        # classical, had authority on that plant. Raising effort alone fixed it.
         # Lowering stiffness instead makes it worse (step gain collapses to 0.0-0.47,
         # hold error 30-160 mm). At x16 the drive is a clean force-limited position servo:
         # step gain 0.83-1.02, settle 0.17-0.25 s, ripple <0.07 mm, ZERO saturation, and it
