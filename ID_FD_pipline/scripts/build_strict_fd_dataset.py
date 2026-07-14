@@ -33,8 +33,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = (ROOT / "ID_FD_pipline/Fine_tune_dataset-20260714T085628Z-1-001/Fine_tune_dataset"
-       / "Excitation_FD_Strict.csv")
+SRC = ROOT / "ID_FD_pipline/training_data/Excitation_FD_Strict.csv"
 OUT = ROOT / "ID_FD_pipline/models/fd/strict_fd_transitions_0p05.npz"
 
 DEC = 5                     # 0.01 s * 5 = 0.05 s
