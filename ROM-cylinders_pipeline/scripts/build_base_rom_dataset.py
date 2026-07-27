@@ -24,7 +24,7 @@ DEFAULT_SOURCES = (
     "/home/rrlab/Desktop/hydraulic_manipulator/Hydraulic_Physics_Curriculum_20.mat",
     "/home/rrlab/Desktop/hydraulic_manipulator/Hydraulic_Mechanic_Dataset_Curriculum_1000.mat",
 )
-DEFAULT_STRICT_CSV = ROOT.parent / "ID_FD_pipline" / "training_data" / "Excitation_FD_Strict.csv"
+DEFAULT_STRICT_CSV = ROOT.parent / "PPO1_ID_FD_PhysX" / "training_data" / "Excitation_FD_Strict.csv"
 
 
 def rows(dataset: h5py.Dataset, width: int, sample_count: int) -> np.ndarray:
@@ -70,13 +70,11 @@ def extract_run(group: h5py.Group, run_id: int, source_id: int) -> dict[str, np.
     extension = rows(group["Extension"], 4, len(time))
     pressure = rows(group["dP"], 4, len(time))
     force = rows(group["Force"], 4, len(time))
-    joint_position = rows(group["JointPos"], 5, len(time))
-    joint_velocity = rows(group["JointVel"], 5, len(time))
-    lengths = {len(value) for value in (time, valve, extension, pressure, force, joint_position, joint_velocity)}
+    lengths = {len(value) for value in (time, valve, extension, pressure, force)}
     if len(lengths) != 1:
         raise ValueError(f"Run {run_id} contains misaligned signal lengths {sorted(lengths)}.")
     velocity = np.gradient(extension, time, axis=0, edge_order=2)
-    features = np.concatenate((valve, extension, velocity, pressure, force, joint_position, joint_velocity), axis=1)
+    features = np.concatenate((valve, extension, velocity, pressure, force), axis=1)
     count = len(time) - schema.history_length
     windows = np.lib.stride_tricks.sliding_window_view(features, schema.history_length, axis=0)
     history = windows[:count].transpose(0, 2, 1).astype(np.float32, copy=True)
@@ -109,8 +107,6 @@ def extract_strict_runs(path: Path, first_run_id: int, source_id: int) -> list[d
         "velocity": [f"ExtensionVelocity_{i}" for i in range(1, 5)],
         "pressure": [f"dP_{i}" for i in range(1, 5)],
         "force": [f"Force_{i}" for i in range(1, 5)],
-        "joint_position": [f"JointPos_{i}" for i in range(1, 6)],
-        "joint_velocity": [f"JointVel_{i}" for i in range(1, 6)],
     }
     missing = sorted({name for names in columns.values() for name in names}.difference(frame.columns))
     if missing:
@@ -131,9 +127,7 @@ def extract_strict_runs(path: Path, first_run_id: int, source_id: int) -> list[d
         velocity = run[columns["velocity"]].to_numpy(np.float64)[index]
         pressure = run[columns["pressure"]].to_numpy(np.float64)[index]
         force = run[columns["force"]].to_numpy(np.float64)[index]
-        joint_position = run[columns["joint_position"]].to_numpy(np.float64)[index]
-        joint_velocity = run[columns["joint_velocity"]].to_numpy(np.float64)[index]
-        features = np.concatenate((valve, extension, velocity, pressure, force, joint_position, joint_velocity), 1)
+        features = np.concatenate((valve, extension, velocity, pressure, force), 1)
         count = len(index) - schema.history_length
         history = np.lib.stride_tricks.sliding_window_view(
             features, schema.history_length, axis=0

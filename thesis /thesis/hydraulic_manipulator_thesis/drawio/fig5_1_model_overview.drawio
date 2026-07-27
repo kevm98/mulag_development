@@ -1,0 +1,22 @@
+<mxfile host="app.diagrams.net" agent="thesis" version="24.0.0">
+  <diagram id="ov" name="Model overview">
+    <mxGraphModel dx="1500" dy="760" grid="1" gridSize="10" page="1" pageWidth="1500" pageHeight="760">
+      <root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="cmd" value="&lt;b&gt;Desired command&lt;/b&gt;&lt;br&gt;c = [dx*, dxdot*] (8-D)" style="rounded=1;fillColor=#F6F0FB;strokeColor=#7A52A8;fontSize=13;" vertex="1" parent="1"><mxGeometry x="60" y="255" width="200" height="130" as="geometry"/></mxCell>
+        <mxCell id="lane1" value="PPO1 path - two separate networks" style="rounded=1;fillColor=#F8FBFF;strokeColor=#2F5DA8;verticalAlign=top;align=left;spacing=12;fontStyle=1;fontColor=#2F5DA8;fontSize=13;" vertex="1" parent="1"><mxGeometry x="330" y="90" width="880" height="190" as="geometry"/></mxCell>
+        <mxCell id="lane2" value="PPO2 path - one grey-box reduced-order model" style="rounded=1;fillColor=#F6FBFA;strokeColor=#16847A;verticalAlign=top;align=left;spacing=12;fontStyle=1;fontColor=#16847A;fontSize=13;" vertex="1" parent="1"><mxGeometry x="330" y="360" width="880" height="190" as="geometry"/></mxCell>
+        <mxCell id="id" value="&lt;b&gt;Inverse dynamics&lt;/b&gt;&lt;br&gt;28-&gt;4 residual MLP&lt;br&gt;state + target -&gt; valve change" style="rounded=1;fillColor=#EEF4FF;strokeColor=#2F5DA8;fontSize=12;" vertex="1" parent="1"><mxGeometry x="365" y="145" width="280" height="90" as="geometry"/></mxCell>
+        <mxCell id="fd" value="&lt;b&gt;Forward dynamics&lt;/b&gt;&lt;br&gt;20-&gt;12 residual MLP&lt;br&gt;valve + state -&gt; increments" style="rounded=1;fillColor=#EEF4FF;strokeColor=#2F5DA8;fontSize=12;" vertex="1" parent="1"><mxGeometry x="805" y="145" width="280" height="90" as="geometry"/></mxCell>
+        <mxCell id="rom" value="&lt;b&gt;Command-conditioned hydraulic ROM&lt;/b&gt;&lt;br&gt;GRU over 0.25 s history + physical update laws&lt;br&gt;internal valve -&gt; pressure -&gt; velocity -&gt; position" style="rounded=1;fillColor=#ECF8F6;strokeColor=#16847A;fontSize=12;" vertex="1" parent="1"><mxGeometry x="365" y="415" width="720" height="100" as="geometry"/></mxCell>
+        <mxCell id="out" value="&lt;b&gt;Predicted increment&lt;/b&gt;&lt;br&gt;bounded PhysX target" style="rounded=1;fillColor=#F1F3F5;strokeColor=#69737D;fontSize=13;" vertex="1" parent="1"><mxGeometry x="1250" y="255" width="200" height="130" as="geometry"/></mxCell>
+        <mxCell id="bus" value="measured cylinder state [x, xdot, dp, F] - 0.05 s model clock" style="endArrow=none;strokeColor=#7A52A8;strokeWidth=5;fontSize=12;fontColor=#7A52A8;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="160" y="640" as="sourcePoint"/><mxPoint x="1350" y="640" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="e1" value="valve u" style="strokeColor=#2F5DA8;strokeWidth=2;" edge="1" parent="1" source="id" target="fd"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="strokeColor=#7A52A8;strokeWidth=2;" edge="1" parent="1" source="cmd" target="id"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="strokeColor=#7A52A8;strokeWidth=2;" edge="1" parent="1" source="cmd" target="rom"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" style="strokeColor=#2F5DA8;strokeWidth=2;" edge="1" parent="1" source="fd" target="out"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" style="strokeColor=#16847A;strokeWidth=2;" edge="1" parent="1" source="rom" target="out"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-samples", type=int, default=4096)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--require-pass", action="store_true")
     args = parser.parse_args()
     device = torch.device(args.device)
     bundle = load_dataset_bundle(args.dataset)
@@ -80,11 +81,25 @@ def main() -> None:
                 "terminal_rmse_by_output": terminal_error.square().mean(dim=0).sqrt().cpu().tolist(),
                 "terminal_r2_by_output": r2(terminal_target, terminal_prediction),
             }
+    normal_r2 = r2(target, prediction)
+    zero_r2 = r2(target, zero_prediction)
+    shuffled_r2 = r2(target, shuffled_prediction)
+    gates = {
+        "valve_mean_r2_at_least_0p9": float(np.mean(normal_r2[0:4])) >= 0.9,
+        "pressure_mean_r2_at_least_0p05": float(np.mean(normal_r2[4:8])) >= 0.05,
+        "velocity_mean_r2_at_least_0p3": float(np.mean(normal_r2[8:12])) >= 0.3,
+        "extension_mean_r2_at_least_0p9": float(np.mean(normal_r2[12:16])) >= 0.9,
+        "zeroed_command_degradation_at_least_0p05": float(np.mean(np.asarray(normal_r2) - np.asarray(zero_r2))) >= 0.05,
+        "shuffled_command_degradation_at_least_0p05": float(np.mean(np.asarray(normal_r2) - np.asarray(shuffled_r2))) >= 0.05,
+        "finite_full_rank_command_jacobian": bool(torch.isfinite(singular_values).all() and singular_values.min() > 1.0e-5),
+    }
     report = {
+        "status": "PASS" if all(gates.values()) else "FAIL",
+        "acceptance_gates": gates,
         "samples": count,
-        "r2_by_output": r2(target, prediction),
-        "zeroed_command_r2_by_output": r2(target, zero_prediction),
-        "shuffled_command_r2_by_output": r2(target, shuffled_prediction),
+        "r2_by_output": normal_r2,
+        "zeroed_command_r2_by_output": zero_r2,
+        "shuffled_command_r2_by_output": shuffled_r2,
         "command_jacobian_delta_extension_wrt_delta_extension_command": jacobian.detach().cpu().tolist(),
         "command_jacobian_singular_values": singular_values.detach().cpu().tolist(),
         "command_jacobian_condition": float((singular_values.max() / singular_values.min().clamp_min(1.0e-12)).detach()),
@@ -97,6 +112,8 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(text)
     print(text, end="")
+    if args.require_pass and report["status"] != "PASS":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,814 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 4 — Data Generation and Preparation (10–16 pages)
+%% Purpose: explain how the Simscape datasets were designed to
+%% contain realistic operation, causal actuator excitation, and
+%% variation required for robust and adaptive learning.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{Data Generation and Preparation}
+\label{chap:data}
+
+Chapter~\ref{chap:system} fixed the plant: the mechanism, the two
+simulated representations of it, and the signals that connect them. What
+it did not fix is how those two representations are supposed to meet.
+The Simscape model knows the hydraulics but is far too slow to train a
+policy against; the IsaacLab articulation is fast but has no hydraulics
+at all. Everything the learned models of Chapter~\ref{chap:models} are
+able to say about the actuator has to travel from the first world to the
+second inside a dataset. This chapter is about how that dataset was
+designed, collected, audited, and prepared.
+
+Two collection campaigns are described. The first drives the arm with a
+closed-loop controller through a large randomized curriculum and
+produces the realistic operating distribution that the inverse model and
+the reduced-order model learn from. The second removes the controller
+entirely and applies deliberate excitation to the valves, because the
+closed-loop campaign turned out to be unable, in principle, to identify
+what the valve does. That second finding is the reason this chapter is
+longer than a dataset description usually needs to be. It is also, in my
+view, one of the more transferable results of this thesis, so
+Section~\ref{sec:data:open-loop} sets out the diagnosis and the repair
+in full rather than presenting only the final data.
+
+\section{Dataset Objectives and Design Requirements}
+\label{sec:data:objectives}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_architecture}
+  \caption{Architecture of the data-generation system. Both campaigns
+  sit on the shared Simscape substrate (bottom) and feed the
+  learned-model datasets (top). The closed-loop stack (left) produces
+  realistic randomized operation for requirements~R1 and~R3; the
+  open-loop stack (right) produces causal excitation for requirement~R2,
+  with a coverage gate and an audit that rejected an earlier export.
+  The two are reconciled by the alignment and join stage, and every
+  stage is checked by the audit spanning the right edge. The rest of
+  this chapter walks up this diagram layer by layer.}
+  \label{fig:data:architecture}
+\end{figure}
+
+Before any run was collected I fixed four requirements that the data had
+to satisfy jointly. They are worth stating explicitly, because the rest
+of the chapter is essentially the record of discovering that no single
+collection strategy meets all four.
+
+\begin{description}
+  \item[R1: realistic operating distribution.] The learned models are
+    deployed inside a tracking controller, so they must be accurate in
+    the states that controller actually visits: coordinated multi-axis
+    motion, gravity-loaded poses, moderate speeds. Data collected far
+    from that distribution would be accurate where it does not matter.
+  \item[R2: causal identifiability of the valve.] A forward model is
+    only useful to a policy if it responds to the command. This requires
+    that the valve signal in the training data carry information that the
+    state history does not already carry, which is a property of the
+    \emph{experiment}, not of the network~\cite{ljung1999system,
+    isermann2011identification}.
+  \item[R3: variation across a plant family.] Robust training and, later,
+    latent adaptation both need many plants rather than one. The
+    variation has to be physically meaningful and it has to be recorded
+    per run, because the teacher latent of Section~\ref{sec:models:latent}
+    is computed from it.
+  \item[R4: clean separation.] Train, validation, and test material must
+    be separable at the level of complete runs, so that no transition
+    window straddles a split boundary and no run contributes to two
+    splits.
+\end{description}
+
+R1 and R2 pull against each other, and that tension is the organising
+idea of this chapter. A controller that produces realistic motion
+computes its command from the measured state, which makes command and
+state history redundant and destroys identifiability
+(Section~\ref{sec:fund:identifiability}). An experiment that guarantees
+identifiability has to break the feedback path, which immediately makes
+the motion unrealistic. Rather than compromise on one of them, I
+collected both: a closed-loop campaign that satisfies R1 and R3, and an
+open-loop campaign that satisfies R2. Section~\ref{sec:data:combining}
+explains how the two are used together without letting either one
+dominate.
+
+\section{Randomized Parameter Space}
+\label{sec:data:randomization}
+
+\subsection{Sampling design}
+
+The closed-loop campaign draws its plants from a twelve-dimensional
+parameter space using Latin hypercube sampling~\cite{mckay1979comparison},
+which spreads the draws more evenly over each marginal than independent
+uniform sampling would at this sample size. The twelve coordinates are
+fixed once for the whole batch, before any simulation runs, so the
+parameter table is reproducible and can be audited independently of the
+data it produced.
+
+The batch is organised as a curriculum rather than a single homogeneous
+pool. Run~1 is the untouched nominal plant. Runs 2--251 randomize only
+the hydraulics, runs 252--501 only the mechanics, and runs 502--1000
+both together, giving the composition shown in
+Figure~\ref{fig:data:design}(a). This structure is deliberate: it makes
+it possible to attribute a later modelling failure to the hydraulic or
+the mechanical axis by retraining on one block at a time, which a
+uniformly mixed batch would not allow.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_dataset_design}
+  \caption{Design of the two collection campaigns.
+  (a)~Composition of the closed-loop curriculum: one nominal run, then
+  250 hydraulics-only, 250 mechanics-only, and 499 fully randomized
+  draws. (b)~Base bulk modulus from the entrained-air and dead-volume
+  parameters. The series formula returns $0.13$--$0.46\,\mathrm{GPa}$
+  across the sampled range, entirely below the $0.70\,\mathrm{GPa}$
+  clamp floor, so the stored value is constant at $0.70\,\mathrm{GPa}$
+  on every run and the base fluid stiffness is not randomized; the same
+  two coordinates still reach the plant weakly through the chamber dead
+  volume (Section~\ref{sec:data:randomization}). (c)~Schedule of the
+  $\unit[64]{s}$ open-loop excitation run: a startup second that is
+  excluded from training, four sequential single-cylinder slots
+  separated by zero-command gaps, a simultaneous phase on all four
+  channels, and a shutdown second.}
+  \label{fig:data:design}
+\end{figure}
+
+\subsection{Hydraulic parameters}
+
+Table~\ref{tab:data:hydraulic} lists the hydraulic axes. They were
+chosen to correspond to the physical mechanisms that make one machine
+differ from another in service, in the sense discussed in
+Section~\ref{sec:fund:actuation-chain}: air works its way into the
+fluid, spools and seals wear, and relief settings drift.
+
+\begin{table}[tb]
+  \centering
+  \caption{Randomized hydraulic parameters. The seal-wear coordinate is
+  drawn independently for each of the four cylinders and drives three
+  physically linked quantities at once.}
+  \label{tab:data:hydraulic}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Parameter & Nominal & Randomized range & Acts on \\
+    \midrule
+    Entrained air fraction $\varepsilon_{\mathrm{air}}$
+      & $0.005$ & $0.001$ -- $0.080$ & fluid compliance \\
+    Dead-volume fraction $\varepsilon_{\mathrm{vol}}$
+      & $0.020$ & $0.005$ -- $0.080$ & fluid compliance \\
+    Discharge coefficient $c_d$
+      & $0.70$ & $0.56$ -- $0.84$ & valve flow gain \\
+    Seal wear $w_{\mathrm{seal},i}$
+      & $0$ & $0$ -- $0.25$ (per cylinder)
+      & clearance, leakage, spool lag \\
+    Relief setting $p_{\mathrm{set}}$
+      & $\unit[27.6]{MPa}$ & $\unit[24.8]{MPa}$ -- $\unit[30.4]{MPa}$
+      & pressure ceiling \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The seal-wear coordinate deserves comment because it is the one place
+where a single sampled number is deliberately allowed to move several
+model parameters together. A worn cylinder does not become leakier
+without also becoming slower, so $w_{\mathrm{seal},i}$ scales the piston
+clearance linearly, the valve leakage area with the cube of the same
+factor, and the spool time constant from $\unit[8]{ms}$ to about
+$\unit[13]{ms}$ at the top of the range. Sampling those three
+independently would have produced physically incoherent machines, some
+of them very leaky and yet perfectly fast.
+
+\subsection{Compliance-equivalent representation of hydraulic
+compressibility}
+\label{sec:data:compliance}
+
+The two air-related coordinates need to be described carefully, because
+what they do in the model is not what their names suggest, and stating it
+loosely would misrepresent the data. The generation campaign uses an
+isothermal fluid with a fixed base bulk modulus
+%
+\begin{equation}
+  \label{eq:data:beta0}
+  \beta_0 = \unit[0.70]{GPa},
+\end{equation}
+%
+held constant across all thousand runs, and auditing the stored run
+descriptors confirms that the applied value is exactly $\beta_0$ on
+every one of them. It would therefore be wrong to claim that the fluid
+bulk modulus was randomized. What the entrained-air and dead-volume
+coordinates actually randomize is the chamber \emph{dead volume},
+%
+\begin{equation}
+  \label{eq:data:vdead}
+  V_{d,i} = V_{d,0}\,\bigl(1 + \varepsilon_{\mathrm{air},i}
+  + \varepsilon_{\mathrm{vol},i}\bigr),
+\end{equation}
+%
+which is assigned to both chambers of run $i$; the stored values span
+$505$ to $\unit[579]{mL}$, an unclamped spread of about thirteen
+percent. The reason this matters is that the pressure dynamics do not
+depend on $\beta_0$ alone. With the stroke-dependent chamber volumes
+$V_{1,i}(x) = V_{d,i} + A_1 x$ and $V_{2,i}(x) = V_{d,i} + A_2 (L-x)$,
+the continuity equation \eqref{eq:sys:continuity} carries the coefficient
+%
+\begin{equation}
+  \label{eq:data:kp}
+  \dot{p}_{1} = \frac{\beta_0}{V_{1,i}(x)}
+  \bigl( Q_1 - A_1 \dot{x} - C_{\mathrm{leak}}(p_1 - p_2) \bigr),
+  \qquad
+  K_{p,i}(x) \equiv \frac{\beta_0}{V_{i}(x)},
+\end{equation}
+%
+so it is the ratio $\beta_0/V$, not $\beta_0$, that sets the
+pressure-response rate. Randomizing $V_{d,i}$ therefore varies the same
+reduced-order coefficient that randomizing the modulus would have varied.
+The hydraulic stiffness reflected at the piston, $k_{h,i}(x) \propto
+\beta_0 A^2 / V_i(x)$, and the associated natural frequency,
+$\omega_{h,i}(x) \propto \sqrt{\beta_0 A^2 / (m_{\mathrm{eq}}
+V_i(x))}$, move with it: a larger chamber is more compliant and slower,
+a smaller chamber stiffer and faster.
+
+To give the realized variation a modulus-like label without the false
+claim, I reference each run to the nominal chamber and define a
+\emph{compliance-equivalent bulk modulus}
+%
+\begin{equation}
+  \label{eq:data:betaeq}
+  \beta_{\mathrm{eq},i} = \beta_0\,\frac{V_{d,0}}{V_{d,i}},
+  \qquad\text{so that}\qquad
+  \frac{\beta_{\mathrm{eq},i}}{V_{d,0}} = \frac{\beta_0}{V_{d,i}},
+\end{equation}
+%
+which preserves exactly the compressibility coefficient of
+\eqref{eq:data:kp}. Equivalently, the run can be described by the
+pressure-stiffness index $K_{p,i}^{d} = \beta_0/V_{d,i}$ or the
+compliance index $C_{h,i}^{d} = V_{d,i}/\beta_0$. These are the correct
+learning and adaptation targets for the hydraulic compressibility axis,
+precisely because the stored $\beta_{\mathrm{eff}}$ is constant while
+$\beta_{\mathrm{eq}}$, $K_p^{d}$, and $C_h^{d}$ carry the variation that
+was physically present in the simulated trajectories. Their distribution
+is shown in Figure~\ref{fig:data:delivered}, alongside the other three
+hydraulic axes.
+
+Two consequences follow, and both are stated as limitations rather than
+strengths. First, the equivalence holds only for the compressibility
+term. Changing the chamber volume reproduces the pressure-build-up
+coefficient that a modulus change would produce, but it does not
+reproduce temperature-dependent density, viscosity, or leakage; those
+were not modelled, and the dataset is isothermal. In a real machine,
+temperature, operating pressure, entrained air, hose expansion, and
+structural compliance all feed the effective compliance, and none of
+them is separately identifiable here. They are represented only through
+the single lumped coordinate $C_h = V/\beta$, or equivalently
+$K_p = \beta/V$, which is what the latent encoder of
+Section~\ref{sec:models:latent} is able to recover. Second, the choice
+of a fixed modulus was partly a computational one. Pushing $\beta$ to
+large values makes the fluid nearly incompressible and lifts the
+hydraulic natural frequency, which sharpens the time-scale separation
+between the fast pressure modes and the slow rigid-body motion and turns
+the coupled differential-algebraic system stiffer; the variable-step
+solver then needs smaller steps and more frequent Jacobian updates.
+Multiplied across a thousand coupled hydraulic-multibody runs, that cost
+is the difference between an overnight campaign and a multi-day one. The
+fixed $\unit[0.70]{GPa}$ was chosen as the compromise that keeps genuine
+compressible pressure dynamics while holding the numerical stiffness, and
+the wall-clock cost, within budget.
+
+The batch is therefore honestly described as containing randomized
+effective chamber compliance, or equivalently randomized hydraulic
+pressure stiffness, under an isothermal fluid assumption, and this thesis
+uses that language rather than the stronger and unsupported claim of a
+randomized fluid modulus.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_delivered_params}
+  \caption{Hydraulic parameters as actually delivered to the plant, read
+  from the stored descriptors of all $1\,000$ curriculum runs (dashed
+  line: nominal value). The discharge coefficient and relief setting
+  vary as designed. The rightmost panels show the compressibility axis
+  in its correct form: the base modulus $\beta_0$ is constant, but the
+  compliance-equivalent modulus
+  $\beta_{\mathrm{eq}} = \beta_0 V_{d,0}/V_{d}$ of
+  \eqref{eq:data:betaeq} and the pressure-stiffness index $K_p^{d} =
+  \beta_0/V_{d}$ carry the variation that the randomized dead volume
+  actually produces in the pressure dynamics.}
+  \label{fig:data:delivered}
+\end{figure}
+
+\subsection{Mechanical parameters}
+
+The mechanical axes, listed in Table~\ref{tab:data:mechanical}, are
+applied to all fourteen rigid bodies of the mechanism: the six links,
+the four cylinder barrels, and the four pistons. For each body the mass
+is perturbed by up to $\pm 20\,\%$, the centre of mass by up to
+$\pm 5\,\%$ of its nominal offset, and the inertia tensor together with
+its products of inertia is perturbed consistently with the mass change,
+so that the body remains physically realisable rather than acquiring an
+inertia that its mass could not produce.
+
+\begin{table}[tb]
+  \centering
+  \caption{Randomized mechanical parameters. The rigid-body
+  perturbations are applied independently to each of the fourteen
+  bodies.}
+  \label{tab:data:mechanical}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Parameter & Nominal & Randomized range \\
+    \midrule
+    Body mass & CAD value & $\pm 20\,\%$ \\
+    Centre-of-mass offset & CAD value & $\pm 5\,\%$ \\
+    Inertia tensor and products & CAD value & consistent with mass draw \\
+    Joint stiffness, J1 and J2 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
+    Joint stiffness, J3 and J4 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
+    Joint stiffness, J5 & $\unit[25]{kN/m}$ & $15$ -- $\unit[60]{kN/m}$ \\
+    Joint damping & $250$ & $100$ -- $600$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The joint stiffness and damping terms model compliance in the bearings
+and linkage rather than in the fluid. They matter here because they set
+how much of a pressure transient appears as boom oscillation instead of
+clean motion, which is exactly the coupling that a purely kinematic
+controller cannot anticipate.
+
+\section{Closed-Loop Data Collection}
+\label{sec:data:closed-loop}
+
+The complete closed-loop procedure is summarized in
+Algorithm~\ref{alg:data:closed-loop}. Two features of it are worth
+reading off before the prose expands on them: the parameter table is
+drawn in full before any simulation runs, so the plant family is fixed
+and reproducible independently of the collection, and the reference
+trajectory is resampled inside every run, so no two runs share a path.
+
+\begin{algorithm}[tb]
+  \small
+  \DontPrintSemicolon
+  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+  \Input{run budget $N=1000$; joint limits $\bm{q}_{\min},\bm{q}_{\max}$;
+    nominal parameters $\bm{\theta}_0$}
+  \Output{dataset $\mathcal{D}=\{(\text{trajectory}_i,\bm{\xi}_i)\}_{i=1}^{N}$}
+  \BlankLine
+  $\mathbf{L}\leftarrow\textsc{LatinHypercube}(N,12)$
+    \tcp*{one design for the whole batch}
+  \For{$i\leftarrow 1$ \KwTo $N$}{
+    assign $i$ to a curriculum block (nominal / hydraulic / mechanical /
+      full)\;
+    $\bm{\xi}_i\leftarrow\textsc{DrawParameters}(\mathbf{L}_i,\text{block})$
+      \tcp*{$\varepsilon_{\mathrm{air}},\varepsilon_{\mathrm{vol}},c_d,
+      w_{\mathrm{seal}},p_{\mathrm{set}}$; masses, CoM, inertia,
+      stiffness}
+  }
+  \For{$i\leftarrow 1$ \KwTo $N$}{
+    inject $\bm{\xi}_i$ into the Simscape model\;
+    $n_w\leftarrow\textsc{RandInt}(12,20)$;\quad
+      $\bm{W}\leftarrow\textsc{LatinHypercube}(n_w,\text{JDOF})$ within
+      $[\bm{q}_{\min},\bm{q}_{\max}]$\;
+    assign each segment a speed class (slow / medium / fast / variable);
+      \textbf{no} dwell\;
+    $\bm{q}_{\mathrm{ref}}(t)\leftarrow\textsc{Interpolate}(\bm{W})$ over
+      $\unit[22]{s}$\;
+    simulate with \texttt{ode23t}; log on the $\unit[0.05]{s}$ grid\;
+    store $(\bm{u},\bm{x},\dot{\bm{x}},\Delta\bm{p},\bm{F},\bm{q},
+      \dot{\bm{q}},\bm{q}_{\mathrm{ref}},\bm{\xi}_i)$\;
+    \lIf{$i \bmod 100 = 0$}{checkpoint $\mathcal{D}$ to disk}
+  }
+  \caption{Closed-loop curriculum generation.}
+  \label{alg:data:closed-loop}
+\end{algorithm}
+
+\subsection{The controller as a data-collection instrument}
+
+Every closed-loop run is driven by the same fixed integral-backstepping
+controller, operating on all five joints at a $\unit[0.005]{s}$ rate.
+Its gains are never retuned between runs. This is deliberate: the
+controller is here as a standardised instrument for putting the arm
+through realistic motion, not as a control contribution of this thesis,
+and holding it fixed is what makes the resulting behavioural differences
+attributable to the plant draw rather than to the controller.
+
+Three details of the controller matter later. The second joint carries
+the gravity load of the whole boom, so it is handled by a
+proportional-integral law with velocity damping and an explicit gravity
+bias rather than by the backstepping law used on the others. A barrier
+term keeps the commanded configuration away from the joint limits
+imported from the URDF. And the commands are saturated per axis at
+$[0.95,\, 0.95,\, 0.80,\, 0.80,\, 0.90]$. That last vector is worth
+noting: the first four entries are exactly the clip limits stored in the
+inverse-dynamics checkpoint in Section~\ref{sec:models:id}. The ID
+network inherited its output limits from the instrument that generated
+its training labels, which is correct but easy to mistake for a
+free design choice.
+
+\subsection{Trajectories}
+
+Each run receives its own reference trajectory, sampled rather than
+scripted. Between twelve and twenty waypoints are drawn by Latin
+hypercube sampling within the joint limits, and the arm moves between
+them without dwelling, so that the data contains transitions rather than
+long static holds. Segment durations are drawn from four speed classes,
+slow ($1.5$--$\unit[2.5]{s}$), medium ($0.8$--$\unit[1.5]{s}$), fast
+($0.3$--$\unit[0.7]{s}$), and variable ($0.5$--$\unit[2.5]{s}$), and
+about a third of the runs receive additional exploratory perturbations
+on top of the waypoint path.
+
+An earlier version of this generator used four to eight waypoints with
+dwell periods between them. It produced data in which the arm was
+stationary for a large fraction of the time, which flatters any model
+that learns to predict persistence. The current settings were chosen to
+remove that easy mass of near-static samples, and the increase in
+waypoint count is the single change that most improved the usefulness of
+the batch.
+
+Figure~\ref{fig:data:trace} shows one resulting run, a fully randomized
+draw from the second half of the curriculum. The four cylinders move
+continuously and out of phase with one another, the extensions sweep a
+large fraction of their travel, and the valve commands are the smooth
+piecewise-linear profiles that the waypoint interpolation produces
+rather than abrupt steps. This is the realistic, coordinated,
+gravity-loaded operation that requirement~R1 asks for, and it is exactly
+the regime the inverse and reduced-order models are trained to be
+accurate in.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_closed_loop_trace}
+  \caption{One closed-loop operating run (fully randomized draw, run 601
+  of the curriculum). Top: the four cylinder extensions, moving
+  continuously and out of phase as the backstepping controller tracks
+  the sampled waypoint trajectory. Bottom: the corresponding valve
+  commands. The motion is coordinated and gravity loaded, which is the
+  operating regime the learned models must be accurate in, but the valve
+  command is nearly a function of the state that produced it, which is
+  the property Section~\ref{sec:data:open-loop} shows makes the valve
+  unidentifiable from this data alone.}
+  \label{fig:data:trace}
+\end{figure}
+
+\subsection{Execution and logging}
+
+Each run simulates $\unit[22]{s}$ of operation. The solver is the stiff
+implicit \texttt{ode23t} integrator in accelerator mode with relative
+and absolute tolerances of $10^{-2}$ and $10^{-3}$; the loose tolerances
+are a deliberate throughput compromise, and their effect is bounded by
+the consistency checks of Section~\ref{sec:data:diagnostics}. Output is
+written on a fixed $\unit[0.05]{s}$ grid, giving 441 logged samples per
+run, and the batch is checkpointed to disk every hundred runs so that a
+failure late in a multi-day batch does not cost the whole collection.
+
+For every run the archive stores the time vector, the five valve
+commands, the four cylinder extensions, the four chamber pressure
+differences, the four rod forces, the five joint positions and
+velocities, the reference position and velocity signals, and, crucially,
+the complete parameter structure that produced the run. That last item
+is what makes the batch usable for the latent-adaptation work: the
+privileged plant descriptor $\bm{\xi}$ of
+Section~\ref{sec:fund:domain-randomization} is not something that has to
+be reconstructed later, it is recorded alongside the trajectory.
+
+The cost is worth quoting, because it is the concrete form of the
+argument made in Section~\ref{sec:fund:sim-data-source}. A single
+$\unit[64]{s}$ open-loop run takes roughly $\unit[2000]{s}$ of wall time
+on the collection machine, a real-time factor of about $0.03$. The
+Simscape plant runs some thirty times slower than the machine it
+models. No policy-optimisation loop that needs millions of environment
+steps can be built on that, which is precisely why the learned actuator
+surrogates exist.
+
+\section{Open-Loop Excitation Experiments}
+\label{sec:data:open-loop}
+
+\subsection{Why the closed-loop batch was not enough}
+
+The first forward-dynamics model was trained on the closed-loop material
+and scored a one-step $R^2$ near $0.999$. It was also, as
+Section~\ref{sec:models:fd-identifiability} documents, almost completely
+insensitive to its own valve input: zeroing that input changed the
+long-horizon rollout error by a few percent. The model had learned to
+continue a trajectory, not to respond to a command.
+
+This is not a training failure and no amount of retraining on the same
+material would have fixed it. In closed loop the controller computes the
+command from the state, so the command is very nearly a deterministic
+function of the state history that the network already
+sees~\cite{ljung1999system}. The information needed to separate cause
+from correlation is simply not present in the data. Recovering it
+requires an experiment in which the command is generated independently
+of the state, which means opening the loop.
+
+It is worth being clear that this is not a coverage problem in disguise.
+Figure~\ref{fig:data:regimes} shows that the closed-loop batch is in
+fact varied in its control effort: pooled over a run, the valve spends
+about a quarter of the time saturated, roughly half in the mid-authority
+band, and the rest in low-command creep, so all three control regimes
+are represented. The difficulty is visible in the same figure. Plotting
+the valve command against the cylinder velocity it produced shows the
+two riding together along a band rather than filling the plane: in a
+feedback loop a fast motion is exactly when the controller commands a
+large valve opening, so command and state move as one. A model can read
+the command off the velocity, which is why it never has to learn what
+the command \emph{causes}. Diverse control effort and identifiable
+control effort are not the same thing, and this batch has the first
+without the second.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_regimes}
+  \caption{The closed-loop batch is diverse in control effort but not
+  identifiable. (a)~Fraction of time the valve spends saturated
+  ($|u|\ge 0.8$), in the mid band ($0.3\le|u|<0.8$), and in low-command
+  creep ($|u|<0.3$), pooled over a representative run; all three regimes
+  are well represented. (b)~The same samples plotted as valve command
+  against the cylinder velocity they produced, coloured by regime. The
+  command tracks the velocity along a band rather than covering the
+  plane, so the valve is nearly a function of the state and cannot be
+  separated from it by a model, whatever the control effort.}
+  \label{fig:data:regimes}
+\end{figure}
+
+\subsection{Design of the excitation signal}
+
+The excitation run lasts $\unit[64]{s}$ and follows the fixed schedule
+in Figure~\ref{fig:data:design}(c). One second of startup is simulated
+and then discarded, because the plant is settling from its initial
+condition and those samples describe the initialisation rather than the
+dynamics. Four sequential slots follow, each giving one cylinder ten
+seconds of excitation followed by a half-second zero-command gap; the
+gaps make the boundaries between single-axis segments unambiguous. A
+twenty-second phase then drives all four channels at once, and a final
+second of zero command closes the run. Commands are limited to
+$\pm 0.90$ of full authority.
+
+The most consequential design decision here is one that runs against the
+textbook reflex. A persistently exciting input for a linear system is
+usually a rapidly switching signal, and the first version of this
+excitation was built that way. It was persistently exciting in the
+formal sense and still produced poor data, because the cylinders
+reversed before they had travelled anywhere: the commanded energy went
+into repeatedly accelerating and decelerating the piston near one point
+of the stroke instead of moving it through the workspace. The present
+signal replaces fast switching with long full-authority plateaus during
+the sequential phase and a slow, high-authority component during the
+simultaneous phase, so that each cylinder actually traverses a
+substantial part of its stroke while its valve is open. The simultaneous
+phase additionally superimposes one slow near-square cycle across the
+full twenty seconds with a distinct medium-frequency component on each
+channel, and short raised-cosine ramps at entry and exit keep the
+transitions differentiable.
+
+The lesson generalises, and it is one this thesis would offer to anyone
+identifying a hydraulic actuator: persistent excitation is a condition
+on the input signal, but the quantity that decides whether a
+\emph{cylinder} is identifiable is how much of the stroke the input
+actually covers. The two are not the same, and optimising the first
+while ignoring the second produces data that passes the classical test
+and still cannot support a model.
+
+\subsection{Plant draws and acceptance}
+
+The same excitation is applied to four plant draws taken from the same
+parameter space as the closed-loop campaign: nominal, randomized
+hydraulics, randomized mechanics, and fully randomized. Holding the
+input fixed and varying only the plant is what makes the four runs
+directly comparable, since any difference in the response is attributable
+to the parameters.
+
+Each run is checked for stroke coverage before it is accepted. The
+collector requires at least $10\,\%$ of the available stroke on
+cylinders 1--3 and $8\,\%$ on cylinder 4, warns below a target of
+$30\,\%$, and records the achieved coverage per channel in the run
+summary. The runs retained here cover between $12\,\%$ and $33\,\%$ of
+the stroke depending on the cylinder, which is above the acceptance
+floor but below the target; cylinder 4 is the weakest, and improving its
+coverage is the clearest available next step for this campaign.
+
+One earlier excitation export was rejected outright rather than repaired.
+Half of its runs turned out to contain duplicated state trajectories, so
+the nominally distinct plant draws were not distinct in the data, and
+the valve was again not causally identifiable. That export and its
+reports are not part of the maintained workflow. It is mentioned here
+because it is the reason the acceptance checks in
+Section~\ref{sec:data:diagnostics} exist in their present form: they were
+written to make that particular failure impossible to miss a second
+time.
+
+\section{Combining Closed-Loop and Open-Loop Datasets}
+\label{sec:data:combining}
+
+The two campaigns are complementary, and each learned model of
+Chapter~\ref{chap:models} draws on them in a different proportion.
+
+The inverse-dynamics model is trained entirely on closed-loop material,
+because its target is the command that a competent controller issued in
+a given state, and that is precisely what the closed-loop campaign
+records. The forward-dynamics model begins on closed-loop material and
+is then retrained on the strict open-loop export, with the closed-loop
+data retained as a replay term at a weight of $0.25$ rather than
+discarded. That weighting is not cosmetic: ablation showed that dropping
+the replay term costs state coverage and extension accuracy, because
+four excitation runs cannot span the poses that a thousand operating
+runs visit. The open-loop data supplies causality, the closed-loop data
+supplies coverage, and the model needs both.
+
+Figure~\ref{fig:data:coverage} makes this complementarity concrete by
+comparing, per cylinder, where the two campaigns place the extension.
+The closed-loop distribution is broad and smoothly filled, because a
+thousand tracking runs visit the workspace densely; the open-loop
+distribution is concentrated into a few narrow bands, because the
+excitation holds each cylinder near a plateau for seconds at a time. The
+open-loop bands are where the valve is genuinely identifiable, and the
+closed-loop mass is where the model has to be accurate at deployment.
+Neither campaign covers both, which is why the forward model is trained
+on their union rather than on either alone.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch4_coverage}
+  \caption{Extension coverage of the two campaigns, per cylinder,
+  pooled over runs (closed-loop: filled, 120 curriculum runs; open-loop:
+  outline, the four strict-excitation runs). The closed-loop data fills
+  the reachable range smoothly, giving the pose coverage the models need
+  at deployment; the open-loop data concentrates into the plateaus where
+  the valve is causally identifiable. The two are complementary, and the
+  forward model of Chapter~\ref{chap:models} is trained on their union.}
+  \label{fig:data:coverage}
+\end{figure}
+
+The reduced-order model consumes the closed-loop material in a joined
+form. The inverse and forward exports are aligned on exact run
+identifiers, time indices, and sample times, and the join is accepted
+only when the sixteen-dimensional cylinder state agrees between them
+sample for sample. The resulting command-conditioned dataset contains
+$452\,400$ transitions at $\unit[0.05]{s}$ drawn from $1\,040$ aligned
+runs. The logged valve command is carried through this join, but only as
+a supervision target for the model's internal valve head; it is never a
+runtime input, which is the property that lets the ROM be driven by
+desired cylinder motion alone (Section~\ref{sec:models:rom}).
+
+The thousand-run randomized curriculum described in
+Section~\ref{sec:data:closed-loop} occupies a different position in the
+argument, and I want to be exact about it because it is easy to overstate.
+The inverse, forward, and reduced-order models reported in
+Chapter~\ref{chap:models} were trained on the earlier aligned export,
+which is a nominal-plant collection. The randomized curriculum was
+collected to support the robust and adaptive configurations, PPO1-B,
+PPO2-B, and PPO2-C, and in particular to provide the per-run parameter
+vectors that the teacher encoder of Section~\ref{sec:models:latent}
+requires. It is the substrate for that work rather than a dataset whose
+results are already reported here.
+
+\section{Feature and Target Construction}
+\label{sec:data:features}
+
+All three learned actuator models take cylinder-space features, in the
+ordering and notation fixed in Section~\ref{sec:models:overview}. Their
+input contracts differ because their questions differ. The inverse model
+receives the measured cylinder state, the logged rod forces, the desired
+increments, and the previously applied command, twenty-eight numbers in
+all. The forward model receives the applied valve command and the
+measured state, twenty numbers. The reduced-order model receives a
+six-sample history of state, previously predicted valve, and desired
+command, twenty-four numbers per step.
+
+Three conventions apply throughout, and they are the same ones the models
+enforce at inference time.
+
+\paragraph{Increment targets.}
+Every dynamic target is a within-run one-step increment,
+$\Delta \bm{x}_k = \bm{x}_{k+1} - \bm{x}_k$, never an absolute state.
+This removes the large static component of the signals and, more
+importantly, makes the trivial persistence solution an explicit baseline
+that a model can be measured against rather than a hiding place it can
+settle into.
+
+\paragraph{Causal alignment.}
+Features at step $k$ contain only quantities available at step $k$. The
+extraction stage verifies this by recomputing every logged target from
+the within-run difference of the states and requiring exact agreement,
+a check reported in Section~\ref{sec:data:diagnostics}.
+
+\paragraph{Time-base conversion.}
+The open-loop campaign is logged at $\unit[0.01]{s}$ but the models run
+at $\unit[0.05]{s}$, so five consecutive raw samples are combined into a
+single transition. The valve input attributed to that transition is the
+command held at the start of the window, which is the causally correct
+choice; the mean command over the window is also recorded, but only for
+analysis. Cylinder extension velocity is not logged directly in the
+closed-loop archive and is obtained by differentiating extension on the
+output grid, which is consistent with the trapezoidal identity that the
+strict data satisfies to $R^2 = 0.994$--$0.9997$
+(Equation~\ref{eq:models:trapezoid}).
+
+\section{Preprocessing and Data Splits}
+\label{sec:data:preprocessing}
+
+Splitting is done at the level of complete runs, never of individual
+samples. A random sample-level split would place transitions from the
+same trajectory on both sides of the boundary and report a validation
+score that mostly measures interpolation within a run. For the
+command-conditioned dataset the $1\,040$ runs are divided into $936$
+training, $52$ validation, and $52$ test runs, giving $407\,160$,
+$22\,620$, and $22\,620$ transitions respectively, with no run
+identifier appearing in more than one split.
+
+The strict open-loop export needs a different treatment because it
+contains only four runs, and holding one out would remove an entire
+plant draw from training. Instead each run is divided into twenty
+temporal blocks, every fifth block is assigned to validation, and a
+five-sample guard interval is discarded at each block boundary so that
+no $\unit[0.05]{s}$ transition window spans the split. A simple
+last-twenty-percent split was tried first and rejected: it changed the
+spread of the targets between training and validation by a factor of
+$1.3$ to $2.3$, because the final fifth of the run is the simultaneous
+excitation phase and is dynamically unlike everything before it. That
+split would have measured extrapolation to a different regime and called
+it generalisation.
+
+Normalization statistics are computed on the training split only and
+stored inside each checkpoint, so that a model always normalizes with the
+statistics it was fitted with. Mixing statistics between checkpoints
+silently invalidates any comparison, and the loader enforces the stored
+contract rather than recomputing it.
+
+Finally, samples are carried with an explicit validity flag rather than
+being silently dropped. In the strict export $93.7\,\%$ of samples are
+marked valid; the remainder are the excluded startup and shutdown
+seconds and the zero-command gaps. Keeping them in the archive with a
+flag, instead of deleting them, means the time base stays contiguous and
+the within-run difference checks remain meaningful.
+
+\section{Dataset Diagnostics}
+\label{sec:data:diagnostics}
+
+No dataset in this thesis is used before it passes an explicit audit,
+for the reason given at the end of
+Section~\ref{sec:data:open-loop}. The audit of the strict open-loop
+export is reproduced in Table~\ref{tab:data:audit}.
+
+\begin{table}[tb]
+  \centering
+  \caption{Audit of the strict open-loop excitation export. All checks
+  are computed by the extraction stage and stored with the data; the
+  export is accepted only if every one of them passes.}
+  \label{tab:data:audit}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Check & Result & Interpretation \\
+    \midrule
+    Rows, runs, columns & $25\,600$ / $4$ / $49$ & four complete runs \\
+    Median sample time & $\unit[0.01]{s}$ & as commanded \\
+    Maximum sample-time error & $9.1\times10^{-15}\,\mathrm{s}$ & numerically exact grid \\
+    Maximum $\Delta$extension error & $0$ & targets match state differences \\
+    Maximum $\Delta$velocity error & $0$ & targets match state differences \\
+    Maximum $\Delta(\Delta p)$ error & $\unit[0]{Pa}$ & targets match state differences \\
+    Non-finite values & $0$ & no solver escapes \\
+    Valid fraction & $0.937$ & startup, gaps, shutdown excluded \\
+    Command rank & $4$ & all four channels independent \\
+    Lagged excitation rank & $80$ & history matrix full rank \\
+    Valve saturation & $8.5\,\%$ per channel & limits reached but not dominant \\
+    Stroke coverage & $12\,\%$ -- $33\,\%$ & above floor, below target \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The two rank figures are the ones that speak directly to requirement R2.
+The instantaneous command matrix has rank four, so no channel is a
+linear combination of the others, and the lagged regressor matrix built
+from the command history has rank eighty, so the excitation is
+persistently exciting to the order the models need. The condition number
+of that lagged matrix is about $4.6\times10^{3}$, which is finite and
+workable rather than comfortable; it is a consequence of using long
+plateaus, and it is the price paid for the stroke coverage those
+plateaus buy.
+
+The exactness of the three increment checks deserves a word, since a
+maximum error of exactly zero invites suspicion. It is expected here:
+the targets are computed from the logged states by the same within-run
+difference that the check recomputes, so the check verifies that the
+extraction stage did what it claims, not that the simulation is
+accurate. It catches misalignment, off-by-one indexing, and rows that
+have been reordered or concatenated across run boundaries, which are the
+failure modes that actually occur. Physical fidelity is a separate
+question, addressed by the validation study in
+Section~\ref{sec:sys:simscape-validation}.
+
+Three limitations are carried forward honestly. The base fluid stiffness
+does not vary across the randomized batch, for the clamp reason set out
+in Section~\ref{sec:data:randomization}; the mechanical randomization,
+the discharge coefficient, the seal wear, the relief setting, and the
+dead-volume capacitance all vary as intended and are confirmed in the
+stored run descriptors, but no result in this thesis may be read as
+adaptation to bulk modulus specifically. Stroke coverage in the
+open-loop campaign reaches only $12\,\%$ on the head-pivot cylinder,
+which is the cylinder the strict forward model predicts least well, and
+the two facts are unlikely to be unrelated. And the rod-force channel is
+recorded but fails a piston-area consistency check on this export, which
+is why it carries zero supervised weight in the reduced-order model
+(Section~\ref{sec:models:rom}) and why no result in this thesis rests on
+it.
+
+With the data described and audited, the next chapter turns to what was
+learned from it: the inverse and forward models that form the PPO1
+actuator path, and the command-conditioned reduced-order model that
+replaces them in PPO2.

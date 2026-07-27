@@ -1,0 +1,17 @@
+digraph controller_pipeline {
+    rankdir=LR;
+    node [shape=box, style=rounded, fontname="serif", fontsize=11];
+    edge [fontname="serif", fontsize=9];
+
+    PPO [label="PPO\nPolicy"];
+    InvDyn [label="Inverse\nDynamics"];
+    Valve [label="Valve\nCommands"];
+    Plant [label="Hydraulic\nPlant"];
+    FDObs [label="Forward Dynamics\nObserver"];
+
+    PPO -> InvDyn;
+    InvDyn -> Valve;
+    Valve -> Plant;
+    Plant -> FDObs;
+    FDObs -> PPO [label=" state\n feedback", style=dashed];
+}

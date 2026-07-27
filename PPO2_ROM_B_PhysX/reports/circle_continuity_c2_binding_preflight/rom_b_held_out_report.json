@@ -1,0 +1,1043 @@
+{
+  "generated_at": "2026-07-26T16:04:01",
+  "checkpoint": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo2_rom_b_robust/2026-07-24_12-48-14/model_53_ppo2_rom_b_final.pt",
+  "checkpoint_sha256": "6731bac46e083d7ac99074e3a7b34752b64117a5003755e3d8296747353a69e9",
+  "policy": "deterministic_actor_mean",
+  "num_envs": 64,
+  "eval_steps": 120,
+  "dls_velocity_filter_beta": 0.0,
+  "shapes": [
+    "circle"
+  ],
+  "factor_order": [
+    "e_comp",
+    "d_seal_1",
+    "d_seal_2",
+    "d_seal_3",
+    "d_seal_4"
+  ],
+  "factor_sampling": "independent_uniform_per_environment_at_reset",
+  "clearance_frame_consistent": true,
+  "privileged_oracle": false,
+  "factor_blind": true,
+  "certifiable": true,
+  "monte_carlo_seed_offset": 300000,
+  "h_sweep_seed_offset": 400000,
+  "h_sweep_rounds": 1,
+  "h_sweep_uses_matched_shape_seeds": true,
+  "condition_process_isolation": true,
+  "thresholds": {
+    "max_shape_mean_error_m": 0.04,
+    "max_shape_p95_error_m": 0.08,
+    "max_shape_p95_acceleration_mps2": 40.0,
+    "min_head_alignment": 0.98,
+    "max_clearance_error_m": 0.2,
+    "max_post_constraint_truck_drift_m": 0.001,
+    "max_termination_rate": 0.05,
+    "consecutive_passing_rounds": 3,
+    "minimum_rounds_per_stage": 3,
+    "minimum_full_scale_rounds": 5
+  },
+  "termination_acceptance_statistic": {
+    "definition": "max(pooled one-sided Clopper-Pearson upper, one-sided seed-group t upper); pooled only across seed groups",
+    "confidence": 0.95,
+    "threshold": 0.05,
+    "granularity": "per shape (monte carlo), per (h, shape) (h sweep)",
+    "aggregation": "worst shape controls; never pooled across shapes or h",
+    "note": "Reported alongside the legacy row-wise point-estimate gate. Neither term alone is safe: pooled Clopper-Pearson assumes exchangeable replicas, and the seed-group t bound carries no within-group binomial uncertainty."
+  },
+  "monte_carlo_termination_acceptance": {
+    "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+    "confidence": 0.95,
+    "threshold": 0.05,
+    "passed": true,
+    "worst_condition": {
+      "shape": "circle",
+      "h": null,
+      "seed_groups": 2,
+      "replicas_per_group": 64,
+      "failures_per_group": [
+        0,
+        0
+      ],
+      "total_failures": 0,
+      "total_replicas": 128,
+      "rate": 0.0,
+      "clopper_pearson_upper": 0.023132405251746743,
+      "seed_group_t_upper": 0.0,
+      "upper_bound": 0.023132405251746743,
+      "binding_term": "clopper_pearson",
+      "dispersion_phi": null,
+      "dispersion_p_value": null,
+      "threshold": 0.05,
+      "passed": true
+    },
+    "failed_conditions": [],
+    "conditions": [
+      {
+        "shape": "circle",
+        "h": null,
+        "seed_groups": 2,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          0,
+          0
+        ],
+        "total_failures": 0,
+        "total_replicas": 128,
+        "rate": 0.0,
+        "clopper_pearson_upper": 0.023132405251746743,
+        "seed_group_t_upper": 0.0,
+        "upper_bound": 0.023132405251746743,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": true
+      }
+    ]
+  },
+  "h_sweep_termination_acceptance": {
+    "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+    "confidence": 0.95,
+    "threshold": 0.05,
+    "passed": false,
+    "worst_condition": {
+      "shape": "circle",
+      "h": 0.5,
+      "seed_groups": 1,
+      "replicas_per_group": 64,
+      "failures_per_group": [
+        1
+      ],
+      "total_failures": 1,
+      "total_replicas": 64,
+      "rate": 0.015625,
+      "clopper_pearson_upper": 0.07198975489470939,
+      "seed_group_t_upper": null,
+      "upper_bound": 0.07198975489470939,
+      "binding_term": "clopper_pearson",
+      "dispersion_phi": null,
+      "dispersion_p_value": null,
+      "threshold": 0.05,
+      "passed": false
+    },
+    "failed_conditions": [
+      {
+        "shape": "circle",
+        "h": 0.5,
+        "seed_groups": 1,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          1
+        ],
+        "total_failures": 1,
+        "total_replicas": 64,
+        "rate": 0.015625,
+        "clopper_pearson_upper": 0.07198975489470939,
+        "seed_group_t_upper": null,
+        "upper_bound": 0.07198975489470939,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": false
+      }
+    ],
+    "conditions": [
+      {
+        "shape": "circle",
+        "h": 0.5,
+        "seed_groups": 1,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          1
+        ],
+        "total_failures": 1,
+        "total_replicas": 64,
+        "rate": 0.015625,
+        "clopper_pearson_upper": 0.07198975489470939,
+        "seed_group_t_upper": null,
+        "upper_bound": 0.07198975489470939,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": false
+      },
+      {
+        "shape": "circle",
+        "h": 0.6,
+        "seed_groups": 1,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          0
+        ],
+        "total_failures": 0,
+        "total_replicas": 64,
+        "rate": 0.0,
+        "clopper_pearson_upper": 0.04572970233076245,
+        "seed_group_t_upper": null,
+        "upper_bound": 0.04572970233076245,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": true
+      },
+      {
+        "shape": "circle",
+        "h": 0.7,
+        "seed_groups": 1,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          0
+        ],
+        "total_failures": 0,
+        "total_replicas": 64,
+        "rate": 0.0,
+        "clopper_pearson_upper": 0.04572970233076245,
+        "seed_group_t_upper": null,
+        "upper_bound": 0.04572970233076245,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": true
+      },
+      {
+        "shape": "circle",
+        "h": 1.2,
+        "seed_groups": 1,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          0
+        ],
+        "total_failures": 0,
+        "total_replicas": 64,
+        "rate": 0.0,
+        "clopper_pearson_upper": 0.04572970233076245,
+        "seed_group_t_upper": null,
+        "upper_bound": 0.04572970233076245,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": true
+      }
+    ]
+  },
+  "monte_carlo": {
+    "rounds": 2,
+    "aggregate": {
+      "max_shape_mean_error_m": 0.02730396017432213,
+      "max_shape_p95_error_m": 0.05186599865555763,
+      "max_shape_p95_acceleration_mps2": 38.8697509765625,
+      "min_head_alignment": 0.9829672574996948,
+      "max_clearance_error_m": 0.08289241790771484,
+      "max_post_constraint_truck_drift_m": 0.0009998364839702845,
+      "max_termination_rate": 0.0,
+      "min_completion_fraction": 1.0
+    },
+    "failed_checks": [],
+    "passed": true,
+    "termination_acceptance": {
+      "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+      "confidence": 0.95,
+      "threshold": 0.05,
+      "passed": true,
+      "worst_condition": {
+        "shape": "circle",
+        "h": null,
+        "seed_groups": 2,
+        "replicas_per_group": 64,
+        "failures_per_group": [
+          0,
+          0
+        ],
+        "total_failures": 0,
+        "total_replicas": 128,
+        "rate": 0.0,
+        "clopper_pearson_upper": 0.023132405251746743,
+        "seed_group_t_upper": 0.0,
+        "upper_bound": 0.023132405251746743,
+        "binding_term": "clopper_pearson",
+        "dispersion_phi": null,
+        "dispersion_p_value": null,
+        "threshold": 0.05,
+        "passed": true
+      },
+      "failed_conditions": [],
+      "conditions": [
+        {
+          "shape": "circle",
+          "h": null,
+          "seed_groups": 2,
+          "replicas_per_group": 64,
+          "failures_per_group": [
+            0,
+            0
+          ],
+          "total_failures": 0,
+          "total_replicas": 128,
+          "rate": 0.0,
+          "clopper_pearson_upper": 0.023132405251746743,
+          "seed_group_t_upper": 0.0,
+          "upper_bound": 0.023132405251746743,
+          "binding_term": "clopper_pearson",
+          "dispersion_phi": null,
+          "dispersion_p_value": null,
+          "threshold": 0.05,
+          "passed": true
+        }
+      ]
+    },
+    "rows": [
+      {
+        "shape": "circle",
+        "evaluated_environments": 64,
+        "completed_environments": 64,
+        "completion_fraction": 1.0,
+        "unsuccessful_environments": 0,
+        "replicas": 64,
+        "mean_error_m": 0.026271702721714973,
+        "p95_error_m": 0.04742487147450447,
+        "p95_acceleration_mps2": 37.744361877441406,
+        "min_head_alignment": 0.9829672574996948,
+        "max_clearance_error_m": 0.08126306533813477,
+        "max_post_constraint_truck_drift_m": 0.000999654526822269,
+        "max_termination_rate": 0.0,
+        "safety_termination_rate": 0.0,
+        "timeout_rate": 0.0,
+        "seed": 300020,
+        "scored_steps": 120,
+        "simulator_steps": 120,
+        "force_zero_policy": false,
+        "mean_abs_residual_m": 0.00017190557264257222,
+        "max_cylinder4_abs_residual_m": 1.1464341014288948e-06,
+        "termination_cause_rates": {
+          "nonfinite": 0.0,
+          "cylinder_limit": 0.0,
+          "head_alignment": 0.0,
+          "clearance": 0.0,
+          "truck_post_constraint": 0.0,
+          "truck_raw_reaction": 0.0,
+          "unclassified": 0.0
+        },
+        "factor_min": [
+          -0.11973480880260468,
+          0.009723025374114513,
+          0.01947670243680477,
+          0.0331084206700325,
+          0.009219341911375523
+        ],
+        "factor_mean": [
+          -0.0475175604224205,
+          0.47350090742111206,
+          0.5211858749389648,
+          0.5142471194267273,
+          0.49536165595054626
+        ],
+        "factor_max": [
+          0.017839714884757996,
+          0.9806287884712219,
+          0.9986768960952759,
+          0.9980428814888,
+          0.9861083030700684
+        ],
+        "suite": "monte_carlo",
+        "round": 1,
+        "h": null
+      },
+      {
+        "shape": "circle",
+        "evaluated_environments": 64,
+        "completed_environments": 64,
+        "completion_fraction": 1.0,
+        "unsuccessful_environments": 0,
+        "replicas": 64,
+        "mean_error_m": 0.02730396017432213,
+        "p95_error_m": 0.05186599865555763,
+        "p95_acceleration_mps2": 38.8697509765625,
+        "min_head_alignment": 0.9829761981964111,
+        "max_clearance_error_m": 0.08289241790771484,
+        "max_post_constraint_truck_drift_m": 0.0009998364839702845,
+        "max_termination_rate": 0.0,
+        "safety_termination_rate": 0.0,
+        "timeout_rate": 0.0,
+        "seed": 300025,
+        "scored_steps": 120,
+        "simulator_steps": 120,
+        "force_zero_policy": false,
+        "mean_abs_residual_m": 0.00016757297271396965,
+        "max_cylinder4_abs_residual_m": 1.1416642564654467e-06,
+        "termination_cause_rates": {
+          "nonfinite": 0.0,
+          "cylinder_limit": 0.0,
+          "head_alignment": 0.0,
+          "clearance": 0.0,
+          "truck_post_constraint": 0.0,
+          "truck_raw_reaction": 0.0,
+          "unclassified": 0.0
+        },
+        "factor_min": [
+          -0.12428516894578934,
+          0.038220345973968506,
+          0.040457870811223984,
+          0.02177324704825878,
+          0.005989161320030689
+        ],
+        "factor_mean": [
+          -0.04533504322171211,
+          0.5690349340438843,
+          0.5222194194793701,
+          0.4759025275707245,
+          0.47555792331695557
+        ],
+        "factor_max": [
+          0.018199101090431213,
+          0.9892730116844177,
+          0.9936495423316956,
+          0.9804465174674988,
+          0.9894733428955078
+        ],
+        "suite": "monte_carlo",
+        "round": 2,
+        "h": null
+      }
+    ]
+  },
+  "h_sweep": [
+    {
+      "h": 0.5,
+      "factors": [
+        -0.1041666641831398,
+        0.8333333134651184,
+        0.8333333134651184,
+        0.8333333134651184,
+        0.8333333134651184
+      ],
+      "physical_multipliers": {
+        "stiffness": 0.9010751247406006,
+        "leakage": 1.7642507553100586
+      },
+      "aggregate": {
+        "max_shape_mean_error_m": 0.025622272863984108,
+        "max_shape_p95_error_m": 0.04793976619839668,
+        "max_shape_p95_acceleration_mps2": 40.25883483886719,
+        "min_head_alignment": 0.9848686456680298,
+        "max_clearance_error_m": 0.09966790676116943,
+        "max_post_constraint_truck_drift_m": 0.0009994797874242067,
+        "max_termination_rate": 0.015625,
+        "min_completion_fraction": 0.984375
+      },
+      "round_aggregates": [
+        {
+          "max_shape_mean_error_m": 0.025622272863984108,
+          "max_shape_p95_error_m": 0.04793976619839668,
+          "max_shape_p95_acceleration_mps2": 40.25883483886719,
+          "min_head_alignment": 0.9848686456680298,
+          "max_clearance_error_m": 0.09966790676116943,
+          "max_post_constraint_truck_drift_m": 0.0009994797874242067,
+          "max_termination_rate": 0.015625,
+          "min_completion_fraction": 0.984375
+        }
+      ],
+      "failed_checks": [
+        "p95_acceleration"
+      ],
+      "passed": false,
+      "rows": [
+        {
+          "shape": "circle",
+          "evaluated_environments": 64,
+          "completed_environments": 63,
+          "completion_fraction": 0.984375,
+          "unsuccessful_environments": 1,
+          "replicas": 64,
+          "mean_error_m": 0.025622272863984108,
+          "p95_error_m": 0.04793976619839668,
+          "p95_acceleration_mps2": 40.25883483886719,
+          "min_head_alignment": 0.9848686456680298,
+          "max_clearance_error_m": 0.09966790676116943,
+          "max_post_constraint_truck_drift_m": 0.0009994797874242067,
+          "max_termination_rate": 0.015625,
+          "safety_termination_rate": 0.015625,
+          "timeout_rate": 0.0,
+          "seed": 400020,
+          "scored_steps": 120,
+          "simulator_steps": 120,
+          "force_zero_policy": false,
+          "mean_abs_residual_m": 0.0001728850620565936,
+          "max_cylinder4_abs_residual_m": 1.147506054621772e-06,
+          "termination_cause_rates": {
+            "nonfinite": 0.0,
+            "cylinder_limit": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0,
+            "truck_post_constraint": 0.0,
+            "truck_raw_reaction": 0.015625,
+            "unclassified": 0.0
+          },
+          "factor_min": [
+            -0.1041666641831398,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184
+          ],
+          "factor_mean": [
+            -0.1041666567325592,
+            0.8333332538604736,
+            0.8333332538604736,
+            0.8333332538604736,
+            0.8333332538604736
+          ],
+          "factor_max": [
+            -0.1041666641831398,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184
+          ],
+          "suite": "h_sweep",
+          "round": 1,
+          "h": 0.5,
+          "fixed_factor_vector": [
+            -0.1041666641831398,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184,
+            0.8333333134651184
+          ]
+        }
+      ],
+      "termination_acceptance": {
+        "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+        "confidence": 0.95,
+        "threshold": 0.05,
+        "passed": false,
+        "worst_condition": {
+          "shape": "circle",
+          "h": 0.5,
+          "seed_groups": 1,
+          "replicas_per_group": 64,
+          "failures_per_group": [
+            1
+          ],
+          "total_failures": 1,
+          "total_replicas": 64,
+          "rate": 0.015625,
+          "clopper_pearson_upper": 0.07198975489470939,
+          "seed_group_t_upper": null,
+          "upper_bound": 0.07198975489470939,
+          "binding_term": "clopper_pearson",
+          "dispersion_phi": null,
+          "dispersion_p_value": null,
+          "threshold": 0.05,
+          "passed": false
+        },
+        "failed_conditions": [
+          {
+            "shape": "circle",
+            "h": 0.5,
+            "seed_groups": 1,
+            "replicas_per_group": 64,
+            "failures_per_group": [
+              1
+            ],
+            "total_failures": 1,
+            "total_replicas": 64,
+            "rate": 0.015625,
+            "clopper_pearson_upper": 0.07198975489470939,
+            "seed_group_t_upper": null,
+            "upper_bound": 0.07198975489470939,
+            "binding_term": "clopper_pearson",
+            "dispersion_phi": null,
+            "dispersion_p_value": null,
+            "threshold": 0.05,
+            "passed": false
+          }
+        ],
+        "conditions": [
+          {
+            "shape": "circle",
+            "h": 0.5,
+            "seed_groups": 1,
+            "replicas_per_group": 64,
+            "failures_per_group": [
+              1
+            ],
+            "total_failures": 1,
+            "total_replicas": 64,
+            "rate": 0.015625,
+            "clopper_pearson_upper": 0.07198975489470939,
+            "seed_group_t_upper": null,
+            "upper_bound": 0.07198975489470939,
+            "binding_term": "clopper_pearson",
+            "dispersion_phi": null,
+            "dispersion_p_value": null,
+            "threshold": 0.05,
+            "passed": false
+          }
+        ]
+      }
+    },
+    {
+      "h": 0.6,
+      "factors": [
+        -0.0833333283662796,
+        0.6666666269302368,
+        0.6666666269302368,
+        0.6666666269302368,
+        0.6666666269302368
+      ],
+      "physical_multipliers": {
+        "stiffness": 0.9200444221496582,
+        "leakage": 1.5879628658294678
+      },
+      "aggregate": {
+        "max_shape_mean_error_m": 0.024398306384682655,
+        "max_shape_p95_error_m": 0.04406111314892769,
+        "max_shape_p95_acceleration_mps2": 36.12548065185547,
+        "min_head_alignment": 0.9835917949676514,
+        "max_clearance_error_m": 0.09781098365783691,
+        "max_post_constraint_truck_drift_m": 0.0009992485865950584,
+        "max_termination_rate": 0.0,
+        "min_completion_fraction": 1.0
+      },
+      "round_aggregates": [
+        {
+          "max_shape_mean_error_m": 0.024398306384682655,
+          "max_shape_p95_error_m": 0.04406111314892769,
+          "max_shape_p95_acceleration_mps2": 36.12548065185547,
+          "min_head_alignment": 0.9835917949676514,
+          "max_clearance_error_m": 0.09781098365783691,
+          "max_post_constraint_truck_drift_m": 0.0009992485865950584,
+          "max_termination_rate": 0.0,
+          "min_completion_fraction": 1.0
+        }
+      ],
+      "failed_checks": [],
+      "passed": true,
+      "rows": [
+        {
+          "shape": "circle",
+          "evaluated_environments": 64,
+          "completed_environments": 64,
+          "completion_fraction": 1.0,
+          "unsuccessful_environments": 0,
+          "replicas": 64,
+          "mean_error_m": 0.024398306384682655,
+          "p95_error_m": 0.04406111314892769,
+          "p95_acceleration_mps2": 36.12548065185547,
+          "min_head_alignment": 0.9835917949676514,
+          "max_clearance_error_m": 0.09781098365783691,
+          "max_post_constraint_truck_drift_m": 0.0009992485865950584,
+          "max_termination_rate": 0.0,
+          "safety_termination_rate": 0.0,
+          "timeout_rate": 0.0,
+          "seed": 400020,
+          "scored_steps": 120,
+          "simulator_steps": 120,
+          "force_zero_policy": false,
+          "mean_abs_residual_m": 0.0001753648102749139,
+          "max_cylinder4_abs_residual_m": 1.200934548251098e-06,
+          "termination_cause_rates": {
+            "nonfinite": 0.0,
+            "cylinder_limit": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0,
+            "truck_post_constraint": 0.0,
+            "truck_raw_reaction": 0.0,
+            "unclassified": 0.0
+          },
+          "factor_min": [
+            -0.0833333283662796,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368
+          ],
+          "factor_mean": [
+            -0.0833333283662796,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368
+          ],
+          "factor_max": [
+            -0.0833333283662796,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368
+          ],
+          "suite": "h_sweep",
+          "round": 1,
+          "h": 0.6,
+          "fixed_factor_vector": [
+            -0.0833333283662796,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368,
+            0.6666666269302368
+          ]
+        }
+      ],
+      "termination_acceptance": {
+        "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+        "confidence": 0.95,
+        "threshold": 0.05,
+        "passed": true,
+        "worst_condition": {
+          "shape": "circle",
+          "h": 0.6,
+          "seed_groups": 1,
+          "replicas_per_group": 64,
+          "failures_per_group": [
+            0
+          ],
+          "total_failures": 0,
+          "total_replicas": 64,
+          "rate": 0.0,
+          "clopper_pearson_upper": 0.04572970233076245,
+          "seed_group_t_upper": null,
+          "upper_bound": 0.04572970233076245,
+          "binding_term": "clopper_pearson",
+          "dispersion_phi": null,
+          "dispersion_p_value": null,
+          "threshold": 0.05,
+          "passed": true
+        },
+        "failed_conditions": [],
+        "conditions": [
+          {
+            "shape": "circle",
+            "h": 0.6,
+            "seed_groups": 1,
+            "replicas_per_group": 64,
+            "failures_per_group": [
+              0
+            ],
+            "total_failures": 0,
+            "total_replicas": 64,
+            "rate": 0.0,
+            "clopper_pearson_upper": 0.04572970233076245,
+            "seed_group_t_upper": null,
+            "upper_bound": 0.04572970233076245,
+            "binding_term": "clopper_pearson",
+            "dispersion_phi": null,
+            "dispersion_p_value": null,
+            "threshold": 0.05,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "h": 0.7,
+      "factors": [
+        -0.0625,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "physical_multipliers": {
+        "stiffness": 0.9394130706787109,
+        "leakage": 1.423828125
+      },
+      "aggregate": {
+        "max_shape_mean_error_m": 0.024886127561330795,
+        "max_shape_p95_error_m": 0.04714320972561836,
+        "max_shape_p95_acceleration_mps2": 36.6503791809082,
+        "min_head_alignment": 0.9849798679351807,
+        "max_clearance_error_m": 0.09319472312927246,
+        "max_post_constraint_truck_drift_m": 0.0009997127344831824,
+        "max_termination_rate": 0.0,
+        "min_completion_fraction": 1.0
+      },
+      "round_aggregates": [
+        {
+          "max_shape_mean_error_m": 0.024886127561330795,
+          "max_shape_p95_error_m": 0.04714320972561836,
+          "max_shape_p95_acceleration_mps2": 36.6503791809082,
+          "min_head_alignment": 0.9849798679351807,
+          "max_clearance_error_m": 0.09319472312927246,
+          "max_post_constraint_truck_drift_m": 0.0009997127344831824,
+          "max_termination_rate": 0.0,
+          "min_completion_fraction": 1.0
+        }
+      ],
+      "failed_checks": [],
+      "passed": true,
+      "rows": [
+        {
+          "shape": "circle",
+          "evaluated_environments": 64,
+          "completed_environments": 64,
+          "completion_fraction": 1.0,
+          "unsuccessful_environments": 0,
+          "replicas": 64,
+          "mean_error_m": 0.024886127561330795,
+          "p95_error_m": 0.04714320972561836,
+          "p95_acceleration_mps2": 36.6503791809082,
+          "min_head_alignment": 0.9849798679351807,
+          "max_clearance_error_m": 0.09319472312927246,
+          "max_post_constraint_truck_drift_m": 0.0009997127344831824,
+          "max_termination_rate": 0.0,
+          "safety_termination_rate": 0.0,
+          "timeout_rate": 0.0,
+          "seed": 400020,
+          "scored_steps": 120,
+          "simulator_steps": 120,
+          "force_zero_policy": false,
+          "mean_abs_residual_m": 0.0001709752541501075,
+          "max_cylinder4_abs_residual_m": 1.170223072222143e-06,
+          "termination_cause_rates": {
+            "nonfinite": 0.0,
+            "cylinder_limit": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0,
+            "truck_post_constraint": 0.0,
+            "truck_raw_reaction": 0.0,
+            "unclassified": 0.0
+          },
+          "factor_min": [
+            -0.0625,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "factor_mean": [
+            -0.0625,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "factor_max": [
+            -0.0625,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "suite": "h_sweep",
+          "round": 1,
+          "h": 0.7,
+          "fixed_factor_vector": [
+            -0.0625,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ],
+      "termination_acceptance": {
+        "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+        "confidence": 0.95,
+        "threshold": 0.05,
+        "passed": true,
+        "worst_condition": {
+          "shape": "circle",
+          "h": 0.7,
+          "seed_groups": 1,
+          "replicas_per_group": 64,
+          "failures_per_group": [
+            0
+          ],
+          "total_failures": 0,
+          "total_replicas": 64,
+          "rate": 0.0,
+          "clopper_pearson_upper": 0.04572970233076245,
+          "seed_group_t_upper": null,
+          "upper_bound": 0.04572970233076245,
+          "binding_term": "clopper_pearson",
+          "dispersion_phi": null,
+          "dispersion_p_value": null,
+          "threshold": 0.05,
+          "passed": true
+        },
+        "failed_conditions": [],
+        "conditions": [
+          {
+            "shape": "circle",
+            "h": 0.7,
+            "seed_groups": 1,
+            "replicas_per_group": 64,
+            "failures_per_group": [
+              0
+            ],
+            "total_failures": 0,
+            "total_replicas": 64,
+            "rate": 0.0,
+            "clopper_pearson_upper": 0.04572970233076245,
+            "seed_group_t_upper": null,
+            "upper_bound": 0.04572970233076245,
+            "binding_term": "clopper_pearson",
+            "dispersion_phi": null,
+            "dispersion_p_value": null,
+            "threshold": 0.05,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "h": 1.2,
+      "factors": [
+        0.019999999552965164,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "physical_multipliers": {
+        "stiffness": 1.020201325416565,
+        "leakage": 1.0
+      },
+      "aggregate": {
+        "max_shape_mean_error_m": 0.025233162567019463,
+        "max_shape_p95_error_m": 0.045509178191423416,
+        "max_shape_p95_acceleration_mps2": 35.27943420410156,
+        "min_head_alignment": 0.9850125312805176,
+        "max_clearance_error_m": 0.12250947952270508,
+        "max_post_constraint_truck_drift_m": 0.0009999164612963796,
+        "max_termination_rate": 0.0,
+        "min_completion_fraction": 1.0
+      },
+      "round_aggregates": [
+        {
+          "max_shape_mean_error_m": 0.025233162567019463,
+          "max_shape_p95_error_m": 0.045509178191423416,
+          "max_shape_p95_acceleration_mps2": 35.27943420410156,
+          "min_head_alignment": 0.9850125312805176,
+          "max_clearance_error_m": 0.12250947952270508,
+          "max_post_constraint_truck_drift_m": 0.0009999164612963796,
+          "max_termination_rate": 0.0,
+          "min_completion_fraction": 1.0
+        }
+      ],
+      "failed_checks": [],
+      "passed": true,
+      "rows": [
+        {
+          "shape": "circle",
+          "evaluated_environments": 64,
+          "completed_environments": 64,
+          "completion_fraction": 1.0,
+          "unsuccessful_environments": 0,
+          "replicas": 64,
+          "mean_error_m": 0.025233162567019463,
+          "p95_error_m": 0.045509178191423416,
+          "p95_acceleration_mps2": 35.27943420410156,
+          "min_head_alignment": 0.9850125312805176,
+          "max_clearance_error_m": 0.12250947952270508,
+          "max_post_constraint_truck_drift_m": 0.0009999164612963796,
+          "max_termination_rate": 0.0,
+          "safety_termination_rate": 0.0,
+          "timeout_rate": 0.0,
+          "seed": 400020,
+          "scored_steps": 120,
+          "simulator_steps": 120,
+          "force_zero_policy": false,
+          "mean_abs_residual_m": 0.00017096732335630804,
+          "max_cylinder4_abs_residual_m": 1.1857348454213934e-06,
+          "termination_cause_rates": {
+            "nonfinite": 0.0,
+            "cylinder_limit": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0,
+            "truck_post_constraint": 0.0,
+            "truck_raw_reaction": 0.0,
+            "unclassified": 0.0
+          },
+          "factor_min": [
+            0.019999999552965164,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "factor_mean": [
+            0.019999999552965164,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "factor_max": [
+            0.019999999552965164,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "suite": "h_sweep",
+          "round": 1,
+          "h": 1.2,
+          "fixed_factor_vector": [
+            0.019999999552965164,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "termination_acceptance": {
+        "statistic": "max(pooled_clopper_pearson_upper, seed_group_t_upper), one-sided, pooled only across seed groups",
+        "confidence": 0.95,
+        "threshold": 0.05,
+        "passed": true,
+        "worst_condition": {
+          "shape": "circle",
+          "h": 1.2,
+          "seed_groups": 1,
+          "replicas_per_group": 64,
+          "failures_per_group": [
+            0
+          ],
+          "total_failures": 0,
+          "total_replicas": 64,
+          "rate": 0.0,
+          "clopper_pearson_upper": 0.04572970233076245,
+          "seed_group_t_upper": null,
+          "upper_bound": 0.04572970233076245,
+          "binding_term": "clopper_pearson",
+          "dispersion_phi": null,
+          "dispersion_p_value": null,
+          "threshold": 0.05,
+          "passed": true
+        },
+        "failed_conditions": [],
+        "conditions": [
+          {
+            "shape": "circle",
+            "h": 1.2,
+            "seed_groups": 1,
+            "replicas_per_group": 64,
+            "failures_per_group": [
+              0
+            ],
+            "total_failures": 0,
+            "total_replicas": 64,
+            "rate": 0.0,
+            "clopper_pearson_upper": 0.04572970233076245,
+            "seed_group_t_upper": null,
+            "upper_bound": 0.04572970233076245,
+            "binding_term": "clopper_pearson",
+            "dispersion_phi": null,
+            "dispersion_p_value": null,
+            "threshold": 0.05,
+            "passed": true
+          }
+        ]
+      }
+    }
+  ]
+}

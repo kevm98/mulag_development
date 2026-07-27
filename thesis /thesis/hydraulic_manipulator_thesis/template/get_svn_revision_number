@@ -1,0 +1,12 @@
+#!/bin/bash
+
+echo
+echo "Note: Always call this script from the main folder of your thesis, not from the subfolder \"template\"!"
+echo
+
+svn info | grep Revision > rrlab.rev.tmp
+s=$(<rrlab.rev.tmp)
+set -- $s
+echo $2 > revision
+# cat revision
+rm rrlab.rev.tmp

@@ -54,7 +54,7 @@ def load_checkpoint(
     stored = payload["schema"]
     if tuple(stored["input_feature_names"]) != schema.input_feature_names:
         raise ValueError("Checkpoint input feature ordering does not match runtime.")
-    if tuple(stored["cylinder_order"]) != schema.cylinder_order or tuple(stored["joint_order"]) != schema.joint_order:
+    if tuple(stored["cylinder_order"]) != schema.cylinder_order:
         raise ValueError("Checkpoint actuator ordering does not match runtime.")
     if float(stored["sample_time_s"]) != schema.sample_time_s or int(stored["history_length"]) != schema.history_length:
         raise ValueError("Checkpoint timing contract does not match runtime.")
@@ -65,6 +65,19 @@ def load_checkpoint(
         input_mean=normalization["input_mean"],
         input_std=normalization["input_std"],
     )
-    model.load_state_dict(payload["state_dict"], strict=True)
+    incompatible = model.load_state_dict(payload["state_dict"], strict=False)
+    allowed_missing = {
+        "command_extension_correction_head.0.weight",
+        "command_extension_correction_head.0.bias",
+        "command_extension_correction_head.2.weight",
+        "command_extension_correction_head.2.bias",
+    }
+    unexpected = set(incompatible.unexpected_keys)
+    missing = set(incompatible.missing_keys)
+    if unexpected or missing - allowed_missing:
+        raise ValueError(
+            f"Checkpoint model state is incompatible: missing={sorted(missing)} "
+            f"unexpected={sorted(unexpected)}"
+        )
     model.to(device).eval()
     return model, payload

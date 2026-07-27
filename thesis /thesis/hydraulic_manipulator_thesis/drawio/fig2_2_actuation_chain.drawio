@@ -1,0 +1,26 @@
+<mxfile host="app.diagrams.net" agent="thesis" version="24.0.0">
+  <diagram id="chain" name="Actuation chain">
+    <mxGraphModel dx="1500" dy="600" grid="1" gridSize="10" page="1" pageWidth="1500" pageHeight="600">
+      <root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="capE" value="ELECTRICAL" style="rounded=1;fillColor=#FFFBF4;strokeColor=#C97816;verticalAlign=top;fontStyle=1;fontColor=#C97816;fontSize=13;" vertex="1" parent="1"><mxGeometry x="60" y="130" width="360" height="290" as="geometry"/></mxCell>
+        <mxCell id="capH" value="HYDRAULIC" style="rounded=1;fillColor=#F8FBFF;strokeColor=#2F5DA8;verticalAlign=top;fontStyle=1;fontColor=#2F5DA8;fontSize=13;" vertex="1" parent="1"><mxGeometry x="550" y="130" width="380" height="290" as="geometry"/></mxCell>
+        <mxCell id="capM" value="MECHANICAL" style="rounded=1;fillColor=#F6FBFA;strokeColor=#16847A;verticalAlign=top;fontStyle=1;fontColor=#16847A;fontSize=13;" vertex="1" parent="1"><mxGeometry x="1040" y="130" width="400" height="290" as="geometry"/></mxCell>
+        <mxCell id="e1" value="&lt;b&gt;Valve command&lt;/b&gt;&lt;br&gt;u in [-1,1] per cylinder" style="rounded=1;fillColor=#FFF4E5;strokeColor=#C97816;fontSize=12;" vertex="1" parent="1"><mxGeometry x="90" y="185" width="300" height="70" as="geometry"/></mxCell>
+        <mxCell id="e2" value="&lt;b&gt;Proportional valve&lt;/b&gt;&lt;br&gt;spool opens metering orifices" style="rounded=1;fillColor=#FFF4E5;strokeColor=#C97816;fontSize=12;" vertex="1" parent="1"><mxGeometry x="90" y="290" width="300" height="75" as="geometry"/></mxCell>
+        <mxCell id="h1" value="&lt;b&gt;Volumetric flow q&lt;/b&gt;&lt;br&gt;orifice law" style="rounded=1;fillColor=#EEF4FF;strokeColor=#2F5DA8;fontSize=12;" vertex="1" parent="1"><mxGeometry x="580" y="185" width="320" height="70" as="geometry"/></mxCell>
+        <mxCell id="h2" value="&lt;b&gt;Chamber pressures dp&lt;/b&gt;&lt;br&gt;compressibility, leakage, relief" style="rounded=1;fillColor=#EEF4FF;strokeColor=#2F5DA8;fontSize=12;" vertex="1" parent="1"><mxGeometry x="580" y="290" width="320" height="75" as="geometry"/></mxCell>
+        <mxCell id="m1" value="&lt;b&gt;Cylinder motion x, xdot&lt;/b&gt;" style="rounded=1;fillColor=#ECF8F6;strokeColor=#16847A;fontSize=12;" vertex="1" parent="1"><mxGeometry x="1070" y="185" width="340" height="70" as="geometry"/></mxCell>
+        <mxCell id="m2" value="&lt;b&gt;Linkage and joints&lt;/b&gt;&lt;br&gt;lever arms -&gt; head motion" style="rounded=1;fillColor=#ECF8F6;strokeColor=#16847A;fontSize=12;" vertex="1" parent="1"><mxGeometry x="1070" y="290" width="340" height="75" as="geometry"/></mxCell>
+        <mxCell id="a1" style="strokeColor=#C97816;strokeWidth=2;" edge="1" parent="1" source="e1" target="e2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a2" value="spool xv" style="strokeColor=#2F5DA8;strokeWidth=2;" edge="1" parent="1" source="capE" target="capH"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a3" style="strokeColor=#2F5DA8;strokeWidth=2;" edge="1" parent="1" source="h1" target="h2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a4" value="force F" style="strokeColor=#16847A;strokeWidth=2;" edge="1" parent="1" source="capH" target="capM"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a5" style="strokeColor=#16847A;strokeWidth=2;" edge="1" parent="1" source="m1" target="m2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="fb1" value="load-pressure feedback" style="strokeColor=#B64B42;strokeWidth=2;dashed=1;curved=1;exitX=0.5;exitY=0;entryX=0.5;entryY=0;" edge="1" parent="1" source="capH" target="e2"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="70"/></Array></mxGeometry></mxCell>
+        <mxCell id="fb2" value="displacement flow A*xdot" style="strokeColor=#69737D;strokeWidth=2;dashed=1;curved=1;exitX=0.5;exitY=0;entryX=0.7;entryY=0;" edge="1" parent="1" source="capM" target="capH"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="990" y="45"/></Array></mxGeometry></mxCell>
+        <mxCell id="note" value="The composite gain from valve command to head motion is an operating point - it changes with load, configuration, and fluid state." style="rounded=1;fillColor=#F8FAFC;strokeColor=#B8C1CA;fontStyle=2;fontSize=12;" vertex="1" parent="1"><mxGeometry x="60" y="510" width="1380" height="48" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

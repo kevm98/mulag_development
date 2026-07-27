@@ -1,0 +1,113 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% introduction.tex
+%%
+%% Kapitel: Introduction
+%% Autor: Axel Vierling (axel.vierling@cs.rptu.de)       
+%% Autor: Jochen Hirth (j_hirth@informatik.uni-kl.de)       
+%% Autor: Tobias Luksch (luksch@informatik.uni-kl.de)       
+%% Datum: Juli 2003                                         
+%%                                                          
+%% Letzte Änderung Dezember 2023
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{The LaTeX-Class}
+\label{chap:class}
+This chapter addresses the provided \LaTeX class \latexklasse and the resulting structure of the main document from its application. The key macros are explained, and some guidance on the systematic construction of the document is provided.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{The Main Document}
+\label{sec:class:main}
+\index{Main Document}\index{\latexklasse} The main document adheres to the usual format of a \LaTeX document. Fundamentally, the main document of this documentation (\texttt{howto.tex}) can be used as a commented example. To create your own work, it is recommended to copy the file \texttt{howto.tex}, for instance, into a file named \texttt{thesis.tex}, and in this copied file, only remove the files included through \verb|\include| or replace them with your own files. The document class to be specified in the document header (\verb|\documentclass{}|) \latexklasse. The optional parameter \texttt{draft} reduces the document by excluding the title page, preface, the declaration page, and the index. Additionally, it marks overfull boxes. The language can be switched to German by using the parameter \texttt{de}. An overview of all possible options is available as comments in the file \texttt{howto.tex}. Following this are some macros for title, author, and type of work, such as \verb|\RRLABtitle|, \verb|\RRLABauthor| and \verb|\RRLABtype|, which should be specified (all macros are listed with comments in \texttt{howto.tex}). Furthermore, there is the possibility to define custom macros and specify directories where images should be searched (\verb|\graphicspath|). Subsequently, the visible content begins within the \verb|document|-environment. There, additional macros can be used here:
+
+\begin{description}
+\item[$\backslash$RRLABtitlepage] generates the title page with the title and author of the work. Additional code can be passed as an argument, for example, to insert an image. Usual commands for inserting images, as described in Chapter~\ref{sec:floats:images}, apply. The second parameter is a string that should contain the submission date. Example:
+  \verb|\RRLABtitlepage{\includegraphics{mickeymouse}}{September 1739}|
+\item[$\backslash$RRLABsecondpage] inserts a page containing the title, author, and type of work once again. Additionally, supervisors, date of issue, and date of submission need to be provided as parameters.
+\item[$\backslash$RRLABdeclaration] creates a page stating that the author independently wrote the work and provided all used sources. The specified date is passed as an argument. This page is to be signed by the student for official copies. Example:
+\verb|\RRLABdeclaration{\today}|
+\item[$\backslash$RRLABpreface] offers the possibility to insert a preface page. The first parameter specifies the chapter's heading, e.g., Preface, Acknowledgments, etc. The entire content of the preface is simply provided as the second parameter. Example: \verb|\RRLABpreface{Preface}{Your preface here}|
+\item[$\backslash$RRLABcontents] inserts the table of contents.
+\item[$\backslash$RRLABbibliography] generates the bibliography. The BibTex file to be used (without .bib) is passed as a parameter. More on bibliographic references in Chapter~\ref{sec:floats:bib}.
+\item[$\backslash$RRLABindex] generates the index directory from the information inserted using the \verb|\RRLABindex|-command. Don't forget to apply \verb|makeindex| to the .idx file of the main document to generate the actual index references.
+\end{description} \footnote{Such a representation can be created with the description environment.}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{File Structure and Tips}
+\label{sec:class:tips}
+In general, for longer documents, it's advisable to distribute the text across multiple files. For instance, creating a separate file for each chapter is a feasible approach. This documentation itself is structured in a similar manner. Using Linux, employing Kile or VSCode as an editor is recommended. To let the program know which file to compile or display, a project can be created, and the individual files can be added to the project with \verb|\include|. If using TeXnicCenter on Windows, it provides similar functionality.
+
+When choosing labels to reference chapters, tables, images, or similar elements, using a consistent naming convention is recommended. This documentation names labels following the schema \verb|<type>:<description>|, where \verb|<type>| can be, for example, \verb|chap|, \verb|sec|, \verb|fig|, \verb|eq|, or something similar. While this might involve more typing, it significantly enhances the document's readability.
+
+Comments are allowed in \LaTeX (beginning with \verb|%|), so it's advisable to use them. Clear demarcations between sub-chapters or other relevant sections are helpful for easier navigation through your sources.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Used Files}
+\label{sec:class:files}
+In addition to the \LaTeX class file \latexklasse, several other files belong to the provided \LaTeX environment. Table~\ref{tab:files} lists the complete package.
+\begin{table}[t]
+ \footnotesize
+    \caption{Provided files with brief descriptions.}
+    \begin{center}
+    \begin{tabular}{p{0.4\textwidth}p{0.4\textwidth}}
+      \toprule
+      \bf \centering{Filename} & \bf \centering{Description} \tabularnewline
+      \midrule
+      \latexklasse & Class definition based on book.cls \tabularnewline
+
+      \texttt{template/rrlab\_macros} & Some macros for robot and framework names \tabularnewline
+ 
+      \texttt{bst/*.bst} & Layout definitions for the bibliography \tabularnewline
+ 
+      \texttt{[de|en]/rrlab\_titlepage} & The title page for the German or English version\tabularnewline
+ 
+      \texttt{[de|en]/rrlab\_secondpage.tex} & Info page with title, author, supervisors, etc. \tabularnewline
+ 
+      \texttt{[de|en]/rrlab\_declaration.tex} & Declaration regarding sources, etc. \tabularnewline
+ 
+      \texttt{howto.tex} & The main file of this sample document \tabularnewline
+ 
+      \texttt{introduction.tex} & The introduction chapter \tabularnewline
+ 
+      \texttt{latexclass.tex} & The chapter about the \LaTeX class \tabularnewline
+ 
+      \texttt{floats.tex} & The chapter about images, tables, etc. \tabularnewline
+ 
+      \texttt{literatur.bib} & The bibliography for this document in BibTeX format \tabularnewline
+ 
+      \texttt{examples.bib} &  Annotated example file for the BibTex database \tabularnewline
+ 
+      \texttt{bold\_author.bib} & Name of the author highlighted in the bibliography (when \texttt{boldauthor} option is set) \tabularnewline
+ 
+      \texttt{doc/*} &  Documentation for various \LaTeX-packages \tabularnewline
+
+      \texttt{Makefile} &  Defines make targets for building the pdf version and cleaning up the directory (\texttt{make clean})\tabularnewline
+
+      \texttt{README.md} & Some useful information about the template \tabularnewline
+
+     \bottomrule
+  \end{tabular}
+  \end{center}
+  \label{tab:files}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Compiling the Document}
+\label{sec:class:comp}
+A few words about compiling the \LaTeX sources. Under Linux and Kile or Windows and TeXnicCenter, this process should mostly happen automatically. If using the command line under Linux, it might be necessary to compile multiple times to get the references right. A complete compilation might look like this:
+
+\begin{verbatim}
+   $ pdflatex howto.tex
+   $ makeindex howto.idx
+   $ bibtex howto.aux
+   $ pdflatex howto.tex
+   $ pdflatex howto.tex
+\end{verbatim} 
+That should cover it. If desired, this can also be packaged into a shell script or utilize the provided Makefile.
+
+\section{Dokumentation zu \LaTeX -Paketen}
+In the \textbf{doc} directory, there are documentations for some interesting \LaTeX packages.
+
+%%% Local Variables: 
+%%% mode: latex
+%%% TeX-master: "howto"
+%%% End: 

@@ -1,0 +1,252 @@
+function u = valve_excitation() %#codegen
+% =========================================================================
+% FAST 64-SECOND OPEN-LOOP VALVE EXCITATION — COVERAGE-PRIORITIZED
+%
+% INPUTS:
+%   None
+%
+% OUTPUT:
+%   u : 5x1 command vector
+%       u(1:4) -> hydraulic cylinder valve commands
+%       u(5)   -> joint-5 command
+%
+% REQUIRED MATLAB FUNCTION BLOCK SETTINGS:
+%   Update method = Discrete
+%   Sample time   = 0.01 s
+%
+% WIRING:
+%   MATLAB Function output -> Demux(5) -> Cmd1 ... Cmd5
+%
+% PURPOSE OF THIS REVISION:
+%   The previous 64-second signal was persistently exciting, but the
+%   cylinders reversed too frequently and produced low physical stroke
+%   coverage. This version keeps the SAME 64-second timing expected by the
+%   collector, but uses long full-authority plateaus during the sequential
+%   phase and a slow high-authority component during the MIMO phase.
+%
+% SCHEDULE — UNCHANGED:
+%   0-1 s       : startup verification, excluded from training
+%   1-43 s      : four sequential slots
+%                 10 s cylinder excitation + 0.5 s zero-command gap
+%   43-63 s     : simultaneous rich MIMO excitation
+%   63-64 s     : zero-command shutdown
+%
+% TOTAL TIME:
+%   64 seconds
+%
+% IMPORTANT:
+%   Keep Fast Restart OFF so the persistent counter resets each run.
+% =========================================================================
+
+    %% Fixed timing — must match the collector
+    DT = 0.01;
+
+    T_PRE      = 1.0;
+    T_CYL      = 10.0;
+    T_GAP      = 0.5;
+    T_MIMO     = 20.0;
+    T_SHUTDOWN = 1.0;
+
+    SLOT_LENGTH = T_CYL + T_GAP;
+    T_SEQ_END   = T_PRE + 4.0*SLOT_LENGTH;
+    T_MIMO_END  = T_SEQ_END + T_MIMO;
+    T_END       = T_MIMO_END + T_SHUTDOWN;
+
+    %% Command configuration
+    U_LIMIT = 0.90;
+
+    % Change an entry to -1 only if positive command moves that cylinder in
+    % the wrong physical direction. Sign does not affect total range, but it
+    % affects which end is reached first.
+    SIGN_1 = 1.0;
+    SIGN_2 = 1.0;
+    SIGN_3 = 1.0;
+    SIGN_4 = 1.0;
+
+    %% Internal clock — same pattern as the original working block
+    persistent k
+
+    if isempty(k)
+        k = uint32(0);
+    end
+
+    t = double(k)*DT;
+    k = k + uint32(1);
+
+    %% Always initialize a fixed-size output
+    u = zeros(5,1);
+
+    %% --------------------------------------------------------------------
+    % PHASE 0: STARTUP EXECUTION CHECK, 0-1 second
+    % Collector marks this phase invalid for training.
+    % ---------------------------------------------------------------------
+    if t < T_PRE
+
+        startup_envelope = 0.5*(1.0 - cos(pi*t/T_PRE));
+
+        u(1) = SIGN_1*( 0.08 + 0.10*startup_envelope* ...
+            cos(2.0*pi*0.50*t));
+
+        u(2) = SIGN_2*(-0.07 + 0.09*startup_envelope* ...
+            cos(2.0*pi*0.65*t + 0.80));
+
+        u(3) = SIGN_3*( 0.06 + 0.08*startup_envelope* ...
+            cos(2.0*pi*0.80*t + 1.60));
+
+        u(4) = SIGN_4*(-0.05 + 0.07*startup_envelope* ...
+            cos(2.0*pi*0.95*t + 2.40));
+
+        u(5) = 0.0;
+
+    %% --------------------------------------------------------------------
+    % PHASE 1: SEQUENTIAL COVERAGE SWEEPS, 1-43 seconds
+    %
+    % Each active cylinder receives:
+    %   0.00-0.40 s : smooth ramp from 0 to +0.90
+    %   0.40-5.20 s : sustained +0.90 command
+    %   5.20-5.80 s : smooth transition from +0.90 to -0.90
+    %   5.80-9.60 s : sustained -0.90 command
+    %   9.60-10.0 s : smooth ramp from -0.90 to 0
+    %
+    % Long plateaus are intentional. They give the slow Simscape hydraulic
+    % plant time to generate actual cylinder travel instead of repeatedly
+    % reversing before significant displacement occurs.
+    % ---------------------------------------------------------------------
+    elseif t < T_SEQ_END
+
+        sequence_time = t - T_PRE;
+        slot_index = floor(sequence_time/SLOT_LENGTH);
+        slot_time  = sequence_time - slot_index*SLOT_LENGTH;
+
+        if slot_time < T_CYL
+
+            coverage_command = 0.0;
+
+            if slot_time < 0.40
+
+                % Raised-cosine ramp: 0 -> +U_LIMIT
+                ramp = 0.5*(1.0 - cos(pi*slot_time/0.40));
+                coverage_command = U_LIMIT*ramp;
+
+            elseif slot_time < 5.20
+
+                % Long positive plateau
+                coverage_command = U_LIMIT;
+
+            elseif slot_time < 5.80
+
+                % Raised-cosine transition: +U_LIMIT -> -U_LIMIT
+                transition_time = slot_time - 5.20;
+                coverage_command = U_LIMIT*cos(pi*transition_time/0.60);
+
+            elseif slot_time < 9.60
+
+                % Long negative plateau
+                coverage_command = -U_LIMIT;
+
+            else
+
+                % Raised-cosine ramp: -U_LIMIT -> 0
+                remaining_time = T_CYL - slot_time;
+                ramp = 0.5*(1.0 - cos(pi*remaining_time/0.40));
+                coverage_command = -U_LIMIT*ramp;
+            end
+
+            % A very small dither preserves local dynamic content without
+            % materially shortening the full-authority travel intervals.
+            dither = 0.025*sin(2.0*pi*0.90*slot_time);
+            coverage_command = coverage_command + dither;
+
+            if slot_index == 0.0
+                u(1) = SIGN_1*coverage_command;
+
+            elseif slot_index == 1.0
+                u(2) = SIGN_2*coverage_command;
+
+            elseif slot_index == 2.0
+                u(3) = SIGN_3*coverage_command;
+
+            elseif slot_index == 3.0
+                u(4) = SIGN_4*coverage_command;
+            end
+        end
+
+    %% --------------------------------------------------------------------
+    % PHASE 2: COVERAGE-ASSISTED MIMO EXCITATION, 43-63 seconds
+    %
+    % Every cylinder receives:
+    %   - one slow near-square cycle across the complete 20-second phase;
+    %   - a unique medium-frequency component;
+    %   - a unique faster component.
+    %
+    % The slow term adds approximately ten seconds of command in each
+    % direction. The unique terms retain MIMO independence and temporal PE.
+    % ---------------------------------------------------------------------
+    elseif t < T_MIMO_END
+
+        tm = t - T_SEQ_END;
+
+        % Short 0.3-second entry and exit ramps maximize useful travel time.
+        mimo_envelope = 1.0;
+
+        if tm < 0.30
+            mimo_envelope = 0.5*(1.0 - cos(pi*tm/0.30));
+
+        elseif tm > T_MIMO - 0.30
+            remaining_time = T_MIMO - tm;
+            mimo_envelope = 0.5*(1.0 - cos(pi*remaining_time/0.30));
+        end
+
+        slow_w = 2.0*pi*(1.0/T_MIMO)*tm;
+
+        % Cylinder 1
+        u(1) = SIGN_1*mimo_envelope*( ...
+            0.62*tanh(2.3*sin(slow_w + 0.00)) + ...
+            0.20*sin(2.0*pi*(7.0/T_MIMO)*tm + 0.72) + ...
+            0.08*sin(2.0*pi*(19.0/T_MIMO)*tm + 1.82));
+
+        % Cylinder 2
+        u(2) = SIGN_2*mimo_envelope*( ...
+            0.62*tanh(2.3*sin(slow_w + 1.15)) + ...
+            0.20*sin(2.0*pi*(11.0/T_MIMO)*tm + 1.44) + ...
+            0.08*sin(2.0*pi*(23.0/T_MIMO)*tm + 3.64));
+
+        % Cylinder 3
+        u(3) = SIGN_3*mimo_envelope*( ...
+            0.62*tanh(2.3*sin(slow_w + 2.30)) + ...
+            0.20*sin(2.0*pi*(13.0/T_MIMO)*tm + 2.16) + ...
+            0.08*sin(2.0*pi*(29.0/T_MIMO)*tm + 5.46));
+
+        % Cylinder 4
+        u(4) = SIGN_4*mimo_envelope*( ...
+            0.62*tanh(2.3*sin(slow_w + 3.45)) + ...
+            0.20*sin(2.0*pi*(17.0/T_MIMO)*tm + 2.88) + ...
+            0.08*sin(2.0*pi*(31.0/T_MIMO)*tm + 7.28));
+
+        % Independent joint-5 excitation
+        u(5) = mimo_envelope*( ...
+            0.34*sin(2.0*pi*0.075*tm + 0.40) + ...
+            0.16*sin(2.0*pi*0.45*tm + 1.10));
+
+    %% --------------------------------------------------------------------
+    % PHASE 3: SHUTDOWN AND AFTER THE EXPERIMENT
+    % ---------------------------------------------------------------------
+    elseif t < T_END
+
+        u(:) = 0.0;
+
+    else
+
+        u(:) = 0.0;
+    end
+
+    %% Final hard clipping to the physical valve-command limits
+    for channel = 1:5
+        if u(channel) > U_LIMIT
+            u(channel) = U_LIMIT;
+
+        elseif u(channel) < -U_LIMIT
+            u(channel) = -U_LIMIT;
+        end
+    end
+end

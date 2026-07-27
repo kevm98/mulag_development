@@ -1,0 +1,646 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 3 — System Fundamentals and Problem Formulation
+%% (10–15 pages)
+%% Purpose: describe the physical and simulated system once,
+%% define all coordinate spaces and interfaces, and formulate
+%% the control objective mathematically.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{System Fundamentals and Problem Formulation}
+\label{chap:system}
+
+Chapter~\ref{chap:fundamentals} closed with a program: learn the
+hydraulic actuation of the FME~500 from identifiable data, wrap the
+learned models in a structured controller, and measure robustness and
+adaptation as separate effects. Before any of that can be made concrete,
+the system itself has to be pinned down. This chapter describes the
+manipulator and its two simulated representations exactly once, so that
+every later chapter can refer back here instead of re-explaining the
+plant. Sections~\ref{sec:sys:platform} and~\ref{sec:sys:kinematics}
+define the mechanism, its coordinate spaces, and the mappings between
+them. Section~\ref{sec:sys:actuation} fixes which signals exist, which
+are commanded, and which are merely estimated.
+Section~\ref{sec:sys:simscape} summarizes the high-fidelity Simscape
+model that generates all training data, and
+Section~\ref{sec:sys:isaaclab} the IsaacLab environment in which
+policies are trained and evaluated.
+Section~\ref{sec:sys:architecture} assembles the hierarchical control
+architecture, and Sections~\ref{sec:sys:problem}
+and~\ref{sec:sys:evaluation-criteria} state the control problem and the
+criteria against which the thesis will judge itself.
+
+\section{Manipulator Platform}
+\label{sec:sys:platform}
+
+The MULAG FME~500 is modeled as a serial-link manipulator with five
+revolute joints. Figure~\ref{fig:sys:topology} shows the kinematic
+topology. The chain starts at the base frame bolted to the Unimog's
+front attachment plate (link~0), continues through the slew column
+(link~1), the two boom segments (links~2 and~3), and the head carrier
+(link~4), and ends in the flail mowing head (link~5). Four double-acting
+hydraulic cylinders actuate the first four joints; each cylinder closes
+a triangle over its joint, so cylinder extension and joint angle are
+related through the linkage geometry. The fifth joint, the rotation of
+the mowing head itself, carries no cylinder of its own in the
+configurations studied here: it is constrained by a swivel-link
+mechanism coupled to the head carrier, and the control task treats it as
+passive. Throughout the thesis the four actuated cylinders are indexed
+in the fixed order introduced in Chapter~\ref{chap:models}: slew
+(\emph{Drehzapfen}), boom~I (\emph{Ausleger~I}), boom~II
+(\emph{Ausleger~II}), and head pivot (\emph{Messerkopf-Schwenk}).
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fme500_topology_annotated}
+  \caption{Kinematic topology of the MULAG FME~500, rendered from the
+  CAD model. (a)~The mechanism with every link (L0--L5), joint
+  (J1--J5), and cylinder (C1--C4) called out; J5 is drawn dashed to
+  mark it as passive. (b)~The same structure as an abstract chain:
+  five revolute joints in series, four of them each bracketed by the
+  cylinder that actuates it, and the passive fifth joint coupled
+  through swivel links rather than a cylinder of its own.}
+  \label{fig:sys:topology}
+\end{figure}
+
+The geometry is not hand-approximated. Link shapes, masses, centers of
+mass, and full inertia tensors were extracted from the manufacturer's
+CAD data using the Blender add-on
+Phobos~\cite{vonszadkowski2020phobos}, which exports a consistent URDF
+description of the mechanism; Figure~\ref{fig:sys:cad} renders this
+CAD-derived model directly. This matters for a machine like the
+FME~500: the boom is a long, asymmetric weldment whose cross-inertia
+terms are significant, and a lumped-mass approximation would
+misrepresent the very load coupling that makes the hydraulics hard to
+control. The same CAD-derived description is the common ancestor of
+both simulated representations used in this thesis, the Simscape model
+of Section~\ref{sec:sys:simscape} and the IsaacLab articulation of
+Section~\ref{sec:sys:isaaclab}, so their mechanical parameters agree by
+construction.
+
+Table~\ref{tab:sys:cylinders} lists the actuated joints and the
+extension ranges of their cylinders as observed across the training
+data. Two geometric facts recur throughout the thesis. First, the
+controlled point is not the origin of the head body: the cutter contact
+point sits $\unit[0.79]{m}$ below the \emph{Messerkopf} body origin,
+and all task-space errors are measured at this offset tool tip. Second,
+the mowing pose of interest keeps the head facing straight down; the
+head-pivot cylinder holds a dedicated reference extension
+($\unit[0.589]{m}$) to maintain this orientation, which effectively
+reserves the fourth cylinder for the orientation task and leaves
+cylinders~1--3 for positioning.
+
+\begin{table}[tb]
+  \centering
+  \caption{Actuated joints of the modeled FME~500 and the extension
+  ranges of their cylinders observed in the training data
+  (Chapter~\ref{chap:data}).}
+  \label{tab:sys:cylinders}
+  \begin{tabular}{clcc}
+    \toprule
+    $i$ & Joint (German designation) & Function & Extension range [m] \\
+    \midrule
+    1 & \emph{Drehzapfen}         & slew about vertical axis & $0.018$ -- $0.493$ \\
+    2 & \emph{Ausleger I}         & inner boom elevation     & $0.275$ -- $0.791$ \\
+    3 & \emph{Ausleger II}        & outer boom articulation  & $0.309$ -- $0.857$ \\
+    4 & \emph{Messerkopf-Schwenk} & head pivot (orientation) & $0.269$ -- $0.689$ \\
+    \midrule
+    5 & \emph{Messerkopf}         & head rotation, passive (swivel links) & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[tb]
+  \centering
+  \begin{subfigure}[b]{.47\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/fme500_cad_iso_annot}
+    \caption{}
+    \label{fig:sys:cad-iso}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{.49\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/fme500_cad_side}
+    \caption{}
+    \label{fig:sys:cad-side}
+  \end{subfigure}
+  \caption{The CAD-derived multibody model of the FME~500 arm, rendered
+  from the URDF export used throughout this thesis: (a)~isometric view
+  with the four hydraulic cylinders C1--C4 highlighted in orange and
+  labeled, (b)~side elevation in the folded zero pose. The swivel links
+  of the passive fifth joint connect the head carrier to the flail
+  head, and the base frame carries the slew column. The same geometry,
+  masses, and inertia tensors drive both the Simscape multibody model
+  and the IsaacLab articulation.}
+  \label{fig:sys:cad}
+\end{figure}
+
+To make the serial chain concrete, Figure~\ref{fig:sys:links} shows the
+individual rigid bodies as they are imported from the URDF, each
+rendered on its own in an orthographic view. Reading outward from the
+vehicle: the \emph{front frame} (link~0) bolts to the Unimog attachment
+plate and carries the slew bearing; the \emph{slew column}
+(\emph{Drehzapfen}, link~1) rotates the whole arm about the vertical
+axis; the \emph{inner} and \emph{outer boom} segments
+(\emph{Ausleger~I} and~\emph{II}, links~2 and~3) are the long
+load-bearing weldments whose asymmetric cross-sections give the
+significant cross-inertia terms noted above; the \emph{head carrier}
+(\emph{Messerkopf-Schwenk}, link~4) with its swivel-link pair sets the
+head orientation; and the \emph{flail mowing head} (link~5) does the
+cutting. Figure~\ref{fig:sys:links}(g) shows one of the four
+double-acting cylinders as a separate barrel--rod pair, the form in
+which each actuator enters the closed kinematic loop of
+Section~\ref{sec:sys:kinematics}.
+
+\begin{figure}[tb]
+  \centering
+  \newcommand{\linkcell}[3]{%
+    \begin{subfigure}[b]{#1\linewidth}
+      \centering
+      \includegraphics[height=26mm]{images/links/link_#2}
+      \caption{#3}
+    \end{subfigure}}
+  \linkcell{.31}{frontrahmen}{Front frame (link 0)}\hfill
+  \linkcell{.31}{drehzapfen}{Slew column (link 1)}\hfill
+  \linkcell{.31}{ausleger_i}{Inner boom (link 2)}
+
+  \vspace{3mm}
+  \linkcell{.31}{ausleger_ii}{Outer boom (link 3)}\hfill
+  \linkcell{.31}{messerkopf_schwenk}{Head carrier (link 4)}\hfill
+  \linkcell{.31}{messerkopf}{Mowing head (link 5)}
+
+  \vspace{3mm}
+  \begin{subfigure}[b]{.31\linewidth}
+    \centering
+    \includegraphics[height=26mm]{images/links/link_cylinder}
+    \caption{Cylinder (barrel + rod)}
+  \end{subfigure}
+  \caption{Catalog of the FME~500 rigid bodies, each rendered
+  individually from the URDF geometry in an orthographic view. Links 0--5
+  form the serial chain; (g)~shows one of the four hydraulic cylinders as
+  the barrel--rod pair that actuates a joint. Renders share the coordinate
+  frames, scale, and matte engineering style used throughout the thesis.}
+  \label{fig:sys:links}
+\end{figure}
+
+\section{Kinematic Structure and Coordinate Mappings}
+\label{sec:sys:kinematics}
+
+\subsection{Joint space and cylinder space}
+
+The mechanism's configuration is described by the joint vector
+$\bm{q} \in \mathbb{R}^5$ and its velocity $\dot{\bm{q}}$. The actuated
+coordinates, however, are the cylinder extensions
+$\bm{x} \in \mathbb{R}^4$ introduced in Chapter~\ref{chap:models}. Each
+cylinder connects an attachment point $\bm{p}_A$ on link $k$ to a point
+$\bm{p}_B$ on link $k{+}1$, both fixed in their links and exported from
+the CAD data. The instantaneous cylinder length and extension are
+%
+\begin{equation}
+  \label{eq:sys:cyl-length}
+  \ell_i(\bm{q}) = \bigl\| \bm{p}_B(\bm{q}) - \bm{p}_A(\bm{q}) \bigr\|,
+  \qquad
+  x_i = \ell_i(\bm{q}) - \ell_{0,i},
+\end{equation}
+%
+with $\ell_{0,i}$ the retracted reference length. Differentiating
+\eqref{eq:sys:cyl-length} gives the scalar mapping between joint motion
+and extension rate,
+%
+\begin{equation}
+  \label{eq:sys:cyl-jac}
+  \dot{x}_i = J_{\mathrm{cyl},i}(\bm{q})\, \dot{\bm{q}},
+  \qquad
+  J_{\mathrm{cyl},i} = \bm{e}_i^{\!\top}
+  \bigl( \bm{J}_B - \bm{J}_A \bigr),
+\end{equation}
+%
+where $\bm{e}_i$ is the unit vector along the cylinder axis and
+$\bm{J}_A, \bm{J}_B$ are the translational Jacobians of the attachment
+points. The same mapping carries force back to torque: by the principle
+of virtual work, a cylinder force $F_{h,i}$ contributes the joint
+torque $\bm{\tau}_{\mathrm{act}} = \bm{J}_{\mathrm{cyl}}^{\top}
+\bm{F}_h$. The rows of $\bm{J}_{\mathrm{cyl}}$ are the lever arms
+discussed qualitatively in Chapter~\ref{chap:fundamentals}; they vary
+over the stroke, and with them the effective gain and stiffness that
+each cylinder presents to its joint.
+
+\subsection{Task space and the calibrated cutter Jacobian}
+\label{sec:sys:task-jacobian}
+
+The task is defined at the cutter tip, expressed in the truck chassis
+frame (\texttt{base\_link}). This choice is deliberate and matters in
+practice: the articulation root of the simulated arm is the slew base,
+which moves with the arm, and using it as the reference frame corrupts
+every tracking measurement. All references and errors in this thesis
+live in the truck frame, and the controlled point includes the
+$\unit[-0.79]{m}$ tool-tip offset of Section~\ref{sec:sys:platform}.
+
+For control, the composition of task kinematics and cylinder linkage is
+captured in a single calibrated Jacobian
+$\bm{J}_c \in \mathbb{R}^{3\times4}$ that maps cylinder extension rates
+to cutter-tip velocity in the truck frame. Rather than deriving it
+symbolically through the CAD chain, it was measured directly on the
+simulated plant: starting from the head-down mowing configuration, each
+cylinder target was stepped in turn and the settled cutter displacement
+recorded, giving central-difference estimates of every column. The
+measured matrix has rank~3 with singular values $8.24$, $5.69$, and
+$2.79$, confirming that at the mowing operating point the four
+cylinders span exactly three independent task directions. This is the
+quantitative form of the observation from
+Section~\ref{sec:sys:platform}: with cylinder~4 committed to holding
+the head down, the remaining freedom moves the cutter in a
+three-dimensional workspace, and one direction of the nominal base
+frame is reachable only through vehicle motion. The damped
+least-squares controller of Chapter~\ref{chap:control} inverts exactly
+this measured $\bm{J}_c$, so the nominal layer and the plant share one
+geometric contract.
+
+\section{Actuation and Measured State}
+\label{sec:sys:actuation}
+
+Every interface in this thesis draws from one signal inventory, and it
+is worth stating it once, together with who can see what.
+Table~\ref{tab:sys:signals} summarizes the quantities, their
+dimensions, and their availability in the two simulation environments.
+
+\begin{table}[tb]
+  \centering
+  \caption{Signal inventory of the modeled system. ``S'' marks signals
+  present in the Simscape data exports, ``I'' signals available live in
+  the IsaacLab environment, and ``M'' quantities that exist there only
+  through the learned models of Chapter~\ref{chap:models}.}
+  \label{tab:sys:signals}
+  \small
+  \begin{tabular}{llcl}
+    \toprule
+    Signal & Dimension & Availability & Meaning \\
+    \midrule
+    $\bm{u}$ & $[-1,1]^4$ & S & normalized proportional-valve commands \\
+    $\bm{x},\, \dot{\bm{x}}$ & $\mathbb{R}^4$ & S, I & cylinder extensions and velocities \\
+    $\Delta\bm{p}$ & $\mathbb{R}^4$ & S, M & chamber pressure differences \\
+    $\bm{F}$ & $\mathbb{R}^4$ & S & logged rod forces \\
+    $\bm{q},\, \dot{\bm{q}}$ & $\mathbb{R}^5$ & S, I & joint positions and velocities \\
+    $\bm{p}_c$ & $\mathbb{R}^3$ & S, I & cutter-tip position, truck frame \\
+    $\bm{c} = [\Delta\bm{x}^*, \Delta\dot{\bm{x}}^*]$ & $\mathbb{R}^8$ & I & desired cylinder command \\
+    $\hat{\bm{z}}$ & $\mathbb{R}^{d_z}$ & M & estimated latent plant descriptor (PPO2-C) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The separation encoded in that table drives several design decisions.
+The valve command $\bm{u}$ exists only inside the Simscape plant and
+its data exports; in IsaacLab no valve is simulated, so any model that
+needs valve information at runtime must either receive it from a
+learned inverse model (the PPO1 path) or predict it internally (the
+PPO2 reduced-order model). The pressure difference $\Delta\bm{p}$
+likewise has no native counterpart in the rigid-body simulation; at
+runtime it is a recursive state of the learned actuator models rather
+than a measurement. Only positions and velocities, of cylinders,
+joints, and the cutter tip, are common ground between the two worlds,
+which is why the acceptance gates of
+Section~\ref{sec:sys:evaluation-criteria} are formulated on exactly
+these quantities. Finally, commanded quantities carry a star and
+estimated ones a hat, following the notation of
+Chapter~\ref{chap:models}; the latent $\hat{\bm{z}}$ exists only in the
+adaptive PPO2-C configuration.
+
+\section{High-Fidelity Simscape Model}
+\label{sec:sys:simscape}
+
+The data source for every learned model in this thesis is a
+multi-domain Simscape model of the FME~500 that I developed in the
+master project preceding this thesis. This section summarizes the parts
+of that model the thesis depends on; the modeling and validation work
+itself is part of the contribution of this research program.
+
+\subsection{Mechanical subsystem}
+
+The mechanism is simulated as a rigid multibody system in Simscape
+Multibody~\cite{mathworks2024simscape}, with the CAD-derived links,
+joints, and cylinder attachment frames of
+Section~\ref{sec:sys:platform}. The joint-space dynamics take the
+standard manipulator form
+%
+\begin{equation}
+  \label{eq:sys:eom}
+  \bm{M}(\bm{q})\ddot{\bm{q}}
+  + \bm{C}(\bm{q},\dot{\bm{q}})\dot{\bm{q}}
+  + \bm{g}(\bm{q})
+  + \bm{\tau}_{\mathrm{fric}}(\dot{\bm{q}})
+  = \bm{\tau}_{\mathrm{act}} - \bm{J}^{\top}(\bm{q})\,\bm{F}_{\mathrm{ext}},
+\end{equation}
+%
+with the inertia matrix $\bm{M}$ assembled from the imported CAD
+tensors. Two terms deserve comment. The friction torque
+$\bm{\tau}_{\mathrm{fric}}$ combines viscous and Coulomb components
+with a smooth $\tanh$ approximation of the sign function, extended by a
+Stribeck term at the cylinder level to capture stick--slip at low
+velocities; the slew joint, which carries high side loads, is
+particularly sensitive to this. The external wrench
+$\bm{F}_{\mathrm{ext}}$ models the vegetation cutting load as a nominal
+force plus a disturbance that scales with feed velocity and vegetation
+density, rather than as a constant, so mowing does not reduce to a
+static payload. Each cylinder is built as a closed kinematic loop
+(spherical--prismatic--cylindrical, shown in the top band of
+Figure~\ref{fig:sys:actuator-channel}), which lets it self-align under
+load without over-constraining the mechanism, and hard-stop constraints
+enforce the physical stroke limits of
+Table~\ref{tab:sys:cylinders}.
+
+\subsection{Hydraulic subsystem}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fme500_hydraulic_schematic}
+  \caption{System-level hydraulic schematic of the modeled machine.
+  Left: the four independent electro-hydraulic actuator channels, each
+  a 4/3 proportional directional valve driving one double-acting
+  cylinder that moves its link (thumbnails rendered from the same CAD
+  model as Figures~\ref{fig:sys:topology}--\ref{fig:sys:links}). Right:
+  the shared hydraulic power unit, comprising the variable-speed pump
+  and its prime mover, the gas-charged accumulator, the pressure-relief
+  valve, the pressure sensor, the suction filter, and the reservoir,
+  connected to every channel through the common supply~(P) and
+  return~(T) rails. Only four cylinders are present: the fifth joint is
+  passive (Table~\ref{tab:sys:cylinders}) and carries no actuator of
+  its own.}
+  \label{fig:sys:schematic}
+\end{figure}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fme500_actuator_channel_detailed}
+  \caption{One electro-hydraulic actuator channel, split into the
+  upper mechanical interface and the lower hydraulic interface that
+  Sections~\ref{sec:sys:kinematics} and~\ref{sec:sys:simscape}
+  describe. Top: barrel and rod are rigid bodies connected to the
+  adjacent links through a revolute--prismatic--revolute joint chain
+  whose prismatic coordinate is the stroke $x$; the prismatic joint is
+  the translational interface that exchanges the axial force $F_h$
+  against the motion $x, \dot{x}$, opposed by the friction
+  $F_{\mathrm{fric}}(\dot{x})$. Bottom: the asymmetric double-acting
+  cylinder, with chamber pressures and flows $(p_1, Q_1)$ and
+  $(p_2, Q_2)$ routed to ports A and B of the 4/3 proportional
+  directional valve, which is driven by the command $u$ through the
+  first-order spool lag and connected to the shared supply and return
+  rails of Figure~\ref{fig:sys:schematic}. The legend, variable table,
+  and force identity use the same notation as the continuity equation
+  \eqref{eq:sys:continuity} and the $F_h$ identity of
+  Section~\ref{sec:sys:simscape}.}
+  \label{fig:sys:actuator-channel}
+\end{figure}
+
+Figure~\ref{fig:sys:schematic} shows the assembled plant at system
+level. The hydraulic side is deliberately physical rather
+than phenomenological. Supply comes from a fixed-displacement pump
+driven at variable speed ($Q_p = D_p\,\omega$), buffered by a
+gas-charged accumulator (polytropic gas model) and protected by a
+pressure-relief valve, so supply pressure is a dynamic quantity that
+sags under simultaneous demand and clips under load spikes. Each of the four
+actuators is a 4/3 proportional directional valve driving an
+asymmetric double-acting cylinder;
+Figure~\ref{fig:sys:actuator-channel} details one such channel, from
+the rigid-body assembly of barrel and rod through the
+mechanical--hydraulic coupling interface down to the valve, the
+chambers, and the measured feedback signals. The chamber pressures
+follow the continuity equations
+%
+\begin{equation}
+  \label{eq:sys:continuity}
+  \dot{p}_1 = \frac{E_{\mathrm{eff}}}{V_1(x)}
+    \bigl( Q_1 - A_1 \dot{x} - C_{\mathrm{leak}}(p_1 - p_2) \bigr),
+  \qquad
+  \dot{p}_2 = \frac{E_{\mathrm{eff}}}{V_2(x)}
+    \bigl( -Q_2 + A_2 \dot{x} + C_{\mathrm{leak}}(p_1 - p_2) \bigr),
+\end{equation}
+%
+with stroke-dependent chamber volumes $V_{1,2}(x)$ that include the
+line dead volumes, piston areas $A_1 \neq A_2$, and laminar internal
+leakage $C_{\mathrm{leak}}$. The effective bulk modulus accounts for
+entrained air through
+%
+\begin{equation}
+  \label{eq:sys:bulk}
+  E_{\mathrm{eff}}(p) =
+  \left( \frac{1}{E_f} + \frac{\alpha}{p} \right)^{-1},
+\end{equation}
+%
+so fluid stiffness itself is pressure dependent, weakest exactly where
+precise low-pressure positioning is attempted. Valve flow follows the
+orifice law of Chapter~\ref{chap:fundamentals}
+(Equation~\ref{eq:fund:orifice}), and the spool is not an instantaneous
+gain but a first-order lag, $\dot{x}_v = (u - x_v)/\tau_v$, so command
+transients are bandwidth limited. The net piston force
+$F_h = p_1 A_1 - p_2 A_2 - F_{\mathrm{fric}}(\dot{x})$ feeds back into
+the mechanism through the virtual-work mapping of
+Section~\ref{sec:sys:kinematics}, closing the bidirectional coupling:
+mechanical loads shape pressure transients, and pressure transients
+shape motion. Because cylinder-induced stiffness is high while
+rigid-body motion is slow, the coupled equations are stiff, and the
+model runs under a variable-step implicit solver; this stiffness is the
+computational reason the Simscape plant cannot serve as an RL training
+environment (Section~\ref{sec:fund:sim-data-source}).
+
+\subsection{What the model is validated to reproduce}
+\label{sec:sys:simscape-validation}
+
+A plant model intended as a data generator must be trusted for its
+\emph{dynamics}, not just its geometry. The validation strategy in the
+modeling study was control-based: a fixed integral backstepping
+controller at $\unit[0.01]{s}$ was applied as a standardized excitation
+instrument, and the emergent behavior of the closed loop was examined
+as the physical parameters varied. The headline experiment sweeps the
+effective bulk modulus over $\beta \in \{0.5, 1.0, 1.5, 2.0\}\,
+\mathrm{GPa}$, the physically meaningful range from strongly aerated to
+very stiff fluid, with all controller gains held constant.
+Figure~\ref{fig:sys:bulkmod} shows the result re-plotted from the
+study's measurements. Actuation delay behaves as hydraulic intuition
+demands: the valve-to-joint delay of the heavy slew axis falls from
+about $\unit[0.85]{s}$ at $\unit[0.5]{GPa}$ to $\unit[0.65]{s}$ at
+$\unit[2.0]{GPa}$, the system-level delay index from roughly
+$\unit[0.45]{s}$ to $\unit[0.35]{s}$, and the improvement saturates
+beyond $\unit[1.5]{GPa}$, where mechanical inertia rather than fluid
+compliance limits the response. Task-space tracking error falls
+monotonically with stiffer fluid, by about 11\,\% over the sweep. The
+model, in other words, reproduces the ``stiff yet oscillatory''
+character of real hydraulic machinery and responds to parameter changes
+in the physically expected direction, which is precisely the property
+that Chapter~\ref{chap:data} exploits when it randomizes these same
+parameters to generate plant families.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch3_bulk_modulus_sensitivity}
+  \caption{Sensitivity of the Simscape plant to the effective bulk
+  modulus, measured in the preceding modeling study.
+  (a)~Valve-to-joint 50\,\% delays of
+  the dominant axes and the RMS delay index; (b)~end-effector tracking
+  error of the fixed validation controller. Softer fluid slows the arm
+  and degrades tracking; the effect saturates beyond
+  $\unit[1.5]{GPa}$.}
+  \label{fig:sys:bulkmod}
+\end{figure}
+
+Three limitations are carried forward honestly. The model is a single
+machine: manufacturing spread enters only through the deliberate
+parameter randomization of Chapter~\ref{chap:data}, not through
+measured variation. Thermal dynamics are not modeled; temperature
+effects are represented indirectly through the parameters they act on
+(bulk modulus, friction). And the logged rod-force channel failed a
+piston-area consistency audit on the current export
+(Section~\ref{sec:models:rom}), so force is treated as unreliable
+supervision throughout the thesis.
+
+\section{IsaacLab Environment}
+\label{sec:sys:isaaclab}
+
+Policy training and closed-loop evaluation run in
+IsaacLab~\cite{mittal2023orbit} on the GPU-parallel PhysX engine. The
+same CAD-derived mechanism enters here as a USD articulation: the
+Unimog carrier with wheels, the five arm links, and the four cylinders
+represented as prismatic actuator joints, with self-collisions enabled
+and the solver configured for the long-chain mechanism (eight position
+iterations). The physics step is $\unit[1/120]{s}$ with a control
+decimation of two, so every controller in this thesis acts at
+$\unit[60]{Hz}$; the learned actuator models keep their native
+$\unit[0.05]{s}$ sample time from the Simscape data, and their
+outputs are resampled onto the control clock. Training uses 64
+parallel environments, the measured throughput optimum on the
+available GPU.
+
+Three environment details cost real debugging time and are recorded
+here so they need not be rediscovered. First, the articulation root of
+the arm sits about $\unit[1.11]{m}$ above the wheel contact plane, so
+the vehicle must spawn with its root at $z = \unit[1.26]{m}$; spawning
+at ground height buries the truck to its axles and silently changes
+every contact force. Second, cylinder actuation uses PhysX position
+targets, and the target must be integrated in \emph{reference} space,
+accumulating commanded increments, rather than re-anchored each step to
+the measured position: re-anchoring lets gravity sag wash out every
+commanded increment, removing the policy's authority entirely. Third,
+during arm tracking the vehicle is parked by holding the wheel
+positions with a planar fixture (with a small deadband), because wheel
+compliance otherwise turns arm reaction forces into slow truck drift
+that contaminates the task-space error. The full hydraulic model does
+not run inside these environments for the computational reasons of
+Section~\ref{sec:fund:sim-data-source}; its behavior enters only
+through the learned actuator representations between the controller and
+the PhysX targets.
+
+\section{Hierarchical Control Architecture}
+\label{sec:sys:architecture}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=.95\textwidth]{images/fme500_control_architecture}
+  \caption{Hierarchical control architecture used in all experiments,
+  organized by layer. A stop/work supervisor alternates vehicle driving
+  and arm tracking, and the reference generator supplies the head-down
+  cutter trajectory in the truck frame. The task layer converts the
+  reference into the desired cylinder command through the EE cascade
+  and the damped least-squares inverse of the measured cutter Jacobian,
+  with the residual PPO policy adding a bounded correction for
+  cylinders 1--3. The learned actuator layer is the experimental
+  variable: either the paired ID--FD hybrid (PPO1) or the
+  command-conditioned hydraulic ROM (PPO2) realizes the command as a
+  bounded PhysX position target. The measured state closes both loops
+  at $\unit[60]{Hz}$.}
+  \label{fig:sys:architecture}
+\end{figure}
+
+Figure~\ref{fig:sys:architecture} assembles the pieces. At the top, a
+stop/work supervisor alternates between driving the vehicle to a
+station (arm stowed) and tracking with the arm (vehicle parked); all
+tracking results in this thesis are scored only during the arm-tracking
+phase. The task layer turns the cutter reference into cylinder-space
+commands: the head-down orientation is held by the dedicated
+cylinder-4 reference, an end-effector cascade distributes the position
+task over cylinders~1--3, and the damped least-squares inverse of the
+measured Jacobian $\bm{J}_c$ produces the desired increments with a
+velocity-scaled lead and bounded per-step magnitude. The residual PPO
+policy observes the tracking state and adds a bounded correction for
+cylinders~1--3; it cannot command cylinder~4 or the vehicle. Below the
+task layer sits the experimental variable of the whole thesis: the
+actuator path that realizes the desired command, either the paired
+ID--FD hybrid (PPO1) or the command-conditioned reduced-order model
+(PPO2), both ending in the same bounded PhysX position target. The
+measured state closes both loops, feeding the DLS layer and the policy
+at $\unit[60]{Hz}$.
+
+\section{Problem Formulation}
+\label{sec:sys:problem}
+
+With the system fixed, the control problem can be stated compactly.
+Let $\bm{p}_{\mathrm{ref}}(t)$ be a reference trajectory for the cutter
+tip in the truck frame, drawn from the trajectory classes used
+throughout the thesis (lines, arcs, circles, and sine sweeps at cruise
+speeds of $0.16$--$\unit[0.18]{m/s}$, with cosine acceleration and
+turnaround profiles), and let $\bm{p}_c(t)$ be the measured tip
+position. The instantaneous task error is
+%
+\begin{equation}
+  \label{eq:sys:error}
+  \bm{e}(t) = \bm{p}_{\mathrm{ref}}(t) - \bm{p}_c(t) .
+\end{equation}
+%
+The \emph{tracking objective} is to keep $\|\bm{e}(t)\|$ small in mean
+and in the tail (p95) over complete reference cycles, while the head
+stays within its orientation band and the motion remains smooth. The
+\emph{model objective}, developed in Chapter~\ref{chap:models}, is that
+each learned actuator representation predict the cylinder response to
+its commands accurately over one step and over recursive rollouts, with
+demonstrated input authority. The \emph{robustness objective} asks that
+tracking persist across the randomized plant family
+$\{\mathcal{P}(\bm{\xi})\}$ of Chapter~\ref{chap:data}, and the
+\emph{adaptation objective} that the latent-conditioned configuration
+recover performance after the active $\bm{\xi}$ changes, faster and
+further than the robust configuration alone. All objectives are subject
+to the same constraint set: valve commands within the per-axis limits
+of Chapter~\ref{chap:models}, cylinder extensions within the ranges of
+Table~\ref{tab:sys:cylinders}, per-step target increments bounded (the
+$\unit[25]{mm}$ cylinder-target lead limit), head-down alignment never
+below $0.95$, and the parked vehicle essentially motionless.
+
+What makes this problem hard is not any single ingredient but their
+conjunction, and the chapters so far have each contributed one piece of
+the difficulty: the actuator chain is nonlinear and drifting
+(Chapter~\ref{chap:fundamentals}), only three task directions are
+controllable and the mapping into them varies with configuration
+(Section~\ref{sec:sys:kinematics}), the true actuator state is not
+observable at runtime (Section~\ref{sec:sys:actuation}), and the
+high-fidelity plant that knows the answers is too slow to train
+against (Section~\ref{sec:sys:simscape}).
+
+\section{Evaluation Criteria at System Level}
+\label{sec:sys:evaluation-criteria}
+
+The thesis judges controllers and models by fixed, pre-registered
+gates rather than by single aggregate scores, and it separates the two
+levels deliberately: a controller metric can hide model weakness behind
+policy compensation (Section~\ref{sec:fund:rl-residual}), so model
+metrics are always reported alongside.
+
+At the \emph{system level}, an accepted tracking run must complete its
+reference cycles and satisfy, at minimum: mean and p95 tool error
+improved over the zero-residual baseline, bounded maximum error, at
+least 99\,\% occupancy of the ground clearance band, head-down
+alignment of at least $0.995$ during scored motion, truck planar drift
+below $\unit[2]{mm}$, and a filtered path-length ratio between $0.95$
+and $1.25$. Two smoothness criteria guard against a failure mode that
+plain error metrics miss, a policy that tracks on average while
+oscillating: the p95 of the detrended tool oscillation must stay below
+$\unit[10]{mm}$ and the high-frequency excess path below 15\,\%. At the
+\emph{cylinder level}, step gates require clean response to fresh
+$\pm\unit[10]{mm}$ commands on every axis, small terminal error on
+large ($\unit[80]{mm}$) coordinated motions, and low out-and-back
+return error, all without valve-limit saturation. Model-level criteria,
+one-step and rollout accuracy, input-ablation authority, and Jacobian
+conditioning, were introduced with the models in
+Chapter~\ref{chap:models}. Chapter~\ref{chap:evaluation} instantiates
+all three families of criteria in the full experimental matrix.
+
+The system is now fully specified: the machine, its two simulated
+representations, the signals that connect them, and the objectives and
+gates that define success. The next chapter turns to the data that
+links the two representations, the Simscape campaigns from which every
+learned model in this thesis is trained.

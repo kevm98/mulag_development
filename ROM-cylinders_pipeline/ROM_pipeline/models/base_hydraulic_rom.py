@@ -1,18 +1,34 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import NamedTuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from ..data.base_rom_schema import BASE_ROM_SCHEMA, BaseROMSchema
-from .hydraulic_rom import ROMOutput, SmoothDeadzone
+from .hydraulic_rom import SmoothDeadzone
+
+
+class BaseROMOutput(NamedTuple):
+    delta_pressure: torch.Tensor
+    delta_velocity: torch.Tensor
+    delta_extension: torch.Tensor
+    predicted_force: torch.Tensor
+    effective_actuation: torch.Tensor
+    pressure_residual: torch.Tensor
+    velocity_residual: torch.Tensor
+    extension_residual: torch.Tensor
+    next_pressure: torch.Tensor
+    next_velocity: torch.Tensor
+    next_extension: torch.Tensor
+    hidden: torch.Tensor
 
 
 @dataclass(frozen=True)
 class BaseHydraulicROMConfig:
-    input_dim: int = 30
+    input_dim: int = 20
     command_dim: int = 4
     hidden_dim: int = 128
     recurrent_layers: int = 2
@@ -63,8 +79,8 @@ class BaseHydraulicROM(nn.Module):
         self.actuation_memory_head = nn.Linear(config.hidden_dim, 4)
         self.deadzone = SmoothDeadzone(4)
         self.pressure_residual_head = nn.Linear(config.hidden_dim, 4)
-        self.force_residual_head = nn.Sequential(nn.Linear(config.hidden_dim + 9, 64), nn.SiLU(), nn.Linear(64, 4))
-        self.load_head = nn.Sequential(nn.Linear(config.hidden_dim + 14, 64), nn.SiLU(), nn.Linear(64, 4))
+        self.force_residual_head = nn.Sequential(nn.Linear(config.hidden_dim + 8, 64), nn.SiLU(), nn.Linear(64, 4))
+        self.load_head = nn.Sequential(nn.Linear(config.hidden_dim + 12, 64), nn.SiLU(), nn.Linear(64, 4))
         self.velocity_residual_head = nn.Linear(config.hidden_dim, 4)
         self.position_residual_head = nn.Linear(config.hidden_dim, 4)
 
@@ -113,7 +129,7 @@ class BaseHydraulicROM(nn.Module):
         history: torch.Tensor,
         valve_command: torch.Tensor | None = None,
         hidden: torch.Tensor | None = None,
-    ) -> ROMOutput:
+    ) -> BaseROMOutput:
         if history.ndim != 3 or history.shape[-1] != self.config.input_dim:
             raise ValueError(f"history must have shape [B, L, {self.config.input_dim}], got {tuple(history.shape)}")
         history = self._replace_current_valve(history, valve_command)
@@ -124,8 +140,6 @@ class BaseHydraulicROM(nn.Module):
         extension = current[:, self.schema.extension_slice]
         velocity = current[:, self.schema.velocity_slice]
         pressure = current[:, self.schema.pressure_slice]
-        joint_position = current[:, self.schema.joint_position_slice]
-        joint_velocity = current[:, self.schema.joint_velocity_slice]
 
         memory_correction = self.config.actuation_correction_bound * torch.tanh(self.actuation_memory_head(latent))
         actuation = self.deadzone((valve + memory_correction).clamp(-1.5, 1.5))
@@ -148,12 +162,12 @@ class BaseHydraulicROM(nn.Module):
         next_pressure = pressure + delta_pressure
 
         force_residual = self.config.max_force_residual_n * torch.tanh(
-            self.force_residual_head(torch.cat((latent, next_pressure / 1.0e7, joint_position), -1))
+            self.force_residual_head(torch.cat((latent, next_pressure / 1.0e7, extension), -1))
         )
         predicted_force = next_pressure * area + force_residual
         friction = self.log_viscous_friction.exp().clamp(1.0, 1.0e7) * velocity
         load = self.config.max_force_residual_n * torch.tanh(
-            self.load_head(torch.cat((latent, predicted_force / 1.0e5, joint_position, joint_velocity), -1))
+            self.load_head(torch.cat((latent, predicted_force / 1.0e5, extension, velocity), -1))
         )
         mass = self.log_effective_mass.exp().clamp(10.0, 1.0e9)
         acceleration = (predicted_force - friction - load) / mass
@@ -166,7 +180,7 @@ class BaseHydraulicROM(nn.Module):
         next_velocity = velocity + delta_velocity
         extension_residual = self.config.position_residual_bound_m * torch.tanh(self.position_residual_head(latent))
         delta_extension = 0.5 * (velocity + next_velocity) * self.config.sample_time_s + extension_residual
-        return ROMOutput(
+        return BaseROMOutput(
             delta_pressure, delta_velocity, delta_extension, predicted_force, actuation,
             pressure_residual, velocity_residual, extension_residual,
             next_pressure, next_velocity, extension + delta_extension, next_hidden,

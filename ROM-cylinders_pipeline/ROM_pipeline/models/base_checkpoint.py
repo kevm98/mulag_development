@@ -52,8 +52,8 @@ def load_base_checkpoint(
     stored = payload["schema"]
     if tuple(stored["input_feature_names"]) != schema.input_feature_names:
         raise ValueError("Base ROM checkpoint input ordering does not match runtime.")
-    if tuple(stored["cylinder_order"]) != schema.cylinder_order or tuple(stored["joint_order"]) != schema.joint_order:
-        raise ValueError("Base ROM checkpoint cylinder/joint ordering does not match runtime.")
+    if tuple(stored["cylinder_order"]) != schema.cylinder_order:
+        raise ValueError("Base ROM checkpoint cylinder ordering does not match runtime.")
     if float(stored["sample_time_s"]) != schema.sample_time_s or int(stored["history_length"]) != schema.history_length:
         raise ValueError("Base ROM checkpoint timing does not match runtime.")
     normalization = payload["normalization"]

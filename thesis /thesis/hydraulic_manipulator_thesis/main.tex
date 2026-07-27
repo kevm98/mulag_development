@@ -1,0 +1,101 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Master Thesis
+%% Learning-Based Online Adaptation for Control of a
+%% Hydraulic Manipulator
+%%
+%% main file: main.tex
+%% Template: RRLab rrlab.cls (RPTU Kaiserslautern-Landau)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[thesis,en]{template/rrlab}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Mandatory information
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Title of the work:
+\RRLABtitle{Learning-Based Online Adaptation for Control of a Hydraulic Manipulator}
+
+% Author of the work:
+\RRLABauthor{Kevin Kudakwashe Murera}
+
+% Type of the work:
+\RRLABtype{Master Thesis}
+
+% Date of issue
+\RRLABinception{TODO: date of issue}
+
+% Date of submission
+\RRLABsubmission{TODO: date of submission}
+
+% First reviewer
+\RRLABfirstreviewer{Prof. Dr. Karsten Berns}
+
+% Supervisor
+\RRLABsupervisor{TODO: supervisor}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Additional packages and own macros
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\input{packages}
+\input{macros}
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Front matter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Title page (optional middle content, e.g. an image, and the date)
+\RRLABtitlepage{}{\today}
+
+% Second page with title, author, supervisor etc.
+\RRLABsecondpage
+
+% Declaration of academic integrity (parameter: signing date)
+\RRLABdeclaration{\today}
+
+% Acknowledgements (optional)
+\RRLABpreface{Acknowledgements}{%
+TODO: acknowledgements.
+}
+
+% Abstract (~250--400 words: problem, approach, datasets, PPO1/PPO2
+% architecture, principal results, contribution)
+\RRLABabstract{Abstract}{%
+TODO: abstract. Hydraulic manipulators are hard to control precisely because
+the actuator response is nonlinear, load dependent, and uncertain. This thesis
+investigates whether a hydraulic manipulator can achieve accurate and robust
+task-space tracking by combining a nominal Damped Least-Squares (DLS)
+controller, an upper-level residual PPO policy, learned hydraulic actuator
+dynamics, and online latent adaptation through an Arm Adaptation Module (AAM).
+}
+
+% Table of contents (plus list of figures/tables)
+\RRLABcontents
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Main matter — one file per chapter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\include{chapters/ch1_introduction}
+\include{chapters/ch2_fundamentals_related_work}
+\include{chapters/ch3_system_fundamentals_problem_formulation}
+\include{chapters/ch4_data_generation_preparation}
+\include{chapters/ch5_learned_models_online_adaptation}
+\include{chapters/ch6_control_framework_simulation_integration}
+\include{chapters/ch7_experimental_evaluation_discussion}
+\include{chapters/ch8_conclusion_outlook}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Appendices
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\appendix
+\include{chapters/appendices}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Bibliography
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RRLABbibliography{literature}
+
+\end{document}

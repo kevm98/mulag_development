@@ -1,0 +1,181 @@
+function u = Mulag_Backstepping_Controller(pos_ref, vel_ref, pos_meas, vel_meas, pressure_vector, Ps)
+%#codegen
+
+    %% 1. BASIC CONFIGURATION
+    nJ = 5;
+    Ts = 0.005;   % [s]
+
+    meas_sign = [ +1;  +1;  +1;  +1;  +1 ];
+    act_sign  = [ -1;  +1;  +1;  -1;  +1 ];
+
+    q_min = [-1.57; -0.52; -0.52; -0.52; -1.57];
+    q_max = [ 0.52;  0.52;  0.52;  0.52;  1.57];
+
+    u_max_vec = [0.95; 0.95; 0.80; 0.80; 0.90];
+
+    Grav_Dir_J2 = 1.0;
+
+    %% 2. BACKSTEPPING GAINS (J1, J3–J5) – LIGHTER DAMPING
+    c1 = [ 800.0;  3.0;  6.0;  800.0;  6.0 ];   % still stiff
+    c2 = [ 1.0;   3.0;  1.5;  1.0;   1.5 ];     % ↓ damping
+
+    K_int = [ 1.5;  4.0;  2.0;  2.0;  1.0 ];
+    b_sys = [ 8.0;  2.0; 12.0; 10.0; 15.0 ];
+
+    U_fric = [ 0.0; 0.0; 0.15; 0.10; 0.0 ];     % slightly weaker
+
+    %% 3. J2 PI + V + GRAVITY – LESS DAMPED, STRONGER BIAS
+    Kp_J2    = 1200.0;
+    Ki_J2    =  3.0;
+    Kv_J2    =  4.0;      % ↓ from 6
+    I_lim_J2 =  2.0;      % ↑
+
+    K_Boom  = 0.40;
+    K_Stick = 0.25;
+
+    rho_0  = 0.03;        % smaller barrier region
+    K_wall = 0.20;        % weaker barrier
+
+    %% 4. BIASES / INT LIMITS
+    u_bias = [ 0.0; 0.0; -0.2; -0.2; 0.0 ];
+    I_lim  = [ 1.0; 1.0; 1.0; 1.0; 1.0 ];
+
+    %% 5. PERSISTENT MEMORY
+    persistent is_init z_int u_prev
+    if isempty(is_init)
+        is_init = true;
+        z_int   = zeros(nJ,1,'double');
+        u_prev  = zeros(nJ,1,'double');
+    end
+
+    %% 6. INPUT BUFFERING
+    pr = zeros(nJ,1,'double');
+    vr = zeros(nJ,1,'double');
+    pm = zeros(nJ,1,'double');
+    vm = zeros(nJ,1,'double');
+
+    k = min(nJ, numel(pos_ref));  pr(1:k) = pos_ref(1:k);
+    k = min(nJ, numel(vel_ref));  vr(1:k) = vel_ref(1:k);
+    k = min(nJ, numel(pos_meas)); pm(1:k) = pos_meas(1:k);
+    k = min(nJ, numel(vel_meas)); vm(1:k) = vel_meas(1:k);
+
+    % Unused
+    pressure_vector = pressure_vector; %#ok<NASGU>
+    Ps              = Ps;              %#ok<NASGU>
+
+    %% 7. MAIN LOOP
+    u = zeros(nJ,1,'double');
+
+    for i = 1:nJ
+
+        umax = u_max_vec(i);
+
+        % ===================== J2: PHYSICAL PI + V + GRAVITY =====================
+        if i == 2
+            q      = pm(2);
+            q_dot  = vm(2);
+            q_des  = pr(2);
+            qd_des = vr(2);
+
+            % Clip reference
+            if q_des < q_min(2)
+                q_des = q_min(2);
+            elseif q_des > q_max(2)
+                q_des = q_max(2);
+            end
+
+            e_pos = q_des - q;
+            e_vel = qd_des - q_dot;
+
+            % Integrate even when mildly saturated (more bias)
+            if abs(u_prev(2)) < 0.99*umax
+                z_int(2) = z_int(2) + e_pos*Ts;
+                if z_int(2) >  I_lim_J2, z_int(2) =  I_lim_J2; end
+                if z_int(2) < -I_lim_J2, z_int(2) = -I_lim_J2; end
+            end
+
+            u_lin = Kp_J2*e_pos + Ki_J2*z_int(2) + Kv_J2*e_vel;
+
+            q2 = q;
+            q3 = pm(3);
+            u_grav = Grav_Dir_J2 * (K_Boom*cos(q2) + K_Stick*cos(q2+q3));
+
+            % Barrier
+            u_wall = 0.0;
+            d_min = q - q_min(2);
+            d_max = q_max(2) - q;
+
+            if d_min < rho_0 && d_min > -0.05
+                u_wall = u_wall + K_wall*(1.0/(d_min + 1.0e-4) - 1.0/rho_0);
+            elseif d_min <= -0.05
+                u_wall = u_wall + 1.0;
+            end
+
+            if d_max < rho_0 && d_max > -0.05
+                u_wall = u_wall - K_wall*(1.0/(d_max + 1.0e-4) - 1.0/rho_0);
+            elseif d_max <= -0.05
+                u_wall = u_wall - 1.0;
+            end
+
+            u_phys = u_lin + u_grav + u_wall;
+            u_cmd  = u_bias(2) + act_sign(2)*u_phys;
+
+            if u_cmd > umax
+                u(2) = umax;
+            elseif u_cmd < -umax
+                u(2) = -umax;
+            else
+                u(2) = u_cmd;
+            end
+
+            u_prev(2) = u(2);
+            continue;
+        end
+
+        % ===================== BACKSTEPPING J1,3,4,5 =====================
+        q      = meas_sign(i)*pm(i);
+        q_dot  = meas_sign(i)*vm(i);
+        q_des  = meas_sign(i)*pr(i);
+        qd_des = meas_sign(i)*vr(i);
+
+        q_des_phys = q_des / meas_sign(i);
+        if q_des_phys < q_min(i)
+            q_des_phys = q_min(i);
+        elseif q_des_phys > q_max(i)
+            q_des_phys = q_max(i);
+        end
+        q_des = meas_sign(i)*q_des_phys;
+
+        z1    = q_des - q;
+        alpha = qd_des + c1(i)*z1;
+        z2    = alpha - q_dot;
+
+        if abs(u_prev(i)) < 0.99*umax
+            z_int(i) = z_int(i) + z2*Ts;
+            if z_int(i) >  I_lim(i), z_int(i) =  I_lim(i); end
+            if z_int(i) < -I_lim(i), z_int(i) = -I_lim(i); end
+        end
+
+        u_back = (1.0/b_sys(i))*(z1 + c2(i)*z2 + K_int(i)*z_int(i));
+
+        term_grav = 0.0;
+
+        term_fric = 0.0;
+        if abs(z2) > 0.01
+            term_fric = sign(z2)*U_fric(i);
+        end
+
+        u_phys = u_back + term_grav + term_fric;
+        u_cmd  = u_bias(i) + act_sign(i)*u_phys;
+
+        if u_cmd > umax
+            u(i) = umax;
+        elseif u_cmd < -umax
+            u(i) = -umax;
+        else
+            u(i) = u_cmd;
+        end
+
+        u_prev(i) = u(i);
+    end
+end

@@ -1,129 +1,84 @@
-# Hydraulic-aware cylinder ROM pipeline
+# Canonical hydraulic ROM for PPO2 V3
 
-This directory is isolated from `ID_FD_pipline`. Its current primary deliverable is a
-valve-conditioned base hydraulic ROM:
+This folder contains the command-conditioned, hydraulic-aware reduced-order cylinder
+model used by the canonical PPO2-ROM-PhysX V3 workflow. The deployed ROM operates only
+in cylinder space and replaces the complete runtime ID/FD actuator pair.
 
-```text
-measured valve command + hydraulic/mechanical history
-    -> pressure -> force/load -> velocity -> extension
-```
+It does not consume joint positions, truck state, trajectory names, or PPO state.
 
-The later command-conditioned PPO2 experiment implements:
+## V3 runtime path
 
 ```text
-desired cylinder motion + measured hydraulic/mechanical history
-    -> effective internal actuation
-    -> pressure update
-    -> hydraulic force and coupled load
-    -> velocity update
-    -> trapezoidal extension integration
-    -> bounded PhysX cylinder position target
+reachable V3 tool reference
+  -> nominal four-cylinder command
+  -> four-action PPO residual
+  -> valve command
+  -> hydraulic cylinder ROM
+  -> PhysX arm
 ```
 
-For that later experiment, the runtime command is the verified PPO1 pair
-`[DesiredDeltaExtension(4), DesiredDeltaExtensionVelocity(4)]`. Actual valve commands are
-optional training labels and are never runtime inputs.
+The ROM uses six contiguous 50 ms history rows. Each row contains extension,
+extension velocity, pressure difference, previous predicted valve, desired extension
+delta, and desired extension velocity for all four cylinders. It predicts valve,
+pressure delta, velocity delta, and extension delta. One ROM prediction is distributed
+over three 60 Hz control steps.
 
-## Important data status
+## Canonical V3 artifacts
 
-The existing sibling directory is named `ROM-cylinders_pipeline ` with a trailing space. Its
-`Models /ROM_cylinder_data.mat` is an AAM dataset: histories map to 91 constant randomized
-plant parameters. The base dynamics ROM is therefore built directly from the four original
-Simscape curriculum files, not from that derived MAT file.
+```text
+Selected hydraulic ROM:
+ROM-cylinders_pipeline/checkpoints/plant_reachable_v1_finetune_blend25/best_rom.pt
 
-## Base ROM dataset and training
+Selected smooth PPO policy:
+logs/rsl_rl/ppo2_rom_residual_4cyl_joint/2026-07-21_02-09-15/model_607.pt
+
+V3 plant-reachable trajectory library:
+PPO2_ROM_PhysX/models/plant_reachable_trajectory_library_v3_large.json
+```
+
+The ROM checkpoint retains the existing filename because it is the physically
+validated actuator model. V3 designates the canonical integrated workflow, trajectory
+library, four-cylinder policy, and deployment supervisor.
+
+## Run the main V3 workflow
 
 ```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/build_base_rom_dataset.py \
-  ROM-cylinders_pipeline/data/base_rom_v1
-
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/validate_base_rom_dataset.py \
-  ROM-cylinders_pipeline/data/base_rom_v1 \
-  --output ROM-cylinders_pipeline/reports/base_dataset_audit.json
-
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/analyze_base_rom_delay.py \
-  ROM-cylinders_pipeline/data/base_rom_v1 \
-  --output ROM-cylinders_pipeline/reports/base_delay_analysis.json
-
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/train_base_rom.py \
-  ROM-cylinders_pipeline/data/base_rom_v1 \
-  ROM-cylinders_pipeline/checkpoints/base_run_001 \
-  --config ROM-cylinders_pipeline/configs/base_training.json
+cd /home/rrlab/rrlab_mulag
+./PPO2_ROM_PhysX/visualize.sh
 ```
 
-The base ROM uses the verified 0.05 s Simscape timestep and six samples of history (0.25 s).
-It retains the actual valve as an explicit causal input. Valve-zeroed and valve-shuffled
-validation must degrade before this model is accepted as hydraulically authoritative.
-The logged `Force` signal fails the authored piston-area consistency check on the current
-curriculum, so `base_training.json` assigns it zero supervised weight. The ROM still exposes
-its pressure-derived hydraulic force; force supervision can be enabled after a reliable
-chamber-force label is collected.
+This runs park → arm track → stow → straight drive → next station for line, arc,
+sine, circle, and square. The truck is locked during arm work, PPO cannot command the
+wheels, and Isaac Sim draws only the cyan reference trajectory.
 
-`scripts/run_base_rom_after_policy.sh` can wait for an existing training PID before starting
-the GPU ROM training. It never signals or stops that process; it polls until the PID exits,
-then trains and runs the offline acceptance gates.
-
-## Dataset source contract
-
-The flat source CSV must contain run/time/parameter identifiers, all 34 schema inputs, and the
-four actual valve commands. See `ROM_pipeline/data/rom_schema.py` for exact names and ordering.
-`intervention_id` is optional but should be supplied for matched-state command experiments.
-Transitions and histories are built strictly within complete runs. Complete run/parameter
-groups are assigned to train, validation, or test splits.
+## Train the V3 policy with this ROM
 
 ```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/build_rom_dataset.py \
-  path/to/closed_loop_rom_export.csv ROM-cylinders_pipeline/data/processed_v1
-
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/validate_rom_dataset.py \
-  ROM-cylinders_pipeline/data/processed_v1 \
-  --output ROM-cylinders_pipeline/reports/dataset_audit.json
+cd /home/rrlab/rrlab_mulag
+./PPO2_ROM_PhysX/train_large_v3.sh
 ```
 
-The legacy trailing-space dataset directory was audited and then removed during repository
-cleanup. Its retained audit is `reports/legacy_mat_audit.json`.
-
-## Training
-
-Do not start this command while another GPU training job is active unless resources have been
-deliberately allocated.
+## Verify the ROM and V3 integration
 
 ```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/train_rom.py \
-  ROM-cylinders_pipeline/data/processed_v1 \
-  ROM-cylinders_pipeline/checkpoints/run_001 \
-  --config ROM-cylinders_pipeline/configs/default_training.json
+cd /home/rrlab/rrlab_mulag
+/home/rrlab/miniconda3/envs/env_isaaclab/bin/python -m pytest -q \
+  ROM-cylinders_pipeline/tests \
+  PPO2_ROM_PhysX/tests/test_command_rom_runtime.py \
+  PPO2_ROM_PhysX/policy_4cyl/tests \
+  PPO2_ROM_PhysX/trajectories/tests
 ```
 
-The trainer uses one-step hydraulic losses followed by recursive rollout horizons of 5, 20,
-and 50 samples with scheduled sampling. The checkpoint embeds feature ordering, normalization,
-timestep, model configuration, cylinder/joint ordering, and training provenance.
+## Dataset contract
 
-Train the required state-only comparison with the same configuration and `--state-only`, using
-a separate output directory. This zeros the command throughout one-step and recursive training.
+- Cylinder space only.
+- Six contiguous history samples per transition.
+- Histories never cross run boundaries.
+- Complete runs stay wholly within train, validation, or test.
+- Measured valves may supervise training but are not runtime inputs.
+- Zero command must preserve the stationary hold contract.
+- A ROM is promoted only after full-cycle PhysX validation; offline loss alone is not
+  an acceptance criterion.
 
-## Offline validation and tests
-
-```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  ROM-cylinders_pipeline/scripts/validate_rom.py \
-  ROM-cylinders_pipeline/checkpoints/run_001/best_rom.pt \
-  ROM-cylinders_pipeline/data/processed_v1 \
-  --output ROM-cylinders_pipeline/reports/offline_validation.json
-
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python -m pytest \
-  ROM-cylinders_pipeline/tests -q
-```
-
-The current validation entry point reports grouped one-step scores, held-out recursive rollout
-metrics, zeroed/shuffled-command ablations, the command-response Jacobian, condition number,
-and inference time. Pressure-velocity phase-plane, frequency-response, and IsaacLab step gates remain
-mandatory before PPO2 integration; one-step extension accuracy alone is not an acceptance
-criterion.
+See [PPO2-ROM-PhysX V3](../PPO2_ROM_PhysX/README.md) for policy observations,
+trajectory dimensions, metrics, and deployment details.
