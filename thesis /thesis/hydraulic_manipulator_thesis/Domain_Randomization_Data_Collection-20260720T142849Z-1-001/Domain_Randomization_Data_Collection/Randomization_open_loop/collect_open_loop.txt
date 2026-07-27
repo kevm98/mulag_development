@@ -1,0 +1,1810 @@
+%% =========================================================================
+% SMALL FINE-TUNING DATASET: MAXIMUM 25 RUNS
+%
+% Model:
+%   Mulag_FME_500_with_cylinder
+%
+% Required excitation block:
+%   valve_excitation
+%
+% Excitation-block interface:
+%   no inputs
+%   one 5x1 output
+%
+% Required logged signals:
+%   cmd1 ... cmd5
+%   Ext1 ... Ext4
+%   Extdot1 ... Extdot4, or xdot1 ... xdot4
+%   PA1 ... PA4
+%   PB1 ... PB4
+%   F1 ... F4
+%   J1_pos ... J5_pos
+%   J1_vel ... J5_vel
+%
+% Dataset split:
+%   1 nominal run
+%   6 hydraulic-randomized runs
+%   6 mechanical-randomized runs
+%   12 fully randomized runs
+%   Total = 25 runs
+%
+% Outputs:
+%   Excitation_Finetune_25/Excitation_Finetune_25.mat
+%   Excitation_Finetune_25/runs/run_XXXX.mat
+%   Excitation_Finetune_25/RunSummary.csv
+%
+% Set VALIDATION_ONLY=true first to run only four validation simulations.
+% =========================================================================
+
+clear;
+clc;
+close all;
+
+%% User configuration
+model_name = 'Mulag_FME_500_with_cylinder';
+
+fd_dt = 0.01;
+
+% These constants must exactly match valve_excitation().
+N_CYL = 4;
+
+T_PRE      = 1.0;
+T_CYL      = 10.0;
+T_GAP      = 0.5;
+T_MIMO     = 20.0;
+T_SHUTDOWN = 1.0;
+
+SLOT_LENGTH = T_CYL + T_GAP;
+T_SEQ_END   = T_PRE + N_CYL*SLOT_LENGTH;
+T_MIMO_END  = T_SEQ_END + T_MIMO;
+T_END       = T_MIMO_END + T_SHUTDOWN;
+
+% Cylinder extension ranges used by the Simscape plant.
+x_min = [0.00, 0.00, 0.00, 0.00];
+x_max = [1.85, 1.85, 2.25, 2.25];
+stroke = x_max - x_min;
+
+endstop_fraction = 0.03;
+
+% Fail-fast excitation requirements. These prevent saving a run when the
+% autonomous MATLAB Function block is not actually executing.
+MIN_COMMAND_RANGE = 0.50;       % each cylinder command must span >= 0.50
+MIN_COMMAND_STD   = 0.05;       % each cylinder command std must be >= 0.05
+MIN_ACTION_RANK   = 4;          % four independent cylinder input channels
+MIN_LAGGED_RANK   = 8;          % basic temporal-excitation sanity threshold
+
+% Coverage gates for the nominal run. The configured physical stroke is not
+% necessarily fully reachable in the assembled manipulator because linkage
+% geometry, joint limits, gravity and hydraulic equilibrium constrain motion.
+%
+% HARD minimum: only reject a channel that is effectively not moving.
+% TARGET: report a warning below 30%%, but still save the run.
+MIN_NOMINAL_COVERAGE = [0.10, 0.10, 0.10, 0.08];
+TARGET_NOMINAL_COVERAGE = 0.30;
+
+% true  -> four-run wiring/coverage validation
+% false -> complete 25-run fine-tuning dataset
+VALIDATION_ONLY = true;
+
+if VALIDATION_ONLY
+    N_NOMINAL = 1;
+    N_HYD     = 1;
+    N_MECH    = 1;
+    N_FULL    = 1;
+else
+    N_NOMINAL = 1;
+    N_HYD     = 6;
+    N_MECH    = 6;
+    N_FULL    = 12;
+end
+
+N_param_draws = N_NOMINAL + N_HYD + N_MECH + N_FULL;
+
+assert(N_param_draws <= 25, ...
+    'The fine-tuning dataset must contain no more than 25 runs.');
+
+% FK can be reconstructed later from q1...q5.
+COMPUTE_EE_POSE = false;
+
+% Full CSV export is slower and much larger than MAT storage.
+WRITE_FULL_CSV = false;
+
+% Keep off because the excitation function uses persistent internal time,
+% and several randomized Simscape/mechanical parameters may be structural.
+USE_FAST_RESTART = false;
+
+SIMULATION_MODE = 'accelerator';
+
+% Disable full Simscape physical-network logging. Explicitly marked
+% Simulink signals remain available in logsout.
+DISABLE_SIMSCAPE_LOGGING = true;
+
+% Use 1.0 if beta_oil is expressed numerically in GPa in the model.
+% Use 1e9 if beta_oil expects a numeric value in Pa.
+BETA_OIL_TO_MODEL_SCALE = 1.0;
+
+RANDOM_SEED = 20260711;
+rng(RANDOM_SEED, 'twister');
+
+fprintf('Fine-tuning collection: %d runs\n', N_param_draws);
+fprintf('Simulation duration per run: %.1f s\n', T_END);
+fprintf('Raw transitions per run: %d\n', round(T_END/fd_dt));
+
+%% Output paths
+output_dir = fullfile(pwd, 'Excitation_Finetune_25');
+run_dir = fullfile(output_dir, 'runs');
+
+if ~exist(output_dir, 'dir')
+    mkdir(output_dir);
+end
+
+if ~exist(run_dir, 'dir')
+    mkdir(run_dir);
+end
+
+output_mat = fullfile(output_dir, 'Excitation_Finetune_25.mat');
+summary_csv = fullfile(output_dir, 'RunSummary.csv');
+full_csv = fullfile(output_dir, 'Excitation_Finetune_25.csv');
+
+if exist(output_mat, 'file')
+    delete(output_mat);
+end
+
+if exist(summary_csv, 'file')
+    delete(summary_csv);
+end
+
+if WRITE_FULL_CSV && exist(full_csv, 'file')
+    delete(full_csv);
+end
+
+%% Nominal parameters
+nominal = nominal_parameters();
+
+set_base_nominal_parameters( ...
+    nominal, stroke, BETA_OIL_TO_MODEL_SCALE);
+
+%% Build the 25-run curriculum
+run_types = [ ...
+    repmat({'Nominal'},             N_NOMINAL, 1); ...
+    repmat({'Random Hydraulics'},   N_HYD,     1); ...
+    repmat({'Random Mechanics'},    N_MECH,    1); ...
+    repmat({'Fully Randomized'},    N_FULL,    1)];
+
+LHS = lhsdesign(N_param_draws, 12);
+
+Draws = build_parameter_draws(run_types, LHS, nominal);
+
+% Apply the first nominal draw before loading/updating the model. This
+% guarantees that every base-workspace variable referenced by the original
+% Simscape plant exists during model callbacks and compilation.
+inject_parameters(Draws{1}, BETA_OIL_TO_MODEL_SCALE);
+verify_required_base_variables();
+
+%% Load and configure model
+fprintf('Loading model: %s\n', model_name);
+load_system(model_name);
+
+%% Configure and verify autonomous MATLAB Function block
+% A no-input MATLAB Function block must use a discrete update method. The
+% Sample Time field in the Subsystem dialog is not sufficient; this sets
+% the MATLAB Function block property itself.
+excitation_block = find_excitation_matlab_function(model_name);
+excitation_config = get_param( ...
+    excitation_block, 'MATLABFunctionConfiguration');
+
+excitation_config.UpdateMethod = 'Discrete';
+excitation_config.SampleTime = sprintf('%.15g', fd_dt);
+
+% A 5x1 output should be emitted as a 5-element vector for the Demux.
+try
+    excitation_config.VectorOutputs1D = true;
+catch
+    % Property is unavailable in older releases; the existing output
+    % dimension is retained.
+end
+
+fprintf('Excitation block: %s\n', excitation_block);
+fprintf('Excitation update method: %s\n', ...
+    char(string(excitation_config.UpdateMethod)));
+fprintf('Excitation sample time: %s s\n', ...
+    char(string(excitation_config.SampleTime)));
+
+if ~strcmpi(char(string(excitation_config.UpdateMethod)), 'Discrete')
+    error('The valve_excitation MATLAB Function block is not Discrete.');
+end
+
+if abs(str2double(char(string(excitation_config.SampleTime))) - fd_dt) > 1e-12
+    error('The valve_excitation sample time does not match fd_dt.');
+end
+
+set_param(model_name, 'SimulationMode', SIMULATION_MODE);
+set_param(model_name, 'Solver', 'ode23t');
+set_param(model_name, 'RelTol', '1e-2');
+set_param(model_name, 'AbsTol', 'auto');
+set_param(model_name, 'MaxStep', 'Inf');
+set_param(model_name, 'StopTime', num2str(T_END, '%.15g'));
+
+set_param(model_name, ...
+    'OutputOption', 'SpecifiedOutputTimes');
+
+set_param(model_name, ...
+    'OutputTimes', sprintf('0:%.15g:%.15g', fd_dt, T_END));
+
+set_param(model_name, 'SignalLogging', 'on');
+set_param(model_name, 'SignalLoggingSaveFormat', 'Dataset');
+
+if DISABLE_SIMSCAPE_LOGGING
+    try
+        set_param(model_name, 'SimscapeLogType', 'none');
+        fprintf('Full Simscape physical-network logging: disabled\n');
+    catch ME
+        warning('Could not disable Simscape logging: %s', excitation_config.message);
+    end
+end
+
+try
+    set_param(model_name, ...
+        'SimMechanicsOpenEditorOnUpdate', 'off');
+catch
+end
+
+if USE_FAST_RESTART
+    set_param(model_name, 'FastRestart', 'on');
+else
+    set_param(model_name, 'FastRestart', 'off');
+end
+
+% Re-check immediately before compilation. This catches accidental clearing
+% or missing initialization before Simscape evaluates block parameters.
+verify_required_base_variables();
+
+% Compile/update only after every original plant variable and all solver
+% settings have been assigned.
+set_param(model_name, 'SimulationCommand', 'update');
+
+%% Optional URDF metadata
+robot = [];
+end_effector = '';
+base_name = '';
+number_robot_joints = 0;
+
+try
+    robot = importrobot('Mulag_FME500.urdf');
+    robot.DataFormat = 'column';
+
+    end_effector = 'Messerkopf';
+
+    if ~any(strcmp(robot.BodyNames, end_effector))
+        end_effector = robot.BodyNames{end};
+    end
+
+    base_name = robot.BaseName;
+    number_robot_joints = numel(homeConfiguration(robot));
+catch ME
+    warning('URDF metadata/FK disabled: %s', E.message);
+    robot = [];
+end
+
+%% Metadata
+Meta = struct();
+
+Meta.units = struct( ...
+    'x', 'm', ...
+    'xd', 'm/s', ...
+    'dP', 'Pa', ...
+    'F', 'N', ...
+    'q', 'rad', ...
+    'qd', 'rad/s', ...
+    'ee', 'm', ...
+    'quat', 'wxyz');
+
+Meta.fd_dt = fd_dt;
+Meta.x_min = x_min;
+Meta.x_max = x_max;
+Meta.strokes = stroke;
+Meta.endstop_fraction = endstop_fraction;
+Meta.random_seed = RANDOM_SEED;
+Meta.validation_only = VALIDATION_ONLY;
+Meta.number_runs = N_param_draws;
+Meta.run_distribution = struct( ...
+    'nominal', N_NOMINAL, ...
+    'hydraulic', N_HYD, ...
+    'mechanical', N_MECH, ...
+    'fully_randomized', N_FULL);
+
+Meta.schedule = struct( ...
+    'T_PRE', T_PRE, ...
+    'T_CYL', T_CYL, ...
+    'T_GAP', T_GAP, ...
+    'T_MIMO', T_MIMO, ...
+    'T_SHUTDOWN', T_SHUTDOWN, ...
+    'T_END', T_END);
+
+Meta.mode_definition = struct( ...
+    'settling_gap_shutdown', -1, ...
+    'single_cylinder', 0, ...
+    'simultaneous_mimo', 1);
+
+Meta.beta_model_scale = BETA_OIL_TO_MODEL_SCALE;
+Meta.compute_ee_pose = COMPUTE_EE_POSE;
+Meta.simulation_mode = SIMULATION_MODE;
+Meta.disable_simscape_logging = DISABLE_SIMSCAPE_LOGGING;
+Meta.excitation_block = excitation_block;
+Meta.excitation_update_method = ...
+    char(string(excitation_config.UpdateMethod));
+Meta.excitation_sample_time = ...
+    char(string(excitation_config.SampleTime));
+Meta.excitation_requirements = struct( ...
+    'min_command_range', MIN_COMMAND_RANGE, ...
+    'min_command_std', MIN_COMMAND_STD, ...
+    'min_action_rank', MIN_ACTION_RANK, ...
+    'min_lagged_rank', MIN_LAGGED_RANK, ...
+    'min_nominal_coverage_hard', MIN_NOMINAL_COVERAGE, ...
+    'target_nominal_coverage', TARGET_NOMINAL_COVERAGE);
+Meta.joint_order = arrayfun( ...
+    @(k) sprintf('J%d', k), 1:5, 'UniformOutput', false);
+
+Meta.ee_body = end_effector;
+Meta.base_name = base_name;
+Meta.cyl2joint = nan(1,4);
+Meta.cyl_sign = nan(1,4);
+
+Meta.note = [ ...
+    'The excitation block has no inputs and one 5x1 output. ', ...
+    'Excitation phases are reconstructed from time. ', ...
+    'mode=-1 settling/gap/shutdown, mode=0 sequential sweep, ', ...
+    'mode=1 simultaneous MIMO.'];
+
+if ~isempty(robot) && number_robot_joints == 5
+    home_q = homeConfiguration(robot);
+    Meta.joint_home = home_q(:)';
+
+    try
+        T_home = getTransform(robot, home_q, end_effector);
+        Meta.ee_home_pos = T_home(1:3,4)';
+        Meta.ee_home_quat = rotation_matrix_to_quaternion( ...
+            T_home(1:3,1:3));
+    catch
+        Meta.ee_home_pos = nan(1,3);
+        Meta.ee_home_quat = nan(1,4);
+    end
+else
+    Meta.joint_home = nan(1,5);
+    Meta.ee_home_pos = nan(1,3);
+    Meta.ee_home_quat = nan(1,4);
+end
+
+%% Column names
+columns = { ...
+    'run_id', 'draw_id', 'mode', 'exc_ch', 't', 'valid', ...
+    'u1', 'u2', 'u3', 'u4', ...
+    'x1', 'x2', 'x3', 'x4', ...
+    'xd1', 'xd2', 'xd3', 'xd4', ...
+    'dP1', 'dP2', 'dP3', 'dP4', ...
+    'F1', 'F2', 'F3', 'F4', ...
+    'q1', 'q2', 'q3', 'q4', 'q5', ...
+    'qd1', 'qd2', 'qd3', 'qd4', 'qd5', ...
+    'u5'};
+
+if COMPUTE_EE_POSE
+    columns = [columns, { ...
+        'ee_x', 'ee_y', 'ee_z', ...
+        'ee_qw', 'ee_qx', 'ee_qy', 'ee_qz'}];
+end
+
+columns = [columns, { ...
+    'dx1', 'dx2', 'dx3', 'dx4', ...
+    'dxd1', 'dxd2', 'dxd3', 'dxd4', ...
+    'ddP1', 'ddP2', 'ddP3', 'ddP4'}];
+
+save(output_mat, ...
+    'columns', 'Meta', 'Draws', ...
+    'fd_dt', 'x_min', 'x_max', 'stroke', ...
+    '-v7.3');
+
+combined_file = matfile(output_mat, 'Writable', true);
+
+%% Fixed output grid and labels
+fd_time = (0:fd_dt:T_END)';
+Nfd = numel(fd_time);
+
+[mode_label, excited_cylinder_label] = ...
+    reconstruct_excitation_schedule( ...
+    fd_time, N_CYL, T_PRE, T_CYL, T_GAP, T_MIMO);
+
+%% Mapping accumulators
+mapping_xd = cell(4,1);
+mapping_qd = cell(4,1);
+
+for c = 1:4
+    mapping_xd{c} = zeros(0,1);
+    mapping_qd{c} = zeros(0,5);
+end
+
+%% Run summary
+Summary = repmat(struct( ...
+    'run_id', NaN, ...
+    'draw_id', NaN, ...
+    'run_type', '', ...
+    'samples', NaN, ...
+    'valid_fraction', NaN, ...
+    'coverage_c1', NaN, ...
+    'coverage_c2', NaN, ...
+    'coverage_c3', NaN, ...
+    'coverage_c4', NaN, ...
+    'min_x1', NaN, ...
+    'min_x2', NaN, ...
+    'min_x3', NaN, ...
+    'min_x4', NaN, ...
+    'max_x1', NaN, ...
+    'max_x2', NaN, ...
+    'max_x3', NaN, ...
+    'max_x4', NaN, ...
+    'occupied_bins_c1', NaN, ...
+    'occupied_bins_c2', NaN, ...
+    'occupied_bins_c3', NaN, ...
+    'occupied_bins_c4', NaN, ...
+    'sat_fraction_u1', NaN, ...
+    'sat_fraction_u2', NaN, ...
+    'sat_fraction_u3', NaN, ...
+    'sat_fraction_u4', NaN, ...
+    'command_range_u1', NaN, ...
+    'command_range_u2', NaN, ...
+    'command_range_u3', NaN, ...
+    'command_range_u4', NaN, ...
+    'command_std_u1', NaN, ...
+    'command_std_u2', NaN, ...
+    'command_std_u3', NaN, ...
+    'command_std_u4', NaN, ...
+    'total_wall_s', NaN, ...
+    'initialization_wall_s', NaN, ...
+    'execution_wall_s', NaN, ...
+    'termination_wall_s', NaN, ...
+    'realtime_factor', NaN, ...
+    'action_rank', NaN, ...
+    'lagged_pe_rank', NaN, ...
+    'lagged_pe_cond', NaN), ...
+    N_param_draws, 1);
+
+row_cursor = 0;
+completed_runs = 0;
+
+%% Execute simulations
+for draw_index = 1:N_param_draws
+    parameters = Draws{draw_index};
+
+    fprintf('\n============================================================\n');
+    fprintf('DRAW %d/%d: %s\n', ...
+        draw_index, N_param_draws, parameters.RunType);
+    fprintf('============================================================\n');
+
+    inject_parameters(parameters, BETA_OIL_TO_MODEL_SCALE);
+    verify_required_base_variables();
+
+    try
+        simulation_input = Simulink.SimulationInput(model_name);
+
+        wall_timer = tic;
+        simulation_output = sim(simulation_input);
+        total_wall_s = toc(wall_timer);
+
+        initialization_wall_s = NaN;
+        execution_wall_s = NaN;
+        termination_wall_s = NaN;
+
+        try
+            timing_info = simulation_output.SimulationMetadata.TimingInfo;
+            initialization_wall_s = timing_value_seconds( ...
+                timing_info.InitializationElapsedWallTime);
+            execution_wall_s = timing_value_seconds( ...
+                timing_info.ExecutionElapsedWallTime);
+            termination_wall_s = timing_value_seconds( ...
+                timing_info.TerminationElapsedWallTime);
+        catch
+            % Timing metadata differs between MATLAB releases. The total
+            % tic/toc wall time remains valid.
+        end
+
+        realtime_factor = T_END/max(total_wall_s, eps);
+
+        fprintf('Wall time: %.2f s for %.1f simulated s (%.3fx real time)\n', ...
+            total_wall_s, T_END, realtime_factor);
+
+        if isfinite(initialization_wall_s)
+            fprintf(['Timing breakdown: initialization %.2f s | ', ...
+                'execution %.2f s | termination %.2f s\n'], ...
+                initialization_wall_s, execution_wall_s, ...
+                termination_wall_s);
+        end
+
+        logs = simulation_output.logsout;
+
+        %% Cylinder states
+        extension = zeros(Nfd,4);
+        extension_velocity = zeros(Nfd,4);
+        pressure_difference = zeros(Nfd,4);
+        cylinder_force = zeros(Nfd,4);
+
+        for c = 1:4
+            ext_signal = get_required_signal( ...
+                logs, {sprintf('Ext%d', c)});
+
+            extension(:,c) = interpolate_linear( ...
+                ext_signal, fd_time);
+
+            vel_signal = get_optional_signal(logs, { ...
+                sprintf('Extdot%d', c), ...
+                sprintf('xdot%d', c)});
+
+            if isempty(vel_signal) || isempty(vel_signal.Data)
+                extension_velocity(:,c) = gradient( ...
+                    extension(:,c), fd_dt);
+            else
+                extension_velocity(:,c) = interpolate_linear( ...
+                    vel_signal, fd_time);
+            end
+
+            pa_signal = get_required_signal( ...
+                logs, {sprintf('PA%d', c)});
+
+            pb_signal = get_required_signal( ...
+                logs, {sprintf('PB%d', c)});
+
+            pressure_difference(:,c) = ...
+                interpolate_linear(pa_signal, fd_time) - ...
+                interpolate_linear(pb_signal, fd_time);
+
+            force_signal = get_required_signal( ...
+                logs, {sprintf('F%d', c)});
+
+            cylinder_force(:,c) = interpolate_linear( ...
+                force_signal, fd_time);
+        end
+
+        %% Commands
+        command = zeros(Nfd,5);
+
+        for channel = 1:5
+            command_signal = get_required_signal( ...
+                logs, {sprintf('cmd%d', channel)});
+
+            command(:,channel) = interpolate_zero_order_hold( ...
+                command_signal, fd_time);
+        end
+
+        %% Fail-fast command and persistent-excitation diagnostics
+        if any(~isfinite(command(:)))
+            error('Logged valve commands contain NaN or Inf values.');
+        end
+
+        command_minimum = min(command, [], 1);
+        command_maximum = max(command, [], 1);
+        command_range = command_maximum - command_minimum;
+        command_std = std(command, 0, 1);
+
+        fprintf('Command minimum: [%+.3f %+.3f %+.3f %+.3f %+.3f]\n', ...
+            command_minimum(1), command_minimum(2), ...
+            command_minimum(3), command_minimum(4), ...
+            command_minimum(5));
+
+        fprintf('Command maximum: [%+.3f %+.3f %+.3f %+.3f %+.3f]\n', ...
+            command_maximum(1), command_maximum(2), ...
+            command_maximum(3), command_maximum(4), ...
+            command_maximum(5));
+
+        fprintf('Command range:   [%.3f %.3f %.3f %.3f %.3f]\n', ...
+            command_range(1), command_range(2), ...
+            command_range(3), command_range(4), ...
+            command_range(5));
+
+        fprintf('Command std:     [%.3f %.3f %.3f %.3f %.3f]\n', ...
+            command_std(1), command_std(2), ...
+            command_std(3), command_std(4), command_std(5));
+
+        weak_range_channels = find( ...
+            command_range(1:4) < MIN_COMMAND_RANGE);
+
+        if ~isempty(weak_range_channels)
+            error([ ...
+                'Cylinder command channels did not span the required ', ...
+                'range. Channels: %s. Check that the MATLAB Function ', ...
+                'block uses Update method=Discrete, Sample time=%.6g, ', ...
+                'and that cmd1...cmd4 log the block output.'], ...
+                mat2str(weak_range_channels), fd_dt);
+        end
+
+        weak_std_channels = find( ...
+            command_std(1:4) < MIN_COMMAND_STD);
+
+        if ~isempty(weak_std_channels)
+            error([ ...
+                'Cylinder command channels have insufficient variation: ', ...
+                '%s.'], mat2str(weak_std_channels));
+        end
+
+        active_command_rows = mode_label == 0 | mode_label == 1;
+        diagnostic_commands = command(active_command_rows,1:4);
+
+        if size(diagnostic_commands,1) < 10
+            error('Too few active excitation samples were reconstructed.');
+        end
+
+        action_rank = rank(cov(diagnostic_commands));
+
+        [lagged_rank, lagged_condition] = ...
+            calculate_lagged_pe_metrics(diagnostic_commands, 20);
+
+        fprintf([ ...
+            'Preflight action rank: %.0f/4 | ', ...
+            'lagged rank: %.0f/80 | condition: %.3e\n'], ...
+            action_rank, lagged_rank, lagged_condition);
+
+        if ~isfinite(action_rank) || action_rank < MIN_ACTION_RANK
+            error([ ...
+                'Cylinder command covariance rank is %.0f/4. ', ...
+                'The logged excitation is not full-rank.'], action_rank);
+        end
+
+        if ~isfinite(lagged_rank)
+            error([ ...
+                'Lagged excitation rank could not be computed. ', ...
+                'The commands are likely constant or incorrectly logged.']);
+        end
+
+        if lagged_rank < MIN_LAGGED_RANK
+            error([ ...
+                'Lagged excitation rank is only %.0f/80; required >= %.0f.'], ...
+                lagged_rank, MIN_LAGGED_RANK);
+        end
+
+        %% Joint states
+        joint_position = zeros(Nfd,5);
+        joint_velocity = zeros(Nfd,5);
+
+        for joint = 1:5
+            position_signal = get_required_signal( ...
+                logs, {sprintf('J%d_pos', joint)});
+
+            velocity_signal = get_required_signal( ...
+                logs, {sprintf('J%d_vel', joint)});
+
+            joint_position(:,joint) = interpolate_linear( ...
+                position_signal, fd_time);
+
+            joint_velocity(:,joint) = interpolate_linear( ...
+                velocity_signal, fd_time);
+        end
+
+        %% Optional end-effector FK
+        if COMPUTE_EE_POSE
+            if isempty(robot) || number_robot_joints ~= 5
+                error([ ...
+                    'COMPUTE_EE_POSE=true, but a valid ', ...
+                    'five-joint URDF was not loaded.']);
+            end
+
+            [ee_position, ee_quaternion] = ...
+                calculate_end_effector_pose( ...
+                robot, joint_position, end_effector);
+        else
+            ee_position = [];
+            ee_quaternion = [];
+        end
+
+        %% Coverage
+        normalized_extension = zeros(size(extension));
+
+        for c = 1:4
+            normalized_extension(:,c) = ...
+                (extension(:,c) - x_min(c))/stroke(c);
+        end
+
+        coverage = zeros(1,4);
+        occupied_bins = zeros(1,4);
+        bin_edges = linspace(0,1,11);
+
+        for c = 1:4
+            coverage(c) = ...
+                (max(extension(:,c)) - min(extension(:,c)))/stroke(c);
+
+            coverage(c) = min(max(coverage(c),0),1);
+
+            bin_counts = histcounts( ...
+                normalized_extension(:,c), bin_edges);
+
+            occupied_bins(c) = nnz(bin_counts > 0);
+        end
+
+        fprintf([ ...
+            'Measured cylinder coverage: [%.1f %.1f %.1f %.1f]%%\n'], ...
+            100*coverage(1), 100*coverage(2), ...
+            100*coverage(3), 100*coverage(4));
+
+        if strcmp(parameters.RunType, 'Nominal')
+            hard_failed = find(coverage < MIN_NOMINAL_COVERAGE);
+
+            if ~isempty(hard_failed)
+                required_percent = 100*MIN_NOMINAL_COVERAGE(hard_failed);
+
+                error([ ...
+                    'Nominal run has effectively inactive cylinder motion. ', ...
+                    'Cylinders %s are below their hard minimum coverage ', ...
+                    'thresholds %s percent. Check the cylinder measurement ', ...
+                    'signals, valve-to-cylinder mapping and mechanical limits.'], ...
+                    mat2str(hard_failed), ...
+                    mat2str(required_percent,3));
+            end
+
+            below_target = find(coverage < TARGET_NOMINAL_COVERAGE);
+
+            if ~isempty(below_target)
+                warning([ ...
+                    'Nominal coverage is below the preferred %.0f%% target ', ...
+                    'for cylinders %s, but all cylinders exceed the hard ', ...
+                    'minimum motion thresholds. The run will be saved. ', ...
+                    'These percentages are relative to the full configured ', ...
+                    'physical strokes, which may not be fully reachable in ', ...
+                    'the assembled manipulator.'], ...
+                    100*TARGET_NOMINAL_COVERAGE, ...
+                    mat2str(below_target));
+            end
+        end
+
+        %% Transition targets and validity
+        state = [extension, extension_velocity, pressure_difference];
+        delta_state = state(2:end,:) - state(1:end-1,:);
+
+        K = Nfd - 1;
+
+        near_endstop = any( ...
+            normalized_extension < endstop_fraction | ...
+            normalized_extension > (1-endstop_fraction), ...
+            2);
+
+        usable_mode = mode_label == 0 | mode_label == 1;
+
+        valid_transition = ...
+            usable_mode(1:K) & ...
+            usable_mode(2:end) & ...
+            ~near_endstop(1:K) & ...
+            ~near_endstop(2:end);
+
+        %% Combined output block
+        block_parts = { ...
+            repmat(draw_index, K, 1), ...
+            repmat(draw_index, K, 1), ...
+            mode_label(1:K), ...
+            excited_cylinder_label(1:K), ...
+            fd_time(1:K), ...
+            double(valid_transition), ...
+            command(1:K,1:4), ...
+            extension(1:K,:), ...
+            extension_velocity(1:K,:), ...
+            pressure_difference(1:K,:), ...
+            cylinder_force(1:K,:), ...
+            joint_position(1:K,:), ...
+            joint_velocity(1:K,:), ...
+            command(1:K,5)};
+
+        if COMPUTE_EE_POSE
+            block_parts{end+1} = ee_position(1:K,:);
+            block_parts{end+1} = ee_quaternion(1:K,:);
+        end
+
+        block_parts{end+1} = delta_state(:,1:4);
+        block_parts{end+1} = delta_state(:,5:8);
+        block_parts{end+1} = delta_state(:,9:12);
+
+        data_block = horzcat(block_parts{:});
+
+        if size(data_block,2) ~= numel(columns)
+            error( ...
+                'Column mismatch: data=%d, labels=%d.', ...
+                size(data_block,2), numel(columns));
+        end
+
+        %% Incremental combined MAT save
+        row_indices = row_cursor + (1:K);
+        combined_file.DATA(row_indices,1:numel(columns)) = data_block;
+        row_cursor = row_cursor + K;
+
+        %% Complete per-run save
+        RunData = struct();
+        RunData.Params = parameters;
+        RunData.Time = fd_time;
+        RunData.Mode = mode_label;
+        RunData.ExcitedCylinder = excited_cylinder_label;
+        RunData.ValveCmd = command;
+        RunData.CommandMinimum = command_minimum;
+        RunData.CommandMaximum = command_maximum;
+        RunData.CommandRange = command_range;
+        RunData.CommandStd = command_std;
+        RunData.ActionRank = action_rank;
+        RunData.LaggedPERank = lagged_rank;
+        RunData.LaggedPECondition = lagged_condition;
+        RunData.TotalWallTimeSeconds = total_wall_s;
+        RunData.InitializationWallTimeSeconds = initialization_wall_s;
+        RunData.ExecutionWallTimeSeconds = execution_wall_s;
+        RunData.TerminationWallTimeSeconds = termination_wall_s;
+        RunData.RealTimeFactor = realtime_factor;
+        RunData.Extension = extension;
+        RunData.ExtVel = extension_velocity;
+        RunData.dP = pressure_difference;
+        RunData.Force = cylinder_force;
+        RunData.JointPos = joint_position;
+        RunData.JointVel = joint_velocity;
+        RunData.ValidTransition = valid_transition;
+        RunData.DeltaState = delta_state;
+        RunData.Coverage = coverage;
+        RunData.OccupiedBins = occupied_bins;
+
+        if COMPUTE_EE_POSE
+            RunData.EEpos = ee_position;
+            RunData.EEquat = ee_quaternion;
+        end
+
+        run_file = fullfile( ...
+            run_dir, sprintf('run_%04d.mat', draw_index));
+
+        save(run_file, 'RunData', '-v7.3');
+
+        %% Optional full CSV
+        if WRITE_FULL_CSV
+            data_table = array2table( ...
+                data_block, 'VariableNames', columns);
+
+            if row_cursor == K
+                writetable(data_table, full_csv);
+            else
+                writetable( ...
+                    data_table, full_csv, ...
+                    'WriteMode', 'append', ...
+                    'WriteVariableNames', false);
+            end
+        end
+
+        %% Nominal mapping data
+        if strcmp(parameters.RunType, 'Nominal')
+            for c = 1:4
+                mapping_rows = ...
+                    mode_label(1:K) == 0 & ...
+                    excited_cylinder_label(1:K) == c & ...
+                    valid_transition;
+
+                mapping_xd{c} = [ ...
+                    mapping_xd{c}; ...
+                    extension_velocity(mapping_rows,c)];
+
+                mapping_qd{c} = [ ...
+                    mapping_qd{c}; ...
+                    joint_velocity(mapping_rows,:)];
+            end
+        end
+
+        %% Remaining excitation diagnostics
+        saturation_fraction = mean( ...
+            abs(command(:,1:4)) >= 0.89, 1);
+
+        %% Summary
+        completed_runs = completed_runs + 1;
+
+        Summary(completed_runs).run_id = draw_index;
+        Summary(completed_runs).draw_id = draw_index;
+        Summary(completed_runs).run_type = parameters.RunType;
+        Summary(completed_runs).samples = K;
+        Summary(completed_runs).valid_fraction = mean(valid_transition);
+
+        Summary(completed_runs).coverage_c1 = coverage(1);
+        Summary(completed_runs).coverage_c2 = coverage(2);
+        Summary(completed_runs).coverage_c3 = coverage(3);
+        Summary(completed_runs).coverage_c4 = coverage(4);
+
+        Summary(completed_runs).min_x1 = min(extension(:,1));
+        Summary(completed_runs).min_x2 = min(extension(:,2));
+        Summary(completed_runs).min_x3 = min(extension(:,3));
+        Summary(completed_runs).min_x4 = min(extension(:,4));
+
+        Summary(completed_runs).max_x1 = max(extension(:,1));
+        Summary(completed_runs).max_x2 = max(extension(:,2));
+        Summary(completed_runs).max_x3 = max(extension(:,3));
+        Summary(completed_runs).max_x4 = max(extension(:,4));
+
+        Summary(completed_runs).occupied_bins_c1 = occupied_bins(1);
+        Summary(completed_runs).occupied_bins_c2 = occupied_bins(2);
+        Summary(completed_runs).occupied_bins_c3 = occupied_bins(3);
+        Summary(completed_runs).occupied_bins_c4 = occupied_bins(4);
+
+        Summary(completed_runs).sat_fraction_u1 = saturation_fraction(1);
+        Summary(completed_runs).sat_fraction_u2 = saturation_fraction(2);
+        Summary(completed_runs).sat_fraction_u3 = saturation_fraction(3);
+        Summary(completed_runs).sat_fraction_u4 = saturation_fraction(4);
+
+        Summary(completed_runs).command_range_u1 = command_range(1);
+        Summary(completed_runs).command_range_u2 = command_range(2);
+        Summary(completed_runs).command_range_u3 = command_range(3);
+        Summary(completed_runs).command_range_u4 = command_range(4);
+
+        Summary(completed_runs).command_std_u1 = command_std(1);
+        Summary(completed_runs).command_std_u2 = command_std(2);
+        Summary(completed_runs).command_std_u3 = command_std(3);
+        Summary(completed_runs).command_std_u4 = command_std(4);
+
+        Summary(completed_runs).total_wall_s = total_wall_s;
+        Summary(completed_runs).initialization_wall_s = initialization_wall_s;
+        Summary(completed_runs).execution_wall_s = execution_wall_s;
+        Summary(completed_runs).termination_wall_s = termination_wall_s;
+        Summary(completed_runs).realtime_factor = realtime_factor;
+
+        Summary(completed_runs).action_rank = action_rank;
+        Summary(completed_runs).lagged_pe_rank = lagged_rank;
+        Summary(completed_runs).lagged_pe_cond = lagged_condition;
+
+        fprintf('Samples: %d | valid: %.1f%% | wall: %.2f s | %.3fx real time\n', ...
+            K, 100*mean(valid_transition), total_wall_s, realtime_factor);
+
+        fprintf([ ...
+            'Coverage: [%.1f %.1f %.1f %.1f]%% | ', ...
+            'bins: [%d %d %d %d]/10\n'], ...
+            100*coverage(1), 100*coverage(2), ...
+            100*coverage(3), 100*coverage(4), ...
+            occupied_bins(1), occupied_bins(2), ...
+            occupied_bins(3), occupied_bins(4));
+
+        fprintf([ ...
+            'Action rank: %.0f/4 | lagged rank: %.0f/80 | ', ...
+            'condition: %.3e\n'], ...
+            action_rank, lagged_rank, lagged_condition);
+
+        if any(coverage < 0.40)
+            warning( ...
+                'Run %d has cylinder coverage below 40%%.', ...
+                draw_index);
+        end
+
+        current_summary = struct2table( ...
+            Summary(1:completed_runs));
+
+        writetable(current_summary, summary_csv);
+
+    catch ME
+        fprintf('\nRUN %d FAILED\n', draw_index);
+        fprintf('%s\n', ...
+            ME.getReport('extended', 'hyperlinks', 'off'));
+        break;
+    end
+end
+
+%% Finalize
+if USE_FAST_RESTART
+    set_param(model_name, 'FastRestart', 'off');
+end
+
+[Meta.cyl2joint, Meta.cyl_sign] = ...
+    recover_cylinder_joint_mapping(mapping_xd, mapping_qd);
+
+fprintf('\nRecovered cylinder-to-joint mapping:\n');
+
+for c = 1:4
+    if isnan(Meta.cyl2joint(c))
+        fprintf('Cylinder %d: insufficient nominal sweep data\n', c);
+    else
+        fprintf('Cylinder %d -> joint %d, sign %+d\n', ...
+            c, Meta.cyl2joint(c), Meta.cyl_sign(c));
+    end
+end
+
+Summary = Summary(1:completed_runs);
+RunSummary = struct2table(Summary);
+writetable(RunSummary, summary_csv);
+
+save(output_mat, ...
+    'Meta', 'RunSummary', ...
+    'completed_runs', 'row_cursor', ...
+    '-append');
+
+fprintf('\n============================================================\n');
+fprintf('FINE-TUNING COLLECTION FINISHED\n');
+fprintf('Completed runs: %d/%d\n', ...
+    completed_runs, N_param_draws);
+fprintf('Combined transition rows: %d\n', row_cursor);
+fprintf('Combined MAT: %s\n', output_mat);
+fprintf('Per-run MAT directory: %s\n', run_dir);
+fprintf('Summary CSV: %s\n', summary_csv);
+fprintf('============================================================\n');
+
+%% =========================================================================
+% Local functions
+% =========================================================================
+
+function block_path = find_excitation_matlab_function(model_name)
+% Find the unique MATLAB Function block containing valve_excitation().
+
+    blocks = find_system( ...
+        model_name, ...
+        'LookUnderMasks', 'all', ...
+        'FollowLinks', 'on', ...
+        'Type', 'Block');
+
+    matches = cell(0,1);
+
+    for k = 1:numel(blocks)
+        try
+            config = get_param( ...
+                blocks{k}, 'MATLABFunctionConfiguration');
+
+            script_text = char(config.FunctionScript);
+
+            is_valve_function = ...
+                contains(script_text, 'function u = valve_excitation');
+
+            if is_valve_function
+                matches{end+1,1} = blocks{k}; %#ok<AGROW>
+            end
+        catch
+            % The candidate is not a MATLAB Function block.
+        end
+    end
+
+    if isempty(matches)
+        error([ ...
+            'Could not locate a MATLAB Function block containing ', ...
+            '"function u = valve_excitation". Paste the excitation ', ...
+            'function into the block before running this script.']);
+    end
+
+    if numel(matches) > 1
+        fprintf('Matching valve_excitation blocks:\n');
+
+        for k = 1:numel(matches)
+            fprintf('  %s\n', matches{k});
+        end
+
+        error('Multiple valve_excitation MATLAB Function blocks found.');
+    end
+
+    block_path = matches{1};
+end
+
+function nominal = nominal_parameters()
+
+    nominal = struct();
+
+    nominal.m_link = [ ...
+        236.338, ...
+         79.6991, ...
+        106.171, ...
+         84.1515, ...
+         12.5697, ...
+        248.085];
+
+    nominal.com_link = { ...
+        [0.233861,   -0.0608381,  0.24567], ...
+        [0.00782058, -0.0531715,  0.576558], ...
+        [1.56406,     0.00654027, 2.04193e-05], ...
+        [1.14397,    -0.0915572,  8.74248e-05], ...
+        [0.0836514,  -0.00277649, 0.000142508], ...
+        [0.280072,   -0.0730586,  0.208635]};
+
+    nominal.I_link = { ...
+        [40.0143, 16.8875, 45.9829], ...
+        [5.56735, 5.41795, 0.913983], ...
+        [0.631129, 80.9252, 80.9184], ...
+        [0.667361, 52.9223, 53.2899], ...
+        [0.106121, 0.106154, 0.0967841], ...
+        [55.5388, 21.4578, 67.5777]};
+
+    nominal.Iprod_link = { ...
+        [2.42626, 0.432578, -1.42106], ...
+        [0.53705, 0.132287, 0.0225438], ...
+        [-9.55394e-05, -0.000904325, 0.512769], ...
+        [-0.000361956, 0.00798074, -0.335725], ...
+        [4.71246e-05, -2.66519e-06, 0.0144236], ...
+        [0.678983, -0.188076, 2.93129]};
+
+    nominal.m_cyl = 7.12257;
+    nominal.com_cyl = [0.000849256, -3.07002e-07, 0.24945];
+    nominal.I_cyl = [0.215291, 0.216002, 0.00723345];
+    nominal.Iprod_cyl = [4.07841e-08, 4.24255e-05, 2.53744e-08];
+
+    nominal.m_pist = 5.61889;
+    nominal.com_pist = [-1.13434e-06, -2.22099e-07, 0.261698];
+    nominal.I_pist = [0.177141, 0.177509, 0.00171372];
+    nominal.Iprod_pist = [-1.50897e-09, 7.7033e-07, -8.61796e-08];
+
+    nominal.stif_J12 = 60000;
+    nominal.stif_J34 = 60000;
+    nominal.stif_J5 = 25000;
+    nominal.damp_val = 250;
+end
+
+function set_base_nominal_parameters(nominal, stroke, beta_scale)
+
+    assignin('base', 'alpha_air', 0.005);
+    assignin('base', 'rho_oil', 845);
+    assignin('base', 'beta_oil', 1.0*beta_scale);
+
+    assignin('base', 'p_displacement', 25);
+    assignin('base', 'p_gain', 1e7);
+    assignin('base', 'p_velocity', 188);
+
+    assignin('base', 'prv_PregRange', 2.759e6);
+    assignin('base', 'prv_Amax', 0.002);
+    assignin('base', 'prv_Aleak', 1e-9);
+    assignin('base', 'prv_ReCrit', 12);
+    assignin('base', 'prv_tau_open', 0.04);
+    assignin('base', 'prv_Cd', 0.7);
+    assignin('base', 'prv_Pset', 27.6e6);
+
+    assignin('base', 'k_contact', 5e5);
+    assignin('base', 'b_contact', 5e3);
+    assignin('base', 'Iprod', [0 0 0]);
+
+    % Nominal hydraulic randomization-dependent variables. These were
+    % assigned by inject_params() in the original script, but they must
+    % already exist before the first model update.
+    nominal_eps_air = 0.005;
+    nominal_eps_vol = 0.02;
+    nominal_w_seal = zeros(1,4);
+    nominal_dead_volume = min(max( ...
+        5e-4*(1 + nominal_eps_air + nominal_eps_vol), ...
+        5e-4), 1e-3);
+
+    for c = 1:4
+        assignin('base', sprintf('cyl_head_len%d', c), 0.01);
+        assignin('base', sprintf('stroke%d', c), stroke(c));
+
+        assignin('base', sprintf('cyl_clearance%d', c), ...
+            1e-4*(1 + nominal_w_seal(c)));
+        assignin('base', sprintf('A_leak_valve%d', c), ...
+            1e-12*(1 + nominal_w_seal(c))^3);
+        assignin('base', sprintf('tau_valve%d', c), ...
+            0.008*(1 + 2.5*nominal_w_seal(c)));
+        assignin('base', sprintf('V_dead_A%d', c), ...
+            nominal_dead_volume);
+        assignin('base', sprintf('V_dead_B%d', c), ...
+            nominal_dead_volume);
+
+        if c <= 2
+            assignin('base', sprintf('A_piston%d', c), 0.2513);
+            assignin('base', sprintf('A_annulus%d', c), 0.2513);
+        else
+            assignin('base', sprintf('A_piston%d', c), 0.1256);
+            assignin('base', sprintf('A_annulus%d', c), 0.1256);
+        end
+    end
+
+    for c = 1:2
+        assignin('base', sprintf('f_force%d', c), 2e5);
+        assignin('base', sprintf('f_coulomb%d', c), 2e5);
+        assignin('base', sprintf('f_velocity%d', c), 0.1);
+    end
+
+    assignin('base', 'f_force3', 1000);
+    assignin('base', 'f_coulomb3', 1000);
+    assignin('base', 'f_velocity3', 0.1);
+
+    assignin('base', 'f_force4', 2000);
+    assignin('base', 'f_coulomb4', 2000);
+    assignin('base', 'f_velocity4', 0.1);
+
+    for link = 1:6
+        assignin('base', sprintf('m_link%d', link), ...
+            nominal.m_link(link));
+        assignin('base', sprintf('com_link%d', link), ...
+            nominal.com_link{link});
+        assignin('base', sprintf('I_link%d', link), ...
+            nominal.I_link{link});
+        assignin('base', sprintf('Iprod_link%d', link), ...
+            nominal.Iprod_link{link});
+    end
+
+    for c = 1:4
+        assignin('base', sprintf('m_cyl%d', c), nominal.m_cyl);
+        assignin('base', sprintf('com_cyl%d', c), nominal.com_cyl);
+        assignin('base', sprintf('I_cyl%d', c), nominal.I_cyl);
+        assignin('base', sprintf('Iprod_cyl%d', c), nominal.Iprod_cyl);
+
+        assignin('base', sprintf('m_pist%d', c), nominal.m_pist);
+        assignin('base', sprintf('com_pist%d', c), nominal.com_pist);
+        assignin('base', sprintf('I_pist%d', c), nominal.I_pist);
+        assignin('base', sprintf('Iprod_pist%d', c), ...
+            nominal.Iprod_pist);
+    end
+
+    assignin('base', 'J1_stif', nominal.stif_J12);
+    assignin('base', 'J1_damp', nominal.damp_val);
+    assignin('base', 'J2_stif', nominal.stif_J12);
+    assignin('base', 'J2_damp', nominal.damp_val);
+    assignin('base', 'J3_stif', nominal.stif_J34);
+    assignin('base', 'J3_damp', nominal.damp_val);
+    assignin('base', 'J4_stif', nominal.stif_J34);
+    assignin('base', 'J4_damp', nominal.damp_val);
+    assignin('base', 'J5_stif', nominal.stif_J5);
+    assignin('base', 'J5_damp', nominal.damp_val);
+end
+
+function Draws = build_parameter_draws(run_types, LHS, nominal)
+
+    number_draws = numel(run_types);
+    Draws = cell(number_draws,1);
+
+    for draw = 1:number_draws
+        p = struct();
+        p.RunType = run_types{draw};
+
+        randomize_hydraulics = ...
+            strcmp(p.RunType, 'Random Hydraulics') || ...
+            strcmp(p.RunType, 'Fully Randomized');
+
+        randomize_mechanics = ...
+            strcmp(p.RunType, 'Random Mechanics') || ...
+            strcmp(p.RunType, 'Fully Randomized');
+
+        if randomize_hydraulics
+            p.eps_air = 0.001 + 0.079*LHS(draw,1);
+            p.eps_vol = 0.005 + 0.075*LHS(draw,2);
+            p.delta_spool = 0.20*(2*LHS(draw,3)-1);
+            p.w_seal = 0.25*LHS(draw,4:7);
+            p.Pset_mult = 0.90 + 0.20*LHS(draw,12);
+        else
+            p.eps_air = 0.005;
+            p.eps_vol = 0.02;
+            p.delta_spool = 0.0;
+            p.w_seal = zeros(1,4);
+            p.Pset_mult = 1.0;
+        end
+
+        beta_calculated_pa = 1/( ...
+            (1-p.eps_air)/0.5e9 + ...
+            p.eps_air/(1.4e7) + ...
+            p.eps_vol/0.5e9);
+
+        p.beta_eff_GPa = min(max(beta_calculated_pa/1e9,0.7),1.8);
+        p.Cd_actual = 0.7*(1+p.delta_spool);
+        p.prv_Pset = 27.6e6*p.Pset_mult;
+
+        p.m_link = zeros(1,6);
+        p.com_link = cell(1,6);
+        p.I_link = cell(1,6);
+        p.Iprod_link = cell(1,6);
+
+        p.m_cyl = zeros(1,4);
+        p.com_cyl = cell(1,4);
+        p.I_cyl = cell(1,4);
+        p.Iprod_cyl = cell(1,4);
+
+        p.m_pist = zeros(1,4);
+        p.com_pist = cell(1,4);
+        p.I_pist = cell(1,4);
+        p.Iprod_pist = cell(1,4);
+
+        if randomize_mechanics
+            mass_variation = 0.20;
+            com_variation = 0.05;
+
+            for link = 1:6
+                [p.m_link(link), p.com_link{link}, ...
+                    p.I_link{link}, p.Iprod_link{link}] = ...
+                    randomize_rigid_body( ...
+                    nominal.m_link(link), ...
+                    nominal.com_link{link}, ...
+                    nominal.I_link{link}, ...
+                    nominal.Iprod_link{link}, ...
+                    mass_variation, com_variation);
+            end
+
+            for c = 1:4
+                [p.m_cyl(c), p.com_cyl{c}, ...
+                    p.I_cyl{c}, p.Iprod_cyl{c}] = ...
+                    randomize_rigid_body( ...
+                    nominal.m_cyl, nominal.com_cyl, ...
+                    nominal.I_cyl, nominal.Iprod_cyl, ...
+                    mass_variation, com_variation);
+
+                [p.m_pist(c), p.com_pist{c}, ...
+                    p.I_pist{c}, p.Iprod_pist{c}] = ...
+                    randomize_rigid_body( ...
+                    nominal.m_pist, nominal.com_pist, ...
+                    nominal.I_pist, nominal.Iprod_pist, ...
+                    mass_variation, com_variation);
+            end
+
+            p.stif_J12 = 40000 + 80000*LHS(draw,8);
+            p.stif_J34 = 40000 + 80000*LHS(draw,9);
+            p.stif_J5  = 15000 + 45000*LHS(draw,10);
+            p.damp_val = 100 + 500*LHS(draw,11);
+        else
+            p.m_link = nominal.m_link;
+            p.com_link = nominal.com_link;
+            p.I_link = nominal.I_link;
+            p.Iprod_link = nominal.Iprod_link;
+
+            for c = 1:4
+                p.m_cyl(c) = nominal.m_cyl;
+                p.com_cyl{c} = nominal.com_cyl;
+                p.I_cyl{c} = nominal.I_cyl;
+                p.Iprod_cyl{c} = nominal.Iprod_cyl;
+
+                p.m_pist(c) = nominal.m_pist;
+                p.com_pist{c} = nominal.com_pist;
+                p.I_pist{c} = nominal.I_pist;
+                p.Iprod_pist{c} = nominal.Iprod_pist;
+            end
+
+            p.stif_J12 = nominal.stif_J12;
+            p.stif_J34 = nominal.stif_J34;
+            p.stif_J5 = nominal.stif_J5;
+            p.damp_val = nominal.damp_val;
+        end
+
+        Draws{draw} = p;
+    end
+end
+
+function inject_parameters(p, beta_scale)
+
+    assignin('base', 'beta_oil', p.beta_eff_GPa*beta_scale);
+    assignin('base', 'prv_Cd', p.Cd_actual);
+    assignin('base', 'prv_Pset', p.prv_Pset);
+
+    for c = 1:4
+        assignin('base', sprintf('cyl_clearance%d', c), ...
+            1e-4*(1+p.w_seal(c)));
+
+        assignin('base', sprintf('A_leak_valve%d', c), ...
+            1e-12*(1+p.w_seal(c))^3);
+
+        assignin('base', sprintf('tau_valve%d', c), ...
+            0.008*(1+2.5*p.w_seal(c)));
+
+        dead_volume = min(max( ...
+            5e-4*(1+p.eps_air+p.eps_vol), ...
+            5e-4), 1e-3);
+
+        assignin('base', sprintf('V_dead_A%d', c), dead_volume);
+        assignin('base', sprintf('V_dead_B%d', c), dead_volume);
+    end
+
+    for link = 1:6
+        assignin('base', sprintf('m_link%d', link), p.m_link(link));
+        assignin('base', sprintf('com_link%d', link), p.com_link{link});
+        assignin('base', sprintf('I_link%d', link), p.I_link{link});
+        assignin('base', sprintf('Iprod_link%d', link), ...
+            p.Iprod_link{link});
+    end
+
+    for c = 1:4
+        assignin('base', sprintf('m_cyl%d', c), p.m_cyl(c));
+        assignin('base', sprintf('com_cyl%d', c), p.com_cyl{c});
+        assignin('base', sprintf('I_cyl%d', c), p.I_cyl{c});
+        assignin('base', sprintf('Iprod_cyl%d', c), p.Iprod_cyl{c});
+
+        assignin('base', sprintf('m_pist%d', c), p.m_pist(c));
+        assignin('base', sprintf('com_pist%d', c), p.com_pist{c});
+        assignin('base', sprintf('I_pist%d', c), p.I_pist{c});
+        assignin('base', sprintf('Iprod_pist%d', c), p.Iprod_pist{c});
+    end
+
+    assignin('base', 'J1_stif', p.stif_J12);
+    assignin('base', 'J1_damp', p.damp_val);
+    assignin('base', 'J2_stif', p.stif_J12);
+    assignin('base', 'J2_damp', p.damp_val);
+    assignin('base', 'J3_stif', p.stif_J34);
+    assignin('base', 'J3_damp', p.damp_val);
+    assignin('base', 'J4_stif', p.stif_J34);
+    assignin('base', 'J4_damp', p.damp_val);
+    assignin('base', 'J5_stif', p.stif_J5);
+    assignin('base', 'J5_damp', p.damp_val);
+end
+
+function verify_required_base_variables()
+% Verify every base-workspace variable initialized or injected by the
+% original collection/randomization code before Simscape compiles.
+
+    required = { ...
+        'alpha_air', 'rho_oil', 'beta_oil', ...
+        'p_displacement', 'p_gain', 'p_velocity', ...
+        'prv_PregRange', 'prv_Amax', 'prv_Aleak', ...
+        'prv_ReCrit', 'prv_tau_open', 'prv_Cd', 'prv_Pset', ...
+        'k_contact', 'b_contact', 'Iprod'};
+
+    for link = 1:6
+        required{end+1} = sprintf('m_link%d', link); %#ok<AGROW>
+        required{end+1} = sprintf('com_link%d', link); %#ok<AGROW>
+        required{end+1} = sprintf('I_link%d', link); %#ok<AGROW>
+        required{end+1} = sprintf('Iprod_link%d', link); %#ok<AGROW>
+    end
+
+    for c = 1:4
+        required{end+1} = sprintf('cyl_head_len%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('A_piston%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('A_annulus%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('stroke%d', c); %#ok<AGROW>
+
+        required{end+1} = sprintf('f_force%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('f_coulomb%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('f_velocity%d', c); %#ok<AGROW>
+
+        required{end+1} = sprintf('cyl_clearance%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('A_leak_valve%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('tau_valve%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('V_dead_A%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('V_dead_B%d', c); %#ok<AGROW>
+
+        required{end+1} = sprintf('m_cyl%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('com_cyl%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('I_cyl%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('Iprod_cyl%d', c); %#ok<AGROW>
+
+        required{end+1} = sprintf('m_pist%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('com_pist%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('I_pist%d', c); %#ok<AGROW>
+        required{end+1} = sprintf('Iprod_pist%d', c); %#ok<AGROW>
+    end
+
+    for joint = 1:5
+        required{end+1} = sprintf('J%d_stif', joint); %#ok<AGROW>
+        required{end+1} = sprintf('J%d_damp', joint); %#ok<AGROW>
+    end
+
+    missing = cell(0,1);
+
+    for k = 1:numel(required)
+        variable_name = required{k};
+        exists_in_base = evalin('base', ...
+            sprintf('exist(''%s'',''var'')', variable_name));
+
+        if exists_in_base ~= 1
+            missing{end+1,1} = variable_name; %#ok<AGROW>
+        end
+    end
+
+    if ~isempty(missing)
+        error('Missing required base-workspace variables:\n  %s', ...
+            strjoin(missing, '\n  '));
+    end
+end
+
+function [mode, excited_cylinder] = ...
+        reconstruct_excitation_schedule( ...
+        time, number_cylinders, pre_time, ...
+        cylinder_time, gap_time, mimo_time)
+
+    number_samples = numel(time);
+    mode = -ones(number_samples,1);
+    excited_cylinder = zeros(number_samples,1);
+
+    slot_length = cylinder_time + gap_time;
+    sequential_end = pre_time + number_cylinders*slot_length;
+    mimo_end = sequential_end + mimo_time;
+
+    for sample = 1:number_samples
+        current_time = time(sample);
+
+        if current_time < pre_time
+            mode(sample) = -1;
+            excited_cylinder(sample) = 0;
+
+        elseif current_time < sequential_end
+            sequence_time = current_time - pre_time;
+            slot_index = floor(sequence_time/slot_length);
+            slot_time = sequence_time - slot_index*slot_length;
+
+            if slot_index >= 0 && ...
+                    slot_index < number_cylinders && ...
+                    slot_time < cylinder_time
+                mode(sample) = 0;
+                excited_cylinder(sample) = slot_index + 1;
+            else
+                mode(sample) = -1;
+                excited_cylinder(sample) = 0;
+            end
+
+        elseif current_time < mimo_end
+            mode(sample) = 1;
+            excited_cylinder(sample) = 0;
+        else
+            mode(sample) = -1;
+            excited_cylinder(sample) = 0;
+        end
+    end
+end
+
+function [mass_new, com_new, inertia_new, inertia_product_new] = ...
+        randomize_rigid_body( ...
+        mass_nominal, com_nominal, inertia_nominal, ...
+        inertia_product_nominal, mass_variation, com_variation)
+
+    mass_scale = 1 + mass_variation*(2*rand()-1);
+    mass_new = mass_nominal*mass_scale;
+
+    random_direction = randn(3,1);
+    direction_norm = norm(random_direction);
+
+    if direction_norm < eps
+        random_direction = [1;0;0];
+    else
+        random_direction = random_direction/direction_norm;
+    end
+
+    com_offset = random_direction*com_variation*rand();
+    com_new = (com_nominal(:)+com_offset)';
+
+    inertia_new = inertia_nominal*(mass_new/mass_nominal);
+    inertia_product_new = ...
+        inertia_product_nominal*(mass_new/mass_nominal);
+end
+
+function signal = get_required_signal(logs, aliases)
+
+    signal = get_optional_signal(logs, aliases);
+
+    if isempty(signal) || isempty(signal.Data)
+        error('Required logged signal not found: %s', ...
+            strjoin(aliases, ' or '));
+    end
+end
+
+function signal = get_optional_signal(logs, aliases)
+
+    signal = [];
+
+    for alias_index = 1:numel(aliases)
+        signal = find_logged_signal(logs, aliases{alias_index});
+
+        if ~isempty(signal) && ~isempty(signal.Data)
+            return;
+        end
+    end
+end
+
+function signal = find_logged_signal(logs, signal_name)
+
+    signal = [];
+
+    try
+        element = logs.get(signal_name);
+    catch
+        element = [];
+    end
+
+    if ~isempty(element)
+        signal = element.Values;
+        signal.Data = squeeze(signal.Data);
+        return;
+    end
+
+    element_names = logs.getElementNames;
+
+    for element_index = 1:numel(element_names)
+        current_name = element_names{element_index};
+
+        if endsWith(current_name, signal_name) || ...
+                strcmp(current_name, signal_name)
+            element = logs.get(element_index);
+            signal = element.Values;
+            signal.Data = squeeze(signal.Data);
+            return;
+        end
+    end
+end
+
+function output = interpolate_linear(signal, target_time)
+
+    source_time = signal.Time(:);
+    source_data = squeeze(signal.Data);
+
+    if size(source_data,1) ~= numel(source_time) && ...
+            size(source_data,2) == numel(source_time)
+        source_data = source_data';
+    end
+
+    [source_time, unique_indices] = unique(source_time, 'stable');
+    source_data = source_data(unique_indices,:);
+
+    output = interp1( ...
+        source_time, source_data, target_time, ...
+        'linear', 'extrap');
+end
+
+function output = interpolate_zero_order_hold(signal, target_time)
+
+    source_time = signal.Time(:);
+    source_data = squeeze(signal.Data);
+
+    if size(source_data,1) ~= numel(source_time) && ...
+            size(source_data,2) == numel(source_time)
+        source_data = source_data';
+    end
+
+    [source_time, unique_indices] = unique(source_time, 'stable');
+    source_data = source_data(unique_indices,:);
+
+    output = interp1( ...
+        source_time, source_data, target_time, ...
+        'previous', 'extrap');
+end
+
+function [position, quaternion] = ...
+        calculate_end_effector_pose( ...
+        robot, joint_position, end_effector)
+
+    number_samples = size(joint_position,1);
+    position = zeros(number_samples,3);
+    quaternion = zeros(number_samples,4);
+
+    for sample = 1:number_samples
+        transform = getTransform( ...
+            robot, joint_position(sample,:)', end_effector);
+
+        position(sample,:) = transform(1:3,4)';
+        quaternion(sample,:) = ...
+            rotation_matrix_to_quaternion(transform(1:3,1:3));
+    end
+end
+
+function [pe_rank, pe_condition] = ...
+        calculate_lagged_pe_metrics(input_commands, history_length)
+
+    pe_rank = NaN;
+    pe_condition = NaN;
+
+    if isempty(input_commands) || ...
+            size(input_commands,1) < history_length+10
+        return;
+    end
+
+    normalized_input = input_commands - mean(input_commands,1);
+
+    input_scale = std(normalized_input,0,1);
+    input_scale(input_scale < 1e-8) = 1.0;
+    normalized_input = normalized_input./input_scale;
+
+    number_samples = size(normalized_input,1);
+    number_inputs = size(normalized_input,2);
+
+    lagged_matrix = zeros( ...
+        number_samples-history_length+1, ...
+        number_inputs*history_length);
+
+    for sample = history_length:number_samples
+        input_window = normalized_input( ...
+            sample:-1:sample-history_length+1,:)';
+
+        lagged_matrix(sample-history_length+1,:) = ...
+            input_window(:)';
+    end
+
+    lagged_matrix = lagged_matrix - mean(lagged_matrix,1);
+    singular_values = svd(lagged_matrix,'econ');
+
+    if isempty(singular_values) || singular_values(1) <= eps
+        return;
+    end
+
+    tolerance = 1e-6*singular_values(1);
+    pe_rank = sum(singular_values > tolerance);
+
+    if singular_values(end) <= eps
+        pe_condition = Inf;
+    else
+        pe_condition = singular_values(1)/singular_values(end);
+    end
+end
+
+function [cylinder_to_joint, cylinder_sign] = ...
+        recover_cylinder_joint_mapping(mapping_xd, mapping_qd)
+
+    cylinder_to_joint = nan(1,4);
+    cylinder_sign = nan(1,4);
+
+    for c = 1:4
+        cylinder_velocity = mapping_xd{c};
+        joint_velocities = mapping_qd{c};
+
+        if numel(cylinder_velocity) < 20 || ...
+                size(joint_velocities,1) ~= numel(cylinder_velocity)
+            continue;
+        end
+
+        best_correlation = 0.0;
+        best_joint = NaN;
+
+        for joint = 1:5
+            joint_velocity = joint_velocities(:,joint);
+
+            if std(cylinder_velocity) < 1e-10 || ...
+                    std(joint_velocity) < 1e-10
+                continue;
+            end
+
+            correlation_matrix = corrcoef( ...
+                cylinder_velocity, joint_velocity);
+
+            correlation_value = correlation_matrix(1,2);
+
+            if abs(correlation_value) > abs(best_correlation)
+                best_correlation = correlation_value;
+                best_joint = joint;
+            end
+        end
+
+        cylinder_to_joint(c) = best_joint;
+
+        if ~isnan(best_joint)
+            cylinder_sign(c) = sign(best_correlation);
+        end
+    end
+end
+
+function quaternion = rotation_matrix_to_quaternion(rotation)
+
+    trace_rotation = rotation(1,1) + ...
+                     rotation(2,2) + ...
+                     rotation(3,3);
+
+    if trace_rotation > 0
+        scale = sqrt(trace_rotation+1)*2;
+        w = 0.25*scale;
+        x = (rotation(3,2)-rotation(2,3))/scale;
+        y = (rotation(1,3)-rotation(3,1))/scale;
+        z = (rotation(2,1)-rotation(1,2))/scale;
+
+    elseif rotation(1,1) > rotation(2,2) && ...
+            rotation(1,1) > rotation(3,3)
+        scale = sqrt( ...
+            1 + rotation(1,1) - ...
+            rotation(2,2) - rotation(3,3))*2;
+
+        w = (rotation(3,2)-rotation(2,3))/scale;
+        x = 0.25*scale;
+        y = (rotation(1,2)+rotation(2,1))/scale;
+        z = (rotation(1,3)+rotation(3,1))/scale;
+
+    elseif rotation(2,2) > rotation(3,3)
+        scale = sqrt( ...
+            1 + rotation(2,2) - ...
+            rotation(1,1) - rotation(3,3))*2;
+
+        w = (rotation(1,3)-rotation(3,1))/scale;
+        x = (rotation(1,2)+rotation(2,1))/scale;
+        y = 0.25*scale;
+        z = (rotation(2,3)+rotation(3,2))/scale;
+
+    else
+        scale = sqrt( ...
+            1 + rotation(3,3) - ...
+            rotation(1,1) - rotation(2,2))*2;
+
+        w = (rotation(2,1)-rotation(1,2))/scale;
+        x = (rotation(1,3)+rotation(3,1))/scale;
+        y = (rotation(2,3)+rotation(3,2))/scale;
+        z = 0.25*scale;
+    end
+
+    quaternion = [w, x, y, z];
+    quaternion_norm = norm(quaternion);
+
+    if quaternion_norm > eps
+        quaternion = quaternion/quaternion_norm;
+    else
+        quaternion = [1,0,0,0];
+    end
+end
+
+function seconds_value = timing_value_seconds(value)
+% Convert Simulink timing metadata to a numeric value in seconds.
+
+    if isnumeric(value)
+        seconds_value = double(value);
+    elseif isduration(value)
+        seconds_value = seconds(value);
+    else
+        try
+            seconds_value = double(value);
+        catch
+            seconds_value = NaN;
+        end
+    end
+end

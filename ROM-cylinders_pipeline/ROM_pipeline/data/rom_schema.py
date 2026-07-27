@@ -10,9 +10,6 @@ CYLINDER_ORDER = (
     "Ausleger_II_joint",
     "Messerkopf_Schwenk_joint",
 )
-JOINT_ORDER = CYLINDER_ORDER + ("Messerkopf_joint",)
-
-
 def _features(prefix: str, count: int) -> tuple[str, ...]:
     return tuple(f"{prefix}_{index}" for index in range(1, count + 1))
 
@@ -27,18 +24,15 @@ class ROMSchema:
     command.
     """
 
-    version: str = "hydraulic_command_rom_v1"
-    sample_time_s: float = 0.01
-    history_length: int = 25
+    version: str = "hydraulic_command_cylinder_only_rom_v2"
+    sample_time_s: float = 0.05
+    history_length: int = 6
     cylinder_order: tuple[str, ...] = CYLINDER_ORDER
-    joint_order: tuple[str, ...] = JOINT_ORDER
     state_feature_names: tuple[str, ...] = (
         _features("Extension", 4)
         + _features("ExtensionVelocity", 4)
         + _features("dP", 4)
-        + _features("Force", 4)
-        + _features("JointPos", 5)
-        + _features("JointVel", 5)
+        + _features("PreviousValveCmd", 4)
     )
     command_feature_names: tuple[str, ...] = (
         _features("DesiredDeltaExtension", 4)
@@ -46,10 +40,10 @@ class ROMSchema:
     )
     auxiliary_feature_names: tuple[str, ...] = _features("ValveCmd", 4)
     target_feature_names: tuple[str, ...] = (
-        _features("DeltaDP", 4)
+        _features("PredictedValveCmd", 4)
+        + _features("DeltaDP", 4)
         + _features("DeltaExtensionVelocity", 4)
         + _features("DeltaExtension", 4)
-        + _features("ForceNext", 4)
     )
 
     @property
@@ -81,20 +75,12 @@ class ROMSchema:
         return slice(8, 12)
 
     @property
-    def force_slice(self) -> slice:
+    def previous_valve_slice(self) -> slice:
         return slice(12, 16)
 
     @property
-    def joint_position_slice(self) -> slice:
-        return slice(16, 21)
-
-    @property
-    def joint_velocity_slice(self) -> slice:
-        return slice(21, 26)
-
-    @property
     def command_slice(self) -> slice:
-        return slice(26, 34)
+        return slice(16, 24)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -107,10 +93,8 @@ class ROMSchema:
     def validate(self) -> None:
         if len(self.cylinder_order) != 4 or len(set(self.cylinder_order)) != 4:
             raise ValueError("The ROM requires four uniquely ordered cylinders.")
-        if len(self.joint_order) != 5 or len(set(self.joint_order)) != 5:
-            raise ValueError("The ROM requires five uniquely ordered mechanical joints.")
-        if self.input_dim != 34 or self.command_dim != 8 or self.target_dim != 16:
-            raise ValueError("Unexpected ROM dimensions; the v1 contract is 34 -> 16 with an 8D command.")
+        if self.input_dim != 24 or self.command_dim != 8 or self.target_dim != 16:
+            raise ValueError("Unexpected ROM dimensions; the v2 contract is 24 -> 16 with an 8D command.")
         if self.history_length < 2 or self.sample_time_s <= 0.0:
             raise ValueError("History length and sample time must be positive.")
 

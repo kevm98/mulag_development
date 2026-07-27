@@ -29,7 +29,7 @@ def test_base_checkpoint_and_runtime(tmp_path):
         restored, num_envs=1, cylinder_lower=torch.zeros(1, 4), cylinder_upper=torch.ones(1, 4)
     )
     measured = torch.full((1, 4), 0.4)
-    state = torch.zeros(1, 26)
+    state = torch.zeros(1, 16)
     state[:, :4] = measured
     actuator.reset(measured, torch.cat((torch.zeros(1, 4), state), -1))
     output = actuator.step(state_row=state, valve_command=torch.zeros(1, 4), measured_extension=measured)
@@ -47,7 +47,7 @@ def test_multirate_applies_full_rom_delta_once_and_holds():
         actuator, num_envs=1, config=BaseMultirateConfig(control_dt_s=0.01, rom_dt_s=0.05)
     )
     measured = torch.full((1, 4), 0.4)
-    state = torch.zeros(1, 26)
+    state = torch.zeros(1, 16)
     state[:, :4] = measured
     row = torch.cat((torch.zeros(1, 4), state), -1)
     wrapper.reset(measured, row)

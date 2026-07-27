@@ -48,7 +48,7 @@ def main() -> None:
     args = parser.parse_args()
     schema = DEFAULT_SCHEMA
     if args.history_length != schema.history_length or args.sample_time != schema.sample_time_s:
-        raise SystemExit("The v1 runtime contract currently requires history=25 and dt=0.01 s.")
+        raise SystemExit("The v2 runtime contract requires history=6 and dt=0.05 s.")
     frame = pd.read_csv(args.source_csv)
     required = set(META + schema.input_feature_names + schema.auxiliary_feature_names)
     missing = sorted(required.difference(frame.columns))
@@ -84,13 +84,12 @@ def main() -> None:
         ext = values[:, schema.extension_slice]
         vel = values[:, schema.velocity_slice]
         pressure = values[:, schema.pressure_slice]
-        force = values[:, schema.force_slice]
         for end in range(schema.history_length - 1, len(run) - 1):
             target = np.concatenate((
+                valves[end],
                 pressure[end + 1] - pressure[end],
                 vel[end + 1] - vel[end],
                 ext[end + 1] - ext[end],
-                force[end + 1],
             )).astype(np.float32)
             destination = packed[split]
             destination["history"].append(values[end - schema.history_length + 1:end + 1])

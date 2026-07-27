@@ -22,7 +22,7 @@ class LossWeights:
 
 
 def output_tensor(output: ROMOutput) -> torch.Tensor:
-    return torch.cat((output.delta_pressure, output.delta_velocity, output.delta_extension, output.predicted_force), dim=-1)
+    return torch.cat((output.predicted_valve, output.delta_pressure, output.delta_velocity, output.delta_extension), dim=-1)
 
 
 def compute_one_step_loss(
@@ -37,29 +37,22 @@ def compute_one_step_loss(
     prediction = output_tensor(output)
     error = (prediction - target) / scale
     terms = {
-        "pressure": F.mse_loss(error[:, 0:4], torch.zeros_like(error[:, 0:4])),
-        "velocity": F.mse_loss(error[:, 4:8], torch.zeros_like(error[:, 4:8])),
-        "extension": F.mse_loss(error[:, 8:12], torch.zeros_like(error[:, 8:12])),
-        "force": F.mse_loss(error[:, 12:16], torch.zeros_like(error[:, 12:16])),
+        "actuation": F.mse_loss(error[:, 0:4], torch.zeros_like(error[:, 0:4])),
+        "pressure": F.mse_loss(error[:, 4:8], torch.zeros_like(error[:, 4:8])),
+        "velocity": F.mse_loss(error[:, 8:12], torch.zeros_like(error[:, 8:12])),
+        "extension": F.mse_loss(error[:, 12:16], torch.zeros_like(error[:, 12:16])),
         "residual": (
             output.pressure_residual.square().mean() / 1.0e12
             + output.velocity_residual.square().mean()
             + output.extension_residual.square().mean() / 1.0e-6
         ),
     }
-    if valve_label is not None:
-        finite = torch.isfinite(valve_label).all(dim=-1)
-        terms["actuation"] = (
-            F.mse_loss(output.effective_actuation[finite], valve_label[finite])
-            if bool(finite.any()) else prediction.new_zeros(())
-        )
-    else:
-        terms["actuation"] = prediction.new_zeros(())
+    if valve_label is not None and not torch.allclose(target[:, 0:4], valve_label):
+        raise ValueError("Valve auxiliary label does not match the ROM valve target.")
     total = (
         weights.pressure * terms["pressure"]
         + weights.velocity * terms["velocity"]
         + weights.extension * terms["extension"]
-        + weights.force * terms["force"]
         + weights.residual * terms["residual"]
         + weights.actuation * terms["actuation"]
     )
@@ -76,16 +69,10 @@ def advance_history(
     teacher_probability: float = 0.0,
 ) -> torch.Tensor:
     next_row = history[:, -1].clone()
-    if teacher_next is not None:
-        # Joint configuration/velocity are measured exogenous inputs; the ROM
-        # does not predict them, so recursive hydraulic rollout must still use
-        # their aligned future values.
-        next_row[:, schema.joint_position_slice] = teacher_next[:, schema.joint_position_slice]
-        next_row[:, schema.joint_velocity_slice] = teacher_next[:, schema.joint_velocity_slice]
     next_row[:, schema.extension_slice] = output.next_extension
     next_row[:, schema.velocity_slice] = output.next_velocity
     next_row[:, schema.pressure_slice] = output.next_pressure
-    next_row[:, schema.force_slice] = output.predicted_force
+    next_row[:, schema.previous_valve_slice] = output.predicted_valve
     next_row[:, schema.command_slice] = next_command
     if teacher_next is not None and teacher_probability > 0.0:
         mask = torch.rand((len(history), 1), device=history.device) < teacher_probability

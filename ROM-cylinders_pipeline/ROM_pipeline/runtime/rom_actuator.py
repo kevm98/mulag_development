@@ -13,10 +13,10 @@ from .rom_history import ROMHistory
 
 @dataclass(frozen=True)
 class RuntimeROMOutput:
+    predicted_valve: torch.Tensor
     delta_pressure: torch.Tensor
     delta_velocity: torch.Tensor
     delta_extension: torch.Tensor
-    predicted_force: torch.Tensor
     position_target: torch.Tensor
     diagnostics: dict[str, Any]
 
@@ -58,21 +58,21 @@ class ROMActuator:
         measured_extension: torch.Tensor,
     ) -> RuntimeROMOutput:
         if state_row.shape[-1] != len(self.schema.state_feature_names):
-            raise ValueError("state_row does not match the 26D state contract.")
+            raise ValueError("state_row does not match the 16D cylinder-state contract.")
         row = torch.cat((state_row, desired_cylinder_command), dim=-1)
         self.history.append(row)
         output = self.model(self.history.buffer, desired_cylinder_command)
         target, target_diagnostics = self.targets.step(output.delta_extension, measured_extension)
         finite = all(torch.isfinite(value).all() for value in (
-            output.delta_pressure, output.delta_velocity, output.delta_extension, output.predicted_force, target
+            output.predicted_valve, output.delta_pressure, output.delta_velocity, output.delta_extension, target
         ))
         if not finite:
             raise FloatingPointError("ROM actuator produced NaN/Inf.")
         return RuntimeROMOutput(
+            predicted_valve=output.predicted_valve,
             delta_pressure=output.delta_pressure,
             delta_velocity=output.delta_velocity,
             delta_extension=output.delta_extension,
-            predicted_force=output.predicted_force,
             position_target=target,
             diagnostics={
                 **target_diagnostics,

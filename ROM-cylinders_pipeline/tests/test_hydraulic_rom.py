@@ -18,7 +18,7 @@ def test_model_is_finite_and_integrates_position():
 
 
 def output_tensor(output):
-    return torch.cat((output.delta_pressure, output.delta_velocity, output.delta_extension, output.predicted_force), -1)
+    return torch.cat((output.predicted_valve, output.delta_pressure, output.delta_velocity, output.delta_extension), -1)
 
 
 def test_command_reaches_effective_actuation_head():

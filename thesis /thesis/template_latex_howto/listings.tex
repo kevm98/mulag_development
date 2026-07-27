@@ -1,0 +1,136 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[utf8x]{inputenc}
+
+%%%%% include and setup of LISTINGS package
+\usepackage{listings}
+\lstset{language=java, basicstyle=\ttfamily, breakautoindent, breaklines, keywordstyle=\textbf}
+
+%%%%% title
+\title{Listings-Test}
+\author{Daniel Schmidt}
+
+\begin{document}
+\maketitle
+
+%%%%% abstract
+\begin{abstract}
+Diese Datei soll das listings-Paket testen. Dabei geht es vor allem um die Zeilennummern, die in der Version 1.4 anscheinend nicht korrekt (oder anders als in 1.3) gesetzt werden. Hier fangen diese immer bei 1 an, auch wenn 5-10 als Bereich definiert wurde.
+\end{abstract}
+
+%%%%% section
+\section{Listings}
+
+\subsection{Beispielscode}
+Anbei der Code, den man auch hier lesen kann: \lstinline$for (int i = 1; i < 10; i ++) { ... }$, obwohl beides nix miteinander zu tun hat. Hier also der ganze Code:
+
+\begin{lstlisting}[numbers=left, frame=single]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.println(++j);      // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+
+\subsection{Problem: falsche Zeilennummer}
+Und hier mittels \texttt{\verb|firstline=2|} und \texttt{\verb|lastline=7|} begrenzt:
+
+\begin{lstlisting}[numbers=left, frame=single, firstline=2, lastline=7]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.printl(++j);       // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+
+\subsubsection*{Lösung: Angabe der ersten Zeilennummer}
+Wenn man zusätzlich noch \texttt{\verb|firstnumber=2|} angibt, so erreicht man damit durchaus den gewünschten Effekt, dass die echten Zeilennummern mit den angegebenen übereinstimmen. Auf die nächste folgende Zeilennummer (hier: \thelstnumber) abhängig vom vorangegangenen Listings kann man übrigends mittels \texttt{\verb|\thelstnumber|} zugreifen.
+
+\begin{lstlisting}[numbers=left, frame=single, firstline=2, lastline=7, firstnumber=2]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.printl(++j);       // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+
+\subsection{Problem: Zeilennummern bei mehreren Bereichen}
+Problematisch wird es aber letzten Endes bei der Variante mit mehreren ausgewählten Bereichen \texttt{\verb|linerange={2-2,4-6}|}. In diesem Beispiel fallen auch noch die Zeilen mit den geschweiften Klammern weg:
+
+\begin{lstlisting}[numbers=left, frame=single, linerange={2-2,4-6}]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.printl(++j);       // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+
+\subsubsection*{Lösung: Einzelne Listings mit separaten Zeilenangaben und negativem 'vspace' dazwischen}
+Wenn man sich die Rahmen wegdenkt (bzw. extern drumlegt) kann man über zwei separate \texttt{\verb|\begin{lstlisting}|}-Befehle und einem entsprechenden Setzen der \texttt{\verb|firstnumber|} den gewünschten Effekt erhalten. Dabei wird allerdings noch ein \texttt{\verb|\vspace*{-0.55cm}|} benötigt, um die beiden Listings näher zusammenzurücken:
+
+\begin{lstlisting}[numbers=left, frame=single, linerange={2-2}, firstnumber=2]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.printl(++j);       // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+\vspace*{-0.55cm}
+\begin{lstlisting}[numbers=left, frame=single, linerange={4-6},firstnumber=4]
+// loop                         // line 1
+for (int i = 1; i < 10; i ++)   // line 2
+{                               // line 3
+  // comment                    // line 4
+  int j = i;                    // line 5
+  System.out.printl(++j);       // line 6
+}                               // line 7
+// and now somthing more...     // line 8
+int dummy = 10;                 // line 9
+if ( dummy > 8 )                // line 10
+{                               // line 11
+  System.out.println(dummy);    // line 12
+}                               // line 13
+\end{lstlisting}
+
+\noindent Noch andere Vorschläge?!?
+
+\end{document}

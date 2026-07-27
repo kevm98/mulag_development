@@ -57,8 +57,8 @@ class BaseROMActuator:
         valve_command: torch.Tensor,
         measured_extension: torch.Tensor,
     ) -> BaseRuntimeOutput:
-        if state_row.shape[-1] != 26:
-            raise ValueError("Base ROM state_row must be [Extension, Velocity, dP, Force, q, qdot] (26D).")
+        if state_row.shape[-1] != 16:
+            raise ValueError("Base ROM state_row must be [Extension, Velocity, dP, Force] (16D).")
         if valve_command.shape != (state_row.shape[0], 4):
             raise ValueError("valve_command must have shape [num_envs, 4].")
         row = torch.cat((valve_command, state_row), dim=-1)

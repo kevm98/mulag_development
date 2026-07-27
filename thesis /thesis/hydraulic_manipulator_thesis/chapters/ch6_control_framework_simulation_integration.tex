@@ -1,0 +1,92 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 6 — Control Framework and Simulation Integration
+%% (12–18 pages)
+%% Purpose: explain the complete hierarchical controller and
+%% present PPO1 and PPO2 as two controlled experimental
+%% pipelines rather than a collection of disconnected models.
+%% Main output: reproducible controller architecture, PPO task
+%% definition, integration details, fair configuration of all
+%% methods.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{Control Framework and Simulation Integration}
+\label{chap:control}
+
+\section{Nominal Task-Space Controller}
+\label{sec:ctrl:dls}
+% - Reference-pose generation and task-space error.
+% - DLS inverse differential kinematics and damping strategy.
+% - Velocity/position-increment limits; mapping to cylinder targets.
+% - DLS as nominal structured controller, not the adaptive contribution.
+\todo{write}
+
+\section{Residual PPO Formulation}
+\label{sec:ctrl:ppo}
+% - What PPO corrects: task-space commands, joint/cylinder targets, or
+%   low-level commands.
+% - Observation groups, action scaling, action filtering, temporal
+%   history.
+% - Reward terms: tracking, smoothness, stability, limits,
+%   pressure/effort penalties, residual magnitude.
+% - Training curriculum, episode termination, policy network, PPO
+%   hyperparameters.
+\todo{write}
+
+\section{PPO1-A: Nominal ID-FD Pipeline}
+\label{sec:ctrl:ppo1a}
+% - ID and FD trained on nominal data; no AAM, no latent conditioning.
+% - Purpose: nominal learned-dynamics baseline under residual PPO.
+\todo{write}
+
+\section{PPO1-B: Randomized/Robust ID-FD Pipeline}
+\label{sec:ctrl:ppo1b}
+% - ID and FD trained/fine-tuned with randomized and informative data;
+%   no AAM on the FD.
+% - Purpose: does data diversity alone improve the ID-FD pipeline?
+\todo{write}
+
+\section{PPO2-A: Nominal ROM Pipeline}
+\label{sec:ctrl:ppo2a}
+% - ROM trained on nominal data, used with the PPO2 policy architecture.
+% - No latent conditioning and no AAM.
+% - Purpose: baseline for the reduced-order architecture.
+\todo{write}
+
+\section{PPO2-B: Randomized/Robust ROM Pipeline}
+\label{sec:ctrl:ppo2b}
+% - ROM trained across randomized systems, no online latent
+%   conditioning.
+% - Purpose: isolate robustness from adaptation.
+\todo{write}
+
+\section{PPO2-C: AAM-Conditioned ROM Pipeline}
+\label{sec:ctrl:ppo2c}
+% - AAM estimates current latent dynamics from recent observations;
+%   the latent estimate conditions the ROM online.
+% - Purpose: complete proposed adaptive method.
+\todo{write}
+
+\section{Optional Oracle-Latent Diagnostic}
+\label{sec:ctrl:oracle}
+% - True simulation latent/context supplied to the ROM as an
+%   upper-bound diagnostic only (PPO2-D).
+% - Gap between oracle and AAM separates ROM capacity limitations from
+%   adaptation-estimation limitations.
+\todo{write}
+
+\section{IsaacLab Integration and Timing}
+\label{sec:ctrl:integration}
+% - Control and physics time steps, action decimation, observation
+%   timing, history-buffer updates.
+% - Model inference order and handling of previous actions.
+% - Device placement, vectorized environments, checkpoint loading,
+%   runtime cost.
+\todo{write}
+
+\section{Stability and Constraint Handling}
+\label{sec:ctrl:constraints}
+% - Joint, cylinder, velocity, pressure, valve limits.
+% - Action clipping, rate limits, termination conditions, numerical
+%   safeguards.
+% - How residual authority is bounded so PPO cannot completely
+%   override the nominal controller.
+\todo{write}

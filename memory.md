@@ -110,7 +110,7 @@
 
 ### What was changed and why
 
-**Stage A — PPO Hyperparameters** (`ID_FD_pipline/ppo1/env_cfg.py`):
+**Stage A — PPO Hyperparameters** (`PPO1_ID_FD_PhysX/ppo1/env_cfg.py`):
 - `hidden_dims`: [64,64] → [128,64] (more capacity for residual mapping over 4-cylinder system)
 - `init_std`: 0.05 → 0.15 (wider initial exploration; zero-entropy policy died at 0.05)
 - `entropy_coef`: 0.0 → 0.005 (gentle exploration pressure; zero entropy let action std collapse)
@@ -119,17 +119,17 @@
 - `clip_param`: 0.1 → 0.2 (IsaacLab default)
 - `desired_kl`: 0.01 → 0.008 (tighter KL constraint compensates higher LR)
 
-**Stage B — Reward Restructure** (`ID_FD_pipline/ppo1/rewards.py`):
+**Stage B — Reward Restructure** (`PPO1_ID_FD_PhysX/ppo1/rewards.py`):
 - Replaced hard-gated truck progress (`if error < 0.05: reward += truck_bonus`) with exponential-weighted: `progress_weight * (kmh/max) * exp(-error/decay_m)`. Now credit is always nonzero, giving smooth gradient.
 - Added action smoothness penalty: `-0.01 * ||a_t - a_{t-1}||` to discourage jitter.
 - Returns 3-tuple `(reward, error, extras_dict)` for richer logging.
 
-**Stage C — Enriched Observations** (`ID_FD_pipline/ppo1/observations.py`, `env.py`):
+**Stage C — Enriched Observations** (`PPO1_ID_FD_PhysX/ppo1/observations.py`, `env.py`):
 - Added 12 dimensions: `cylinder_goal_x[4]`, `current_valve_cmd[4]`, `fd_delta_corrected[4]`.
 - Total observation: 21 → 33 dims.
 - Policy can now see what the base controller is doing internally.
 
-**Stage D — Truck-Speed Curriculum** (`ID_FD_pipline/ppo1/scripts/train.py`, `env.py`):
+**Stage D — Truck-Speed Curriculum** (`PPO1_ID_FD_PhysX/ppo1/scripts/train.py`, `env.py`):
 - Three-phase curriculum managed by `residual_truck_curriculum_phase`:
   - Phase 0 (iter 0-99): truck disabled, arm-only tracking
   - Phase 1 (iter 100-299): slow truck, span=2.0 km/h
@@ -144,16 +144,68 @@
 - Action smoothness penalty scales correctly (0.01 × action delta norm).
 
 ### Files modified
-- `ID_FD_pipline/ppo1/env_cfg.py` — full rewrite (config changes)
-- `ID_FD_pipline/ppo1/rewards.py` — full rewrite (new reward logic)
-- `ID_FD_pipline/ppo1/observations.py` — full rewrite (enriched obs)
-- `ID_FD_pipline/ppo1/env.py` — targeted edits (obs wiring, reward wiring, truck span)
-- `ID_FD_pipline/ppo1/scripts/train.py` — full rewrite (curriculum loop)
+- `PPO1_ID_FD_PhysX/ppo1/env_cfg.py` — full rewrite (config changes)
+- `PPO1_ID_FD_PhysX/ppo1/rewards.py` — full rewrite (new reward logic)
+- `PPO1_ID_FD_PhysX/ppo1/observations.py` — full rewrite (enriched obs)
+- `PPO1_ID_FD_PhysX/ppo1/env.py` — targeted edits (obs wiring, reward wiring, truck span)
+- `PPO1_ID_FD_PhysX/ppo1/scripts/train.py` — full rewrite (curriculum loop)
 
 ### Training command
 ```bash
-TERM=xterm ./rrlab.sh -p ID_FD_pipline/ppo1/scripts/train.py --num_envs 256 --max_iterations 500 --headless
+TERM=xterm ./rrlab.sh -p PPO1_ID_FD_PhysX/ppo1/scripts/train.py --num_envs 256 --max_iterations 500 --headless
 ```
 
 For GPU (RTX 3060 6GB), 256 envs is safer than 1000.
 Add `--phase1_iters 100 --phase2_iters 200` to override curriculum boundaries.
+
+## Canonical PPO2-ROM-PhysX setup (2026-07-19)
+
+- The maintained hydraulic backend is the single command-conditioned ROM at
+  `ROM-cylinders_pipeline/checkpoints/plant_reachable_v1_finetune_blend25/best_rom.pt`.
+  PPO2 does not use ID or FD.
+- The only deployment/reference library is
+  `PPO2_ROM_PhysX/models/plant_reachable_trajectory_library_v1.json`. Its exact shapes
+  are line, arc, sine, circle, and a genuinely sharp square at fixed, distinct heights.
+- Exact zero-policy full-cycle results at requested 0.18 m/s are: line 0.0221/0.0430 m,
+  arc 0.0189/0.0391 m, sine 0.0255/0.0422 m, circle 0.0215/0.0389 m, and square
+  0.0200/0.0398 m mean/p95 tool error.
+- The truck and PPO are hard-interlocked. PPO acts only during `ARM_TRACK`, corrects
+  cylinders 1-3 by at most 2 mm, and cannot control wheels, truck root, or cylinder 4.
+- Canonical runtime smoothing is ROM direction guard enabled, hydraulic target filter
+  beta 0.5, EE correction gain 0.25, and 0.25 s seed/reference lead.
+- The new PPO training profile is 500 iterations from a fresh actor: 350 exact-only,
+  then 150 at a 70/30 exact/procedural mix, with 64 environments, seed 17, and requested
+  speed 0.18 m/s. Do not resume the old stage checkpoints for this run.
+- The observation remains 41-D but uses a 0.25 s local XY reference preview instead of
+  template phase. There is no shape identifier. Ten conservative size/offset/height
+  variants are plant-solved and gated for the mixed phase.
+- Retain only decision metrics: mean and p95 tool error, p95 measured tool acceleration,
+  minimum head alignment, maximum post-lock truck drift, and mean absolute PPO residual.
+- A new path is not automatically safe: solve it inside the measured head-down workspace,
+  reject it if the plant projection fails, and keep speed/curvature inside the trained
+  envelope before asking the policy to track it.
+- PPO2 training reset latches the settled truck pose after ROM warm-up and applies the
+  planar fixture both before and after each physics step. The preflight uses stage-4
+  reference-relative clearance, limits raw suspension reaction to 5 cm, and limits
+  retained post-constraint drift to 2 cm (the verified seed-17 maximum was 0.999 mm).
+- The first 2026-07-19 PPO2 run was intentionally stopped after `model_200.pt`. A
+  vectorized identical-state five-shape screen selected `model_100.pt`: zero/model100/
+  model200 aggregate mean error was 0.02708/0.02511/0.02630 m, p95 was
+  0.04893/0.04572/0.04805 m, and p95 acceleration was 28.97/28.09/27.95 m/s².
+  Model 200 regressed sine and circle and used 0.492 mm mean residual versus 0.236 mm
+  for model 100. Fine-tune model 100 with a fresh optimizer, fixed 1e-4 learning rate,
+  zero entropy, std 0.03, action-rate -0.20, bounded acceleration penalty -0.20, and
+  save interval 10; do not resume model 200.
+- The fine-tune completed at
+  `logs/rsl_rl/ppo2_rom_residual/2026-07-19_18-55-23/model_249.pt` and is accepted/frozen
+  for now. Its identical-state screen improves zero-policy aggregate mean error
+  0.02649->0.02401 m, p95 0.04820->0.04726 m, and acceleration 27.73->26.09 m/s².
+  Use `./PPO2_ROM_PhysX/visualize.sh` for the canonical quiet five-station GUI run.
+- The canonical GUI run draws the current station reference directly in the Isaac
+  viewport in cyan and appends the measured mower-tool trail in orange. The reference
+  is transformed from the truck frame after every relocation; headless runs skip it.
+- A separate four-cylinder residual experiment now lives under
+  `PPO2_ROM_PhysX/residual_policy_4cyl/`. It transfers the accepted model_249 trunk and
+  first three outputs exactly, inserts a zero observation column, zero-initializes the
+  fourth output, and unlocks cylinder 4 through 0/0.25/0.50 mm stages. Never overwrite
+  or reinterpret the accepted 41-observation/3-action checkpoint as a four-action model.

@@ -1,0 +1,104 @@
+digraph UniversalPolicy {
+  graph [
+    rankdir=TB,
+    bgcolor="#fbfcfe",
+    pad="0.25",
+    nodesep="0.34",
+    ranksep="0.70",
+    fontname="DejaVu Sans",
+    fontsize=24,
+    label="Universal PPO Policy V3 — Observations, Actions, Rewards, Nominal Backends, and Variant Roadmap",
+    labelloc=t,
+    labeljust=c
+  ];
+  node [shape=plain, fontname="DejaVu Sans"];
+  edge [fontname="DejaVu Sans", fontsize=10, color="#344054", penwidth=1.5, arrowsize=0.8];
+
+  taxonomy [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#667085">
+      <TR><TD BGCOLOR="#e9d7fe" COLSPAN="2"><B>Workflow taxonomy</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO1_A</B></TD><TD ALIGN="LEFT">Nominal ID–FD backend — current V3 workflow</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO1_B</B></TD><TD ALIGN="LEFT">Randomized ID–FD backend — future</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO2_A</B></TD><TD ALIGN="LEFT">Nominal command-ROM backend — current V3 workflow</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO2_B</B></TD><TD ALIGN="LEFT">Randomized ROM backend — future</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO2_C</B></TD><TD ALIGN="LEFT">Nominal ROM policy fine-tuned with online AAM estimates — implemented</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO2_D</B></TD><TD ALIGN="LEFT">Upper-bound diagnostic with AAM — future, not deployment</TD></TR>
+    </TABLE>
+  >];
+
+  obs [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#3973ac">
+      <TR><TD BGCOLOR="#d7eaff" COLSPAN="2"><B>OBSERVATIONS — 42 values</B></TD></TR>
+      <TR><TD ALIGN="LEFT">0:12</TD><TD ALIGN="LEFT">tool error, measured velocity, reference velocity, reference acceleration</TD></TR>
+      <TR><TD ALIGN="LEFT">12:24</TD><TD ALIGN="LEFT">four cylinder extensions, goal errors, and velocities</TD></TR>
+      <TR><TD ALIGN="LEFT">24:28</TD><TD ALIGN="LEFT">previous filtered four-cylinder policy action</TD></TR>
+      <TR><TD ALIGN="LEFT">28:36</TD><TD ALIGN="LEFT">four valve commands and four backend extension increments</TD></TR>
+      <TR><TD ALIGN="LEFT">36:38</TD><TD ALIGN="LEFT">0.25 s local XY reference preview</TD></TR>
+      <TR><TD ALIGN="LEFT">38:42</TD><TD ALIGN="LEFT">direction, relative clearance, head alignment, alignment rate</TD></TR>
+      <TR><TD BGCOLOR="#eef6ff" COLSPAN="2">No shape label and no vehicle command</TD></TR>
+    </TABLE>
+  >];
+
+  actor [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#b7791f">
+      <TR><TD BGCOLOR="#fff1bf"><B>PPO ACTOR–CRITIC</B></TD></TR>
+      <TR><TD ALIGN="LEFT">Actor: 42 → 256 → 128 → 64 → Gaussian(4)</TD></TR>
+      <TR><TD ALIGN="LEFT">Critic: 42 → 256 → 128 → 64 → V(o)</TD></TR>
+      <TR><TD ALIGN="LEFT">PPO clipped objective + GAE; γ = 0.99, λ = 0.95</TD></TR>
+      <TR><TD BGCOLOR="#fff9df">Empirical observation normalization; ELU networks</TD></TR>
+    </TABLE>
+  >];
+
+  action [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#805ad5">
+      <TR><TD BGCOLOR="#eadcff"><B>ACTIONS — four bounded cylinder residuals</B></TD></TR>
+      <TR><TD ALIGN="LEFT">ū = clip(u, −1, 1)</TD></TR>
+      <TR><TD ALIGN="LEFT">ũ₁:₃ = 0.80 ũprev + 0.20 ū; authority ±2.00 mm</TD></TR>
+      <TR><TD ALIGN="LEFT">ũ₄ = 0.95 ũprev,4 + 0.05 ū₄; authority ±0.25 mm</TD></TR>
+      <TR><TD ALIGN="LEFT">xcorr = clip(xnominal + scale ⊙ ũ)</TD></TR>
+      <TR><TD BGCOLOR="#f5efff">PPO never commands wheels, parking, or station transitions</TD></TR>
+    </TABLE>
+  >];
+
+  backend [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#228b5a">
+      <TR><TD BGCOLOR="#d9f5e7" COLSPAN="2"><B>NOMINAL HYDRAULIC BACKENDS</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO1_A</B></TD><TD ALIGN="LEFT">DLS → ID(target−zero) → FD(valve−zero) → PhysX</TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PPO2_A</B></TD><TD ALIGN="LEFT">DLS → command-conditioned hydraulic ROM → PhysX</TD></TR>
+      <TR><TD ALIGN="LEFT" COLSPAN="2">Measure tool pose/velocity, cylinders, valve, backend increment, clearance, head alignment</TD></TR>
+      <TR><TD BGCOLOR="#edfff5" COLSPAN="2">V3 is the chosen main workflow for both nominal A pipelines</TD></TR>
+    </TABLE>
+  >];
+
+  reward [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#c27803">
+      <TR><TD BGCOLOR="#fff0cc"><B>REWARDS AND PROMOTION</B></TD></TR>
+      <TR><TD ALIGN="LEFT">+ reference tracking + progress</TD></TR>
+      <TR><TD ALIGN="LEFT">− quadratic tracking guard − measured tool acceleration</TD></TR>
+      <TR><TD ALIGN="LEFT">− action magnitude/rate − cylinder-4 magnitude/rate</TD></TR>
+      <TR><TD ALIGN="LEFT">− head deviation − clearance deviation − valve saturation</TD></TR>
+      <TR><TD ALIGN="LEFT">Promote only if mean/p95 error improve and acceleration, completion, alignment, drift remain safe</TD></TR>
+    </TABLE>
+  >];
+
+  supervisor [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#475467">
+      <TR><TD BGCOLOR="#eaecf0"><B>DETERMINISTIC SUPERVISOR</B></TD></TR>
+      <TR><TD>PARK → ARM_TRACK → ARM_STOW → STRAIGHT_DRIVE → PARK</TD></TR>
+      <TR><TD>PPO enabled only in ARM_TRACK; truck locked during tool work</TD></TR>
+    </TABLE>
+  >];
+
+  taxonomy -> actor [style=invis, weight=20];
+  obs -> actor [label="normalized observation"];
+  actor -> action [label="four policy outputs"];
+  action -> backend [label="corrected four-cylinder goal"];
+  backend -> obs [label="plant + hydraulic feedback", constraint=false, minlen=2];
+  backend -> reward [label="tracking + safety outcome"];
+  reward -> actor [label="advantages + returns", constraint=false];
+  supervisor -> backend [label="mode interlock", style=dashed];
+  backend -> supervisor [style=invis, weight=10];
+
+  {rank=same; obs; actor; action; backend;}
+  {rank=same; reward; supervisor;}
+}

@@ -1,0 +1,197 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Sample document for using the latex class rrlab.cls      %%
+%% with information on creating scientific documents.       %%
+%%                                                          %%
+%% main file: howto.tex                                     %%
+%% Author: Jochen Hirth (j_hirth@informatik.uni-kl.de)      %%
+%% Author: Tobias Luksch (luksch@informatik.uni-kl.de)      %%
+%% Author: Axel Vierling (vierling@cs.rptu.de)              %%
+%% Date: July 2003                                          %%
+%%                                                          %%
+%% Last modified December 2023                              %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Definition of the document class (rrlab.cls) with optional parameters
+% Different document types:
+%   Parameter [thesis] To create a master's or bachelor's thesis
+%   Parameter [report] To create a report, no "chapter" only "section" can be used to create project or seminar reports etc.
+%                      The command \RRLABmaktetitle can be used to create a paper-like header (e.g. for seminar papers).
+%                      The use with \RRLABtitlepage and \RRLABpagenumbers is suitable for applications, reports etc.
+%   Parameter [diss] Create a dissertation for submission to the department
+%   Parameter [summary] To create the summary of the dissertation to inform the faculty that the PhD process has nearly been completed
+%   Parameter [dissfinal] Creating a dissertation for submission to the publisher
+% Language options:
+%   Parameter [de,en] Language, default is [en]
+%   Parameter [latin1] sets input encoding to latin1, default is utf8
+% Screen presentations:
+%   Parameter [colorlinks] recommended for screen presentation; can be used to switch on the colored links when building with 'pdflatex'
+%   Parameter [rgbcolor] sets the color coding to RGB (recommended for screen presentation); CMYK is set by default (for printing)
+% Misc Options
+%   Parameter [external] If your thesis was done externally, you can choose this option and must give the name of the institution with \RRLABinstitution{}
+%   Parameter [draft] Omits title page, table of contents, index, etc. and marks overfull boxes
+%   Parameter [boldauthor] highlights the author defined in the file 'bold_author.bib' in the bibliography.
+%   Parameter [relaxed] allows slightly less attractive spacing for automatic line breaks
+%   Parameter [icsecondpage] 'image correction for 2nd page' makes a binding correction for the 2nd page that corresponds to the red cover pages for bachelor and master theses,
+%                             This is helpful if you do not want to print the title of the thesis on the cover page
+%                             (there is also a template for this), but want to cut out the title field. Then the title
+%                             on the 2nd page fits exactly into this window.
+
+
+\documentclass[thesis]{template/rrlab}
+
+% First some relevant Information for the work.
+% This information is mandatory. Please use the predefined macros 
+
+% Title of the work:
+\RRLABtitle{Information on how to create a scientific work with \LaTeX}
+
+% Author of the work:
+\RRLABauthor{Jochen Hirth, \RRLABand Tobias Luksch, \RRLABand Axel Vierling}
+
+% Type of the work (e.g. Master Thesis, Project report, Seminar report, Dissertation, ...):
+\RRLABtype{Documentation}
+
+% Date of issue
+\RRLABinception{1. September 1907}
+
+% Date of submission
+\RRLABsubmission{\today}
+
+% First reviewer
+\RRLABfirstreviewer{Prof. Dr. Karsten Berns}
+
+% Only for Project-, Seminar report, Bachelor-, Master thesis
+% Supervisor
+\RRLABsupervisor{A member of the Robotics Research Lab}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%The following are only for Dissertation
+% Second reviewer
+\RRLABsecondreviewer{Someone}
+% Desired Title
+\RRLABdegree{Doktor-Ingenieur (Dr.-Ing.)}
+%
+% Date of Defense
+\RRLABdefense{somewhen}
+%
+% Head of committee
+\RRLABchair{someone}
+%
+% Dean
+\RRLABdean{someone else}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% If you need additional Packages you can add them
+%% to the following packages.tex file
+%% Is is advised to add things only there to
+%% keep a better overview 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\input{packages}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Macro definitions
+%% Here the experienced TeX-User can define their own macros
+%% or commands
+%%
+%% For relevant, commonly used macros and names that are
+%% already defined see template/rrlab_macros.tex
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\input{macros}
+
+
+\newcommand{\latexklasse}{\texttt{rrlab.cls}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Document Environment. 
+%% Here the actual document starts
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+% Comment the following commands out depending on your needs
+
+% Generate a title page. The parameter can e.g. be an Image
+% or additional text that shows up in the middle of the page
+% Additionally the date is forwarded
+% For Dissertations: Neither the date nor the title image is needed and therefore not shown
+\RRLABtitlepage{An image or something else, usage: e.g.\\ \includegraphics[width=10cm]{rrlab}}{\today}
+
+
+% Second page with Title, Author, supervisor etc.
+\RRLABsecondpage
+
+
+% Page with the declaration, that the work was done only by yourself
+% Parameter is the date when the declaration is signed
+\RRLABdeclaration{\today}
+
+
+% Inserts Preface, optional for all but Dissertation
+% Parameter: 1. Parameter Name of the Chapter, e.g. Preface, Acknowledgement, ...
+%            2. Parameter the actual preface
+\RRLABpreface{Preface}{In Dissertations usually a Preface is expected.
+  These are commonly acknowledgments. For Bachelor and Master theses, it is also common.
+  For any smaller work, e.g. project or seminar reports it is not common and not recommended.
+  
+  Who you acknowledge is up to you. We want to thank Roland Bless
+  who wrote the base of the here used this \LaTeX -class}
+
+% Abstract
+% Parameter: 1. Parameter Name of the chapter, e.g. Abstract, Summary, ...
+%            2. Parameter the actual Abstract
+\RRLABabstract{Abstract}{This documentation introduces the usage of the \latexklasse. 
+It is used as a template for different works and includes helpful information for the creation of scientific documents.}
+
+
+% Create Table of Contents:
+\RRLABcontents
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Start of the actual thesis
+%%
+%% For longer works it is recommended to split the work
+%% into individual chapters, each with a different file
+%% which are then included in the main file via \include{}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Paper-like header for Seminar/Projects
+% \RRLABmaketitle
+
+% Page numbers: Only in report mode, not for seminars
+% \RRLABpagenumbers
+
+\include{introduction}
+
+\include{latexclass}
+
+\include{floats}
+
+\include{structure}
+
+\chapter{Another chapter}
+\label{chap:addendum}
+
+\section{Why this section and chapter?}
+This chapter only exists to highlight, that it is possible
+to use a mixture of directly inserted Text and files
+that are included via \verb|\include|. For short documents
+it might be more feasible to use only a single \LaTeX file,
+as it is faster and easier to keep an overview.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Bibliography
+%%
+%% Inclusion of the Bibliography. The macro expects
+%% BibTex-Files (e.g. literature.bib) without file identifier
+%% as a Parameter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RRLABbibliography{literatur}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Create Index, comment if not needed
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RRLABindex
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% End of the Document
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\end{document}

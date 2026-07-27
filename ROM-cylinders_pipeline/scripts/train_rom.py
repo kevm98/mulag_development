@@ -52,9 +52,9 @@ def matched_command_loss(model, dataset, starts, target_std, weights, device, st
     right_history = torch.from_numpy(dataset.history[pairs[:, 1]]).to(device)
     predicted_difference = model(left_history).delta_extension - model(right_history).delta_extension
     true_difference = torch.from_numpy(
-        dataset.target[pairs[:, 0], 8:12] - dataset.target[pairs[:, 1], 8:12]
+        dataset.target[pairs[:, 0], 12:16] - dataset.target[pairs[:, 1], 12:16]
     ).to(device)
-    scale = target_std[8:12].reshape(1, 4).clamp_min(1.0e-8)
+    scale = target_std[12:16].reshape(1, 4).clamp_min(1.0e-8)
     return weights.command * ((predicted_difference - true_difference) / scale).square().mean(), len(pairs)
 
 
@@ -92,6 +92,8 @@ def main() -> None:
     parser.add_argument("--config", type=Path)
     parser.add_argument("--device", help="Override config device, e.g. cpu or cuda:0")
     parser.add_argument("--state-only", action="store_true", help="Train the required command-free ablation model.")
+    parser.add_argument("--resume", type=Path, help="Resume model weights from a ROM checkpoint.")
+    parser.add_argument("--start-stage", type=int, default=1, choices=(1, 2, 3, 4))
     args = parser.parse_args()
     config = TrainingConfig.load(args.config) if args.config else TrainingConfig()
     device = torch.device(args.device or config.device)
@@ -103,21 +105,27 @@ def main() -> None:
     model = HydraulicROM(
         HydraulicROMConfig(), input_mean=stats["input_mean"], input_std=stats["input_std"]
     ).to(device)
+    if args.resume:
+        payload = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(payload["state_dict"], strict=True)
     target_std = stats["target_std"].to(device)
     train_loader = DataLoader(bundle.train, batch_size=config.batch_size, shuffle=True,
                               num_workers=config.num_workers, pin_memory=device.type == "cuda")
     val_loader = DataLoader(bundle.validation, batch_size=config.validation_batch_size, shuffle=False,
                             num_workers=config.num_workers, pin_memory=device.type == "cuda")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     config.save(args.output_dir / "resolved_config.json")
-    best = float("inf")
-    best_epoch = -1
-    epochs_without_improvement = 0
-    global_epoch = 0
-    report = []
+    global_epoch = sum(config.stage_epochs[: args.start_stage - 1])
+    history_path = args.output_dir / "training_history.json"
+    report = json.loads(history_path.read_text()) if args.resume and history_path.is_file() else []
     total_epochs = sum(config.stage_epochs)
     for stage, (epochs, horizon) in enumerate(zip(config.stage_epochs, config.stage_rollout_horizons, strict=True), start=1):
+        if stage < args.start_stage:
+            continue
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        stage_best = float("inf")
+        stage_best_epoch = -1
+        stale = 0
         for _ in range(epochs):
             global_epoch += 1
             progress = (global_epoch - 1) / max(total_epochs - 1, 1)
@@ -165,25 +173,34 @@ def main() -> None:
                    "selection_score": selection_score}
             report.append(row)
             print(json.dumps(row), flush=True)
-            if selection_score < best:
-                best = selection_score
-                best_epoch = global_epoch
-                epochs_without_improvement = 0
-                save_checkpoint(
-                    args.output_dir / "best_rom.pt", model,
-                    target_mean=stats["target_mean"], target_std=stats["target_std"],
-                    cylinder_limits=torch.tensor(
-                        bundle.manifest["cylinder_limits_from_training_extension"], dtype=torch.float32
-                    ),
-                    training_metadata={"best_epoch": best_epoch, "best_validation_loss": best,
-                                       "dataset_manifest": bundle.manifest, "state_only_ablation": args.state_only},
-                )
+            if selection_score < stage_best:
+                stage_best = selection_score
+                stage_best_epoch = global_epoch
+                stale = 0
+                metadata = {
+                    "stage": stage, "rollout_horizon": horizon,
+                    "best_epoch": stage_best_epoch, "best_validation_loss": stage_best,
+                    "dataset_manifest": bundle.manifest, "state_only_ablation": args.state_only,
+                }
+                for filename in (f"best_stage_{stage}.pt", "best_rom.pt"):
+                    save_checkpoint(
+                        args.output_dir / filename, model,
+                        target_mean=stats["target_mean"], target_std=stats["target_std"],
+                        cylinder_limits=torch.tensor(
+                            bundle.manifest["cylinder_limits_from_training_extension"], dtype=torch.float32
+                        ),
+                        training_metadata=metadata,
+                    )
             else:
-                epochs_without_improvement += 1
+                stale += 1
             (args.output_dir / "training_history.json").write_text(json.dumps(report, indent=2) + "\n")
-            if epochs_without_improvement >= config.early_stopping_patience:
-                print(f"Early stopping at epoch {global_epoch}; best epoch was {best_epoch}.")
-                return
+            if stale >= config.early_stopping_patience:
+                print(f"Early stopping stage {stage} at epoch {global_epoch}; best epoch was {stage_best_epoch}.")
+                break
+        best_payload = torch.load(
+            args.output_dir / f"best_stage_{stage}.pt", map_location=device, weights_only=False
+        )
+        model.load_state_dict(best_payload["state_dict"], strict=True)
 
 
 if __name__ == "__main__":
