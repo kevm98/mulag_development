@@ -387,6 +387,11 @@ def test_evaluator_selects_one_path_family_and_supports_live_tracking_plot():
     assert '"--plot_tracking"' in source
     assert "class LiveTrackingPlot" in source
     assert "tracking_plot.sample(raw, step)" in source
+    assert 'self.axis.set_xlabel("x [m]")' in source
+    assert 'self.axis.set_ylabel("y [m]")' in source
+    assert "self.target_line.set_data(self.target_x_m, self.target_y_m)" in source
+    assert "self.actual_line.set_data(self.cutter_x_m, self.cutter_y_m)" in source
+    assert "plt.subplots(3, 1" not in source
 
 
 def test_terrain_teacher_uses_student_action_interface_without_direct_write():

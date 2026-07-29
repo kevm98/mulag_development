@@ -54,7 +54,7 @@ p.add_argument(
 p.add_argument(
     "--plot_tracking",
     action="store_true",
-    help="Show a live Matplotlib plot of vertical, lateral, and contact tracking.",
+    help="Show one live 2D XY plot of the desired path and actual cutter trajectory.",
 )
 p.add_argument("--plot_update_interval", type=int, default=15)
 p.add_argument("--plot_out", default="")
@@ -157,7 +157,7 @@ def build_env():
 
 
 class LiveTrackingPlot:
-    """Live, saved plot of what the trained arm does in environment zero."""
+    """Live plan-view XY plot of environment zero's desired and actual paths."""
 
     def __init__(self, *, family: str, update_interval: int, output: Path):
         import matplotlib.pyplot as plt
@@ -167,70 +167,47 @@ class LiveTrackingPlot:
         self.update_interval = int(update_interval)
         self.output = output
         self.output.parent.mkdir(parents=True, exist_ok=True)
-        self.time_s: list[float] = []
-        self.ground_delta_m: list[float] = []
-        self.cutter_delta_m: list[float] = []
+        self.target_x_m: list[float] = []
         self.target_y_m: list[float] = []
+        self.cutter_x_m: list[float] = []
         self.cutter_y_m: list[float] = []
-        self.contact_force_kn: list[float] = []
-        self._ground_zero: float | None = None
-        self._cutter_zero: float | None = None
 
         plt.ion()
-        self.figure, self.axes = plt.subplots(3, 1, figsize=(9, 8), sharex=True)
+        self.figure, self.axis = plt.subplots(figsize=(9, 6))
         self.figure.canvas.manager.set_window_title(
             f"PPO3 tracking — {family}"
         )
-        (self.ground_line,) = self.axes[0].plot([], [], "#2ca02c", label="terrain height change")
-        (self.cutter_line,) = self.axes[0].plot([], [], "#ff7f0e", label="cutter origin height change")
-        (self.target_line,) = self.axes[1].plot([], [], "#d62728", label="target path y")
-        (self.actual_line,) = self.axes[1].plot([], [], "#1f77b4", label="cutter y")
-        (self.force_line,) = self.axes[2].plot([], [], "#9467bd", label="contact force")
-        self.axes[0].set_ylabel("vertical Δ [m]")
-        self.axes[1].set_ylabel("lateral y [m]")
-        self.axes[2].set_ylabel("contact [kN]")
-        self.axes[2].set_xlabel("simulation time [s]")
-        for axis in self.axes:
-            axis.grid(True, alpha=0.3)
-            axis.legend(loc="best")
-        self.figure.suptitle(f"PPO3 adaptive tracking: {family}")
+        (self.target_line,) = self.axis.plot(
+            [], [], "#d62728", linewidth=2.0, label="desired XY path"
+        )
+        (self.actual_line,) = self.axis.plot(
+            [], [], "#1f77b4", linewidth=1.5, label="actual cutter XY trajectory"
+        )
+        self.axis.set_xlabel("x [m]")
+        self.axis.set_ylabel("y [m]")
+        self.axis.set_aspect("equal", adjustable="datalim")
+        self.axis.grid(True, alpha=0.3)
+        self.axis.legend(loc="best")
+        self.axis.set_title(f"PPO3 path tracking: {family}")
         self.figure.tight_layout()
 
     @torch.no_grad()
     def sample(self, raw, step: int) -> None:
-        ground = float(raw.ground_height_under_cutter()[0])
-        cutter_origin = float(
-            raw.robot.data.body_link_state_w[0, raw._ee_body_id, 2]
-        )
-        if self._ground_zero is None:
-            self._ground_zero = ground
-            self._cutter_zero = cutter_origin
         cutter_world = raw._compute_cutter_pos_w()[0]
+        cutter_x = float(cutter_world[0] - raw.scene.env_origins[0, 0])
         cutter_y = float(cutter_world[1] - raw.scene.env_origins[0, 1])
-        self.time_s.append((step + 1) * float(raw.step_dt))
-        self.ground_delta_m.append(ground - self._ground_zero)
-        self.cutter_delta_m.append(cutter_origin - self._cutter_zero)
+        self.target_x_m.append(cutter_x)
         self.target_y_m.append(float(raw.tracking_line_y_local()[0]))
+        self.cutter_x_m.append(cutter_x)
         self.cutter_y_m.append(cutter_y)
-        self.contact_force_kn.append(
-            float(raw.cutter_terrain_contact_force_n()[0]) / 1000.0
-        )
         if step % self.update_interval == 0:
             self.refresh()
 
     def refresh(self) -> None:
-        x = self.time_s
-        for line, values in (
-            (self.ground_line, self.ground_delta_m),
-            (self.cutter_line, self.cutter_delta_m),
-            (self.target_line, self.target_y_m),
-            (self.actual_line, self.cutter_y_m),
-            (self.force_line, self.contact_force_kn),
-        ):
-            line.set_data(x, values)
-        for axis in self.axes:
-            axis.relim()
-            axis.autoscale_view()
+        self.target_line.set_data(self.target_x_m, self.target_y_m)
+        self.actual_line.set_data(self.cutter_x_m, self.cutter_y_m)
+        self.axis.relim()
+        self.axis.autoscale_view()
         self.figure.canvas.draw_idle()
         self.figure.canvas.flush_events()
 
