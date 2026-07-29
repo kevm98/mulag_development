@@ -1,0 +1,454 @@
+#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+"""Persistently train PPO3 with 512 envs and gate on held-out terrain.
+
+Training and held-out validation use separate Isaac Sim processes because the
+terrain mesh is static after scene construction.  This supervisor alternates
+one bounded stage-4 PPO block with one deterministic evaluation on the rougher
+seed-1337 terrain family.  Only one GPU scene exists at a time, every block has
+an exact resumable checkpoint, and training stops only when all shared gates
+pass.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Sequence
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence
+
+
+DEFAULT_PYTHON = Path("/home/rrlab/miniconda3/envs/env_isaaclab/bin/python")
+DEFAULT_RUN_DIR = ROOT / "logs/rsl_rl/ppo3_sole_terrain/heldout_convergence"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--resume",
+        default="",
+        help="Initial terrain PPO checkpoint. Omit only when resuming saved state.",
+    )
+    parser.add_argument("--run_dir", default=str(DEFAULT_RUN_DIR))
+    parser.add_argument("--python", default=str(DEFAULT_PYTHON))
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--num_envs", type=int, default=512)
+    parser.add_argument("--eval_envs", type=int, default=128)
+    parser.add_argument("--block_iterations", type=int, default=50)
+    parser.add_argument("--eval_steps", type=int, default=720)
+    parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--learning_rate", type=float, default=1.0e-5)
+    parser.add_argument("--entropy_coef", type=float, default=0.0)
+    parser.add_argument(
+        "--reset_optimizer_first_block",
+        action="store_true",
+        help="Discard optimizer moments only for the first block of a restarted run.",
+    )
+    parser.add_argument(
+        "--reset_critic_head_first_block",
+        action="store_true",
+        help="Zero the critic output head only for the first block of a restarted run.",
+    )
+    parser.add_argument(
+        "--first_block_c4_std",
+        type=float,
+        default=None,
+        help="Optional c4 exploration std applied only to the first resumed block.",
+    )
+    parser.add_argument("--save_interval", type=int, default=10)
+    parser.add_argument("--train_timeout_s", type=int, default=7200)
+    parser.add_argument("--eval_timeout_s", type=int, default=1800)
+    parser.add_argument(
+        "--max_blocks",
+        type=int,
+        default=0,
+        help="Optional safety cap; zero keeps training until convergence.",
+    )
+    parser.add_argument("--trajectory_library_path", default="")
+    parser.add_argument("--command_rom_checkpoint", default="")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Ignore an existing supervisor state file and start from --resume.",
+    )
+    return parser
+
+
+def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.num_envs <= 0 or args.eval_envs <= 0:
+        parser.error("training and evaluation environment counts must be positive")
+    # Stage 4 is 720 environment steps and RSL collects 32 steps per update.
+    # Fewer than 23 updates would restart before a complete production episode.
+    if args.block_iterations < 23:
+        parser.error("--block_iterations must be at least 23 for a full stage-4 episode")
+    if args.eval_steps <= 0:
+        parser.error("--eval_steps must be positive")
+    if args.learning_rate <= 0.0:
+        parser.error("--learning_rate must be positive")
+    if args.first_block_c4_std is not None and args.first_block_c4_std <= 0.0:
+        parser.error("--first_block_c4_std must be positive")
+    if args.save_interval <= 0:
+        parser.error("--save_interval must be positive")
+    if args.max_blocks < 0:
+        parser.error("--max_blocks cannot be negative")
+
+
+def training_command(
+    args: argparse.Namespace,
+    *,
+    resume: Path,
+    checkpoint_out: Path,
+    block_index: int,
+) -> list[str]:
+    # Checkpoints do not contain RNG state. Vary the runner seed per process so
+    # resuming the same optimizer state cannot replay an identical PPO block.
+    block_seed = int(args.seed) + 10_000 + int(block_index)
+    command = [
+        str(Path(args.python).expanduser()),
+        str(ROOT / "PPO3_SOLE_PhysX/scripts/train.py"),
+        "--headless",
+        "--device",
+        str(args.device),
+        "--num_envs",
+        str(args.num_envs),
+        "--seed",
+        str(block_seed),
+        "--stages",
+        "4",
+        "--stage_iterations",
+        str(args.block_iterations),
+        "--save_interval",
+        str(args.save_interval),
+        "--learning_rate",
+        str(args.learning_rate),
+        "--fixed_learning_rate",
+        "--entropy_coef",
+        str(args.entropy_coef),
+        "--resume",
+        str(resume),
+        "--checkpoint_out",
+        str(checkpoint_out),
+        "--log_dir",
+        str(Path(args.run_dir).expanduser() / "train_logs" / f"block_{block_index:04d}"),
+    ]
+    if args.trajectory_library_path:
+        command.extend(["--trajectory_library_path", args.trajectory_library_path])
+    if args.command_rom_checkpoint:
+        command.extend(["--command_rom_checkpoint", args.command_rom_checkpoint])
+    if int(block_index) == 1:
+        if args.reset_optimizer_first_block:
+            command.append("--reset_optimizer_on_resume")
+        if args.reset_critic_head_first_block:
+            command.append("--reset_critic_head_on_resume")
+        if args.first_block_c4_std is not None:
+            command.extend(["--resume_c4_std", str(args.first_block_c4_std)])
+    return command
+
+
+def evaluation_command(
+    args: argparse.Namespace, *, checkpoint: Path, report: Path
+) -> list[str]:
+    command = [
+        str(Path(args.python).expanduser()),
+        str(ROOT / "PPO3_SOLE_PhysX/scripts/evaluate.py"),
+        str(checkpoint),
+        "--headless",
+        "--device",
+        str(args.device),
+        "--num_envs",
+        str(args.eval_envs),
+        "--seed",
+        str(args.seed),
+        "--steps",
+        str(args.eval_steps),
+        "--stage",
+        "4",
+        "--eval_terrain",
+        "--report",
+        str(report),
+    ]
+    if args.trajectory_library_path:
+        command.extend(["--trajectory_library_path", args.trajectory_library_path])
+    if args.command_rom_checkpoint:
+        command.extend(["--command_rom_checkpoint", args.command_rom_checkpoint])
+    return command
+
+
+def _display_command(command: Sequence[str]) -> str:
+    """Readable command without shell evaluation or fragile quoting."""
+    return json.dumps(list(command))
+
+
+def run_child(command: Sequence[str], *, timeout_s: int, label: str) -> None:
+    print(f"[PPO3-SUPERVISOR] starting {label}: {_display_command(command)}", flush=True)
+    started = datetime.now()
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=ROOT,
+            timeout=int(timeout_s),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} exceeded {timeout_s} seconds") from exc
+    elapsed = (datetime.now() - started).total_seconds()
+    if completed.returncode != 0:
+        raise RuntimeError(f"{label} exited with code {completed.returncode}")
+    print(f"[PPO3-SUPERVISOR] finished {label} in {elapsed:.1f}s", flush=True)
+
+
+def atomic_write_json(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(row, indent=2, sort_keys=True))
+    temporary.replace(path)
+
+
+def load_validation_report(path: Path) -> dict:
+    if not path.is_file():
+        raise RuntimeError(f"held-out evaluator did not write {path}")
+    report = json.loads(path.read_text())
+    provenance = report.get("terrain_provenance") or {}
+    if provenance.get("split") != "held_out_validation":
+        raise RuntimeError(f"refusing non-held-out convergence report: {provenance}")
+    if "verge" not in report:
+        raise RuntimeError(f"held-out report has no verge metrics: {path}")
+    summary = summarize_convergence(report["verge"])
+    # Recompute centrally even if the evaluator already supplied these fields.
+    report["gates"] = summary["gates"]
+    report["normalized_gate_violations"] = summary[
+        "normalized_gate_violations"
+    ]
+    report["score"] = summary["score"]
+    report["passed"] = summary["passed"]
+    atomic_write_json(path, report)
+    return report
+
+
+def copy_checkpoint(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination = destination.resolve()
+    if source == destination:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+
+
+def candidate_is_better(candidate: dict, *, best_score: float, best_gates: dict) -> bool:
+    """Promote only monotone gate progress, then use score as the tie-breaker.
+
+    The normalized score is dominated by the 1% ground-strike denominator. A
+    checkpoint can therefore lower score while losing a gate that was already
+    passed (block 3 did exactly this to safety terminations). Keep every passed
+    gate sticky; among gate-preserving candidates prefer more passed gates,
+    then the lower aggregate violation score.
+    """
+    gates = dict(candidate.get("gates") or {})
+    if any(bool(passed) and not bool(gates.get(name, False)) for name, passed in best_gates.items()):
+        return False
+    passed_count = sum(bool(value) for value in gates.values())
+    best_passed_count = sum(bool(value) for value in best_gates.values())
+    return passed_count > best_passed_count or (
+        passed_count == best_passed_count
+        and float(candidate["score"]) < float(best_score)
+    )
+
+
+def evaluate_candidate(
+    args: argparse.Namespace,
+    *,
+    checkpoint: Path,
+    report_path: Path,
+    label: str,
+) -> dict:
+    run_child(
+        evaluation_command(args, checkpoint=checkpoint, report=report_path),
+        timeout_s=args.eval_timeout_s,
+        label=label,
+    )
+    report = load_validation_report(report_path)
+    print(
+        "[PPO3-HELDOUT] "
+        + json.dumps(
+            {
+                "checkpoint": str(checkpoint),
+                "score": report["score"],
+                "passed": report["passed"],
+                "metrics": report["verge"],
+                "gates": report["gates"],
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    return report
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    validate_args(parser, args)
+
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    reports_dir = run_dir / "reports"
+    state_path = run_dir / "state.json"
+    latest_checkpoint = run_dir / "model_latest.pt"
+    best_checkpoint = run_dir / "model_best.pt"
+    converged_checkpoint = run_dir / "model_converged.pt"
+    best_report_path = run_dir / "convergence_best.json"
+    converged_report_path = run_dir / "convergence_heldout.json"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    if state_path.is_file() and not args.restart:
+        state = json.loads(state_path.read_text())
+        current_checkpoint = Path(state["latest_checkpoint"]).resolve()
+        completed_blocks = int(state.get("completed_blocks", 0))
+        best_score = float(state.get("best_score", float("inf")))
+        best_gates = dict(state.get("best_gates") or {})
+        if not best_gates:
+            saved_best_report = Path(state["best_report"]).resolve()
+            if saved_best_report.is_file():
+                best_gates = dict(
+                    json.loads(saved_best_report.read_text()).get("gates") or {}
+                )
+        if not current_checkpoint.is_file():
+            raise RuntimeError(
+                f"saved supervisor checkpoint is missing: {current_checkpoint}"
+            )
+        print(
+            f"[PPO3-SUPERVISOR] resuming state after {completed_blocks} blocks "
+            f"from {current_checkpoint}",
+            flush=True,
+        )
+    else:
+        if not args.resume:
+            parser.error("--resume is required when no saved supervisor state is used")
+        current_checkpoint = Path(args.resume).expanduser().resolve()
+        if not current_checkpoint.is_file():
+            parser.error(f"resume checkpoint does not exist: {current_checkpoint}")
+        completed_blocks = 0
+        best_score = float("inf")
+
+        initial_report_path = reports_dir / "heldout_initial.json"
+        initial = evaluate_candidate(
+            args,
+            checkpoint=current_checkpoint,
+            report_path=initial_report_path,
+            label="initial held-out validation",
+        )
+        best_score = float(initial["score"])
+        best_gates = dict(initial["gates"])
+        copy_checkpoint(current_checkpoint, best_checkpoint)
+        shutil.copy2(initial_report_path, best_report_path)
+        if initial["passed"]:
+            copy_checkpoint(current_checkpoint, converged_checkpoint)
+            shutil.copy2(initial_report_path, converged_report_path)
+            print(
+                f"[PPO3-SUPERVISOR] initial checkpoint already PASSED; wrote "
+                f"{converged_checkpoint}",
+                flush=True,
+            )
+            return 0
+
+        state = {
+            "status": "training",
+            "latest_checkpoint": str(current_checkpoint),
+            "best_checkpoint": str(best_checkpoint),
+            "best_report": str(best_report_path),
+            "best_score": best_score,
+            "best_gates": best_gates,
+            "completed_blocks": completed_blocks,
+            "training_num_envs": int(args.num_envs),
+            "heldout_num_envs": int(args.eval_envs),
+            "heldout_steps": int(args.eval_steps),
+            "block_iterations": int(args.block_iterations),
+        }
+        atomic_write_json(state_path, state)
+
+    while args.max_blocks == 0 or completed_blocks < args.max_blocks:
+        block_index = completed_blocks + 1
+        train_cmd = training_command(
+            args,
+            resume=current_checkpoint,
+            checkpoint_out=latest_checkpoint,
+            block_index=block_index,
+        )
+        run_child(
+            train_cmd,
+            timeout_s=args.train_timeout_s,
+            label=f"512-env training block {block_index}",
+        )
+        if not latest_checkpoint.is_file():
+            raise RuntimeError(f"training did not write {latest_checkpoint}")
+        current_checkpoint = latest_checkpoint
+
+        report_path = reports_dir / f"heldout_block_{block_index:04d}.json"
+        report = evaluate_candidate(
+            args,
+            checkpoint=current_checkpoint,
+            report_path=report_path,
+            label=f"held-out validation after block {block_index}",
+        )
+        completed_blocks = block_index
+        score = float(report["score"])
+        if candidate_is_better(
+            report, best_score=best_score, best_gates=best_gates
+        ):
+            best_score = score
+            best_gates = dict(report["gates"])
+            copy_checkpoint(current_checkpoint, best_checkpoint)
+            shutil.copy2(report_path, best_report_path)
+            print(
+                f"[PPO3-SUPERVISOR] new best score={best_score:.6f}; "
+                f"wrote {best_checkpoint}",
+                flush=True,
+            )
+
+        state = {
+            "status": "converged" if report["passed"] else "training",
+            "latest_checkpoint": str(current_checkpoint),
+            "latest_report": str(report_path),
+            "latest_score": score,
+            "best_checkpoint": str(best_checkpoint),
+            "best_report": str(best_report_path),
+            "best_score": best_score,
+            "best_gates": best_gates,
+            "completed_blocks": completed_blocks,
+            "training_num_envs": int(args.num_envs),
+            "heldout_num_envs": int(args.eval_envs),
+            "heldout_steps": int(args.eval_steps),
+            "block_iterations": int(args.block_iterations),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        atomic_write_json(state_path, state)
+
+        if report["passed"]:
+            copy_checkpoint(current_checkpoint, converged_checkpoint)
+            shutil.copy2(report_path, converged_report_path)
+            print(
+                f"[PPO3-SUPERVISOR] HELD-OUT GATES PASSED after "
+                f"{completed_blocks} blocks; wrote {converged_checkpoint}",
+                flush=True,
+            )
+            return 0
+
+    print(
+        f"[PPO3-SUPERVISOR] stopped at --max_blocks={args.max_blocks} without "
+        "convergence; state is resumable",
+        flush=True,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

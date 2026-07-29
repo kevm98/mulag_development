@@ -1,0 +1,50 @@
+"""Unit contracts for the shared PPO3 terrain stop condition."""
+
+from __future__ import annotations
+
+import pytest
+
+from PPO3_SOLE_PhysX.terrain_convergence import (
+    GATE_SPECS,
+    summarize_convergence,
+)
+
+
+def _passing_metrics() -> dict[str, float]:
+    return {spec.metric: spec.threshold for spec in GATE_SPECS.values()}
+
+
+def test_values_exactly_on_every_threshold_pass():
+    result = summarize_convergence(_passing_metrics())
+    assert result["passed"]
+    assert result["score"] == 0.0
+    assert all(result["gates"].values())
+
+
+def test_upper_and_lower_gate_violations_are_normalized():
+    metrics = _passing_metrics()
+    metrics["mean_abs_cut_height_error_m"] = 0.060
+    metrics["p01_head_alignment"] = 0.931
+
+    result = summarize_convergence(metrics)
+
+    assert not result["passed"]
+    assert result["normalized_gate_violations"]["mean_cut_height_error"] == pytest.approx(
+        0.5
+    )
+    assert result["normalized_gate_violations"]["head_alignment_p01"] == pytest.approx(
+        (GATE_SPECS["head_alignment_p01"].threshold - 0.931)
+        / GATE_SPECS["head_alignment_p01"].threshold
+    )
+    assert result["score"] == pytest.approx(
+        0.5
+        + (GATE_SPECS["head_alignment_p01"].threshold - 0.931)
+        / GATE_SPECS["head_alignment_p01"].threshold
+    )
+
+
+def test_missing_metric_is_rejected_instead_of_silently_passing():
+    metrics = _passing_metrics()
+    del metrics["ground_contact_fraction"]
+    with pytest.raises(KeyError):
+        summarize_convergence(metrics)
