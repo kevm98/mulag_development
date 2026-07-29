@@ -53,11 +53,9 @@ $PY PPO3_SOLE_PhysX/scripts/evaluate.py "$CKPT" \
   --report PPO3_SOLE_PhysX/reports/s_curve_visualization.json
 ```
 
-The Matplotlib window updates during simulation and shows:
-
-- terrain-height change versus cutter-origin-height change;
-- desired lateral path versus actual cutter lateral position;
-- physical cutter/verge interaction force.
+The Matplotlib window is one plan-view XY plot: the red curve is the desired
+path and the blue curve is the cutter's actual trajectory. It intentionally
+contains no vertical-height, lateral-versus-time, or contact-force subplot.
 
 Interactive visualization adds a visual-only medium-gray floor with a 2 m grid,
 a dark rough asphalt road, the green physical verge, and the red projected path.
