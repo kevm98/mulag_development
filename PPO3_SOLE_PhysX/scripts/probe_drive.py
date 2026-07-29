@@ -55,8 +55,18 @@ p.add_argument(
         "offset_return",
         "boom_sweep",
         "lateral_chirp",
+        "double_s_curve",
+        "lane_change_hold",
+        "gaussian_slalom",
+        "fourier_meander",
     ),
-    help="Red tracking-path family; mixed cycles all seven across environments.",
+    help="Red tracking-path family; mixed cycles all families across environments.",
+)
+p.add_argument(
+    "--terrain_height_scale",
+    type=float,
+    default=0.0,
+    help="Positive relief-scale override; zero uses the balanced curriculum.",
 )
 p.add_argument("--report", default="")
 p.add_argument("--full_preposition", action="store_true",
@@ -110,6 +120,8 @@ p.add_argument(
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
+if a.terrain_height_scale < 0.0:
+    p.error("--terrain_height_scale cannot be negative")
 
 launcher = AppLauncher(a)
 simulation_app = launcher.app
@@ -128,7 +140,10 @@ def main() -> None:
     cfg.vehicle_speed_min_kmh = float(a.speed_kmh)
     cfg.vehicle_speed_max_kmh = float(a.speed_kmh)
     cfg.use_eval_terrain = bool(a.eval_terrain)
+    cfg.terrain_base_seed = int(a.seed)
+    cfg.terrain_height_scale_override = float(a.terrain_height_scale)
     cfg.tracking_path_family = str(a.path_family)
+    cfg.enable_visual_grid_floor = not bool(a.headless)
     cfg.enable_contact_tracking_demo = bool(a.contact_tracking_demo)
     if a.ride_height_target_m is not None:
         cfg.truck_ride_height_target_m = float(a.ride_height_target_m)
@@ -164,7 +179,7 @@ def main() -> None:
         cfg.settle_steps = 20
         cfg.rom_reset_warmup_steps = 20
     # A visualization/probe must not silently reset before its requested step
-    # count. The previous 780-step command crossed the 720-step training episode
+    # count. A command that crosses the 960-step training episode boundary
     # boundary, making final displacement appear zero and falsely failing speed.
     requested_duration_s = (
         int(a.steps) * float(cfg.sim.dt) * int(getattr(cfg, "decimation", 2))
@@ -408,6 +423,8 @@ def main() -> None:
         "truck_env_local_y_m_mean": float(torch.stack(base_xy_track)[..., 1].mean()),
         "wheel_body_names": list(wheel_body_names),
         "tracking_path_families": list(env._tracking_path_family_names),
+        "terrain_curriculum_version": str(env.cfg.terrain_curriculum_version),
+        "terrain_height_scales": list(env._terrain_height_scales),
         "wheel_axle_straight_error_deg": wheel_axle_straight_error_deg.detach()
         .cpu()
         .tolist(),

@@ -367,6 +367,9 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     cfg_source = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
     assert "road_color: tuple = (0.11, 0.12, 0.13)" in cfg_source
     assert "road_roughness: float = 0.92" in cfg_source
+    assert "visual_floor_color: tuple = (0.30, 0.31, 0.31)" in cfg_source
+    assert "visual_grid_color: tuple = (0.52, 0.53, 0.54)" in cfg_source
+    assert "visual_grid_length_m: float = 70.0" in cfg_source
     assert "dark_visual_background: bool = True" in cfg_source
     theme = ast.get_source_segment(
         _TERRAIN_ENV_SOURCE, _terrain_method("_configure_dark_visual_theme")
@@ -385,6 +388,13 @@ def test_evaluator_selects_one_path_family_and_supports_live_tracking_plot():
     assert '"--path_family"' in source
     assert "env_cfg.tracking_path_family = str(a.path_family)" in source
     assert '"--plot_tracking"' in source
+    for family in (
+        "double_s_curve",
+        "lane_change_hold",
+        "gaussian_slalom",
+        "fourier_meander",
+    ):
+        assert f'"{family}"' in source
     assert "class LiveTrackingPlot" in source
     assert "tracking_plot.sample(raw, step)" in source
     assert 'self.axis.set_xlabel("x [m]")' in source

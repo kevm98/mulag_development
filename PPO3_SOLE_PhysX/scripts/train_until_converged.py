@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_envs", type=int, default=512)
     parser.add_argument("--eval_envs", type=int, default=128)
     parser.add_argument("--block_iterations", type=int, default=50)
-    parser.add_argument("--eval_steps", type=int, default=720)
+    parser.add_argument("--eval_steps", type=int, default=960)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--learning_rate", type=float, default=1.0e-5)
     parser.add_argument("--entropy_coef", type=float, default=0.0)
@@ -68,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_timeout_s", type=int, default=7200)
     parser.add_argument("--eval_timeout_s", type=int, default=1800)
     parser.add_argument(
+        "--min_blocks",
+        type=int,
+        default=0,
+        help=(
+            "Minimum resumed PPO blocks before convergence may stop training. "
+            "Use this to force extensive fine-tuning of an already-passing checkpoint."
+        ),
+    )
+    parser.add_argument(
         "--max_blocks",
         type=int,
         default=0,
@@ -86,10 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.num_envs <= 0 or args.eval_envs <= 0:
         parser.error("training and evaluation environment counts must be positive")
-    # Stage 4 is 720 environment steps and RSL collects 32 steps per update.
-    # Fewer than 23 updates would restart before a complete production episode.
-    if args.block_iterations < 23:
-        parser.error("--block_iterations must be at least 23 for a full stage-4 episode")
+    # Stage 4 is 960 environment steps and RSL collects 32 steps per update.
+    # Fewer than 30 updates would restart before a complete production episode.
+    if args.block_iterations < 30:
+        parser.error("--block_iterations must be at least 30 for a full stage-4 episode")
     if args.eval_steps <= 0:
         parser.error("--eval_steps must be positive")
     if args.learning_rate <= 0.0:
@@ -98,8 +107,10 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--first_block_c4_std must be positive")
     if args.save_interval <= 0:
         parser.error("--save_interval must be positive")
-    if args.max_blocks < 0:
-        parser.error("--max_blocks cannot be negative")
+    if args.min_blocks < 0 or args.max_blocks < 0:
+        parser.error("--min_blocks and --max_blocks cannot be negative")
+    if args.max_blocks and args.max_blocks < args.min_blocks:
+        parser.error("--max_blocks cannot be smaller than --min_blocks")
 
 
 def training_command(
@@ -213,13 +224,22 @@ def atomic_write_json(path: Path, row: dict) -> None:
     temporary.replace(path)
 
 
-def load_validation_report(path: Path) -> dict:
+def load_validation_report(path: Path, *, expected_steps: int | None = None) -> dict:
     if not path.is_file():
         raise RuntimeError(f"held-out evaluator did not write {path}")
     report = json.loads(path.read_text())
     provenance = report.get("terrain_provenance") or {}
     if provenance.get("split") != "held_out_validation":
         raise RuntimeError(f"refusing non-held-out convergence report: {provenance}")
+    if provenance.get("curriculum_version") != "path_height_v2":
+        raise RuntimeError(f"refusing wrong terrain curriculum: {provenance}")
+    if expected_steps is not None and int(provenance.get("steps", -1)) != int(
+        expected_steps
+    ):
+        raise RuntimeError(
+            f"held-out report has {provenance.get('steps')} steps; "
+            f"expected {expected_steps}"
+        )
     if "verge" not in report:
         raise RuntimeError(f"held-out report has no verge metrics: {path}")
     summary = summarize_convergence(report["verge"])
@@ -275,7 +295,9 @@ def evaluate_candidate(
         timeout_s=args.eval_timeout_s,
         label=label,
     )
-    report = load_validation_report(report_path)
+    report = load_validation_report(
+        report_path, expected_steps=int(args.eval_steps)
+    )
     print(
         "[PPO3-HELDOUT] "
         + json.dumps(
@@ -350,7 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         best_gates = dict(initial["gates"])
         copy_checkpoint(current_checkpoint, best_checkpoint)
         shutil.copy2(initial_report_path, best_report_path)
-        if initial["passed"]:
+        if initial["passed"] and int(args.min_blocks) == 0:
             copy_checkpoint(current_checkpoint, converged_checkpoint)
             shutil.copy2(initial_report_path, converged_report_path)
             print(
@@ -361,7 +383,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         state = {
-            "status": "training",
+            "status": (
+                "minimum_training" if initial["passed"] else "training"
+            ),
             "latest_checkpoint": str(current_checkpoint),
             "best_checkpoint": str(best_checkpoint),
             "best_report": str(best_report_path),
@@ -372,6 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "heldout_num_envs": int(args.eval_envs),
             "heldout_steps": int(args.eval_steps),
             "block_iterations": int(args.block_iterations),
+            "minimum_blocks": int(args.min_blocks),
         }
         atomic_write_json(state_path, state)
 
@@ -414,8 +439,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 flush=True,
             )
 
+        minimum_complete = completed_blocks >= int(args.min_blocks)
         state = {
-            "status": "converged" if report["passed"] else "training",
+            "status": (
+                "converged"
+                if report["passed"] and minimum_complete
+                else "minimum_training"
+                if report["passed"]
+                else "training"
+            ),
             "latest_checkpoint": str(current_checkpoint),
             "latest_report": str(report_path),
             "latest_score": score,
@@ -428,11 +460,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "heldout_num_envs": int(args.eval_envs),
             "heldout_steps": int(args.eval_steps),
             "block_iterations": int(args.block_iterations),
+            "minimum_blocks": int(args.min_blocks),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
         atomic_write_json(state_path, state)
 
-        if report["passed"]:
+        if report["passed"] and minimum_complete:
             copy_checkpoint(current_checkpoint, converged_checkpoint)
             shutil.copy2(report_path, converged_report_path)
             print(
@@ -441,6 +474,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 flush=True,
             )
             return 0
+        if report["passed"]:
+            print(
+                f"[PPO3-SUPERVISOR] gates pass, but continuing: completed "
+                f"{completed_blocks}/{int(args.min_blocks)} required blocks",
+                flush=True,
+            )
 
     print(
         f"[PPO3-SUPERVISOR] stopped at --max_blocks={args.max_blocks} without "

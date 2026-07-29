@@ -48,8 +48,18 @@ p.add_argument(
         "offset_return",
         "boom_sweep",
         "lateral_chirp",
+        "double_s_curve",
+        "lane_change_hold",
+        "gaussian_slalom",
+        "fourier_meander",
     ),
     help="Tracking path to visualize/evaluate; use one environment for an explicit family.",
+)
+p.add_argument(
+    "--terrain_height_scale",
+    type=float,
+    default=0.0,
+    help="Positive relief-scale override for visualization; zero uses the curriculum.",
 )
 p.add_argument(
     "--plot_tracking",
@@ -96,6 +106,8 @@ if not a.audit and not a.checkpoint:
     p.error("a checkpoint is required unless --control-path-audit is used")
 if a.plot_update_interval <= 0:
     p.error("--plot_update_interval must be positive")
+if a.terrain_height_scale < 0.0:
+    p.error("--terrain_height_scale cannot be negative")
 
 launcher = AppLauncher(a)
 simulation_app = launcher.app
@@ -131,6 +143,8 @@ def build_env():
     env_cfg.sole_ik_hint = False
     env_cfg.observation_space = verge_observation_dim() + 1
     env_cfg.use_eval_terrain = bool(a.eval_terrain)
+    env_cfg.terrain_base_seed = int(a.seed)
+    env_cfg.terrain_height_scale_override = float(a.terrain_height_scale)
     env_cfg.enable_contact_tracking_demo = False
     env_cfg.tracking_path_family = str(a.path_family)
     env_cfg.enable_visual_grid_floor = bool(a.visual_grid) or not bool(a.headless)
@@ -536,6 +550,41 @@ def evaluate_verge(raw, policy, steps: int, tracking_plot=None) -> dict:
         ),
         "safety_termination_rate": safety_terminations / max(steps * raw.num_envs, 1),
     }
+    family_rows = []
+    for family in sorted(set(raw._tracking_path_family_names)):
+        family_mask = torch.as_tensor(
+            [name == family for name in raw._tracking_path_family_names],
+            dtype=torch.bool,
+            device=raw.device,
+        )
+        family_rows.append(
+            {
+                "family": family,
+                "num_envs": int(family_mask.sum()),
+                "mean_abs_cut_height_error_m": float(
+                    error_steps[:, family_mask].mean()
+                ),
+                "p95_abs_cut_height_error_m": float(
+                    torch.quantile(error_steps[:, family_mask], 0.95)
+                ),
+                "mean_abs_lateral_error_m": float(
+                    lateral_steps[:, family_mask].mean()
+                ),
+                "ground_contact_fraction": float(
+                    contact_steps[:, family_mask].mean()
+                ),
+            }
+        )
+    row["path_family_results"] = family_rows
+    row["worst_family_mean_abs_cut_height_error_m"] = max(
+        item["mean_abs_cut_height_error_m"] for item in family_rows
+    )
+    row["worst_family_mean_abs_lateral_error_m"] = max(
+        item["mean_abs_lateral_error_m"] for item in family_rows
+    )
+    row["worst_family_ground_contact_fraction"] = min(
+        item["ground_contact_fraction"] for item in family_rows
+    )
     if a.direct_hold_probe:
         row["initial_cylinder_target_error_max_usd"] = initial_cylinder_target_error
         row["initial_joint_reference_error_max"] = initial_joint_reference_error
@@ -603,6 +652,7 @@ def main() -> None:
         "hold_effort_floor_n": float(a.hold_effort_floor_n),
         "hold_damping_scale": float(a.hold_damping_scale),
         "terrain_provenance": {
+            "curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "split": "held_out_validation" if a.eval_terrain else "training",
             "base_seed": int(strip.seed),
             "per_env_seed_stride": int(raw.cfg.terrain_seed_stride),
@@ -615,6 +665,12 @@ def main() -> None:
             "num_envs": int(raw.num_envs),
             "steps": int(a.steps),
             "path_family": str(a.path_family),
+            "path_families_realized": sorted(
+                set(raw._tracking_path_family_names)
+            ),
+            "height_scales_realized": sorted(
+                set(float(value) for value in raw._terrain_height_scales)
+            ),
         },
     }
 

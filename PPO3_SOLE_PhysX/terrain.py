@@ -33,7 +33,27 @@ TRACKING_PATH_FAMILIES = (
     "offset_return",
     "boom_sweep",
     "lateral_chirp",
+    "double_s_curve",
+    "lane_change_hold",
+    "gaussian_slalom",
+    "fourier_meander",
 )
+
+DEFAULT_TERRAIN_HEIGHT_SCALES = (0.50, 0.70, 0.85, 1.00)
+
+
+def terrain_height_scale_for_environment(
+    scales: tuple[float, ...], env_index: int, override: float = 0.0
+) -> float:
+    """Select a positive, deterministic relief scale for one environment."""
+
+    values = tuple(float(value) for value in scales)
+    if not values or min(values) <= 0.0:
+        raise ValueError("terrain height scales must contain positive values")
+    override = float(override)
+    if override < 0.0:
+        raise ValueError("terrain height scale override cannot be negative")
+    return override if override > 0.0 else values[int(env_index) % len(values)]
 
 
 @dataclass(frozen=True)
@@ -74,6 +94,9 @@ class MowStripCfg:
     """
 
     tracking_reference_x_m: float = -25.4
+    tracking_active_length_m: float = 16.0
+    """Length over which one complete lateral path is executed."""
+
     tracking_height_sweep_gain: float = 1.5
     tracking_path_family: str = "boom_sweep"
     """Curve the mowing path with the boom's measured high-terrain sweep."""
@@ -205,7 +228,7 @@ def build_tracking_line_mesh(
 
 
 def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
-    """Return one of seven deterministic, smooth, strip-bounded path families."""
+    """Return one deterministic, smooth, strip-bounded path family."""
 
     x = np.asarray(x_local, dtype=np.float64)
     family = str(cfg.tracking_path_family)
@@ -215,22 +238,34 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
             f"{TRACKING_PATH_FAMILIES}"
         )
     rng = np.random.default_rng(cfg.seed + 104_729)
-    active_length = max(
-        cfg.start_x_m + cfg.length_m - cfg.tracking_reference_x_m, 1.0e-6
-    )
+    active_length = max(float(cfg.tracking_active_length_m), 1.0e-6)
     q = np.clip((x - cfg.tracking_reference_x_m) / active_length, 0.0, 1.0)
     offset = np.zeros_like(x)
 
+    def smootherstep01(value):
+        value = np.clip(value, 0.0, 1.0)
+        return value**3 * (value * (value * 6.0 - 15.0) + 10.0)
+
+    # Returning curves join the straight lead-in/out with zero first and second
+    # derivative. The boom sweep instead eases into a constant final offset.
+    # Both remove the hidden steering impulse that the old sine/chirp
+    # definitions introduced at clipped endpoints.
+    endpoint_fraction = 0.10
+    start_window = smootherstep01(q / endpoint_fraction)
+    endpoint_window = start_window * smootherstep01(
+        (1.0 - q) / endpoint_fraction
+    )
+
     if family == "lateral_sine":
-        amplitude = rng.uniform(0.06, 0.09)
+        amplitude = rng.uniform(0.10, 0.14)
         cycles = rng.uniform(1.25, 1.75)
         offset = amplitude * np.sin(2.0 * np.pi * cycles * q)
     elif family == "s_curve":
-        amplitude = rng.uniform(0.08, 0.12)
+        amplitude = rng.uniform(0.12, 0.18)
         offset = amplitude * np.sin(2.0 * np.pi * q)
     elif family == "random_spline":
         knots = np.linspace(0.0, 1.0, 7)
-        values = rng.uniform(-0.10, 0.10, size=knots.size)
+        values = rng.uniform(-0.16, 0.16, size=knots.size)
         values[0] = 0.0
         values[-1] *= 0.35
         segment = np.minimum(
@@ -243,7 +278,7 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
             values[segment + 1] - values[segment]
         )
     elif family == "offset_return":
-        amplitude = rng.uniform(0.10, 0.14) * rng.choice((-1.0, 1.0))
+        amplitude = rng.uniform(0.14, 0.20) * rng.choice((-1.0, 1.0))
         offset = amplitude * np.sin(np.pi * q) ** 2
     elif family == "boom_sweep":
         reference_height = surface_height_at(
@@ -251,17 +286,70 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
             np.asarray(cfg.tracking_reference_x_m),
             np.asarray(cfg.center_y_m),
         )
-        height = surface_height_at(cfg, x, np.full_like(x, cfg.center_y_m))
-        offset = cfg.tracking_height_sweep_gain * (height - reference_height)
+        active_x = cfg.tracking_reference_x_m + q * active_length
+        height = surface_height_at(
+            cfg, active_x, np.full_like(active_x, cfg.center_y_m)
+        )
+        raw_offset = cfg.tracking_height_sweep_gain * (height - reference_height)
+        # Full-height terrain previously drove this family into the strip-edge
+        # clip. Keep its natural height correlation but smoothly limit it to an
+        # easy, scanner-visible lateral excursion.
+        boom_limit = 0.24
+        offset = boom_limit * np.tanh(raw_offset / boom_limit)
+        end_height = surface_height_at(
+            cfg,
+            np.asarray(cfg.tracking_reference_x_m + active_length),
+            np.asarray(cfg.center_y_m),
+        )
+        end_offset = boom_limit * np.tanh(
+            cfg.tracking_height_sweep_gain
+            * (end_height - reference_height)
+            / boom_limit
+        )
+        end_blend = smootherstep01((q - 0.85) / 0.15)
+        offset = ((1.0 - end_blend) * offset + end_blend * end_offset) * start_window
     elif family == "lateral_chirp":
-        amplitude = rng.uniform(0.06, 0.08)
+        amplitude = rng.uniform(0.10, 0.14)
         phase = 2.0 * np.pi * (0.75 * q + 1.25 * q**2)
         offset = amplitude * np.sin(phase)
+    elif family == "double_s_curve":
+        amplitude = rng.uniform(0.10, 0.14)
+        offset = amplitude * np.sin(4.0 * np.pi * q)
+    elif family == "lane_change_hold":
+        amplitude = rng.uniform(0.12, 0.18) * rng.choice((-1.0, 1.0))
+        rise = smootherstep01((q - 0.12) / 0.18)
+        fall = smootherstep01((q - 0.70) / 0.18)
+        offset = amplitude * (rise - fall)
+    elif family == "gaussian_slalom":
+        amplitude = rng.uniform(0.11, 0.16)
+        centers = np.asarray((0.23, 0.50, 0.76))
+        widths = np.asarray((0.105, 0.14, 0.09))
+        signs = np.asarray((1.0, -0.85, 0.75)) * rng.choice((-1.0, 1.0))
+        offset = np.zeros_like(q)
+        for center, width, sign in zip(centers, widths, signs):
+            offset = offset + amplitude * sign * np.exp(
+                -0.5 * ((q - center) / width) ** 2
+            )
+    elif family == "fourier_meander":
+        amplitude = rng.uniform(0.10, 0.15)
+        phases = rng.uniform(-0.35, 0.35, size=3)
+        offset = amplitude * (
+            0.62 * np.sin(2.0 * np.pi * q + phases[0])
+            + 0.26 * np.sin(4.0 * np.pi * q + phases[1])
+            + 0.12 * np.sin(6.0 * np.pi * q + phases[2])
+        )
 
-    # Preserve a green margin even for the height-coupled boom path.
+    if family != "boom_sweep":
+        offset = offset * endpoint_window
+
+    # Preserve a green margin even for the height-coupled boom path. Smooth
+    # saturation avoids the flat, non-differentiable sections produced by clip.
     margin = 0.16
     half_available = max(0.5 * cfg.width_m - margin, 0.0)
-    return cfg.center_y_m + np.clip(offset, -half_available, half_available)
+    if half_available <= 0.0:
+        return np.full_like(x, cfg.center_y_m)
+    bounded_offset = half_available * np.tanh(offset / half_available)
+    return cfg.center_y_m + bounded_offset
 
 
 def strip_height_at(cfg: MowStripCfg, x_local) -> np.ndarray:
