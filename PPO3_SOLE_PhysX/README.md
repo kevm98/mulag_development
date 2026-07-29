@@ -97,7 +97,7 @@ $PY PPO3_SOLE_PhysX/scripts/train_until_converged.py \
   --block_iterations 100 --min_blocks 20 --max_blocks 0 --eval_steps 960 \
   --learning_rate 5e-5 --entropy_coef 0.001 \
   --save_interval 10 --train_timeout_s 43200 --eval_timeout_s 7200 \
-  2>&1 | tee "$RUN/supervisor.log"
+  2>&1 | tee -a "$RUN/supervisor.log"
 ```
 
 This forces at least 2,000 PPO updates (32.8 million environment transitions),
