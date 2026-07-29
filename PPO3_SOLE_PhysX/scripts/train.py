@@ -1,0 +1,604 @@
+#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+"""Train the PPO3 verge-following sole controller over ROM-A.
+
+Production training starts from the terrain teacher-student initializer and
+walks the authority curriculum in ``env_cfg.apply_sole_curriculum_stage``. A
+random start is available only as an explicitly labelled ablation. A stage advances only
+after ``--stage_iterations`` PPO iterations; there is deliberately no automatic
+promotion gate here, because a sole controller that has not yet learned to move
+produces meaningless gate statistics.  Use ``scripts/evaluate.py`` between
+stages for that.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from isaaclab.app import AppLauncher
+
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument("--num_envs", type=int, default=64)
+p.add_argument("--seed", type=int, default=17)
+p.add_argument("--stages", default="1,2,3,4", help="Curriculum stages, in order.")
+p.add_argument("--stage_iterations", type=int, default=500)
+p.add_argument(
+    "--until_converged",
+    action="store_true",
+    help="Repeat the final curriculum stage until all terrain gates pass.",
+)
+p.add_argument("--convergence_check_interval", type=int, default=50)
+p.add_argument("--convergence_steps", type=int, default=300)
+p.add_argument("--save_interval", type=int, default=50)
+p.add_argument("--learning_rate", type=float, default=None)
+p.add_argument(
+    "--fixed_learning_rate",
+    action="store_true",
+    help="Disable adaptive-KL learning-rate changes (useful for convergence fine-tuning).",
+)
+p.add_argument("--init_std", type=float, default=None)
+p.add_argument("--entropy_coef", type=float, default=None)
+p.add_argument("--vehicle_speed_kmh", type=float, default=4.0)
+p.add_argument("--trajectory_library_path", default="")
+p.add_argument("--command_rom_checkpoint", default="")
+p.add_argument(
+    "--sole_ik_hint",
+    action="store_true",
+    help=(
+        "ABLATION ONLY. Put the cascade's cylinder error into the observation "
+        "to measure what the Jacobian is worth. Never report as a "
+        "sole-controller result."
+    ),
+)
+p.add_argument("--sole_limit_shield_margin_m", type=float, default=None)
+p.add_argument("--resume", default=None, help="Checkpoint to continue from.")
+p.add_argument(
+    "--from_scratch",
+    action="store_true",
+    help=(
+        "Explicit ablation: initialize a random terrain actor. Production "
+        "teacher-student PPO requires --resume from distill_terrain.py."
+    ),
+)
+p.add_argument(
+    "--reset_optimizer_on_resume",
+    action="store_true",
+    help="Load actor/critic weights but discard stale PPO optimizer moments.",
+)
+p.add_argument(
+    "--reset_critic_head_on_resume",
+    action="store_true",
+    help="Zero the resumed critic output head after loading changed reward semantics.",
+)
+p.add_argument(
+    "--resume_c4_std",
+    type=float,
+    default=None,
+    help="Optional exploration std for the head-pitch action after resume.",
+)
+p.add_argument(
+    "--checkpoint_out",
+    default="",
+    help=(
+        "Write the final actor/critic/optimizer state to this exact path and a "
+        "JSON manifest beside it. Intended for checkpointed training blocks."
+    ),
+)
+p.add_argument(
+    "--log_dir",
+    default="",
+    help="Run-specific TensorBoard/checkpoint directory (default: timestamped).",
+)
+p.add_argument(
+    "--zero_action_probe",
+    action="store_true",
+    help="Step 100 zero actions before training and report plant motion.",
+)
+p.add_argument("--probe_only", action="store_true")
+AppLauncher.add_app_launcher_args(p)
+a, unknown = p.parse_known_args()
+sys.argv = [sys.argv[0], *unknown]
+
+stages = tuple(int(part) for part in a.stages.split(",") if part.strip())
+if not stages or any(stage not in (1, 2, 3, 4) for stage in stages):
+    p.error("--stages must be a comma-separated subset of 1,2,3,4")
+if a.stage_iterations <= 0 or a.save_interval <= 0:
+    p.error("stage iterations and save interval must be positive")
+if a.learning_rate is not None and a.learning_rate <= 0.0:
+    p.error("--learning_rate must be positive")
+if a.init_std is not None and a.init_std <= 0.0:
+    p.error("--init_std must be positive")
+if a.resume_c4_std is not None and a.resume_c4_std <= 0.0:
+    p.error("--resume_c4_std must be positive")
+if a.convergence_check_interval <= 0 or a.convergence_steps <= 0:
+    p.error("convergence interval and steps must be positive")
+
+launcher = AppLauncher(a)
+simulation_app = launcher.app
+
+import gymnasium as gym  # noqa: E402
+import torch  # noqa: E402
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
+from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
+from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+
+import PPO3_SOLE_PhysX  # noqa: F401,E402  (registers the gym task)
+from PPO3_SOLE_PhysX.distill import assert_teacher_disabled  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
+    TerrainSolePolicyPPORunnerCfg,
+    apply_terrain_curriculum_stage,
+    configure_terrain_gpu_physx_memory,
+)
+from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence  # noqa: E402
+
+
+@torch.no_grad()
+def zero_action_probe(raw, steps: int = 100) -> dict[str, float]:
+    """Measure what a zero command does to the plant.
+
+    PPO2 could assert that a zero action reproduces the teacher bit-exactly.
+    PPO3 has no teacher, so the meaningful invariant is the opposite one: a zero
+    command must leave the arm essentially where it is. Large motion here means
+    the target integrator is drifting under gravity and the policy would be
+    learning to fight a bias rather than to track.
+    """
+    raw.reset(seed=int(a.seed))
+    start = raw._compute_ee_pos_local().detach().clone()
+    zero = torch.zeros((raw.num_envs, 4), device=raw.device)
+    max_drift = 0.0
+    for _ in range(steps):
+        raw.step(zero)
+        drift = float(
+            torch.linalg.norm(raw._compute_ee_pos_local() - start, dim=-1).max()
+        )
+        max_drift = max(max_drift, drift)
+    return {
+        "steps": float(steps),
+        "max_ee_drift_m": max_drift,
+        "scan_valid_fraction": float(raw.scan_valid_fraction().mean()),
+        "mean_abs_cut_height_error_m": float(raw.cut_height_error().abs().mean()),
+        "max_abs_applied_action": float(raw._sole_applied.abs().max()),
+        "max_abs_cylinder_lead_m": float(
+            raw._commanded_target_lead(raw._refresh_cylinder_state()[0]).abs().max()
+        ),
+    }
+
+
+@torch.inference_mode()
+def convergence_rollout(raw, policy, steps: int) -> dict:
+    """Deterministic rollout used as the stop condition for persistent PPO."""
+    obs, _ = raw.reset(seed=int(a.seed) + 100_003)
+    errors, accelerations, alignments = [], [], []
+    laterals, scan_validity, contacts = [], [], []
+    wheel_support, wheel_forces = [], []
+    truck_heading_errors = []
+    terminations = 0
+    for _ in range(int(steps)):
+        action = policy(obs)
+        obs, _, terminated, _, _ = raw.step(action)
+        errors.append(raw.cut_height_error().abs())
+        accelerations.append(
+            torch.linalg.norm(raw._measured_tool_acceleration_truck, dim=-1)
+        )
+        alignments.append(raw._measure_head_down_alignment())
+        laterals.append(raw.verge_lateral_error().abs())
+        scan_validity.append(raw.scan_valid_fraction())
+        contacts.append(raw.cutter_ground_contact().float())
+        wheel_support.append(raw.wheel_road_contact_fraction())
+        wheel_forces.append(raw.wheel_road_contact_forces_n())
+        truck_heading_errors.append(raw._truck_heading_error_rad)
+        terminations += int(terminated.sum())
+
+    error = torch.cat(errors)
+    metrics = {
+        "mean_abs_cut_height_error_m": float(error.mean()),
+        "p95_abs_cut_height_error_m": float(torch.quantile(error, 0.95)),
+        "p95_tool_acceleration_mps2": float(
+            torch.quantile(torch.cat(accelerations), 0.95)
+        ),
+        "min_head_alignment": float(torch.cat(alignments).min()),
+        "p01_head_alignment": float(torch.quantile(torch.cat(alignments), 0.01)),
+        "mean_abs_lateral_error_m": float(torch.cat(laterals).mean()),
+        "scan_valid_fraction": float(torch.cat(scan_validity).mean()),
+        "ground_contact_fraction": float(torch.cat(contacts).mean()),
+        "min_wheel_road_contact_duty_cycle": float(
+            (
+                torch.stack(wheel_forces)
+                > float(getattr(raw.cfg, "road_contact_force_threshold_n", 10.0))
+            ).float().mean(dim=(0, 1)).min()
+        ),
+        "max_truck_post_constraint_drift_m": float(
+            raw._max_truck_post_constraint_drift.max()
+        ),
+        "max_truck_heading_error_deg": float(
+            torch.rad2deg(torch.cat(truck_heading_errors).max())
+        ),
+        "safety_termination_rate": terminations / max(steps * raw.num_envs, 1),
+    }
+    result = summarize_convergence(metrics)
+    result["terrain"] = "training_validation"
+    return result
+
+
+def main() -> None:
+    resume_path = Path(a.resume).resolve() if a.resume else None
+    if resume_path is None and not a.from_scratch:
+        raise RuntimeError(
+            "Production terrain PPO requires a teacher-student initializer. Run "
+            "scripts/distill_terrain.py first and pass its checkpoint with "
+            "--resume. Use --from_scratch only for an explicitly labelled ablation."
+        )
+    if resume_path is not None and a.from_scratch:
+        raise ValueError("--resume and --from_scratch are mutually exclusive")
+    resume_payload = None
+    resume_source = "random ablation"
+    if resume_path is not None:
+        if not resume_path.is_file():
+            raise FileNotFoundError(resume_path)
+        resume_payload = torch.load(
+            resume_path, map_location="cpu", weights_only=False
+        )
+        infos = resume_payload.get("infos") or {}
+        resume_source = str(infos.get("source", ""))
+        schema = str(infos.get("schema", ""))
+        if schema != "terrain_teacher_student_v1" or resume_source not in {
+            "PPO3 terrain teacher distillation v1",
+            "PPO3 terrain PPO",
+        }:
+            raise RuntimeError(
+                "Checkpoint is outside the terrain_teacher_student_v1 contract "
+                f"(source={resume_source!r}, schema={schema!r}). All pre-correction "
+                "terrain PPO and legacy stored-path distillation checkpoints are "
+                "intentionally invalid."
+            )
+
+    env_cfg = parse_env_cfg(
+        PPO3_SOLE_PhysX.TERRAIN_TASK_ID, device=a.device, num_envs=a.num_envs
+    )
+    if a.sole_ik_hint:
+        raise ValueError("--sole_ik_hint is not part of the terrain observation contract")
+    env_cfg.sole_ik_hint = False
+    env_cfg.observation_space = verge_observation_dim() + 1
+    env_cfg.enable_contact_tracking_demo = False
+    resume_load_path = resume_path
+    if resume_payload is not None:
+        checkpoint_width = int(
+            (resume_payload.get("infos") or {}).get("observation_width", -1)
+        )
+        if checkpoint_width != int(env_cfg.observation_space):
+            raise RuntimeError(
+                f"checkpoint observation width {checkpoint_width} does not match "
+                f"the frozen terrain contract {env_cfg.observation_space}; automatic "
+                "migration is disabled for production training"
+            )
+    env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
+    env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    if a.trajectory_library_path:
+        env_cfg.trajectory_library_path = str(Path(a.trajectory_library_path).resolve())
+    if a.command_rom_checkpoint:
+        env_cfg.command_rom_checkpoint = str(Path(a.command_rom_checkpoint).resolve())
+    if a.sole_limit_shield_margin_m is not None:
+        env_cfg.sole_limit_shield_margin_m = float(a.sole_limit_shield_margin_m)
+    configure_terrain_gpu_physx_memory(env_cfg, int(a.num_envs))
+
+    runner_cfg = TerrainSolePolicyPPORunnerCfg()
+    # RSL-RL seeds policy sampling from the runner config, not from raw.reset().
+    # The block supervisor varies this seed so separate resumed processes do not
+    # replay the same stochastic update sequence from checkpoints that omit RNG
+    # state.
+    runner_cfg.seed = int(a.seed)
+    runner_cfg.max_iterations = int(a.stage_iterations)
+    runner_cfg.save_interval = int(a.save_interval)
+    if a.learning_rate is not None:
+        runner_cfg.algorithm.learning_rate = float(a.learning_rate)
+    if a.fixed_learning_rate:
+        runner_cfg.algorithm.schedule = "fixed"
+    if a.entropy_coef is not None:
+        runner_cfg.algorithm.entropy_coef = float(a.entropy_coef)
+    if a.init_std is not None:
+        runner_cfg.actor.distribution_cfg.init_std = float(a.init_std)
+
+    apply_terrain_curriculum_stage(env_cfg, stages[0])
+    # The inherited trajectory exists only for reset deployment. Scored terrain
+    # episodes always use the sensed verge reference and a fixed deployment.
+    env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
+    env_cfg.randomize_trajectory_shape = False
+    env_cfg.randomize_start_phase = False
+    # PPO always runs teacher-free. Distillation is scripts/distill_terrain.py, and it
+    # hands over a checkpoint, not a teacher.
+    assert_teacher_disabled(env_cfg, context="PPO3 PPO training")
+    env = gym.make(PPO3_SOLE_PhysX.TERRAIN_TASK_ID, cfg=env_cfg, render_mode=None)
+    raw = env.unwrapped
+    # DirectRLEnv construction leaves the asset at its spawn pose. Without an
+    # explicit reset, PPO's first rollout starts before the production arm
+    # deployment/settle/ROM warm-up and sees ~1.1 m cut-height error. Every
+    # training run must enter through the same verified reset path as probes.
+    raw.reset(seed=int(a.seed))
+    if bool(getattr(raw.cfg, "enable_contact_tracking_demo", False)):
+        raise RuntimeError("direct-target contact demo must be disabled for PPO")
+    reset_obs = raw._get_observations()["policy"]
+    if tuple(reset_obs.shape) != (raw.num_envs, int(raw.cfg.observation_space)):
+        raise RuntimeError(
+            f"reset observation shape {tuple(reset_obs.shape)} violates the frozen contract"
+        )
+    if not bool(torch.isfinite(reset_obs).all()):
+        raise RuntimeError("non-finite reset observation; refusing to start PPO")
+    reset_cut_height = raw.cutter_height_above_ground()
+    reset_cut_error = raw.cut_height_error().abs()
+    reset_ground = raw._cutter_world_z() - reset_cut_height
+    print(
+        "[PPO3-RESET] "
+        f"mean_abs_cut_error={float(reset_cut_error.mean()):.4f} m "
+        f"p95_abs_cut_error={float(torch.quantile(reset_cut_error, 0.95)):.4f} m "
+        f"mean_cut_height={float(reset_cut_height.mean()):.4f} m "
+        f"mean_cutter_z={float(raw._cutter_world_z().mean()):.4f} m "
+        f"mean_ground_z={float(reset_ground.mean()):.4f} m "
+        f"scan_valid={float(raw.scan_valid_fraction().mean()):.3f} "
+        f"ride_height={float(raw.truck_ride_height().mean()):.4f} m "
+        f"mean_lateral_error={float(raw.verge_lateral_error().abs().mean()):.4f} m "
+        f"min_head_alignment={float(raw._measure_head_down_alignment().min()):.4f}",
+        flush=True,
+    )
+
+    if a.zero_action_probe or a.probe_only:
+        report = zero_action_probe(raw)
+        print(f"[PPO3-SOLE] zero-action probe: {report}", flush=True)
+        if report["max_abs_applied_action"] > 1.0e-7:
+            raise RuntimeError(
+                "zero action produced a non-zero plant command; the action "
+                "chain is not a fixed point at rest"
+            )
+        if a.probe_only:
+            env.close()
+            simulation_app.close()
+            return
+
+    wrapped = RslRlVecEnvWrapper(env, clip_actions=runner_cfg.clip_actions)
+    log_dir = (
+        Path(a.log_dir).expanduser().resolve()
+        if a.log_dir
+        else ROOT
+        / "logs/rsl_rl"
+        / runner_cfg.experiment_name
+        / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    )
+    log_dir.mkdir(parents=True, exist_ok=True)
+    runner = OnPolicyRunner(
+        wrapped, runner_cfg.to_dict(), log_dir=str(log_dir), device=a.device
+    )
+    startup_manifest = {
+        "schema": "terrain_teacher_student_v1",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "log_dir": str(log_dir),
+        "initialization_source": resume_source,
+        "resume": str(resume_path) if resume_path is not None else None,
+        "teacher_mode": str(raw.cfg.sole_teacher_mode),
+        "direct_target_demo": bool(raw.cfg.enable_contact_tracking_demo),
+        "num_envs": int(raw.num_envs),
+        "observation_width": int(raw.cfg.observation_space),
+        "action_width": 4,
+        "path_families": sorted(set(raw._tracking_path_family_names)),
+        "actor_parameters": int(
+            sum(parameter.numel() for parameter in runner.alg.actor.parameters())
+        ),
+        "critic_parameters": int(
+            sum(parameter.numel() for parameter in runner.alg.critic.parameters())
+        ),
+        "num_steps_per_env": int(runner_cfg.num_steps_per_env),
+        "learning_rate": float(runner_cfg.algorithm.learning_rate),
+        "entropy_coef": float(runner_cfg.algorithm.entropy_coef),
+        "seed": int(a.seed),
+        "stages": list(stages),
+    }
+    (log_dir / "run_manifest.json").write_text(
+        json.dumps(startup_manifest, indent=2, sort_keys=True)
+    )
+    print("[PPO3-RUN] " + json.dumps(startup_manifest, sort_keys=True), flush=True)
+    if resume_path is not None:
+        teacher_handoff = resume_source == "PPO3 terrain teacher distillation v1"
+        if teacher_handoff:
+            load_cfg = {
+                "actor": True,
+                "critic": False,
+                "optimizer": False,
+                "iteration": False,
+                "rnd": False,
+            }
+        elif a.reset_optimizer_on_resume:
+            load_cfg = {
+                "actor": True,
+                "critic": True,
+                "optimizer": False,
+                "iteration": True,
+                "rnd": False,
+            }
+        else:
+            load_cfg = None
+        runner.load(str(resume_load_path), load_cfg=load_cfg)
+        if teacher_handoff:
+            # PPO learns a new value function and optimizer. Only the deployable
+            # actor (including its observation normalizer) crosses the boundary.
+            critic_output = runner.alg.critic.mlp[-1]
+            if not isinstance(critic_output, torch.nn.Linear):
+                raise RuntimeError("terrain critic output is not Linear")
+            with torch.no_grad():
+                critic_output.weight.zero_()
+                critic_output.bias.zero_()
+        if a.reset_critic_head_on_resume:
+            critic_output = runner.alg.critic.mlp[-1]
+            if not isinstance(critic_output, torch.nn.Linear):
+                raise RuntimeError("terrain critic output is not Linear")
+            with torch.no_grad():
+                critic_output.weight.zero_()
+                critic_output.bias.zero_()
+        if a.resume_c4_std is not None:
+            distribution = runner.alg.actor.distribution
+            if not hasattr(distribution, "std_param"):
+                raise RuntimeError("terrain actor distribution has no std_param")
+            with torch.no_grad():
+                distribution.std_param[3] = float(a.resume_c4_std)
+        # rsl_rl restores the optimizer param-group LR but not PPO's separate
+        # ``learning_rate`` scalar. On the next adaptive-KL update that stale
+        # scalar overwrites the restored optimizer LR (3e-4 instead of the
+        # checkpoint's 1.52e-5 in the measured run), causing a large policy
+        # jump immediately after resume. Keep both representations in sync.
+        if a.learning_rate is None:
+            resumed_lr = float(runner.alg.optimizer.param_groups[0]["lr"])
+            for param_group in runner.alg.optimizer.param_groups:
+                param_group["lr"] = resumed_lr
+        else:
+            resumed_lr = float(a.learning_rate)
+            for param_group in runner.alg.optimizer.param_groups:
+                param_group["lr"] = resumed_lr
+        runner.alg.learning_rate = resumed_lr
+        print(f"[PPO3-SOLE] resumed from {a.resume}", flush=True)
+        if teacher_handoff:
+            print(
+                "[PPO3-TEACHER-HANDOFF] loaded actor+normalizer only; "
+                "teacher is off, critic and PPO optimizer are new",
+                flush=True,
+            )
+        print(f"[PPO3-SOLE] resumed optimizer learning_rate={resumed_lr:.6g}", flush=True)
+        if a.reset_optimizer_on_resume:
+            print("[PPO3-SOLE] reset optimizer moments on resume", flush=True)
+        if a.reset_critic_head_on_resume:
+            print("[PPO3-SOLE] reset critic output head on resume", flush=True)
+        if a.resume_c4_std is not None:
+            print(
+                f"[PPO3-SOLE] set resumed c4 exploration std={a.resume_c4_std:.6g}",
+                flush=True,
+            )
+    else:
+        bias = torch.as_tensor(
+            tuple(getattr(raw.cfg, "terrain_initial_action_bias", (0.0, 0.0, 0.0, 0.0))),
+            dtype=torch.float32,
+            device=a.device,
+        )
+        output_layer = runner.alg.get_policy().mlp[-1]
+        if not isinstance(output_layer, torch.nn.Linear) or output_layer.bias is None:
+            raise RuntimeError("terrain actor output layer is not a biased Linear layer")
+        with torch.no_grad():
+            output_layer.bias.copy_(bias)
+        print(f"[PPO3-VERGE] initialized actor action bias={bias.tolist()}", flush=True)
+
+    final_stage = stages[-1]
+    last_convergence_result = None
+    for stage in stages:
+        apply_terrain_curriculum_stage(raw.cfg, stage)
+        raw.cfg.trajectory_shape = str(raw.cfg.terrain_deployment_trajectory_shape)
+        raw.cfg.randomize_trajectory_shape = False
+        raw.cfg.randomize_start_phase = False
+        print(
+            f"[PPO3-VERGE] === stage {stage} === "
+            f"truck={raw.cfg.vehicle_speed_min_kmh:.2f} km/h "
+            f"action_scale={raw.cfg.action_scale:.4f} m "
+            f"rate={raw.cfg.sole_max_action_rate:.3f}/step "
+            f"filter={raw.cfg.sole_action_filter:.2f} "
+            + (
+                f"until convergence (checks every {a.convergence_check_interval} iterations)"
+                if a.until_converged and stage == final_stage
+                else f"for {a.stage_iterations} iterations"
+            ),
+            flush=True,
+        )
+        if not (a.until_converged and stage == final_stage):
+            runner.learn(
+                num_learning_iterations=int(a.stage_iterations),
+                init_at_random_ep_len=False,
+            )
+            continue
+
+        while True:
+            runner.learn(
+                num_learning_iterations=int(a.convergence_check_interval),
+                init_at_random_ep_len=False,
+            )
+            policy = runner.get_inference_policy(device=a.device)
+            result = convergence_rollout(raw, policy, int(a.convergence_steps))
+            last_convergence_result = result
+            runner.alg.train_mode()
+            result.update(
+                {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "iteration": int(runner.current_learning_iteration),
+                    "num_envs": int(raw.num_envs),
+                    "stage": int(stage),
+                }
+            )
+            convergence_report = log_dir / "convergence_latest.json"
+            convergence_report.write_text(json.dumps(result, indent=2))
+            checkpoint = log_dir / f"model_{runner.current_learning_iteration}.pt"
+            runner.save(
+                str(checkpoint),
+                infos={
+                    "source": "PPO3 terrain PPO",
+                    "schema": "terrain_teacher_student_v1",
+                    "observation_width": int(raw.cfg.observation_space),
+                    "convergence": result,
+                },
+            )
+            print(
+                "[PPO3-CONVERGENCE] " + json.dumps(result, sort_keys=True),
+                flush=True,
+            )
+            if result["passed"]:
+                converged_path = log_dir / "model_converged.pt"
+                runner.save(
+                    str(converged_path),
+                    infos={
+                        "source": "PPO3 terrain PPO",
+                        "schema": "terrain_teacher_student_v1",
+                        "observation_width": int(raw.cfg.observation_space),
+                        "convergence": result,
+                    },
+                )
+                print(
+                    f"[PPO3-CONVERGENCE] PASSED; wrote {converged_path}",
+                    flush=True,
+                )
+                break
+
+    if a.checkpoint_out:
+        checkpoint_out = Path(a.checkpoint_out).expanduser().resolve()
+        checkpoint_out.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_info = {
+            "source": "PPO3 terrain PPO",
+            "schema": "terrain_teacher_student_v1",
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "iteration": int(runner.current_learning_iteration),
+            "num_envs": int(raw.num_envs),
+            "stage": int(final_stage),
+            "seed": int(a.seed),
+            "learning_rate": float(runner.alg.optimizer.param_groups[0]["lr"]),
+            "fixed_learning_rate": bool(a.fixed_learning_rate),
+            "convergence": last_convergence_result,
+            "observation_width": int(raw.cfg.observation_space),
+            "initialization_source": resume_source,
+            "teacher_enabled_during_ppo": False,
+            "optimizer_reset_on_resume": bool(a.reset_optimizer_on_resume),
+            "critic_head_reset_on_resume": bool(a.reset_critic_head_on_resume),
+            "resume_c4_std": a.resume_c4_std,
+        }
+        runner.save(str(checkpoint_out), infos=checkpoint_info)
+        manifest = checkpoint_out.with_suffix(".json")
+        manifest_row = {"checkpoint": str(checkpoint_out), **checkpoint_info}
+        manifest.write_text(json.dumps(manifest_row, indent=2))
+        print(
+            "[PPO3-CHECKPOINT] " + json.dumps(manifest_row, sort_keys=True),
+            flush=True,
+        )
+
+    env.close()
+    simulation_app.close()
+
+
+if __name__ == "__main__":
+    main()
