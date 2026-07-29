@@ -51,7 +51,7 @@ GATE_SPECS: dict[str, GateSpec] = {
         # those impulses destabilize the vehicle.
         "p95_tool_acceleration_mps2", 80.0, "max"
     ),
-    # A minimum over 512 x 720 samples becomes stricter merely by adding
+    # A minimum over 512 x 960 samples becomes stricter merely by adding
     # environments. Gate the lower 1% robustly, while retaining a separate hard
     # minimum that catches an actual head flip/collapse.
     "head_alignment_p01": GateSpec("p01_head_alignment", 0.975, "min"),
@@ -68,6 +68,17 @@ GATE_SPECS: dict[str, GateSpec] = {
     "ground_contact": GateSpec("ground_contact_fraction", 0.90, "min"),
     "wheel_road_support": GateSpec(
         "min_wheel_road_contact_duty_cycle", 0.20, "min"
+    ),
+    # Aggregate scores can hide one failed path behind ten easy families. These
+    # gates require every represented family to retain tracking and contact.
+    "worst_family_cut_height": GateSpec(
+        "worst_family_mean_abs_cut_height_error_m", 0.050, "max"
+    ),
+    "worst_family_lateral": GateSpec(
+        "worst_family_mean_abs_lateral_error_m", 0.30, "max"
+    ),
+    "worst_family_contact": GateSpec(
+        "worst_family_ground_contact_fraction", 0.85, "min"
     ),
 }
 

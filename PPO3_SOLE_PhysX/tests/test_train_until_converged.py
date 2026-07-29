@@ -44,7 +44,7 @@ def test_evaluation_is_forced_onto_held_out_terrain():
         report=Path("/tmp/report.json"),
     )
     assert "--eval_terrain" in command
-    assert command[command.index("--steps") + 1] == "720"
+    assert command[command.index("--steps") + 1] == "960"
     assert command[command.index("--num_envs") + 1] == "128"
 
 
@@ -84,7 +84,33 @@ def test_semantic_reset_flags_apply_only_to_first_training_block():
 def test_block_cannot_restart_before_one_full_stage4_episode():
     parser = build_parser()
     args = parser.parse_args(
-        ["--resume", "/tmp/model.pt", "--block_iterations", "22"]
+        ["--resume", "/tmp/model.pt", "--block_iterations", "29"]
+    )
+    with pytest.raises(SystemExit):
+        validate_args(parser, args)
+
+
+def test_minimum_blocks_can_force_extensive_continuation():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--resume", "/tmp/model.pt", "--min_blocks", "20"]
+    )
+    validate_args(parser, args)
+    assert args.min_blocks == 20
+    assert args.max_blocks == 0
+
+
+def test_maximum_blocks_cannot_precede_minimum_blocks():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--resume",
+            "/tmp/model.pt",
+            "--min_blocks",
+            "20",
+            "--max_blocks",
+            "10",
+        ]
     )
     with pytest.raises(SystemExit):
         validate_args(parser, args)

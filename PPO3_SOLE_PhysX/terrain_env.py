@@ -66,6 +66,7 @@ from PPO3_SOLE_PhysX.terrain import (
     TRACKING_PATH_FAMILIES,
     build_mow_strip_mesh,
     build_tracking_line_mesh,
+    terrain_height_scale_for_environment,
     tracking_line_center_y_at,
 )
 
@@ -241,10 +242,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         return verge_observation_dim() + 1
 
     def _mow_strip_cfg(self):
-        base = (
-            MOW_STRIP_EVAL_CFG
-            if bool(getattr(self.cfg, "use_eval_terrain", False))
-            else MOW_STRIP_CFG
+        held_out = bool(getattr(self.cfg, "use_eval_terrain", False))
+        base = MOW_STRIP_EVAL_CFG if held_out else MOW_STRIP_CFG
+        # Held-out geometry remains fixed at seed 1337. Training entry points
+        # deliberately vary this seed between resumed blocks so the policy does
+        # not replay the same 512 static meshes forever.
+        seed = (
+            int(base.seed)
+            if held_out
+            else int(getattr(self.cfg, "terrain_base_seed", base.seed))
         )
         resolution = float(
             getattr(self.cfg, "mow_strip_resolution_m", base.resolution_m)
@@ -253,6 +259,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         width = float(getattr(self.cfg, "mow_strip_width_m", base.width_m))
         return replace(
             base,
+            seed=seed,
             resolution_m=resolution,
             length_m=length,
             width_m=width,
@@ -468,6 +475,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         line_pieces = []
         path_y_samples = []
         path_family_names = []
+        terrain_height_scales = []
         requested_family = str(
             getattr(self.cfg, "tracking_path_family", "mixed")
         )
@@ -477,6 +485,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 f"{TRACKING_PATH_FAMILIES}, got {requested_family!r}"
             )
         family_offset = int(getattr(self.cfg, "tracking_path_family_offset", 0))
+        configured_height_scales = tuple(
+            float(value)
+            for value in getattr(
+                self.cfg, "terrain_height_scales", (0.50, 0.70, 0.85, 1.00)
+            )
+        )
+        height_override = float(
+            getattr(self.cfg, "terrain_height_scale_override", 0.0)
+        )
         for env_index, origin in enumerate(origins):
             family = (
                 TRACKING_PATH_FAMILIES[
@@ -494,30 +511,27 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 if vary_seed
                 else replace(strip_cfg, tracking_path_family=family)
             )
-            # Straight/sine/spline curriculum paths use varied but moderate
-            # ground so line feasibility is not confounded with maximum boom
-            # elevation. The dedicated boom_sweep family retains the full
-            # 58-cm irregular hill and validates the hard height adaptation.
-            if family != "boom_sweep":
-                height_scale = float(
-                    getattr(self.cfg, "path_family_terrain_height_scale", 0.35)
-                )
-                env_strip_cfg = replace(
-                    env_strip_cfg,
-                    elevation_rise_end_m=(
-                        env_strip_cfg.elevation_rise_end_m * height_scale
-                    ),
-                    hill_heights_m=tuple(
-                        value * height_scale
-                        for value in env_strip_cfg.hill_heights_m
-                    ),
-                    amplitude_start_m=(
-                        env_strip_cfg.amplitude_start_m * height_scale
-                    ),
-                    amplitude_end_m=(
-                        env_strip_cfg.amplitude_end_m * height_scale
-                    ),
-                )
+            # Height difficulty is independent of lateral family. Because 11
+            # families and four scales are coprime, consecutive environments
+            # cover every family x height pair exactly once per 44 envs.
+            height_scale = terrain_height_scale_for_environment(
+                configured_height_scales, env_index, height_override
+            )
+            env_strip_cfg = replace(
+                env_strip_cfg,
+                elevation_rise_end_m=(
+                    env_strip_cfg.elevation_rise_end_m * height_scale
+                ),
+                hill_heights_m=tuple(
+                    value * height_scale for value in env_strip_cfg.hill_heights_m
+                ),
+                amplitude_start_m=env_strip_cfg.amplitude_start_m * height_scale,
+                amplitude_end_m=env_strip_cfg.amplitude_end_m * height_scale,
+                cross_slope_end_rad=(
+                    env_strip_cfg.cross_slope_end_rad * height_scale
+                ),
+            )
+            terrain_height_scales.append(height_scale)
             piece = build_mow_strip_mesh(env_strip_cfg)
             piece.apply_translation(
                 (float(origin[0]), float(origin[1]), float(origin[2]))
@@ -560,6 +574,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             np.stack(path_y_samples), dtype=torch.float32, device=self.device
         )
         self._tracking_path_family_names = tuple(path_family_names)
+        self._terrain_height_scales = tuple(terrain_height_scales)
 
         physics_material = sim_utils.RigidBodyMaterialCfg(
             static_friction=float(getattr(self.cfg, "terrain_static_friction", 1.0)),
@@ -600,11 +615,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             family: path_family_names.count(family)
             for family in sorted(set(path_family_names))
         }
+        height_scale_counts = {
+            f"{scale:.2f}": terrain_height_scales.count(scale)
+            for scale in sorted(set(terrain_height_scales))
+        }
         print(
             f"[PPO3-VERGE] verge strip: {len(mesh.faces):,} triangles across "
             f"{len(origins)} environments (single merged mesh, "
             f"{'per-env seeds' if vary_seed else 'shared seed'}; paths="
-            f"{family_counts})",
+            f"{family_counts}; height_scales={height_scale_counts})",
             flush=True,
         )
 
@@ -775,6 +794,25 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._cascade.reset(env_ids)
         self._cascade.ee_feedback_gain = 0.35
         self._cascade.jacobian_refresh_every = 1
+        # Cylinder 4 is reserved for cutter-head pitch. The old full 3x4
+        # pseudoinverse assigned part of XYZ correction to c4 and then replaced
+        # that channel with the fixed head target below, silently discarding the
+        # correction. Solve translation with c1-c3 only so the privileged
+        # teacher can actually hold a lateral line while height changes.
+        j_xyz = self._cascade.jacobian[:, :3].detach().cpu()
+        u, singular_values, vh = torch.linalg.svd(j_xyz, full_matrices=False)
+        damping = 0.03 * singular_values[0]
+        pinv_xyz = (
+            vh.transpose(0, 1)
+            @ torch.diag(
+                singular_values
+                / (singular_values.square() + damping.square())
+            )
+            @ u.transpose(0, 1)
+        )
+        self._contact_demo_xyz_pinv = pinv_xyz.to(
+            device=self.device, dtype=torch.float32
+        )
         ee = self._compute_ee_pos_local().detach()
         measured_x, _ = self._refresh_cylinder_state()
         self._contact_demo_anchor_ee = ee.clone()
@@ -1001,8 +1039,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         task_error[:, 1] *= float(
             getattr(self.cfg, "contact_demo_lateral_error_weight", 3.0)
         )
-        learned_delta = dls_gain * (
-            task_error @ self._cascade.pinv.transpose(0, 1)
+        learned_delta = torch.zeros_like(measured_x)
+        learned_delta[:, :3] = dls_gain * (
+            task_error @ self._contact_demo_xyz_pinv.transpose(0, 1)
         )
         learned_delta = torch.clamp(
             learned_delta,
@@ -2100,5 +2139,22 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                     self._last_reward_terms[
                         f"family/{family}_contact_fraction"
                     ] = self.cutter_ground_contact()[family_mask].float().mean()
+            for scale in sorted(set(self._terrain_height_scales)):
+                scale_mask = torch.as_tensor(
+                    [value == scale for value in self._terrain_height_scales],
+                    dtype=torch.bool,
+                    device=self.device,
+                ) & valid_active
+                if bool(scale_mask.any()):
+                    label = f"{scale:.2f}".replace(".", "p")
+                    self._last_reward_terms[
+                        f"height_scale/{label}_mean_cut_error_m"
+                    ] = terms.cut_height_error[scale_mask].abs().mean()
+                    self._last_reward_terms[
+                        f"height_scale/{label}_mean_lateral_error_m"
+                    ] = lateral_error[scale_mask].abs().mean()
+                    self._last_reward_terms[
+                        f"height_scale/{label}_contact_fraction"
+                    ] = self.cutter_ground_contact()[scale_mask].float().mean()
             self.extras.setdefault("log", {}).update(self._last_reward_terms)
         return reward

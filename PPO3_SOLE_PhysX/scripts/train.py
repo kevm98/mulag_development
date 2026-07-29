@@ -197,7 +197,10 @@ def convergence_rollout(raw, policy, steps: int) -> dict:
         truck_heading_errors.append(raw._truck_heading_error_rad)
         terminations += int(terminated.sum())
 
-    error = torch.cat(errors)
+    error_steps = torch.stack(errors)
+    lateral_steps = torch.stack(laterals)
+    contact_steps = torch.stack(contacts)
+    error = error_steps.reshape(-1)
     metrics = {
         "mean_abs_cut_height_error_m": float(error.mean()),
         "p95_abs_cut_height_error_m": float(torch.quantile(error, 0.95)),
@@ -206,9 +209,9 @@ def convergence_rollout(raw, policy, steps: int) -> dict:
         ),
         "min_head_alignment": float(torch.cat(alignments).min()),
         "p01_head_alignment": float(torch.quantile(torch.cat(alignments), 0.01)),
-        "mean_abs_lateral_error_m": float(torch.cat(laterals).mean()),
+        "mean_abs_lateral_error_m": float(lateral_steps.mean()),
         "scan_valid_fraction": float(torch.cat(scan_validity).mean()),
-        "ground_contact_fraction": float(torch.cat(contacts).mean()),
+        "ground_contact_fraction": float(contact_steps.mean()),
         "min_wheel_road_contact_duty_cycle": float(
             (
                 torch.stack(wheel_forces)
@@ -223,8 +226,44 @@ def convergence_rollout(raw, policy, steps: int) -> dict:
         ),
         "safety_termination_rate": terminations / max(steps * raw.num_envs, 1),
     }
+    family_rows = []
+    for family in sorted(set(raw._tracking_path_family_names)):
+        family_mask = torch.as_tensor(
+            [name == family for name in raw._tracking_path_family_names],
+            dtype=torch.bool,
+            device=raw.device,
+        )
+        family_rows.append(
+            {
+                "family": family,
+                "num_envs": int(family_mask.sum()),
+                "mean_abs_cut_height_error_m": float(
+                    error_steps[:, family_mask].mean()
+                ),
+                "mean_abs_lateral_error_m": float(
+                    lateral_steps[:, family_mask].mean()
+                ),
+                "ground_contact_fraction": float(
+                    contact_steps[:, family_mask].mean()
+                ),
+            }
+        )
+    metrics.update(
+        {
+            "worst_family_mean_abs_cut_height_error_m": max(
+                row["mean_abs_cut_height_error_m"] for row in family_rows
+            ),
+            "worst_family_mean_abs_lateral_error_m": max(
+                row["mean_abs_lateral_error_m"] for row in family_rows
+            ),
+            "worst_family_ground_contact_fraction": min(
+                row["ground_contact_fraction"] for row in family_rows
+            ),
+        }
+    )
     result = summarize_convergence(metrics)
     result["terrain"] = "training_validation"
+    result["path_family_results"] = family_rows
     return result
 
 
@@ -281,6 +320,7 @@ def main() -> None:
             )
     env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
     env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    env_cfg.terrain_base_seed = int(a.seed)
     if a.trajectory_library_path:
         env_cfg.trajectory_library_path = str(Path(a.trajectory_library_path).resolve())
     if a.command_rom_checkpoint:
@@ -386,6 +426,11 @@ def main() -> None:
         "observation_width": int(raw.cfg.observation_space),
         "action_width": 4,
         "path_families": sorted(set(raw._tracking_path_family_names)),
+        "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
+        "terrain_base_seed": int(raw._mow_strip_cfg().seed),
+        "terrain_height_scales": sorted(
+            set(float(value) for value in raw._terrain_height_scales)
+        ),
         "actor_parameters": int(
             sum(parameter.numel() for parameter in runner.alg.actor.parameters())
         ),
@@ -583,6 +628,12 @@ def main() -> None:
             "observation_width": int(raw.cfg.observation_space),
             "initialization_source": resume_source,
             "teacher_enabled_during_ppo": False,
+            "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
+            "terrain_base_seed": int(raw._mow_strip_cfg().seed),
+            "path_families": sorted(set(raw._tracking_path_family_names)),
+            "terrain_height_scales": sorted(
+                set(float(value) for value in raw._terrain_height_scales)
+            ),
             "optimizer_reset_on_resume": bool(a.reset_optimizer_on_resume),
             "critic_head_reset_on_resume": bool(a.reset_critic_head_on_resume),
             "resume_c4_std": a.resume_c4_std,

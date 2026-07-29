@@ -73,7 +73,7 @@ def bounded_cost_progress(
     """Reward one-step reduction of a non-negative task cost, with a hard cap.
 
     The terrain PPO collects only 32 steps per update while a production drive
-    lasts 720 steps.  Static occupancy rewards alone therefore give weak credit
+    lasts 960 steps. Static occupancy rewards alone therefore give weak credit
     to the action that started a useful correction.  This transition term is
     positive when cost falls, negative when it rises, and bounded to
     ``[-abs(weight), +abs(weight)]`` so a reset or terrain edge cannot dominate

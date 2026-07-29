@@ -22,7 +22,7 @@ deployment. Production checkpoints use the frozen schema
 `terrain_teacher_student_v1`; older stored-path and pre-correction checkpoints
 are rejected.
 
-## Seven path families
+## Expanded path-and-height curriculum
 
 One shared policy is trained over:
 
@@ -33,9 +33,16 @@ One shared policy is trained over:
 5. `offset_return`
 6. `boom_sweep`
 7. `lateral_chirp`
+8. `double_s_curve`
+9. `lane_change_hold`
+10. `gaussian_slalom`
+11. `fourier_meander`
 
-Training with 512 environments cycles these families evenly. Terrain seed,
-phase, elevation, and smooth relief vary independently between environments.
+Training with 512 environments cycles these families evenly. Every family is
+crossed independently with 50%, 70%, 85%, and 100% smooth terrain relief, and
+each resumed training block receives a new deterministic terrain seed. The
+16-second stage-4 episode covers 17.8 m at 4 km/h and executes one complete
+16 m lateral trajectory on a 26 m verge strip.
 
 ## Visualize one family with live tracking plots
 
@@ -47,8 +54,8 @@ PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
 CKPT=logs/rsl_rl/ppo3_sole_terrain/teacher_student_v1_long/model_converged.pt
 
 $PY PPO3_SOLE_PhysX/scripts/evaluate.py "$CKPT" \
-  --device cuda:0 --num_envs 1 --steps 720 --stage 4 --eval_terrain \
-  --path_family s_curve --plot_tracking \
+  --device cuda:0 --num_envs 1 --steps 960 --stage 4 --eval_terrain \
+  --path_family s_curve --terrain_height_scale 1.0 --plot_tracking \
   --plot_out PPO3_SOLE_PhysX/plots/s_curve_tracking.png \
   --report PPO3_SOLE_PhysX/reports/s_curve_visualization.json
 ```
@@ -57,7 +64,7 @@ The Matplotlib window is one plan-view XY plot: the red curve is the desired
 path and the blue curve is the cutter's actual trajectory. It intentionally
 contains no vertical-height, lateral-versus-time, or contact-force subplot.
 
-Interactive visualization adds a visual-only medium-gray floor with a 2 m grid,
+Interactive visualization adds a large visual-only dark-gray floor with a 2 m grid,
 a dark rough asphalt road, the green physical verge, and the red projected path.
 The floor/grid has collision disabled and is not spawned during training or
 headless evaluation.
@@ -69,32 +76,40 @@ headless evaluation.
 ```bash
 $PY PPO3_SOLE_PhysX/scripts/distill_terrain.py \
   --headless --device cuda:0 --num_envs 128 --stage 4 \
-  --probe_steps 720 --iterations 120 --steps_per_iteration 32 \
+  --probe_steps 960 --iterations 120 --steps_per_iteration 32 \
   --epochs_per_iteration 3 --minibatch_size 8192 \
   --replay_capacity 262144 --learning_rate 3e-4 \
   --out logs/rsl_rl/ppo3_sole_terrain/terrain_teacher_student_v1.pt \
   --report PPO3_SOLE_PhysX/reports/terrain_teacher_distillation_v1.json
 ```
 
-### 2. Persistent 512-environment PPO
+### 2. Extensive continuation from the current best PPO
 
 ```bash
+RUN=logs/rsl_rl/ppo3_sole_terrain/expanded_paths_height_v2_very_long
+mkdir -p "$RUN"
+set -o pipefail
+
 $PY PPO3_SOLE_PhysX/scripts/train_until_converged.py \
-  --resume logs/rsl_rl/ppo3_sole_terrain/terrain_teacher_student_v1.pt \
-  --run_dir logs/rsl_rl/ppo3_sole_terrain/teacher_student_v1_long \
+  --resume logs/rsl_rl/ppo3_sole_terrain/teacher_student_v1_long/model_best.pt \
+  --run_dir "$RUN" \
   --device cuda:0 --num_envs 512 --eval_envs 128 \
-  --block_iterations 50 --eval_steps 720 \
-  --learning_rate 1e-4 --entropy_coef 0.001 \
-  --save_interval 10 --train_timeout_s 21600 --eval_timeout_s 3600
+  --block_iterations 100 --min_blocks 20 --max_blocks 0 --eval_steps 960 \
+  --learning_rate 5e-5 --entropy_coef 0.001 \
+  --save_interval 10 --train_timeout_s 43200 --eval_timeout_s 7200 \
+  2>&1 | tee "$RUN/supervisor.log"
 ```
 
-The supervisor alternates bounded training blocks and separate held-out
-evaluation processes until every shared gate passes. It saves exact resumable,
-best, and converged checkpoints.
+This forces at least 2,000 PPO updates (32.8 million environment transitions),
+then continues without a block cap until aggregate and worst-family held-out
+gates pass. Re-running the same command resumes from `state.json`. Do not add
+`--restart`, and do not reset the optimizer or critic. The final extensively
+trained artifact is `model_converged.pt` in the new run directory.
 
-## Final measured result
+## Starting-checkpoint baseline
 
-The converged policy passed all held-out gates after two 512-environment blocks:
+The checkpoint used to initialize the expanded curriculum passed the earlier
+seven-family held-out task after two 512-environment blocks:
 
 | Metric | Result |
 |---|---:|
@@ -113,16 +128,16 @@ The converged policy passed all held-out gates after two 512-environment blocks:
 $PY -m pytest -q PPO3_SOLE_PhysX/tests
 ```
 
-The final evidence retained in `reports/` covers the corrected physics task,
-all seven path families, teacher-student rewrite, production-width teacher
-preflight, and completed distillation.
+The retained evidence in `reports/` is the baseline for the earlier seven-path
+curriculum. New v2 reports belong in the new training run directory so old and
+new validation evidence cannot be confused.
 
 ## Package layout
 
 ```text
 actions.py                  pure actor action chain and safety shields
 env.py / env_cfg.py         sole-controller base task
-terrain.py                  terrain and seven path generators
+terrain.py                  terrain and eleven smooth path generators
 terrain_env.py              road, verge, sensors, physics and task signals
 terrain_env_cfg.py          task, visual and PPO configuration
 terrain_observations.py     frozen 54-D actor observation

@@ -110,6 +110,7 @@ def build_env():
         PPO3_SOLE_PhysX.TERRAIN_TASK_ID, device=a.device, num_envs=a.num_envs
     )
     apply_terrain_curriculum_stage(cfg, int(a.stage))
+    cfg.terrain_base_seed = int(a.seed)
     cfg.sole_teacher_mode = "execute"
     cfg.enable_contact_tracking_demo = False
     cfg.trajectory_shape = str(cfg.terrain_deployment_trajectory_shape)
@@ -165,6 +166,11 @@ def teacher_preflight(raw, steps: int) -> dict:
         "observation_width": int(obs["policy"].shape[-1]),
         "path_families": sorted(family_counts),
         "path_family_counts": family_counts,
+        "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
+        "terrain_base_seed": int(raw._mow_strip_cfg().seed),
+        "terrain_height_scales": sorted(
+            set(float(value) for value in raw._terrain_height_scales)
+        ),
         "all_finite": nonfinite == 0,
         "nonfinite_or_unexpected_terminal_count": nonfinite,
         "max_abs_teacher_raw_action": float(raw_stream.abs().max()),
@@ -300,6 +306,7 @@ def main() -> None:
         "source": "PPO3 terrain teacher distillation v1",
         "schema": "terrain_teacher_student_v1",
         "observation_width": int(raw.cfg.observation_space),
+        "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
         "teacher_preflight": preflight,
         "final_bc_loss": history[-1]["bc_loss"],
     }

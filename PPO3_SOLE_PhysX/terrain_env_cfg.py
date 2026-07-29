@@ -65,7 +65,7 @@ def apply_terrain_curriculum_stage(cfg, stage: int) -> None:
     elif stage == 4:
         cfg.cut_tracking_std_m = 0.03
         cfg.lateral_tracking_std_m = 0.30
-        cfg.episode_length_s = 12.0
+        cfg.episode_length_s = 16.0
         # Kept explicit for terrain A/B studies. The 0.85 filter improved head
         # but barely changed acceleration (234.8 -> 233.5 m/s^2) and regressed
         # strikes/lateral, so production remains at the learned 0.70 contract.
@@ -142,10 +142,10 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     dark_visual_background: bool = True
     """Hide the bright dome from camera rays while retaining its illumination."""
     enable_visual_grid_floor: bool = False
-    visual_floor_color: tuple = (0.25, 0.26, 0.27)
-    visual_grid_color: tuple = (0.58, 0.59, 0.60)
-    visual_grid_length_m: float = 50.0
-    visual_grid_width_m: float = 18.0
+    visual_floor_color: tuple = (0.30, 0.31, 0.31)
+    visual_grid_color: tuple = (0.52, 0.53, 0.54)
+    visual_grid_length_m: float = 70.0
+    visual_grid_width_m: float = 26.0
     visual_grid_spacing_m: float = 2.0
     visual_grid_line_width_m: float = 0.025
     visual_grid_center_x_m: float = -20.0
@@ -175,6 +175,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
 
     # --- Terrain ---
     use_eval_terrain: bool = False
+    terrain_curriculum_version: str = "path_height_v2"
+    terrain_base_seed: int = 42
+    """Training mesh seed; entry points vary it between resumed PPO blocks."""
     randomize_terrain_per_env: bool = True
     """Give each parallel environment a distinct deterministic verge phase."""
     terrain_seed_stride: int = 7919
@@ -195,21 +198,23 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     shortest 2.5 m terrain wavelength. At 512 environments this reduces the
     merged mesh from 24.6 million to about 3.9 million triangles.
     """
-    mow_strip_length_m: float = 22.0
+    mow_strip_length_m: float = 26.0
     """Per-environment strip length.
 
-    A 12 s episode at 4 km/h covers 13.3 m; 22 m includes the lead-in and exit
-    margin without forcing a huge, numerically poor 512-environment world.
+    A 16 s episode at 4 km/h covers 17.8 m; 26 m includes the lead-in and exit
+    margin while allowing a complete 16 m lateral trajectory.
     """
     tracking_line_color: tuple = (0.95, 0.08, 0.05)
     tracking_line_width_m: float = 0.07
     tracking_line_z_offset_m: float = 0.012
     """Visual-only line projected onto the exact terrain centre path."""
     tracking_path_family: str = "mixed"
-    """Cycle all seven path families across parallel environments."""
+    """Cycle every path family across parallel environments."""
     tracking_path_family_offset: int = 0
-    path_family_terrain_height_scale: float = 0.35
-    """Moderate terrain for plan-view paths; boom_sweep keeps full-height hills."""
+    terrain_height_scales: tuple = (0.50, 0.70, 0.85, 1.00)
+    """Balanced relief levels crossed independently with every path family."""
+    terrain_height_scale_override: float = 0.0
+    """Positive visualization/probe override; zero uses the balanced curriculum."""
 
     # --- Ground sensing ---
     cutter_body_name: str = "Messerkopf"
@@ -383,9 +388,10 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
         # Terrain patches are large; a wide env grid needs terrain to match.
         # See TerrainSolePolicyEnv._setup_scene, which checks coverage.
         self.scene.num_envs = 16
-        # Keep the proven compact grid. With the 22 m strip, adjacent X columns
-        # only touch beyond the normal active mowing segment.
-        self.scene.env_spacing = 20.0
+        # The 26 m verge meshes must never overlap adjacent X columns: overlap
+        # would let one environment's cutter contact another environment's
+        # independently generated height profile.
+        self.scene.env_spacing = 28.0
         from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim
         self.observation_space = verge_observation_dim() + 1
 
