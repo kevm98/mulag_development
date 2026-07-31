@@ -54,8 +54,8 @@ def apply_sole_curriculum_stage(cfg, stage: int) -> None:
     signal and the 0.20 m band.
     """
     stage = int(stage)
-    if stage not in (1, 2, 3, 4):
-        raise ValueError(f"curriculum stage must be 1, 2, 3, or 4; got {stage}")
+    if stage not in (1, 2, 3, 4, 5):
+        raise ValueError(f"curriculum stage must be 1, 2, 3, 4, or 5; got {stage}")
 
     # Shared across all stages. See the note above.
     cfg.trajectory_shape = "line"
@@ -79,7 +79,10 @@ def apply_sole_curriculum_stage(cfg, stage: int) -> None:
         cfg.path_speed_mps = 0.15
         cfg.action_scale = 0.004
         cfg.sole_action_filter = 0.75
-    elif stage == 4:
+    elif stage in (4, 5):
+        # Stage 5 is stage 4's arm contract on rougher ground. The action scale,
+        # rate limit and filter must stay identical or a stage-5 result would be
+        # measuring a different controller, not a harder verge.
         cfg.path_speed_mps = 0.18
         cfg.action_scale = 0.004
         cfg.sole_action_filter = 0.70
@@ -150,6 +153,76 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     sole_limit_margin_m: float = 0.02
     sole_action_authority: tuple = (1.0, 1.0, 1.0, 1.0)
     """Per-cylinder policy authority; zero is an evidence-backed safety lock."""
+
+    sole_head_joint_action: bool = False
+    """Drive ``Messerkopf_joint`` as a real 5th action instead of slaving it to c4.
+
+    ``Messerkopf_joint`` carries no cylinder and is not hydraulic, but the
+    inherited pipeline commands it as ``0.76 * q4 + b`` -- a fixed feedforward
+    ratio with no feedback. Measured consequence: it misses that reference by
+    0.2096 rad at p99 while its actuator is a rigid position lock (stiffness
+    5e6, effort limit 20000), i.e. the coupling asks for a pose the joint cannot
+    hold and the error shows up as head tilt. teacher_student drives the same
+    joint independently.
+
+    Bolting a bounded correction onto the feedforward was tried and does not
+    generalize: opening the levelling clamp scored 17/17 on one mesh and 14/17
+    on the held-out one. ``min_head_alignment`` fails on varied terrain in every
+    coupled configuration measured, while p01 stays healthy at 0.976-0.988.
+
+    True adds a 5th action and CHANGES THE POLICY INTERFACE, so a 4-action
+    checkpoint cannot be resumed into it -- the policy must relearn.
+    """
+    sole_head_action_scale_rad: float = 0.010
+    """Radians of head-joint reference commanded per unit action per step.
+
+    The cylinders get 0.004 m per step; this is the rotational counterpart.
+    Integrated onto the reference and clamped to the joint's own soft limits, so
+    the policy steers the head rather than being handed an absolute pose.
+    """
+    sole_head_correction_max_rad: float = 0.35
+    """Bound on the policy's integrated head correction above the coupling.
+
+    The coupling 0.76*q4 is kept as feedforward because it tracks the boom the
+    head hangs from -- freezing the reference instead measured min_head_alignment
+    0.8369 against 0.9296 for the coupled reference. This bounds how far the
+    policy may depart from that feedforward, so the integrator cannot wind the
+    head into a pose the joint will not hold.
+    """
+    sole_head_action_filter: float = 0.75
+    """Low-pass on the head action, matching the cylinder action filter."""
+    sole_head_teacher_band_rad: float = 0.03
+    """Tilt at which the head teacher reaches full command.
+
+    Normalizing by the per-step action scale (0.010 rad) instead made the
+    teacher saturate at 0.57 deg and behave as bang-bang, measured
+    min_head_alignment 0.9296 against a healthy p01 of 0.9858 -- the worst
+    samples were overshoot, not lack of authority. A saturating demonstration is
+    also the worst possible signal to distil from.
+    """
+    sole_head_teacher_damping: float = 0.0
+    """Rate damping on the head teacher, in units of the proportional gain.
+
+    The head hangs off a moving boom, so pure proportional control chases an
+    accelerating reference and overshoots precisely at the worst-case samples
+    the hard-min alignment gate reads.
+    """
+    sole_head_teacher_sign: float = 1.0
+    """Measured head-action -> tilt polarity, confirmed by direct probe.
+
+    +1 head action drove the joint to 0.34034 rad and the head-down tilt to
+    -0.12261 rad. Copying c4's sign convention instead of measuring this made
+    the head teacher worse than no head control at all.
+    """
+    sole_head_teacher_gain: float = 0.0
+    """Proportional gain of the head channel's distillation teacher.
+
+    The cylinder DLS teacher inverts the cylinder Jacobian and has no opinion
+    about ``Messerkopf_joint`` -- c4 only orients the boom the head hangs from.
+    So the head gets its own teacher: drive measured world-down tilt to zero.
+    Padding the DLS output with zeros instead would teach the student never to
+    move the joint at all.
+    """
     sole_rate_penalty_weight: float = -0.10
     sole_acceleration_weight: float = -0.20
     sole_acceleration_scale_mps2: float = 30.0
@@ -163,7 +236,8 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.observation_space = sole_observation_dim(ik_hint=bool(self.sole_ik_hint))
-        self.action_space = 4
+        # 4 cylinders, plus Messerkopf_joint when it is driven as a real joint.
+        self.action_space = 5 if bool(self.sole_head_joint_action) else 4
 
 
 @configclass

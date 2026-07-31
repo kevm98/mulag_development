@@ -144,6 +144,11 @@ def main() -> None:
     cfg.terrain_height_scale_override = float(a.terrain_height_scale)
     cfg.tracking_path_family = str(a.path_family)
     cfg.enable_visual_grid_floor = not bool(a.headless)
+    cfg.enable_road_scenery = not bool(a.headless)
+    if cfg.enable_road_scenery:
+        cfg.dark_visual_background = False
+        cfg.visual_floor_color = (0.82, 0.83, 0.84)
+        cfg.visual_grid_color = (0.90, 0.90, 0.91)
     cfg.enable_contact_tracking_demo = bool(a.contact_tracking_demo)
     if a.ride_height_target_m is not None:
         cfg.truck_ride_height_target_m = float(a.ride_height_target_m)

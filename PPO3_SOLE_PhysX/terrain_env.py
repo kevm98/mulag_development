@@ -64,8 +64,10 @@ from PPO3_SOLE_PhysX.terrain import (
     MOW_STRIP_CFG,
     MOW_STRIP_EVAL_CFG,
     TRACKING_PATH_FAMILIES,
+    apply_relief_profile,
     build_mow_strip_mesh,
     build_tracking_line_mesh,
+    decoration_seed,
     terrain_height_scale_for_environment,
     tracking_line_center_y_at,
 )
@@ -75,6 +77,9 @@ ROAD_ROOT = "/World/TruckRoad"
 TRACKING_LINE_ROOT = "/World/MowTrackingLine"
 VISUAL_FLOOR_ROOT = "/World/PPO3VisualFloor"
 VISUAL_GRID_ROOT = "/World/PPO3VisualGrid"
+ROAD_APRON_ROOT = "/World/PPO3RoadApron"
+ROAD_MARKING_ROOT = "/World/PPO3RoadMarkings"
+VERGE_APRON_ROOT = "/World/PPO3VergeApron"
 
 
 def _path_aligned_grid_pattern(cfg, device: str):
@@ -257,12 +262,23 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
         length = float(getattr(self.cfg, "mow_strip_length_m", base.length_m))
         width = float(getattr(self.cfg, "mow_strip_width_m", base.width_m))
-        return replace(
-            base,
-            seed=seed,
-            resolution_m=resolution,
-            length_m=length,
-            width_m=width,
+        amplitude_scale = float(
+            getattr(
+                self.cfg,
+                "terrain_tracking_amplitude_scale",
+                base.tracking_path_amplitude_scale,
+            )
+        )
+        return apply_relief_profile(
+            replace(
+                base,
+                seed=seed,
+                resolution_m=resolution,
+                length_m=length,
+                width_m=width,
+                tracking_path_amplitude_scale=amplitude_scale,
+            ),
+            str(getattr(self.cfg, "terrain_relief_profile", "gentle")),
         )
 
     def _cutter_prim_path(self) -> str:
@@ -293,6 +309,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if bool(getattr(self.cfg, "enable_visual_grid_floor", False)):
             self._spawn_visual_grid_floor()
         self._spawn_flat_road()
+        if bool(getattr(self.cfg, "enable_road_scenery", False)):
+            self._spawn_road_scenery()
         self._spawn_mow_strip()
         self._add_ground_sensors()
 
@@ -448,6 +466,220 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             f"[PPO3-ROAD] dark asphalt flat road: x=[{start_x:.2f}, "
             f"{start_x + length:.2f}] y=[{center_y - 0.5 * width:.2f}, "
             f"{center_y + 0.5 * width:.2f}] per environment",
+            flush=True,
+        )
+
+    def _lawn_apron_mesh(
+        self, *, x0: float, x1: float, y0: float, y1: float, z: float, seed_offset: int
+    ):
+        """Undulating grass sheet for the roadside banks.
+
+        Visual only, so it is sampled far coarser than the verge and carries no
+        collider. Deterministic per environment and per bank, which keeps a
+        screenshot reproducible.
+        """
+        import numpy as np
+        import trimesh
+
+        step = max(float(getattr(self.cfg, "verge_apron_resolution_m", 0.45)), 0.05)
+        relief = float(getattr(self.cfg, "verge_apron_relief_m", 0.09))
+        nx = max(int(round((x1 - x0) / step)) + 1, 2)
+        ny = max(int(round((y1 - y0) / step)) + 1, 2)
+        x = np.linspace(x0, x1, nx)
+        y = np.linspace(y0, y1, ny)
+        xx, yy = np.meshgrid(x, y, indexing="ij")
+
+        rng = np.random.default_rng(
+            decoration_seed(
+                int(getattr(self.cfg, "terrain_base_seed", 42)), int(seed_offset)
+            )
+        )
+        ph = rng.uniform(0.0, 2.0 * np.pi, size=6)
+        # Layered sinusoids rather than per-vertex noise: a real lawn reads as
+        # broad swells with finer texture on top, and this stays continuous so
+        # the surface never shows facet seams under the viewport light.
+        zz = z + relief * (
+            0.55 * np.sin(2.0 * np.pi * xx / 7.0 + ph[0])
+            + 0.30 * np.sin(2.0 * np.pi * yy / 3.1 + ph[1])
+            + 0.20 * np.sin(2.0 * np.pi * xx / 2.3 + ph[2])
+            + 0.14 * np.sin(2.0 * np.pi * yy / 1.4 + ph[3])
+            + 0.10 * np.sin(2.0 * np.pi * (xx + yy) / 1.1 + ph[4])
+            + 0.07 * np.sin(2.0 * np.pi * (xx - yy) / 0.7 + ph[5])
+        )
+        vertices = np.column_stack((xx.ravel(), yy.ravel(), zz.ravel()))
+        i, j = np.meshgrid(np.arange(nx - 1), np.arange(ny - 1), indexing="ij")
+        v00 = (i * ny + j).ravel()
+        v01 = v00 + 1
+        v10 = v00 + ny
+        v11 = v10 + 1
+        faces = np.vstack(
+            (
+                np.column_stack((v00, v10, v11)),
+                np.column_stack((v00, v11, v01)),
+            )
+        )
+        return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+    def _spawn_road_scenery(self) -> None:
+        """Dress the calibrated road as a marked two-lane carriageway.
+
+        Visual only, and deliberately additive: the colliding road from
+        ``_spawn_flat_road`` keeps its measured width, position and friction, and
+        the wheel-road contact sensors keep resolving against it. Everything here
+        has collision disabled, so physics and every gate metric are unchanged.
+
+        Three merged prims (asphalt apron, white markings, grass apron) rather
+        than one prim per piece -- the same reason ``_spawn_mow_strip`` merges.
+        Off by default; ``evaluate.py``/``probe_drive.py`` enable it only for
+        interactive viewing, where ``--num_envs 1`` makes the cost negligible.
+        """
+        import numpy as np
+        import trimesh
+
+        start_x = float(getattr(self.cfg, "road_start_x_m", -40.0))
+        length = float(getattr(self.cfg, "road_length_m", 40.0))
+        road_center_y = float(getattr(self.cfg, "road_center_y_m", 4.30))
+        road_width = float(getattr(self.cfg, "road_width_m", 3.60))
+        lanes = max(int(getattr(self.cfg, "road_visual_lanes", 2)), 1)
+        edge_width = float(getattr(self.cfg, "road_edge_line_width_m", 0.14))
+        dash_width = float(getattr(self.cfg, "road_lane_dash_width_m", 0.12))
+        dash_length = float(getattr(self.cfg, "road_lane_dash_length_m", 2.0))
+        dash_gap = float(getattr(self.cfg, "road_lane_dash_gap_m", 3.0))
+        apron_m = float(getattr(self.cfg, "verge_visual_apron_m", 3.2))
+        if min(edge_width, dash_width, dash_length, dash_gap) <= 0.0:
+            raise ValueError("road marking dimensions must be positive")
+
+        # The colliding lane is the one under the tyres; extra lanes are added on
+        # the far side of it so nothing is ever placed between the verge and the
+        # wheels, where it could occlude the height scan.
+        near_edge_y = road_center_y - 0.5 * road_width
+        far_edge_y = near_edge_y + lanes * road_width
+        # Take the verge placement from the strip config actually used to build
+        # the colliding mesh, so the grass and shoulder stay aligned if the strip
+        # is ever moved or resized.
+        strip_cfg = self._mow_strip_cfg()
+        strip_center_y = float(strip_cfg.center_y_m)
+        strip_width = float(strip_cfg.width_m)
+        strip_outer_y = strip_center_y - 0.5 * strip_width
+
+        asphalt, markings, grass = [], [], []
+        # Sit each layer a hair above the one below it: apron under the markings,
+        # both just under the colliding road so no z-fight with the tyre surface.
+        apron_z, marking_z = -0.012, -0.004
+        for origin in self.scene.env_origins.detach().cpu().numpy():
+            ox, oy, oz = float(origin[0]), float(origin[1]), float(origin[2])
+            mid_x = ox + start_x + 0.5 * length
+
+            if lanes > 1:
+                extra = (lanes - 1) * road_width
+                slab = trimesh.creation.box(extents=(length, extra, 0.02))
+                slab.apply_translation(
+                    (mid_x, oy + far_edge_y - 0.5 * extra, oz + apron_z)
+                )
+                asphalt.append(slab)
+
+            for edge_y in (near_edge_y + 0.5 * edge_width,
+                           far_edge_y - 0.5 * edge_width):
+                line = trimesh.creation.box(extents=(length, edge_width, 0.012))
+                line.apply_translation((mid_x, oy + edge_y, oz + marking_z))
+                markings.append(line)
+
+            period = dash_length + dash_gap
+            for lane in range(1, lanes):
+                lane_y = near_edge_y + lane * road_width
+                for dash_x in np.arange(start_x, start_x + length - dash_length, period):
+                    dash = trimesh.creation.box(
+                        extents=(dash_length, dash_width, 0.012)
+                    )
+                    dash.apply_translation(
+                        (
+                            ox + dash_x + 0.5 * dash_length,
+                            oy + lane_y,
+                            oz + marking_z,
+                        )
+                    )
+                    markings.append(dash)
+
+            # Grass outboard of the mowed verge, and a matching bank beyond the
+            # far kerb, so the carriageway reads as a road between two verges.
+            uneven = bool(getattr(self.cfg, "uneven_verge_apron", True))
+            for centre, band in (
+                (strip_outer_y - 0.5 * apron_m, apron_m),
+                (far_edge_y + 0.5 * apron_m, apron_m),
+            ):
+                if uneven:
+                    bank = self._lawn_apron_mesh(
+                        x0=ox + start_x,
+                        x1=ox + start_x + length,
+                        y0=oy + centre - 0.5 * band,
+                        y1=oy + centre + 0.5 * band,
+                        z=oz + apron_z,
+                        seed_offset=int(round(centre * 1000.0)),
+                    )
+                else:
+                    bank = trimesh.creation.box(extents=(length, band, 0.02))
+                    bank.apply_translation((mid_x, oy + centre, oz + apron_z))
+                grass.append(bank)
+            # Close the narrow gap between the verge mesh and the near kerb.
+            shoulder = (near_edge_y) - (strip_center_y + 0.5 * strip_width)
+            if shoulder > 1.0e-3:
+                fill = trimesh.creation.box(extents=(length, shoulder, 0.02))
+                fill.apply_translation(
+                    (mid_x, oy + near_edge_y - 0.5 * shoulder, oz + apron_z)
+                )
+                grass.append(fill)
+
+        for root, pieces, material in (
+            (
+                ROAD_APRON_ROOT,
+                asphalt,
+                sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=tuple(
+                        getattr(self.cfg, "road_color", (0.11, 0.12, 0.13))
+                    ),
+                    roughness=float(getattr(self.cfg, "road_roughness", 0.92)),
+                    metallic=0.0,
+                ),
+            ),
+            (
+                ROAD_MARKING_ROOT,
+                markings,
+                sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=tuple(
+                        getattr(
+                            self.cfg, "road_marking_color", (0.90, 0.90, 0.88)
+                        )
+                    ),
+                    roughness=0.6,
+                ),
+            ),
+            (
+                VERGE_APRON_ROOT,
+                grass,
+                sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=tuple(
+                        getattr(
+                            self.cfg, "verge_visual_color", (0.16, 0.42, 0.13)
+                        )
+                    ),
+                    roughness=1.0,
+                ),
+            ),
+        ):
+            if not pieces:
+                continue
+            create_prim_from_mesh(
+                root, trimesh.util.concatenate(pieces), visual_material=material
+            )
+            mesh_prim = sim_utils.get_prim_at_path(f"{root}/mesh")
+            sim_utils.define_collision_properties(
+                mesh_prim.GetPrimPath(),
+                sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            )
+        print(
+            f"[PPO3-SCENERY] {lanes}-lane marked road with grass verges "
+            f"(visual-only, y=[{strip_outer_y - apron_m:.2f}, "
+            f"{far_edge_y + apron_m:.2f}])",
             flush=True,
         )
 
@@ -739,6 +971,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         `_reset_idx` zeroes that counter, so travel stayed near zero and the
         truck covered 1.67 m of a commanded 5.55 m.
         """
+        # Start a fresh per-step window for the chassis-reaction peak. Zeroing
+        # here rather than after the reward keeps the accumulator aligned with
+        # exactly one control step's worth of substep corrections.
+        self._ensure_chassis_reaction_buffers()
+        self._chassis_lateral_reaction_m.zero_()
+        self._chassis_attitude_reaction_rad.zero_()
+
         contact_demo = bool(
             getattr(self.cfg, "enable_contact_tracking_demo", False)
         )
@@ -1125,10 +1364,52 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ),
         )
         applied, task_gain = self._task_action_shield(output.applied)
-        self._terrain_teacher_raw_action = raw_teacher.detach().clone()
         self._terrain_teacher_shield_gain = (
             output.shield_gain * task_gain
         ).detach().clone()
+
+        if bool(getattr(self.cfg, "sole_head_joint_action", False)):
+            # c1-c4 above are untouched: c4 keeps its validated tilt assist, so
+            # the boom still ORIENTS the head. This adds the head joint itself as
+            # a separate, finer channel -- it is not hydraulic and c4 does not
+            # command it.
+            #
+            # Proportional over a BAND plus rate damping. Normalizing by the
+            # 0.010 rad per-step action scale saturated this at 0.57 deg of tilt,
+            # i.e. bang-bang, and a demonstration that slams between +-1 is the
+            # worst possible thing to clone.
+            band = max(
+                float(getattr(self.cfg, "sole_head_teacher_band_rad", 0.05)), 1e-6
+            )
+            head_gain_joint = float(
+                getattr(self.cfg, "sole_head_teacher_gain", 1.0)
+            )
+            previous_tilt = getattr(self, "_head_teacher_prev_tilt", None)
+            if previous_tilt is None or previous_tilt.shape != signed_tilt.shape:
+                previous_tilt = signed_tilt.detach().clone()
+            tilt_rate = signed_tilt - previous_tilt
+            self._head_teacher_prev_tilt = signed_tilt.detach().clone()
+            damping = float(getattr(self.cfg, "sole_head_teacher_damping", 4.0))
+            # Sign MEASURED, not inherited from c4: a held +1 head action drove
+            # the joint to q=0.34034 rad and produced signed_tilt=-0.12261, i.e.
+            # about 0.36 rad of tilt per radian of joint, negative-going. So
+            # cancelling a POSITIVE tilt needs a POSITIVE command. The first
+            # version negated this by copying c4's convention and lost to a
+            # STATIC head reference at every gain, with and without c4's assist,
+            # while nearly doubling tool acceleration (67.8 -> 105-117).
+            head_sign = float(getattr(self.cfg, "sole_head_teacher_sign", 1.0))
+            head_command = torch.clamp(
+                head_sign
+                * (head_gain_joint * signed_tilt + damping * tilt_rate)
+                / band,
+                -1.0,
+                1.0,
+            )
+            head_command = torch.nan_to_num(head_command).reshape(-1, 1)
+            raw_teacher = torch.cat([raw_teacher, head_command], dim=-1)
+            applied = torch.cat([applied, head_command], dim=-1)
+
+        self._terrain_teacher_raw_action = raw_teacher.detach().clone()
         return applied
 
     @property
@@ -1182,6 +1463,21 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
 
     @torch.no_grad()
+    def _ensure_chassis_reaction_buffers(self) -> None:
+        """Allocate the chassis-reaction accumulators on first use.
+
+        Allocated lazily rather than in ``__init__`` because the base class
+        already calls ``_constrain_truck_xy`` during its own construction, so an
+        ``__init__`` assignment would run too late and raise on the first step.
+        """
+        if getattr(self, "_chassis_lateral_reaction_m", None) is None:
+            self._chassis_lateral_reaction_m = torch.zeros(
+                self.num_envs, device=self.device
+            )
+            self._chassis_attitude_reaction_rad = torch.zeros(
+                self.num_envs, device=self.device
+            )
+
     def _constrain_truck_xy(self) -> None:
         """Advance the chassis along the road at exactly the commanded speed.
 
@@ -1256,6 +1552,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             dim=-1, keepdim=True
         ).clamp(min=1e-8)
         delta_q = quat_mul(anchor_quat, quat_inv(base_quat))
+
+        # Arm-induced chassis reaction, sampled BEFORE the correction is written.
+        # Sampling after is what made `truck_drift` read 0.0000 while the chassis
+        # was visibly swaying: the fixture had already removed the evidence.
+        # `correction` is the residual chassis position error, so its component
+        # perpendicular to the drive heading is exactly the lateral sway, and
+        # `delta_q` is the full attitude error, so roll and pitch are counted and
+        # not just the yaw already in `heading_error`.
+        #
+        # Several calls per env step under per-substep pinning: keep the worst,
+        # because a single hard shove is what is visible and what unloads a tyre.
+        lateral_reaction = (
+            correction[:, 0] * (-heading[:, 1]) + correction[:, 1] * heading[:, 0]
+        ).abs()
+        attitude_reaction = 2.0 * torch.acos(delta_q[:, 0].abs().clamp(max=1.0))
+        self._ensure_chassis_reaction_buffers()
+        self._chassis_lateral_reaction_m = torch.maximum(
+            self._chassis_lateral_reaction_m, lateral_reaction.detach()
+        )
+        self._chassis_attitude_reaction_rad = torch.maximum(
+            self._chassis_attitude_reaction_rad, attitude_reaction.detach()
+        )
+
         root_relative_to_base = root_pose[:, :3] - base_state[:, :3]
         rotated_relative = quat_apply(delta_q, root_relative_to_base)
         root_pose[:, :3] = base_state[:, :3] + rotated_relative
@@ -1266,7 +1585,18 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # otherwise settle at different suspension heights (0.229 m at 512 vs
         # 0.139 m at 2 envs), injecting an irrelevant base-height curriculum
         # into the arm task.
-        root_pose[:, 2] = root_pose[:, 2] + (target_base_z - base_z)
+        # Partial vertical correction. teacher_student drives a FREE chassis on
+        # velocity-driven wheels and lets gravity load all four tyres; PPO3 pins
+        # the pose instead, and a hard z pin is exactly what leaves one tyre
+        # hovering (min duty 0.1947 against a 0.7527 mean, i.e. three wheels near
+        # 0.94 and one chattering). Freeing z entirely was measured and recovers
+        # the wheel gate outright (0.5178) but costs smoothness (accel 138.88),
+        # because the vertical pin is what supplies it. A gain in (0,1) is a
+        # first-order lag toward the target height: the chassis may settle onto
+        # its tyres while large vertical excursions are still suppressed.
+        # 1.0 reproduces every previously measured number exactly.
+        ride_gain = float(getattr(self.cfg, "truck_ride_height_gain", 1.0))
+        root_pose[:, 2] = root_pose[:, 2] + ride_gain * (target_base_z - base_z)
         self.robot.write_root_pose_to_sim(root_pose)
 
         # Report the true translational velocity so anything reading root
@@ -1692,6 +2022,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         alignment = self._measure_head_down_alignment().detach()
         self._prev_head_alignment[env_ids] = alignment[env_ids]
         self._head_alignment_rate[env_ids] = 0.0
+        if not hasattr(self, "_head_down_failed"):
+            self._head_down_failed = torch.zeros(
+                self.num_envs, dtype=torch.bool, device=self.device
+            )
+        self._head_down_failed[env_ids] = False
         if not hasattr(self, "_previous_abs_cut_error"):
             self._previous_abs_cut_error = torch.zeros(
                 self.num_envs, dtype=torch.float32, device=self.device
@@ -1796,12 +2131,168 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         ).expand(self.num_envs, -1)
         return quat_apply(q, local_axis)
 
+    @torch.no_grad()
+    def _apply_action(self):
+        """Level the cutter head before the inherited joint targets are written.
+
+        ``Messerkopf_joint`` carries no cylinder and is not hydraulic, yet the
+        inherited pipeline commands it as ``joint6_coupling_a * q4`` with a fixed
+        ratio. The mechanism's real ratio is pose-dependent -- the inherited
+        comment records 0.50-0.76 across tests -- because the joint angle that
+        points the head at world-down changes as c1-c3 move the boom. A fixed
+        ratio is therefore wrong by a pose-varying amount, and measurement bears
+        that out: the joint misses its reference by 0.2096 rad at p99, 43x c4's
+        own joint, with drive torque pinned at any ceiling it is given.
+
+        Deleting the ratio is worse, not better. Commanding a constant 0.0 rad
+        instead (teacher-student gains, stiffness 6000) drove held-out minimum
+        head alignment to -0.6956, and 300000 stiffness to 0.6268, against
+        0.9628 for the inherited coupling -- the response is not even monotonic
+        in stiffness, because a constant cannot express a pose-dependent angle.
+
+        So keep the ratio as feedforward and close the loop around it: measure
+        the head's actual tilt and correct the reference until the head is level.
+        That makes the effective ratio adapt with pose, which is what the
+        mechanism does, without discarding the term that currently holds the
+        head. The correction is bounded so a bad measurement cannot command the
+        joint across its travel, and it is recomputed from the coupling source
+        every substep rather than accumulated onto the reference -- ``_apply_action``
+        runs once per decimation step while the coupling is written once per
+        environment step, so an incremental update would integrate.
+
+        Disabled by default (gain 0.0): with the gain at zero this reproduces the
+        inherited targets exactly.
+        """
+        gain = float(getattr(self.cfg, "terrain_messerkopf_level_gain", 0.0))
+        target = getattr(self, "_joint6_coupling_target_ref_index", None)
+        source = getattr(self, "_joint6_coupling_source_ref_index", None)
+        if gain != 0.0 and target is not None and source is not None:
+            head_axis = self._head_down_axis_world()
+            # Same projection the c4 tilt shield uses: the signed tilt in the
+            # plane this joint actually acts in. Out-of-plane (X) excursions are
+            # unreachable for it -- measured authority is 3.8 % of the Y axis --
+            # so correcting on the full off-down angle would chase a component
+            # the joint cannot move.
+            if bool(getattr(self.cfg, "terrain_head_tilt_arm_frame", False)):
+                # Exact one-DOF solve about the joint's own rotation axis, which
+                # travels with the arm instead of staying pinned to world Y-Z.
+                #
+                # The world projection below is blind whenever the arm slews:
+                # world-X tilt is in-plane tilt rotated by the slew angle, so a
+                # correction measured in a fixed world plane stops seeing the
+                # error exactly when the arm turns. That is what the "X is
+                # unsteerable" reading was: reports/head_axis_authority.json was
+                # sampled at alignment 0.978-0.997, a nearly vertical down-axis,
+                # and a vertical vector is invariant to yaw -- so the probe could
+                # not have detected slew-coupled authority even if it existed.
+                #
+                # Rotating the head about `axis` by this angle brings its
+                # down-axis as close to world-down as that single joint allows.
+                axis_index = int(
+                    getattr(self.cfg, "terrain_head_tilt_axis_index", 0)
+                )
+                local = torch.zeros(
+                    (self.num_envs, 3), device=self.device, dtype=head_axis.dtype
+                )
+                local[:, axis_index] = 1.0
+                quat = self.robot.data.body_link_state_w[:, self._ee_body_id, 3:7]
+                quat = quat / quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-8)
+                axis = quat_apply(quat, local)
+                # NOTE: named down_target, not target -- `target` is already the
+                # coupling joint's reference index in this scope and shadowing it
+                # indexes _joint_ref with a float tensor.
+                down_target = torch.zeros_like(head_axis)
+                down_target[:, 2] = -1.0
+                # Component of each vector in the plane the joint can reach.
+                target_p = (
+                    down_target
+                    - (down_target * axis).sum(-1, keepdim=True) * axis
+                )
+                head_p = head_axis - (head_axis * axis).sum(-1, keepdim=True) * axis
+                cross = torch.cross(head_p, target_p, dim=-1)
+                signed_tilt = -torch.atan2(
+                    (cross * axis).sum(-1), (head_p * target_p).sum(-1)
+                )
+            else:
+                signed_tilt = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
+            sign = float(
+                getattr(self.cfg, "terrain_messerkopf_level_sign", -1.0)
+            )
+            bound = float(
+                getattr(self.cfg, "terrain_messerkopf_level_max_rad", 0.15)
+            )
+            # Progressive response. A single linear gain cannot serve both ends
+            # of the tilt range: the swept pair 0.5/0.08 saturates at 0.16 rad,
+            # but the worst held-out sample sits at 18.5 deg (0.323 rad), so the
+            # correction is pinned exactly where the hard-min gate is decided,
+            # while simply widening it oscillates in the common small-tilt case
+            # (clamp 0.15 measured min alignment 0.9407 against 0.9482 at 0.08).
+            # The quadratic term is negligible near level and dominant in the
+            # tail, which is the only region the hard-min gate reads.
+            quadratic = float(
+                getattr(self.cfg, "terrain_messerkopf_level_quadratic_gain", 0.0)
+            )
+            response = gain * signed_tilt + quadratic * signed_tilt * signed_tilt.abs()
+            correction = torch.clamp(sign * response, -bound, bound)
+            # Optional low-pass. The correction is recomputed every decimation
+            # substep, so an unfiltered term injects its own high-frequency
+            # motion into the tool -- and p95_tool_acceleration is a gate.
+            beta = float(
+                getattr(self.cfg, "terrain_messerkopf_level_filter", 0.0)
+            )
+            if beta > 0.0:
+                previous = getattr(self, "_messerkopf_level_filtered", None)
+                if previous is None or previous.shape != correction.shape:
+                    previous = torch.zeros_like(correction)
+                correction = beta * previous + (1.0 - beta) * correction
+                self._messerkopf_level_filtered = correction.detach().clone()
+            a = float(getattr(self.cfg, "joint6_coupling_a", 0.76))
+            b = float(getattr(self.cfg, "joint6_coupling_b", 0.0))
+            # One reference, three contributions: the coupling FEEDFORWARD that
+            # makes the head track the boom it hangs from, the measured-tilt
+            # levelling CORRECTION, and the policy's own integrated correction.
+            # Dropping any one of them was measured worse -- no levelling gives
+            # min_head_alignment 0.8662, a frozen (non-tracking) reference gives
+            # 0.8369, and both together give 0.9296.
+            policy_correction = getattr(self, "_head_joint_correction", None)
+            if policy_correction is None:
+                policy_correction = torch.zeros_like(correction)
+            self._joint_ref[:, target] = (
+                a * self._joint_ref[:, source]
+                + b
+                + correction
+                + policy_correction
+            )
+            self._terrain_head_level_correction = correction
+        super()._apply_action()
+        # Re-pin the chassis every decimation substep. The inherited fixture runs
+        # once per control step, so with decimation=2 two physics substeps elapse
+        # in which arm reaction translates and rotates the truck before the next
+        # correction snaps it back -- visible as a small sideways sway when the
+        # cutter strikes terrain. max_truck_post_constraint_drift_m reads 0.0000
+        # because it is sampled AFTER the correction, so no gate could see this.
+        # The correction is idempotent (it drives off base_link error), so the
+        # extra call costs a pose write and cannot accumulate.
+        if bool(getattr(self.cfg, "terrain_constrain_truck_per_substep", True)):
+            self._constrain_truck_xy()
+
     def _task_action_shield(
         self, applied_action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Prevent c4 from continuing to drive the cutter away from world-down."""
         head_axis = self._head_down_axis_world()
         signed_head_angle = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
+        # NOTE: atan2(y, -z) is the tilt projected into the Y-Z plane, so this
+        # shield is blind to an X-Z excursion (see the blind-axis tests in
+        # tests/test_sole_actions.py). Fading on the true off-down angle instead
+        # was measured to be strictly worse: on the same checkpoint and held-out
+        # set it drove min_head_alignment 0.881 -> -0.168 and max_abs_head_axis_y
+        # 0.474 -> 0.979. The total angle is dominated by X, which c4 cannot
+        # affect, so it zeroed c4 authority almost permanently while the
+        # worsening sign kept chattering with y -- destroying the very authority
+        # that holds the head down in c4's own plane. Out-of-plane excursions are
+        # the head barrier's job, not the shield's; it sees alignment directly
+        # and is direction-agnostic.
         return directional_tilt_shield(
             applied_action,
             signed_tilt=signed_head_angle,
@@ -1939,6 +2430,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             head_penalty_max_deviation=float(
                 getattr(cfg, "terrain_head_penalty_max_deviation", 2.0)
             ),
+            head_penalty_far_weight=float(
+                getattr(cfg, "terrain_head_penalty_far_weight", -0.5)
+            ),
             clearance_barrier_weight=float(
                 getattr(cfg, "terrain_clearance_barrier_weight", -2.0)
             ),
@@ -1966,6 +2460,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ),
             acceleration_max_ratio=float(
                 getattr(cfg, "terrain_acceleration_max_ratio", 10.0)
+            ),
+            chassis_lateral_reaction_m=self._chassis_lateral_reaction_m,
+            chassis_attitude_reaction_rad=self._chassis_attitude_reaction_rad,
+            chassis_reaction_weight=float(
+                getattr(cfg, "terrain_chassis_reaction_weight", 0.0)
+            ),
+            chassis_lateral_scale_m=float(
+                getattr(cfg, "terrain_chassis_lateral_scale_m", 0.005)
+            ),
+            chassis_attitude_scale_rad=float(
+                getattr(cfg, "terrain_chassis_attitude_scale_rad", 0.005)
+            ),
+            chassis_reaction_max_ratio=float(
+                getattr(cfg, "terrain_chassis_reaction_max_ratio", 5.0)
             ),
         )
 
@@ -2002,14 +2510,87 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             scale=float(getattr(cfg, "terrain_head_progress_scale", 0.002)),
             weight=float(getattr(cfg, "terrain_head_progress_weight", 0.25)),
         )
-        shaped_reward = (
-            terms.reward
+        task_reward = (
+            terms.cut_tracking
+            + terms.lateral
+            + terms.contact_reward
             + dense_cut
             + dense_lateral
             + cut_progress
             + lateral_progress
-            + head_progress
         )
+        # Head-down is a precondition for being paid to track, not a competing
+        # objective. Terminating on a violation is not affordable here: any
+        # termination synchronizes (PPO2 policy/env.py) and _run_reset_preposition
+        # steps the whole scene, so at 512 envs a per-step head check would reset
+        # continuously. Latching the failure for the rest of the episode buys the
+        # same guarantee for free -- once the head leaves the cone that env earns
+        # no tracking reward again until reset, so no rollout can ever profit from
+        # mowing with a tilted head. The safety barriers stay live, so recovering
+        # still pays and the policy keeps a gradient back toward world-down.
+        required = float(
+            getattr(self.cfg, "terrain_head_down_required_alignment", 0.98)
+        )
+        if not hasattr(self, "_head_down_failed"):
+            self._head_down_failed = torch.zeros(
+                self.num_envs, dtype=torch.bool, device=self.device
+            )
+        # Hysteresis release. The latch above is monotone within an episode and
+        # is cleared only at reset, so a single transient dip zeroes task reward
+        # for every remaining step -- up to the full 16 s horizon for one bad
+        # contact. Measured consequence across five blocks on the rough verge
+        # (v3 2-4, v4 1, v5 1): the latched fraction spikes at the same
+        # phase-locked hard windows, Loss/value goes 1-3k -> 80-230k as returns
+        # become bimodal, and every one of those blocks scored worse than the
+        # checkpoint it resumed from. The only promoted block held latch mean
+        # 0.0026; every collapse ran 0.032-0.109. Softening the head barrier and
+        # zeroing the entropy bonus were both tried against this and both failed
+        # to prevent it (entropy did cut latch mean 0.109 -> 0.032 and the score
+        # 6.89 -> 2.19, so it is kept, but it is not the mechanism).
+        #
+        # Releasing at a strictly higher alignment than `required` preserves the
+        # guarantee that matters -- an env earns nothing while tilted, so no
+        # rollout can profit from mowing with a tilted head -- while making the
+        # cost of a dip proportional to its duration instead of to whenever it
+        # happened to occur in the episode. The gap between the two thresholds
+        # is what stops a head oscillating across the boundary from collecting
+        # partial reward on the upswing.
+        release = float(
+            getattr(self.cfg, "terrain_head_down_latch_release_alignment", 0.97)
+        )
+        if bool(getattr(self.cfg, "terrain_head_down_latches_failure", True)):
+            self._head_down_failed |= active & (alignment < required)
+            if release > required:
+                recovered = self._head_down_failed & active & (alignment >= release)
+                self._head_down_failed &= ~recovered
+                self._head_down_latch_released = recovered
+            else:
+                self._head_down_latch_released = torch.zeros_like(
+                    self._head_down_failed
+                )
+            task_reward = torch.where(
+                self._head_down_failed, torch.zeros_like(task_reward), task_reward
+            )
+        else:
+            self._head_down_latch_released = torch.zeros_like(self._head_down_failed)
+
+        # terms.reward less its three task components; these stay live whether or
+        # not the head has failed, so barriers keep shaping and recovery pays.
+        chassis_penalty = terms.chassis_reaction_penalty
+        if chassis_penalty is None:
+            chassis_penalty = torch.zeros_like(terms.limit_penalty)
+        safety_reward = (
+            terms.smoothness
+            + terms.head_penalty
+            + terms.clearance_barrier
+            + terms.limit_penalty
+            + terms.acceleration_penalty
+            # Kept in the safety group, not the task group: a latched head must
+            # not stop paying for keeping the truck steady, or an env that dips
+            # once is free to shove the chassis for the rest of the episode.
+            + chassis_penalty
+        )
+        shaped_reward = safety_reward + task_reward + head_progress
         shaped_reward = torch.where(
             active, shaped_reward, torch.zeros_like(shaped_reward)
         )
@@ -2071,6 +2652,19 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 "truck/max_heading_error_deg": torch.rad2deg(
                     self._truck_heading_error_rad[valid_active].abs().max()
                 ),
+                # Pre-correction chassis error: the sway the fixture erases
+                # before `truck/max_post_constraint_drift_m` can see it.
+                "truck/mean_chassis_lateral_reaction_mm": 1000.0
+                * self._chassis_lateral_reaction_m[valid_active].mean(),
+                "truck/p95_chassis_lateral_reaction_mm": 1000.0
+                * torch.quantile(
+                    self._chassis_lateral_reaction_m[valid_active], 0.95
+                ),
+                "truck/p95_chassis_attitude_reaction_deg": torch.rad2deg(
+                    torch.quantile(
+                        self._chassis_attitude_reaction_rad[valid_active], 0.95
+                    )
+                ),
                 "truck/mean_speed_kmh": self._vehicle_speed_kmh[
                     valid_active
                 ].mean(),
@@ -2082,6 +2676,22 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 ),
                 "safety/min_head_alignment": torch.min(
                     alignment[valid_active]
+                ),
+                "safety/head_down_failed_fraction": self._head_down_failed[
+                    valid_active
+                ].float().mean(),
+                # Envs whose head physically recovered this step and had their
+                # task reward restored. Under the old monotone latch this is
+                # exactly the population that stayed unpaid for the rest of the
+                # episode, so a non-trivial value here measures the mechanism
+                # directly rather than inferring it from the collapse.
+                "safety/head_down_latch_released_fraction": getattr(
+                    self,
+                    "_head_down_latch_released",
+                    torch.zeros_like(self._head_down_failed),
+                )[valid_active].float().mean(),
+                "safety/max_abs_head_axis_x": torch.max(
+                    self._head_down_axis_world()[valid_active, 0].abs()
                 ),
                 "safety/p95_tool_acceleration_mps2": torch.quantile(
                     acceleration[valid_active], 0.95

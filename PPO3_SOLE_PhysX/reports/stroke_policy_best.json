@@ -1,0 +1,116 @@
+{
+  "timestamp": "2026-07-30T18:38:30",
+  "mode": "policy",
+  "checkpoint_contract": {
+    "path": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo3_sole_terrain/lawn_rough_stage5_v5/model_best.pt",
+    "source": "PPO3 terrain PPO",
+    "schema": "terrain_teacher_student_v1",
+    "observation_width": 54
+  },
+  "stage": 5,
+  "terrain": "held_out",
+  "num_envs": 128,
+  "steps": 960,
+  "gate_mps2": 120.0,
+  "total_samples": 122880,
+  "gate_reduction": {
+    "all_samples": {
+      "name": "all samples (this is the gate)",
+      "samples": 122880,
+      "p95_mps2": 130.93930969238264,
+      "mean_mps2": 42.40695909987407,
+      "max_mps2": 631.9409790039062,
+      "exceeds_gate_fraction": 0.06151529774069786
+    },
+    "excluding_post_reset": {
+      "name": "post-reset excluded",
+      "samples": 122496,
+      "p95_mps2": 131.1175994873047,
+      "mean_mps2": 42.49937241695736,
+      "max_mps2": 631.9409790039062,
+      "exceeds_gate_fraction": 0.06170813739299774
+    },
+    "post_reset_only": {
+      "name": "post-reset only",
+      "samples": 384,
+      "p95_mps2": 22.322128391265853,
+      "mean_mps2": 12.9271109503073,
+      "max_mps2": 52.73299789428711,
+      "exceeds_gate_fraction": 0.0
+    },
+    "post_reset_sample_fraction": 0.003125,
+    "reset_mask_steps": 3
+  },
+  "contact_split": {
+    "free_swing": {
+      "name": "cutter not in contact",
+      "samples": 8739,
+      "p95_mps2": 188.71033020019533,
+      "mean_mps2": 94.30948985620117,
+      "max_mps2": 408.8429260253906,
+      "exceeds_gate_fraction": 0.3207460939884186
+    },
+    "in_contact": {
+      "name": "cutter in contact",
+      "samples": 113757,
+      "p95_mps2": 110.43714752197259,
+      "mean_mps2": 38.51923390854423,
+      "max_mps2": 631.9409790039062,
+      "exceeds_gate_fraction": 0.041808415204286575
+    },
+    "contact_sample_fraction": 0.928658894984326
+  },
+  "tail_coincidence": {
+    "tail_samples": 6125,
+    "tail_in_contact_fraction": 0.6372244897959184,
+    "baseline_in_contact_fraction": 0.928658894984326,
+    "tail_force_spike_fraction": 0.31314285714285717,
+    "baseline_force_spike_fraction": 0.05000163270637409
+  },
+  "explained_variance": {
+    "command_only_r2": 0.4246762389857829,
+    "command_plus_contact_r2": 0.45102472539898475,
+    "contact_increment_r2": 0.026348486413201866,
+    "samples": 122496,
+    "note": "command features are |applied action rate| and |applied action| per cylinder; contact feature is |delta cutter contact force|"
+  },
+  "stroke": {
+    "pin_threshold_m": 0.0001,
+    "any_cylinder_pinned_fraction": 0.0,
+    "low_pinned_fraction_per_cylinder": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "high_pinned_fraction_per_cylinder": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "min_low_headroom_m_per_cylinder": [
+      0.25126561522483826,
+      0.12341499328613281,
+      0.024595052003860474,
+      0.04068213701248169
+    ],
+    "p01_low_headroom_m_per_cylinder": [
+      0.25526785433292387,
+      0.12817420959472656,
+      0.03980031907558441,
+      0.052446463108062745
+    ],
+    "median_low_headroom_m_per_cylinder": [
+      0.26500770449638367,
+      0.1605830192565918,
+      0.08603489398956299,
+      0.06160253286361694
+    ],
+    "head_alignment_p01": 0.9882688665390015,
+    "head_alignment_min": 0.9628067016601562,
+    "below_latch_fraction": 0.0,
+    "pinned_and_below_latch_fraction": 0.0,
+    "note": "zero_action_floor mode measures stroke the environment consumes on its own; a policy run's excess over that is self-inflicted"
+  }
+}

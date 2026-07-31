@@ -33,6 +33,7 @@ class VergeRewardTerms:
     limit_penalty: torch.Tensor
     acceleration_penalty: torch.Tensor
     cut_height_error: torch.Tensor
+    chassis_reaction_penalty: torch.Tensor | None = None
 
 
 def sanitize_terminal_reward(
@@ -122,6 +123,7 @@ def compute_verge_reward(
     head_threshold: float = 0.98,
     head_penalty_scale: float = 0.02,
     head_penalty_max_deviation: float = 2.0,
+    head_penalty_far_weight: float = 0.0,
     clearance_barrier_weight: float = -2.0,
     clearance_margin_m: float = 0.02,
     clearance_barrier_scale_m: float = 0.02,
@@ -132,6 +134,12 @@ def compute_verge_reward(
     acceleration_weight: float = -0.20,
     acceleration_scale_mps2: float = 30.0,
     acceleration_max_ratio: float = 10.0,
+    chassis_lateral_reaction_m: torch.Tensor | None = None,
+    chassis_attitude_reaction_rad: torch.Tensor | None = None,
+    chassis_reaction_weight: float = 0.0,
+    chassis_lateral_scale_m: float = 0.005,
+    chassis_attitude_scale_rad: float = 0.005,
+    chassis_reaction_max_ratio: float = 5.0,
 ) -> VergeRewardTerms:
     """Hold the cutter at ``target_cut_height_m`` above the sensed verge.
 
@@ -163,14 +171,25 @@ def compute_verge_reward(
     # Match PPO2's normalized quadratic safety barrier. The old unnormalized
     # linear term was only -0.165 at alignment=.9717, so gaining cut height by
     # tilting the head remained profitable against +7 of task reward.
-    head_deviation = torch.relu(
+    #
+    # The quadratic is clamped so a flipped head cannot explode the value
+    # targets, but the clamp alone makes the barrier a *plateau*: with the
+    # production scale/max_deviation it saturates at alignment 0.955 and is then
+    # exactly flat all the way to -1. Every inverted pose scores identically, so
+    # PPO sees zero gradient in the region it must climb out of and a head that
+    # flips once has no reason to come back. ``head_penalty_far_weight`` adds a
+    # linear far-field term past the clamp: bounded slope, still finite at
+    # alignment=-1, but strictly monotone so recovery is always rewarded.
+    raw_head_deviation = torch.relu(
         (float(head_threshold) - head_down_alignment)
         / max(float(head_penalty_scale), 1.0e-6)
     )
     head_deviation = torch.clamp(
-        head_deviation, max=max(float(head_penalty_max_deviation), 0.0)
+        raw_head_deviation, max=max(float(head_penalty_max_deviation), 0.0)
     )
-    head_penalty = float(head_penalty_weight) * head_deviation.square()
+    head_penalty = float(head_penalty_weight) * head_deviation.square() + float(
+        head_penalty_far_weight
+    ) * (raw_head_deviation - head_deviation)
 
     # Optional geometric guard.  The physical task uses a zero-height target and
     # real contact feedback, so production sets this weight to zero; retaining
@@ -203,6 +222,37 @@ def compute_verge_reward(
         tool_acceleration_norm / scale, min=0.0, max=max_acceleration_ratio
     ).square()
 
+    # Arm-induced chassis reaction. The truck is a kinematic fixture, so its
+    # pose error is corrected every substep and `truck_drift` therefore reads
+    # 0.0000 -- which is why the visible sway was never in any metric. What the
+    # fixture *cannot* hide is how hard it had to push: the pre-correction error
+    # is exactly the reaction the arm fed into the chassis, and it is the only
+    # part of the sway the policy can actually act on. Penalizing it trains the
+    # arm to stop shoving the truck instead of relying on the fixture to mop up
+    # afterwards, which is also what unloads a tyre (wheel_road_support).
+    #
+    # Lateral and attitude are kept as separate normalized channels because they
+    # have different units and different scales; combining them into one metre
+    # figure would silently weight 1 mm of slide against 1 mrad of roll.
+    chassis_reaction_penalty = torch.zeros_like(cut_tracking)
+    if float(chassis_reaction_weight) != 0.0:
+        max_reaction_ratio = max(float(chassis_reaction_max_ratio), 0.0)
+        channels = []
+        if chassis_lateral_reaction_m is not None:
+            channels.append(
+                chassis_lateral_reaction_m / max(float(chassis_lateral_scale_m), 1e-6)
+            )
+        if chassis_attitude_reaction_rad is not None:
+            channels.append(
+                chassis_attitude_reaction_rad
+                / max(float(chassis_attitude_scale_rad), 1e-6)
+            )
+        if channels:
+            normalized = torch.stack(channels, dim=-1).abs().amax(dim=-1)
+            chassis_reaction_penalty = float(chassis_reaction_weight) * torch.clamp(
+                normalized, min=0.0, max=max_reaction_ratio
+            ).square()
+
     reward = (
         cut_tracking
         + lateral
@@ -212,6 +262,7 @@ def compute_verge_reward(
         + contact_reward
         + limit_penalty
         + acceleration_penalty
+        + chassis_reaction_penalty
     )
     return VergeRewardTerms(
         reward=reward,
@@ -224,4 +275,5 @@ def compute_verge_reward(
         limit_penalty=limit_penalty,
         acceleration_penalty=acceleration_penalty,
         cut_height_error=error,
+        chassis_reaction_penalty=chassis_reaction_penalty,
     )
