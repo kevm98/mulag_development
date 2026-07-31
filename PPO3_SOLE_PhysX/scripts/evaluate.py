@@ -73,6 +73,14 @@ p.add_argument(
     action="store_true",
     help="Force the visual-only gray grid floor (interactive mode enables it automatically).",
 )
+p.add_argument(
+    "--road_scene",
+    action="store_true",
+    help=(
+        "Force the visual-only marked two-lane road with grass verges and pale "
+        "floor (interactive mode enables it automatically). Physics unchanged."
+    ),
+)
 p.add_argument("--trajectory_library_path", default="")
 p.add_argument("--command_rom_checkpoint", default="")
 p.add_argument("--sole_ik_hint", action="store_true")
@@ -97,6 +105,11 @@ p.add_argument(
     help="DIAGNOSTIC ONLY: multiplier on damping of the five held arm joints.",
 )
 p.add_argument("--control-path-audit", dest="audit", action="store_true")
+p.add_argument(
+    "--zero_action",
+    action="store_true",
+    help="Command the arm still and report the environment-only floor.",
+)
 p.add_argument("--report", default="")
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
@@ -148,6 +161,15 @@ def build_env():
     env_cfg.enable_contact_tracking_demo = False
     env_cfg.tracking_path_family = str(a.path_family)
     env_cfg.enable_visual_grid_floor = bool(a.visual_grid) or not bool(a.headless)
+    # Presentation scene: marked two-lane road between grass verges, on a pale
+    # studio floor. Visual-only (see _spawn_road_scenery), so gate numbers from a
+    # --road_scene run are comparable with headless ones.
+    env_cfg.enable_road_scenery = bool(a.road_scene) or not bool(a.headless)
+    if env_cfg.enable_road_scenery:
+        env_cfg.dark_visual_background = False
+        env_cfg.visual_floor_color = (0.82, 0.83, 0.84)
+        env_cfg.visual_grid_color = (0.90, 0.90, 0.91)
+        env_cfg.enable_visual_grid_floor = True
     # Count raw terrain safety violations in the evaluator without triggering a
     # synchronized physical redeployment. Nonfinite state still terminates in
     # the environment; finite violation rate is accumulated explicitly below.
@@ -294,7 +316,9 @@ def head_action_direction_probe(raw, steps: int = 12) -> dict:
 
 
 @torch.no_grad()
-def evaluate_verge(raw, policy, steps: int, tracking_plot=None) -> dict:
+def evaluate_verge(
+    raw, policy, steps: int, tracking_plot=None, zero_action: bool = False
+) -> dict:
     obs, _ = raw.reset(seed=int(a.seed))
     if a.hold_effort_floor_n > 0.0 or a.hold_damping_scale != 1.0:
         if not a.direct_hold_probe:
@@ -380,11 +404,18 @@ def evaluate_verge(raw, policy, steps: int, tracking_plot=None) -> dict:
     laterals, scan_validity, contacts, actions = [], [], [], []
     cutter_contact_forces, wheel_support, wheel_forces = [], [], []
     applied_actions, shield_gains, head_extensions = [], [], []
+    chassis_lateral_reactions, chassis_attitude_reactions = [], []
     safety_terminations = 0
     for step in range(steps):
         # get_inference_policy returns the MLPModel; its forward consumes the
         # observation dict and returns the deterministic mean.
         action = policy(obs)
+        if zero_action:
+            # Measure what the environment alone produces with the arm commanded
+            # still. Deriving a gate from policy behaviour instead of from this
+            # floor is how p95_tool_acceleration was once gated at 80 against a
+            # measured floor of 100.06 -- unreachable by any policy.
+            action = torch.zeros_like(action)
         obs, _, terminated, truncated, _ = raw.step(action)
         signed_error = raw.cut_height_error()
         signed_errors.append(signed_error)
@@ -444,6 +475,15 @@ def evaluate_verge(raw, policy, steps: int, tracking_plot=None) -> dict:
         applied_actions.append(raw._sole_applied.detach().clone())
         shield_gains.append(raw._sole_shield_gain.detach().clone())
         head_extensions.append(raw._refresh_cylinder_state()[0][:, 3].detach().clone())
+        # Pre-correction chassis error. Every other truck metric here samples
+        # after the fixture has already removed it, which is why they all read
+        # 0.0000 while the chassis was visibly swaying.
+        chassis_lateral_reactions.append(
+            raw._chassis_lateral_reaction_m.detach().clone()
+        )
+        chassis_attitude_reactions.append(
+            raw._chassis_attitude_reaction_rad.detach().clone()
+        )
         safety_terminations += int(raw.terrain_safety_violation().sum())
         if tracking_plot is not None:
             tracking_plot.sample(raw, step)
@@ -545,6 +585,18 @@ def evaluate_verge(raw, policy, steps: int, tracking_plot=None) -> dict:
         "limit_shield_active_fraction": float((shield_gain_steps < 0.999).float().mean()),
         "head_cylinder_extension_min_m": float(head_extension_steps.min()),
         "head_cylinder_extension_max_m": float(head_extension_steps.max()),
+        "p95_chassis_lateral_reaction_mm": 1000.0
+        * float(torch.quantile(torch.stack(chassis_lateral_reactions), 0.95)),
+        "max_chassis_lateral_reaction_mm": 1000.0
+        * float(torch.stack(chassis_lateral_reactions).max()),
+        "p95_chassis_attitude_reaction_deg": float(
+            torch.rad2deg(
+                torch.quantile(torch.stack(chassis_attitude_reactions), 0.95)
+            )
+        ),
+        "max_chassis_attitude_reaction_deg": float(
+            torch.rad2deg(torch.stack(chassis_attitude_reactions).max())
+        ),
         "max_truck_post_constraint_drift_m": float(
             raw._max_truck_post_constraint_drift.max()
         ),
@@ -746,7 +798,11 @@ def main() -> None:
                 output=plot_path,
             )
         row = evaluate_verge(
-            raw, policy, int(a.steps), tracking_plot=tracking_plot
+            raw,
+            policy,
+            int(a.steps),
+            tracking_plot=tracking_plot,
+            zero_action=bool(a.zero_action),
         )
         summary = summarize_convergence(row)
         report["verge"] = row

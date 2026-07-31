@@ -25,7 +25,7 @@ from isaaclab.app import AppLauncher
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--num_envs", type=int, default=128)
 p.add_argument("--seed", type=int, default=17)
-p.add_argument("--stage", type=int, default=4, choices=(1, 2, 3, 4))
+p.add_argument("--stage", type=int, default=4, choices=(1, 2, 3, 4, 5))
 p.add_argument("--iterations", type=int, default=120)
 p.add_argument("--steps_per_iteration", type=int, default=32)
 p.add_argument("--epochs_per_iteration", type=int, default=3)
@@ -128,7 +128,7 @@ def teacher_preflight(raw, steps: int) -> dict:
     raw.set_teacher_execute_mask(
         torch.ones(raw.num_envs, dtype=torch.bool, device=raw.device)
     )
-    zero = torch.zeros((raw.num_envs, 4), device=raw.device)
+    zero = torch.zeros((raw.num_envs, int(raw.cfg.action_space)), device=raw.device)
     raw_actions, applied, errors, laterals, contacts, scans = [], [], [], [], [], []
     alignments, accelerations, wheel_support, rewards = [], [], [], []
     nonfinite = 0
@@ -245,7 +245,7 @@ def main() -> None:
     optimizer = torch.optim.Adam(actor.parameters(), lr=float(a.learning_rate))
     obs, _ = raw.reset(seed=int(a.seed) + 1)
     replay = ReplayBuffer(
-        int(a.replay_capacity), int(obs["policy"].shape[-1]), 4, raw.device
+        int(a.replay_capacity), int(obs["policy"].shape[-1]), int(raw.cfg.action_space), raw.device
     )
     history = []
 

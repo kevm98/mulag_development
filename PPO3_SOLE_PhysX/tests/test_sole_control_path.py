@@ -181,6 +181,8 @@ def test_terrain_head_contract_has_margin_lock_and_strict_evaluation():
     cfg_source = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
     assert "terrain_head_threshold: float = 0.995" in cfg_source
     assert "terrain_head_penalty_max_deviation: float = 2.0" in cfg_source
+    assert "terrain_head_penalty_scale: float = 0.02" in cfg_source
+    assert "terrain_head_penalty_far_weight: float = -0.5" in cfg_source
     assert "head_down_termination_alignment: float = 0.98" in cfg_source
     assert "sole_action_authority: tuple = (1.0, 1.0, 1.0, 1.0)" in cfg_source
     assert "terrain_head_tilt_shield_soft: float = 0.08" in cfg_source
@@ -213,11 +215,17 @@ def test_terrain_reward_forwards_configured_smoothing_and_safety_scales():
     for contract in (
         "terrain_clearance_barrier_weight: float = 0.0",
         "terrain_clearance_margin_m: float = 0.0",
-        "terrain_contact_reward_weight: float = 2.0",
+        # Raised 2.0 -> 4.0 (2026-07-31) against residual cutter skipping that
+        # no physics change moved; see the config docstring for the derivation.
+        "terrain_contact_reward_weight: float = 4.0",
         "dense_lateral_error_weight: float = 3.0",
-        "sole_acceleration_weight: float = -0.50",
+        "sole_acceleration_scale_mps2: float = 80.0",
+        "sole_acceleration_weight: float = -2.5",
         "sole_rate_penalty_weight: float = -0.30",
-        "terrain_action_filter: float = 0.70",
+        # Swept down from 0.70 with the head levelling contract: 0.85 measured
+        # p95_tool_acceleration 133.3 and 0.55 measured 129.88 while carrying
+        # p95_cut_height_error to 0.0628, the pair that reaches 14/15 gates.
+        "terrain_action_filter: float = 0.55",
         "terrain_action_magnitude_weight: float = -1.0",
         "terrain_cut_progress_weight: float = 1.0",
         "terrain_lateral_progress_weight: float = 0.5",
@@ -609,3 +617,42 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"ok  {name}")
+
+
+def test_head_joint_bypasses_the_hydraulic_rom():
+    """q5 is not hydraulic and must never be commanded through ROM-A.
+
+    The plant now includes Messerkopf_joint as a real actuated joint, but it
+    carries no cylinder: ROM-A is the command-conditioned surrogate for the four
+    HYDRAULIC cylinders only. The head column is therefore split off the policy
+    action before the cylinder pipeline runs, and its reference is written
+    directly to the articulation.
+
+    Two things this pins:
+      * the split happens before the ROM/ID pipeline, so c1-c4 see a 4-wide
+        tensor identical to the pre-5-action contract;
+      * the head reference is never routed through the cylinder adapter.
+    """
+    source = (ROOT / "PPO3_SOLE_PhysX" / "env.py").read_text()
+
+    split = source.index("self._head_action_raw = torch.clamp")
+    rom = source.index("self._run_cylinder_id_pipeline()")
+    assert split < rom, "head column must be split off BEFORE the ROM pipeline"
+
+    # The head reference is assembled from the joint reference vector, never
+    # from the cylinder adapter's learned/USD scaling.
+    head_fn = source[source.index("def _integrate_head_joint_action") :]
+    head_fn = head_fn[: head_fn.index("\n    def ")]
+    for forbidden in (
+        "_cylinder_adapter",
+        "_cylinder_pos_target",
+        "learned_delta_to_usd_delta",
+        "_run_cylinder_id_pipeline",
+    ):
+        assert forbidden not in head_fn, (
+            f"head joint command must not touch {forbidden}: q5 is not hydraulic "
+            "and is not commanded by ROM-A"
+        )
+
+    # sanitize_cylinder_action is the hydraulic command gate and stays 4-wide.
+    assert "action_dim=4" in source

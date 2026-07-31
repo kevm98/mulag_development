@@ -27,7 +27,14 @@ from isaaclab.app import AppLauncher
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--num_envs", type=int, default=64)
 p.add_argument("--seed", type=int, default=17)
-p.add_argument("--stages", default="1,2,3,4", help="Curriculum stages, in order.")
+p.add_argument(
+    "--stages",
+    default="1,2,3,4",
+    help=(
+        "Curriculum stages, in order. Stage 5 is stage 4's arm contract on the "
+        "rough-lawn verge and is opt-in, so it is not in the default schedule."
+    ),
+)
 p.add_argument("--stage_iterations", type=int, default=500)
 p.add_argument(
     "--until_converged",
@@ -84,6 +91,16 @@ p.add_argument(
     help="Optional exploration std for the head-pitch action after resume.",
 )
 p.add_argument(
+    "--resume_std",
+    type=float,
+    default=None,
+    help=(
+        "Optional exploration std for ALL four actions after resume. "
+        "--init_std cannot do this on a resume: it sets the distribution at "
+        "construction and the checkpoint overwrites it on load."
+    ),
+)
+p.add_argument(
     "--checkpoint_out",
     default="",
     help=(
@@ -107,12 +124,14 @@ a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
 
 stages = tuple(int(part) for part in a.stages.split(",") if part.strip())
-if not stages or any(stage not in (1, 2, 3, 4) for stage in stages):
-    p.error("--stages must be a comma-separated subset of 1,2,3,4")
+if not stages or any(stage not in (1, 2, 3, 4, 5) for stage in stages):
+    p.error("--stages must be a comma-separated subset of 1,2,3,4,5")
 if a.stage_iterations <= 0 or a.save_interval <= 0:
     p.error("stage iterations and save interval must be positive")
 if a.learning_rate is not None and a.learning_rate <= 0.0:
     p.error("--learning_rate must be positive")
+if a.resume_std is not None and a.resume_std <= 0.0:
+    p.error("--resume_std must be positive")
 if a.init_std is not None and a.init_std <= 0.0:
     p.error("--init_std must be positive")
 if a.resume_c4_std is not None and a.resume_c4_std <= 0.0:
@@ -347,6 +366,31 @@ def main() -> None:
         runner_cfg.actor.distribution_cfg.init_std = float(a.init_std)
 
     apply_terrain_curriculum_stage(env_cfg, stages[0])
+    # Training-only relief spread. The held-out gate terrain deliberately keeps
+    # the narrower cfg tuple so scores stay comparable; PPO sees 0.35 (near-flat)
+    # and 1.15 (rougher than anything scored) so it generalizes past the gates
+    # rather than to them. Per-scale tracking is logged as
+    # height_scale/<scale>_* so an unservable scale is visible, not averaged.
+    env_cfg.terrain_height_scales = (0.35, 0.50, 0.70, 0.85, 1.00, 1.15)
+    # Training-only path widening, same rationale and same pattern as the relief
+    # spread above: the gated held-out path deliberately keeps the cfg default so
+    # scores stay comparable, while PPO is exercised over a wider lateral band
+    # than it is ever scored on.
+    #
+    # The families author 0.10-0.24 m of swing against 0.74 m of available
+    # half-strip, so the arm was working a third of the room the verge offers
+    # (mean peak-to-peak 0.202 m). 1.8x takes that to 0.355 m.
+    #
+    # Measured cost on the SHIPPED checkpoint, which was never trained for it
+    # (128 envs x 960 held-out steps): 1.2x -> 14/17, 1.4x -> 13/17,
+    # 1.8x -> 9/17. Lateral error stays well inside its 0.30 gate at every scale
+    # (0.081/0.092/0.118), so reach is not the limit -- head alignment is
+    # (0.9500 -> 0.9155/0.8928/0.3379). A wider path demands more slew and slew
+    # tilts the head, so this widening AMPLIFIES the outstanding head coupling.
+    # Expect a policy trained here to need the head driven as a real joint
+    # rather than the 0.76 feedforward with a bounded correction.
+    env_cfg.terrain_tracking_amplitude_scale = 1.8
+
     # The inherited trajectory exists only for reset deployment. Scored terrain
     # episodes always use the sensed verge reference and a fixed deployment.
     env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
@@ -484,6 +528,19 @@ def main() -> None:
             with torch.no_grad():
                 critic_output.weight.zero_()
                 critic_output.bias.zero_()
+        # Applied before --resume_c4_std so the head-pitch axis can still be set
+        # independently on top of a global reduction.
+        if a.resume_std is not None:
+            distribution = runner.alg.actor.distribution
+            if not hasattr(distribution, "std_param"):
+                raise RuntimeError("terrain actor distribution has no std_param")
+            with torch.no_grad():
+                distribution.std_param[:] = float(a.resume_std)
+            print(
+                f"[PPO3-VERGE] set exploration std to {float(a.resume_std)} "
+                "on all four actions after resume",
+                flush=True,
+            )
         if a.resume_c4_std is not None:
             distribution = runner.alg.actor.distribution
             if not hasattr(distribution, "std_param"):
@@ -530,6 +587,20 @@ def main() -> None:
         output_layer = runner.alg.get_policy().mlp[-1]
         if not isinstance(output_layer, torch.nn.Linear) or output_layer.bias is None:
             raise RuntimeError("terrain actor output layer is not a biased Linear layer")
+        # The bias is authored per cylinder. When Messerkopf_joint is driven as a
+        # real 5th action it starts unbiased: the reset seeds its reference from
+        # the inherited coupling, so zero action already holds the validated
+        # deployment pose and any bias here would push the head off it.
+        width = int(output_layer.bias.numel())
+        if bias.numel() < width:
+            bias = torch.cat(
+                [bias, torch.zeros(width - bias.numel(), device=bias.device)]
+            )
+        elif bias.numel() > width:
+            raise RuntimeError(
+                f"terrain_initial_action_bias has {bias.numel()} entries but the "
+                f"actor emits {width} actions"
+            )
         with torch.no_grad():
             output_layer.bias.copy_(bias)
         print(f"[PPO3-VERGE] initialized actor action bias={bias.tolist()}", flush=True)

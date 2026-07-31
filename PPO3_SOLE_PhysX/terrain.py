@@ -19,7 +19,7 @@ harder as the truck keeps driving rather than being uniformly random.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import trimesh
@@ -101,6 +101,18 @@ class MowStripCfg:
     tracking_path_family: str = "boom_sweep"
     """Curve the mowing path with the boom's measured high-terrain sweep."""
 
+    tracking_path_amplitude_scale: float = 1.0
+    """Multiplier on every family's lateral excursion, applied before bounding.
+
+    The families author amplitudes of 0.10-0.24 m while the strip offers
+    ``0.5 * width_m - 0.16`` = 0.74 m of half-width, so the paths were using
+    barely a third of the available room and the tanh bound never engaged --
+    the arm was exercised over a much narrower lateral band than the verge
+    supports. Scaling here rather than editing eleven literals keeps every
+    family's SHAPE and their relative difficulty ordering intact, and 1.0
+    reproduces every previously measured score bit-for-bit.
+    """
+
     # Roughness. Amplitude ramps linearly from `start` to `end` along the strip,
     # so the first metres are nearly flat and the ground becomes progressively
     # harder as the truck drives.
@@ -113,6 +125,24 @@ class MowStripCfg:
     lateral_wavelength_m: float = 4.0
     cross_slope_end_rad: float = 0.005
     """Sideways tilt of the verge, ramping in like the amplitude."""
+
+    # --- Lawn relief (zero by default; the rough stage-5 profile sets these) ---
+    # Hollows are the only way the verge goes BELOW road level: every other term
+    # is non-negative, so the gentle profile never dips under the tyre plane.
+    hollow_centers: tuple[float, ...] = ()
+    hollow_depths_m: tuple[float, ...] = ()
+    hollow_widths: tuple[float, ...] = ()
+    """Gaussian depressions as fractions of length; depths are negative metres."""
+
+    # Mid-band roughness. The gentle profile's shortest component is 4.5 m, i.e.
+    # 0.25 Hz at 4 km/h -- quasi-static. These two add the 0.5-2 m band a real
+    # lawn has, which is where the arm's own bandwidth is actually tested.
+    wavelength_mid_m: float = 1.2
+    mid_weight: float = 0.0
+    wavelength_fine_m: float = 0.6
+    fine_weight: float = 0.0
+    lateral_weight: float = 0.1
+    """Weight of the lateral ripple; the gentle profile leaves this at 0.1."""
 
     seed: int = 42
 
@@ -144,12 +174,32 @@ def surface_height_at(cfg: MowStripCfg, x_local, y_local) -> np.ndarray:
         hills = hills + varied_peak * np.exp(
             -0.5 * ((progress - varied_center) / varied_width) ** 2
         )
+    # Depressions carrying the surface below the tyre plane. Drawn from the same
+    # generator as the mounds so a seed still reproduces the whole verge exactly.
+    for center, depth, width in zip(
+        cfg.hollow_centers, cfg.hollow_depths_m, cfg.hollow_widths
+    ):
+        varied_center = center + rng.uniform(-0.025, 0.025)
+        varied_depth = depth * rng.uniform(0.90, 1.10)
+        varied_width = width * rng.uniform(0.90, 1.10)
+        hills = hills + varied_depth * np.exp(
+            -0.5 * ((progress - varied_center) / varied_width) ** 2
+        )
     # Broad hills plus low-frequency surface variation: visibly non-uniform,
     # but differentiable and gentle enough for continuous cutter contact.
+    # Two extra phases for the mid/fine band. Drawn after the hill loop so the
+    # gentle profile, which leaves both weights at zero, keeps the exact surface
+    # it had before -- stage 1-4 runs and the fixed held-out set stay comparable.
+    lawn_phase = rng.uniform(0.0, 2.0 * np.pi, size=2)
     height = cfg.base_z_m + progress * cfg.elevation_rise_end_m + hills + amplitude * (
         0.6 * np.sin(2.0 * np.pi * s / cfg.wavelength_long_m + phase[0])
         + 0.3 * np.sin(2.0 * np.pi * s / cfg.wavelength_short_m + phase[1])
-        + 0.1 * np.sin(2.0 * np.pi * t / cfg.lateral_wavelength_m + phase[2])
+        + cfg.lateral_weight
+        * np.sin(2.0 * np.pi * t / cfg.lateral_wavelength_m + phase[2])
+        + cfg.mid_weight
+        * np.sin(2.0 * np.pi * s / max(cfg.wavelength_mid_m, 1.0e-6) + lawn_phase[0])
+        + cfg.fine_weight
+        * np.sin(2.0 * np.pi * s / max(cfg.wavelength_fine_m, 1.0e-6) + lawn_phase[1])
     )
     return height + progress * cfg.cross_slope_end_rad * t
 
@@ -342,6 +392,11 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
     if family != "boom_sweep":
         offset = offset * endpoint_window
 
+    # Widen every family uniformly. Applied AFTER the endpoint windows so the
+    # zero-derivative joins at the lead-in/out are preserved -- scaling before
+    # them would reintroduce the steering impulse those windows exist to remove.
+    offset = offset * float(getattr(cfg, "tracking_path_amplitude_scale", 1.0))
+
     # Preserve a green margin even for the height-coupled boom path. Smooth
     # saturation avoids the flat, non-differentiable sections produced by clip.
     margin = 0.16
@@ -373,3 +428,78 @@ MOW_STRIP_EVAL_CFG = MowStripCfg(
     amplitude_end_m=0.07,
     hill_heights_m=(0.20, 0.55, 0.31),
 )
+
+RELIEF_PROFILES = ("gentle", "lawn_rough")
+
+
+def decoration_seed(base_seed: int, offset: int) -> int:
+    """Fold a signed offset into a seed numpy will accept.
+
+    Scene decoration is keyed by geometry -- a bank's centre y, for instance --
+    and those coordinates are routinely negative, which ``default_rng`` rejects
+    outright. Mixing before the mask keeps nearby offsets on unrelated streams,
+    so two banks a few centimetres apart do not get near-identical relief.
+    """
+    mixed = (int(base_seed) & 0xFFFFFFFF) * 1_000_003 + int(offset) * 2_654_435_761
+    return int(mixed % (2**32))
+
+
+def apply_relief_profile(cfg: MowStripCfg, profile: str) -> MowStripCfg:
+    """Return ``cfg`` re-cut for a named relief class.
+
+    ``gentle`` is the identity: stages 1-4 and the fixed held-out set keep the
+    exact surface they were scored on, so existing numbers stay comparable.
+
+    ``lawn_rough`` is the stage-5 verge. Three changes over ``gentle``:
+
+    * Hollows carry parts of the surface *below* road level. Every other term is
+      non-negative, so the gentle verge never dips under the tyre plane and the
+      cutter never has to work down into a depression.
+    * Mounds are lifted a little above the gentle profile's tallest.
+    * Mid (1.2 m) and fine (0.6 m) bands fill the 0.5-2 m gap. The gentle verge
+      has nothing shorter than 4.5 m, i.e. 0.25 Hz at 4 km/h, which is
+      quasi-static; 1.2 m is 0.93 Hz and is where arm bandwidth actually bites.
+
+    Cross-slope is raised only to 0.035 rad (2.0 deg) rather than the 5-10 deg a
+    real verge is canted at. Cant is the most direct load on head attitude, and
+    ``head_alignment_hard_min`` has never passed on the gentle verge -- so it is
+    deliberately the least aggressive of these knobs. Raise it once head-down
+    holds, not before.
+    """
+    profile = str(profile)
+    if profile not in RELIEF_PROFILES:
+        raise ValueError(
+            f"terrain_relief_profile must be one of {RELIEF_PROFILES}, got {profile!r}"
+        )
+    if profile == "gentle":
+        return cfg
+    # Four mounds of deliberately unequal height, scaled to whichever base verge
+    # this is so the training/held-out difference survives. The monotonic
+    # elevation ramp is dropped entirely: it is what held the gentle verge
+    # everywhere above the tyre plane, and without it the surface returns to road
+    # level between mounds instead of climbing steadily.
+    hill_scale = max(cfg.hill_heights_m) / 0.48 if cfg.hill_heights_m else 1.0
+    return replace(
+        cfg,
+        hill_centers=(0.21, 0.47, 0.70, 0.89),
+        hill_heights_m=tuple(
+            round(value * hill_scale, 4) for value in (0.14, 0.42, 0.68, 0.24)
+        ),
+        hill_widths=(0.042, 0.052, 0.072, 0.038),
+        # Shallow scoops, not pits: a few centimetres under the road, enough that
+        # the cutter has to work down to them without asking for vertical travel
+        # the arm has not got. The Q4 authority collapse on the gentle verge is
+        # the reason these are 3-4 cm and not 15.
+        hollow_centers=(0.10, 0.34, 0.58, 0.80, 0.96),
+        hollow_depths_m=(-0.030, -0.040, -0.028, -0.035, -0.026),
+        hollow_widths=(0.028, 0.026, 0.024, 0.026, 0.023),
+        elevation_rise_end_m=0.0,
+        wavelength_mid_m=1.2,
+        mid_weight=0.26,
+        wavelength_fine_m=0.6,
+        fine_weight=0.09,
+        lateral_weight=0.24,
+        cross_slope_end_rad=0.030,
+        amplitude_start_m=0.010,
+        amplitude_end_m=max(cfg.amplitude_end_m * 0.60, 0.036),
+    )

@@ -8,6 +8,7 @@ sign-flipping, and NaN actions, because those are what an untrained PPO emits.
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -207,6 +208,81 @@ def test_directional_tilt_shield_blocks_only_worsening_head_motion():
     assert torch.allclose(gain[:, 3], torch.tensor([0.5, 1.0, 1.0, 0.0]))
     assert torch.allclose(shielded[:, :3], action[:, :3])
     assert torch.allclose(shielded[:, 3], action[:, 3] * gain[:, 3])
+
+
+def test_directional_tilt_shield_fades_on_true_excursion_not_its_projection():
+    """A head leaving the cone square to c4's plane must still lose authority.
+
+    ``signed_tilt`` is atan2(axis_y, -axis_z), the tilt projected into the plane
+    c4 acts in. A pure X-Z excursion projects to exactly zero, so without an
+    explicit magnitude the shield stays wide open until the head passes 90
+    degrees -- the escape route that inverted the head in training.
+    """
+    # Head 80 degrees off world-down, almost all of it in X with a slight Y
+    # lean. The projected angle is 0.058 rad -- inside the 0.08 soft limit, so
+    # the shield reads "nearly aligned" -- while the head is in fact sideways.
+    axis = torch.tensor([[math.sin(math.radians(80.0)), 0.01, -math.cos(math.radians(80.0))]])
+    projected = torch.atan2(axis[:, 1], -axis[:, 2])
+    true_angle = torch.acos(torch.clamp(-axis[:, 2], -1.0, 1.0))
+    assert float(projected[0]) < 0.08 < float(true_angle[0])
+
+    action = torch.full((1, 4), 0.5)
+    _, blind_gain = directional_tilt_shield(
+        action,
+        signed_tilt=projected,
+        action_channel=3,
+        action_to_tilt_sign=1.0,
+        soft_limit=0.08,
+        hard_limit=0.16,
+    )
+    _, guarded_gain = directional_tilt_shield(
+        action,
+        signed_tilt=projected,
+        tilt_magnitude=true_angle,
+        action_channel=3,
+        action_to_tilt_sign=1.0,
+        soft_limit=0.08,
+        hard_limit=0.16,
+    )
+    assert float(blind_gain[0, 3]) == 1.0
+    assert float(guarded_gain[0, 3]) == 0.0
+
+
+def test_directional_tilt_shield_cannot_act_on_a_pure_out_of_plane_excursion():
+    """Documents the shield's hard limit: c4 only acts in the Y-Z plane.
+
+    For an excursion exactly square to that plane the projected sign is zero, so
+    no c4 direction is worsening and none is corrective -- there is nothing for
+    the shield to fade. Holding the head down against this axis needs authority
+    the shield does not have (termination, or the DOF that produced the tilt).
+    """
+    action = torch.full((1, 4), 0.5)
+    _, gain = directional_tilt_shield(
+        action,
+        signed_tilt=torch.zeros(1),
+        tilt_magnitude=torch.tensor([math.radians(80.0)]),
+        action_channel=3,
+        action_to_tilt_sign=1.0,
+        soft_limit=0.08,
+        hard_limit=0.16,
+    )
+    assert float(gain[0, 3]) == 1.0
+
+
+def test_directional_tilt_shield_magnitude_preserves_recovery_authority():
+    """Fading must never touch the direction that returns the head to down."""
+    action = torch.tensor([[0.0, 0.0, 0.0, -0.5], [0.0, 0.0, 0.0, 0.5]])
+    _, gain = directional_tilt_shield(
+        action,
+        signed_tilt=torch.tensor([0.02, 0.02]),
+        tilt_magnitude=torch.tensor([1.4, 1.4]),
+        action_channel=3,
+        action_to_tilt_sign=1.0,
+        soft_limit=0.08,
+        hard_limit=0.16,
+    )
+    # Corrective (negative) command keeps full authority; worsening is blocked.
+    assert torch.allclose(gain[:, 3], torch.tensor([1.0, 0.0]))
 
 
 def test_directional_tilt_shield_rejects_invalid_contracts():

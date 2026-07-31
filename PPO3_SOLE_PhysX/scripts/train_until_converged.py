@@ -64,6 +64,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional c4 exploration std applied only to the first resumed block.",
     )
+    parser.add_argument(
+        "--exploration_std",
+        type=float,
+        default=None,
+        help=(
+            "Exploration std forced on every action at the start of EVERY block, "
+            "not just the first. Head X-axis excursions are unrecoverable (c4 "
+            "acts only in the Y-Z plane), so a std that drifts back up between "
+            "blocks re-opens the failure."
+        ),
+    )
+    parser.add_argument(
+        "--c4_exploration_std",
+        type=float,
+        default=None,
+        help=(
+            "Exploration std forced on the HEAD-PITCH axis only, at the start of "
+            "every block. Measured 2026-07-31: the v5 checkpoint's converged std "
+            "is [0.128, 0.106, 0.146, 0.119]. Forcing all four axes to 0.04-0.05 "
+            "(--exploration_std) amplifies PPO's gradient on the action mean by "
+            "1/sigma and made every block regress; leaving all four at their "
+            "natural 0.12 finally cut chassis sway 54.77 -> 39.22 mm and tool "
+            "acceleration 111.6 -> 92.7, but flipped the head to alignment "
+            "-0.8539. c4 acts only in the Y-Z plane, so a head X excursion is "
+            "unrecoverable -- cap that axis alone and let c1-c3 keep the "
+            "exploration that is doing the useful work."
+        ),
+    )
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=4,
+        help=(
+            "Curriculum stage for both training blocks and the held-out "
+            "evaluation. 4 is the gentle production verge; 5 is the rough-lawn "
+            "verge. A stage-5 score is NOT comparable with a stage-4 one."
+        ),
+    )
     parser.add_argument("--save_interval", type=int, default=10)
     parser.add_argument("--train_timeout_s", type=int, default=7200)
     parser.add_argument("--eval_timeout_s", type=int, default=1800)
@@ -89,6 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore an existing supervisor state file and start from --resume.",
     )
+    parser.add_argument(
+        "--keep_regressed_checkpoint",
+        action="store_true",
+        help=(
+            "Seed the next block from the block just trained even when its "
+            "held-out result regressed. The default rolls back to model_best.pt "
+            "so a bad block cannot compound."
+        ),
+    )
     return parser
 
 
@@ -105,8 +152,14 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--learning_rate must be positive")
     if args.first_block_c4_std is not None and args.first_block_c4_std <= 0.0:
         parser.error("--first_block_c4_std must be positive")
+    if args.exploration_std is not None and args.exploration_std <= 0.0:
+        parser.error("--exploration_std must be positive")
+    if args.c4_exploration_std is not None and args.c4_exploration_std <= 0.0:
+        parser.error("--c4_exploration_std must be positive")
     if args.save_interval <= 0:
         parser.error("--save_interval must be positive")
+    if not 1 <= args.stage <= 5:
+        parser.error("--stage must be between 1 and 5")
     if args.min_blocks < 0 or args.max_blocks < 0:
         parser.error("--min_blocks and --max_blocks cannot be negative")
     if args.max_blocks and args.max_blocks < args.min_blocks:
@@ -134,7 +187,7 @@ def training_command(
         "--seed",
         str(block_seed),
         "--stages",
-        "4",
+        str(args.stage),
         "--stage_iterations",
         str(args.block_iterations),
         "--save_interval",
@@ -155,6 +208,12 @@ def training_command(
         command.extend(["--trajectory_library_path", args.trajectory_library_path])
     if args.command_rom_checkpoint:
         command.extend(["--command_rom_checkpoint", args.command_rom_checkpoint])
+    if args.exploration_std is not None:
+        command.extend(["--resume_std", str(args.exploration_std)])
+    # Applied after --resume_std so the head axis wins, and on EVERY block: the
+    # head can flip in any block, not just the first.
+    if args.c4_exploration_std is not None:
+        command.extend(["--resume_c4_std", str(args.c4_exploration_std)])
     if int(block_index) == 1:
         if args.reset_optimizer_first_block:
             command.append("--reset_optimizer_on_resume")
@@ -182,7 +241,7 @@ def evaluation_command(
         "--steps",
         str(args.eval_steps),
         "--stage",
-        "4",
+        str(args.stage),
         "--eval_terrain",
         "--report",
         str(report),
@@ -333,7 +392,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if state_path.is_file() and not args.restart:
         state = json.loads(state_path.read_text())
-        current_checkpoint = Path(state["latest_checkpoint"]).resolve()
+        # Prefer the recorded resume point so a restart honours a rollback.
+        # States written before `resume_checkpoint` existed only have
+        # `latest_checkpoint`, which was the resume point under the old rules.
+        current_checkpoint = Path(
+            state.get("resume_checkpoint") or state["latest_checkpoint"]
+        ).resolve()
         completed_blocks = int(state.get("completed_blocks", 0))
         best_score = float(state.get("best_score", float("inf")))
         best_gates = dict(state.get("best_gates") or {})
@@ -438,6 +502,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"wrote {best_checkpoint}",
                 flush=True,
             )
+        elif not args.keep_regressed_checkpoint:
+            # A block that lost ground must not seed the next one. Every block
+            # used to resume from model_latest.pt unconditionally, so the run
+            # walked away from its own best policy with no path back: stage 5
+            # block 1 regressed 0.673 -> 1.316 and block 2 would have continued
+            # from the worse weights. Rolling back keeps the search anchored to
+            # the best held-out checkpoint; a fresh seed and the reshuffled
+            # terrain make the retry a genuinely different block, not a replay.
+            current_checkpoint = best_checkpoint
+            print(
+                f"[PPO3-SUPERVISOR] block {block_index} regressed "
+                f"(score={score:.6f} vs best={best_score:.6f}); "
+                f"next block resumes from {best_checkpoint}",
+                flush=True,
+            )
 
         minimum_complete = completed_blocks >= int(args.min_blocks)
         state = {
@@ -448,9 +527,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if report["passed"]
                 else "training"
             ),
-            "latest_checkpoint": str(current_checkpoint),
+            # The checkpoint this block produced and `latest_score` scored, which
+            # is not necessarily what the next block resumes from -- see the
+            # rollback above and `resume_checkpoint`.
+            "latest_checkpoint": str(latest_checkpoint),
             "latest_report": str(report_path),
             "latest_score": score,
+            "resume_checkpoint": str(current_checkpoint),
             "best_checkpoint": str(best_checkpoint),
             "best_report": str(best_report_path),
             "best_score": best_score,

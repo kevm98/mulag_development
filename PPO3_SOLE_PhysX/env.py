@@ -47,9 +47,15 @@ class SolePolicyEnv(ResidualPolicyEnv):
     _sole_applied: torch.Tensor | None = None
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
-        if int(getattr(cfg, "action_space", 4)) != 4:
+        # 4 hydraulic cylinders, plus Messerkopf_joint when it is driven as a
+        # real joint rather than slaved to c4. Any other width is a mismatched
+        # checkpoint or a mis-set config, and must fail loudly rather than
+        # silently truncate the command.
+        expected_actions = 5 if bool(getattr(cfg, "sole_head_joint_action", False)) else 4
+        if int(getattr(cfg, "action_space", 4)) != expected_actions:
             raise ValueError(
-                f"PPO3 requires 4 actions, got {getattr(cfg, 'action_space', None)}"
+                f"PPO3 requires {expected_actions} actions, got "
+                f"{getattr(cfg, 'action_space', None)}"
             )
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
@@ -165,9 +171,52 @@ class SolePolicyEnv(ResidualPolicyEnv):
             self._baseline_cylinder_goal,
             goal_velocity=self._baseline_cylinder_velocity,
         )
-        return sanitize_cylinder_action(
+        teacher = sanitize_cylinder_action(
             action_4d, num_envs=self.num_envs, action_dim=4
         ).to(self.device)
+
+        if not bool(getattr(self.cfg, "sole_head_joint_action", False)):
+            return teacher
+
+        # The DLS inverts the CYLINDER Jacobian and knows nothing about
+        # Messerkopf_joint -- it is not hydraulic and c4 only sets the boom
+        # attitude the head hangs from. Returning the 4-wide command here would
+        # crash the DAgger assignment against a 5-wide student action, and
+        # padding it with zeros would be worse than crashing: the teacher would
+        # actively demonstrate "never move the head", teaching the student to
+        # abandon the joint this whole change exists to control.
+        #
+        # The head teacher is therefore a levelling law, not the DLS: drive the
+        # measured world-down tilt to zero. It is the same signed-tilt feedback
+        # the feedforward correction used, expressed as an action in [-1, 1]
+        # instead of a bounded reference offset.
+        head_axis = self._head_down_axis_world()
+        signed_tilt = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
+        sign = float(getattr(self.cfg, "terrain_messerkopf_level_sign", -1.0))
+
+        # Proportional over a BAND, not over the per-step action scale. Dividing
+        # by the 0.010 rad action scale saturated the teacher at 0.57 deg of
+        # tilt, making it bang-bang: measured min_head_alignment 0.9296 (a 21.7
+        # deg worst tilt) even though p01 was a healthy 0.9858. A demonstration
+        # that slams between +-1 is also the worst possible thing to clone.
+        band = max(float(getattr(self.cfg, "sole_head_teacher_band_rad", 0.05)), 1e-6)
+        gain = float(getattr(self.cfg, "sole_head_teacher_gain", 1.0))
+
+        # Rate damping. The head hangs off a moving boom, so pure proportional
+        # control chases a reference that is itself accelerating and overshoots
+        # exactly at the worst-case samples the hard-min gate reads.
+        previous_tilt = getattr(self, "_head_teacher_prev_tilt", None)
+        if previous_tilt is None or previous_tilt.shape != signed_tilt.shape:
+            previous_tilt = signed_tilt.detach().clone()
+        tilt_rate = signed_tilt - previous_tilt
+        self._head_teacher_prev_tilt = signed_tilt.detach().clone()
+        damping = float(getattr(self.cfg, "sole_head_teacher_damping", 4.0))
+
+        command = gain * signed_tilt + damping * tilt_rate
+        head_action = torch.clamp(sign * command / band, -1.0, 1.0)
+        return torch.cat(
+            [teacher, torch.nan_to_num(head_action).reshape(-1, 1)], dim=-1
+        )
 
     def set_teacher_execute_mask(self, mask: torch.Tensor) -> None:
         """Choose which environments the teacher drives this step (DAgger beta)."""
@@ -194,9 +243,13 @@ class SolePolicyEnv(ResidualPolicyEnv):
             actions.to(dtype=torch.float32, device=self.device),
             nan=0.0, posinf=0.0, neginf=0.0,
         )
-        if tuple(actions.shape) != (int(self.num_envs), 4):
+        expected_actions = (
+            5 if bool(getattr(cfg, "sole_head_joint_action", False)) else 4
+        )
+        if tuple(actions.shape) != (int(self.num_envs), expected_actions):
             raise RuntimeError(
-                f"Sole-controller action must be ({self.num_envs}, 4), "
+                f"Sole-controller action must be "
+                f"({self.num_envs}, {expected_actions}), "
                 f"got {tuple(actions.shape)}"
             )
 
@@ -219,6 +272,21 @@ class SolePolicyEnv(ResidualPolicyEnv):
             if bool(getattr(cfg, "force_zero_policy", False))
             else actions
         )
+        # Split off the head channel BEFORE the cylinder pipeline so that every
+        # validated 4-cylinder contract below sees exactly the tensor it always
+        # saw. The head is not hydraulic and does not belong in the cylinder
+        # limit shield, the ID pipeline, or the ROM command.
+        if bool(getattr(cfg, "sole_head_joint_action", False)):
+            self._head_action_raw = torch.clamp(
+                torch.nan_to_num(
+                    effective[:, 4], nan=0.0, posinf=0.0, neginf=0.0
+                ),
+                -1.0,
+                1.0,
+            )
+            effective = effective[:, :4]
+        else:
+            self._head_action_raw = None
         self._prev_sole_applied = self._sole_applied.clone()
         output = apply_sole_action(
             policy_action=effective,
@@ -258,9 +326,20 @@ class SolePolicyEnv(ResidualPolicyEnv):
             self._teacher_action = self._compute_teacher_action()
             if self._teacher_mode == "execute" and self._teacher_execute_mask.any():
                 mask = self._teacher_execute_mask
-                self._current_action[mask] = self._teacher_action[mask]
-                self._ppo_raw_action[mask] = self._teacher_action[mask]
-                self._sole_applied[mask] = self._teacher_action[mask]
+                # The teacher is 5-wide when the head is a real joint. Route its
+                # head column to the head integrator; assigning the whole tensor
+                # into the 4-wide cylinder buffers would be a shape error, and
+                # dropping the column would silently leave the head on the
+                # student's command while claiming the teacher was driving.
+                teacher_cylinders = self._teacher_action[:, :4]
+                self._current_action[mask] = teacher_cylinders[mask]
+                self._ppo_raw_action[mask] = teacher_cylinders[mask]
+                self._sole_applied[mask] = teacher_cylinders[mask]
+                if (
+                    getattr(self, "_head_action_raw", None) is not None
+                    and self._teacher_action.shape[-1] > 4
+                ):
+                    self._head_action_raw[mask] = self._teacher_action[mask, 4]
 
         # Parent bookkeeping expects these to describe the commanded cylinder
         # state; keep them meaningful so inherited logging and the inherited
@@ -296,14 +375,88 @@ class SolePolicyEnv(ResidualPolicyEnv):
             source = self._joint6_coupling_source_ref_index
             target = self._joint6_coupling_target_ref_index
             if source is not None and target is not None:
-                self._joint_ref[:, target] = (
-                    float(getattr(cfg, "joint6_coupling_a", 0.76))
-                    * self._joint_ref[:, source]
-                    + float(getattr(cfg, "joint6_coupling_b", 0.0))
-                )
+                if getattr(self, "_head_action_raw", None) is not None:
+                    self._integrate_head_joint_action(target)
+                else:
+                    self._joint_ref[:, target] = (
+                        float(getattr(cfg, "joint6_coupling_a", 0.76))
+                        * self._joint_ref[:, source]
+                        + float(getattr(cfg, "joint6_coupling_b", 0.0))
+                    )
 
         self._hold_wheels()
         self._constrain_truck_xy()
+
+    def _integrate_head_joint_action(self, target: int) -> None:
+        """Steer ``Messerkopf_joint`` with the 5th action.
+
+        Integrated onto the existing reference rather than commanded absolutely:
+        the reset deployment seeds that reference from the inherited
+        ``0.76 * q4`` coupling, so a fresh policy starts from the validated
+        deployment pose and learns to depart from it, instead of snapping the
+        head somewhere arbitrary on the first step.
+
+        Clamped to the joint's own soft limits every step, so the integrator
+        cannot wind up past a pose the joint can physically hold -- which is the
+        failure the fixed coupling had (it asked for a pose the actuator missed
+        by 0.2096 rad at p99).
+        """
+        cfg = self.cfg
+        beta = float(getattr(cfg, "sole_head_action_filter", 0.75))
+        previous = getattr(self, "_head_action_applied", None)
+        if previous is None or previous.shape != self._head_action_raw.shape:
+            previous = torch.zeros_like(self._head_action_raw)
+        applied = beta * previous + (1.0 - beta) * self._head_action_raw
+        self._head_action_applied = applied.detach().clone()
+
+        # Integrate on OUR OWN state, not on _joint_ref. The parent rewrites the
+        # head entry of _joint_ref every step, so accumulating there silently
+        # collapses to a constant one-step offset: measured 0.04482 -> 0.05482
+        # rad after 40 steps of a held +1 action, i.e. exactly one increment,
+        # when it should have travelled 0.4 rad. That version looked correct and
+        # gave the policy no real authority at all.
+        # Feedforward + correction, NOT a free integrator.
+        #
+        # The head hangs off a moving boom, so its reference has to track the
+        # boom or it falls behind as c4 sweeps. Measured directly: holding the
+        # reference static drops min_head_alignment to 0.8369, while letting it
+        # follow 0.76*q4 holds 0.9296 -- the inherited coupling is a decent
+        # FEEDFORWARD even though it is a poor controller on its own (no
+        # feedback, and it misses its own reference by 0.2096 rad at p99).
+        #
+        # So keep the coupling as the base and let the policy own an integrated
+        # CORRECTION on top of it. That gives real authority over the joint
+        # without throwing away the boom tracking the coupling provides.
+        source = getattr(self, "_joint6_coupling_source_ref_index", None)
+        a = float(getattr(cfg, "joint6_coupling_a", 0.76))
+        b = float(getattr(cfg, "joint6_coupling_b", 0.0))
+        feedforward = (
+            a * self._joint_ref[:, source] + b
+            if source is not None
+            else self._joint_ref[:, target]
+        )
+
+        scale = float(getattr(cfg, "sole_head_action_scale_rad", 0.010))
+        correction = getattr(self, "_head_joint_correction", None)
+        if correction is None or correction.shape != applied.shape:
+            correction = torch.zeros_like(applied)
+        bound = float(getattr(cfg, "sole_head_correction_max_rad", 0.35))
+        correction = torch.clamp(correction + scale * applied, -bound, bound)
+        self._head_joint_correction = correction.detach().clone()
+
+        # Only integrate here. The REFERENCE itself is assembled in
+        # _apply_action, which runs every physics substep: with decimation=2 a
+        # once-per-control-step write tracks the boom half as tightly and cost
+        # min_head_alignment 0.9296 -> 0.8662. One writer, one rate.
+        if bool(getattr(cfg, "terrain_head_reference_per_substep", False)):
+            return
+        reference = feedforward + correction
+
+        joint_id = getattr(self, "_joint6_coupling_target_joint_id", None)
+        if joint_id is not None:
+            limits = self.robot.data.soft_joint_pos_limits[:, int(joint_id), :]
+            reference = torch.clamp(reference, limits[:, 0], limits[:, 1])
+        self._joint_ref[:, target] = reference
 
     # ------------------------------------------------------------------
     # Observations
@@ -572,3 +725,25 @@ class SolePolicyEnv(ResidualPolicyEnv):
         self._sole_applied[env_ids] = 0.0
         self._prev_sole_applied[env_ids] = 0.0
         self._sole_shield_gain[env_ids] = 1.0
+
+        if bool(getattr(self.cfg, "sole_head_joint_action", False)):
+            # Seed the head reference from the inherited coupling so the reset
+            # deployment pose is bit-identical to the 4-action plant, then let
+            # the policy integrate away from it. Without this the head would
+            # start each episode wherever the previous one left it.
+            source = self._joint6_coupling_source_ref_index
+            target = self._joint6_coupling_target_ref_index
+            if source is not None and target is not None:
+                self._joint_ref[env_ids, target] = (
+                    float(getattr(self.cfg, "joint6_coupling_a", 0.76))
+                    * self._joint_ref[env_ids, source]
+                    + float(getattr(self.cfg, "joint6_coupling_b", 0.0))
+                )
+            applied = getattr(self, "_head_action_applied", None)
+            if applied is not None:
+                applied[env_ids] = 0.0
+            # Zero the correction, so a reset env starts on the pure coupling
+            # feedforward instead of resuming last episode's offset.
+            correction = getattr(self, "_head_joint_correction", None)
+            if correction is not None:
+                correction[env_ids] = 0.0

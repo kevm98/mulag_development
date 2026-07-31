@@ -47,6 +47,12 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode=render_mode, **kwargs)
         self._residual_action_dim = int(getattr(cfg, "action_space", 3))
+        if bool(getattr(cfg, "sole_head_joint_action", False)):
+            # PPO3 appends a non-hydraulic Messerkopf_joint channel to the
+            # policy action. It splits that column off before anything here
+            # runs, so this cylinder pipeline still sees exactly 4 columns.
+            # PPO2 never sets this flag, so its behaviour is unchanged.
+            self._residual_action_dim -= 1
         if self._residual_action_dim not in (3, 4):
             raise ValueError(
                 f"Policy requires 3 or 4 actions, got {self._residual_action_dim}"

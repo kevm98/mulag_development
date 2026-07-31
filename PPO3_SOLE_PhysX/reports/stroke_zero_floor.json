@@ -1,0 +1,111 @@
+{
+  "timestamp": "2026-07-30T18:33:13",
+  "mode": "zero_action_floor",
+  "checkpoint_contract": null,
+  "stage": 5,
+  "terrain": "held_out",
+  "num_envs": 128,
+  "steps": 960,
+  "gate_mps2": 120.0,
+  "total_samples": 122880,
+  "gate_reduction": {
+    "all_samples": {
+      "name": "all samples (this is the gate)",
+      "samples": 122880,
+      "p95_mps2": 100.05920639038081,
+      "mean_mps2": 32.605511566686374,
+      "max_mps2": 439.76788330078125,
+      "exceeds_gate_fraction": 0.02941080741584301
+    },
+    "excluding_post_reset": {
+      "name": "post-reset excluded",
+      "samples": 122496,
+      "p95_mps2": 100.17871475219727,
+      "mean_mps2": 32.64183458375653,
+      "max_mps2": 439.76788330078125,
+      "exceeds_gate_fraction": 0.029503004625439644
+    },
+    "post_reset_only": {
+      "name": "post-reset only",
+      "samples": 384,
+      "p95_mps2": 51.15306015014647,
+      "mean_mps2": 21.018469121307135,
+      "max_mps2": 86.43611907958984,
+      "exceeds_gate_fraction": 0.0
+    },
+    "post_reset_sample_fraction": 0.003125,
+    "reset_mask_steps": 3
+  },
+  "contact_split": {
+    "free_swing": {
+      "name": "cutter not in contact",
+      "samples": 33639,
+      "p95_mps2": 42.800639343261714,
+      "mean_mps2": 15.991217645723784,
+      "max_mps2": 211.62339782714844,
+      "exceeds_gate_fraction": 0.0023187370970845222
+    },
+    "in_contact": {
+      "name": "cutter in contact",
+      "samples": 88857,
+      "p95_mps2": 111.6439437866211,
+      "mean_mps2": 38.945334625154324,
+      "max_mps2": 439.76788330078125,
+      "exceeds_gate_fraction": 0.039794277399778366
+    },
+    "contact_sample_fraction": 0.7253869514106583
+  },
+  "tail_coincidence": {
+    "tail_samples": 6125,
+    "tail_in_contact_fraction": 0.9704489795918367,
+    "baseline_in_contact_fraction": 0.7253869514106583,
+    "tail_force_spike_fraction": 0.2355918367346939,
+    "baseline_force_spike_fraction": 0.05000163270637409
+  },
+  "explained_variance": {
+    "command_only_r2": -2.220446049250313e-16,
+    "command_plus_contact_r2": -1.057232784803111,
+    "contact_increment_r2": -1.0572327848031107,
+    "samples": 122496,
+    "note": "command features are |applied action rate| and |applied action| per cylinder; contact feature is |delta cutter contact force|"
+  },
+  "stroke": {
+    "pin_threshold_m": 0.0001,
+    "any_cylinder_pinned_fraction": 0.0,
+    "low_pinned_fraction_per_cylinder": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "high_pinned_fraction_per_cylinder": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "min_low_headroom_m_per_cylinder": [
+      0.25375017523765564,
+      0.1380578875541687,
+      0.058265745639801025,
+      0.05157589912414551
+    ],
+    "p01_low_headroom_m_per_cylinder": [
+      0.26021854192018506,
+      0.14265058934688568,
+      0.06994943112134934,
+      0.054454420804977414
+    ],
+    "median_low_headroom_m_per_cylinder": [
+      0.26830461621284485,
+      0.16308152675628662,
+      0.0812130868434906,
+      0.056239187717437744
+    ],
+    "head_alignment_p01": 0.9945278990268708,
+    "head_alignment_min": 0.9731621742248535,
+    "below_latch_fraction": 0.0,
+    "pinned_and_below_latch_fraction": 0.0,
+    "note": "zero_action_floor mode measures stroke the environment consumes on its own; a policy run's excess over that is self-inflicted"
+  }
+}

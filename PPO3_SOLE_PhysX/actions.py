@@ -97,6 +97,7 @@ def directional_tilt_shield(
     action_to_tilt_sign: float,
     soft_limit: float,
     hard_limit: float,
+    tilt_magnitude: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Fade only commands that worsen an observed signed orientation error.
 
@@ -104,6 +105,14 @@ def directional_tilt_shield(
     inactive; between soft and hard it linearly removes authority in the
     direction that increases ``abs(signed_tilt)``; at/above hard it blocks that
     direction completely while preserving full authority to recover.
+
+    ``signed_tilt`` names the direction the shielded channel acts along, so it
+    is necessarily a projection. Pass ``tilt_magnitude`` -- the true off-target
+    angle -- when the head can leave the cone along an axis that projection
+    cannot see; the fade is then driven by the real excursion while the sign
+    still selects which command direction is worsening. Without it a caller
+    whose ``signed_tilt`` is a single-plane projection has no shield at all
+    against excursions square to that plane.
     """
     if action.ndim != 2:
         raise ValueError(f"action must be rank 2, got shape {tuple(action.shape)}")
@@ -123,10 +132,24 @@ def directional_tilt_shield(
         raise ValueError(
             f"signed_tilt batch {tilt.shape[0]} != action batch {action.shape[0]}"
         )
+    if tilt_magnitude is None:
+        magnitude = tilt.abs()
+    else:
+        magnitude = (
+            tilt_magnitude.to(device=action.device, dtype=action.dtype)
+            .reshape(-1)
+            .abs()
+        )
+        if magnitude.shape[0] != action.shape[0]:
+            raise ValueError(
+                f"tilt_magnitude batch {magnitude.shape[0]} != "
+                f"action batch {action.shape[0]}"
+            )
+
     channel_action = action[:, channel]
     predicted_tilt_direction = channel_action * response_sign
     worsening = tilt * predicted_tilt_direction > 0.0
-    fade = torch.clamp((hard - tilt.abs()) / (hard - soft), 0.0, 1.0)
+    fade = torch.clamp((hard - magnitude) / (hard - soft), 0.0, 1.0)
     channel_gain = torch.where(worsening, fade, torch.ones_like(fade))
     gain = torch.ones_like(action)
     gain[:, channel] = channel_gain
