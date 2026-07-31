@@ -129,7 +129,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     #
     # This changes the action interface from 4 to 5, so no existing checkpoint
     # can be resumed. The policy relearns from scratch.
-    sole_head_joint_action: bool = True
+    sole_head_joint_action: bool = False
     terrain_head_reference_per_substep: bool = True
     """Assemble the head joint reference in _apply_action, every substep.
 
