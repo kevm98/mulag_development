@@ -22,7 +22,48 @@ from PPO3_SOLE_PhysX.actions import (
     apply_sole_action,
     directional_tilt_shield,
     limit_shield,
+    nullspace_head_restoring_overlay,
 )
+
+
+def test_nullspace_head_overlay_restores_tilt_and_preserves_cartesian_motion():
+    jacobian = torch.tensor(
+        [
+            [5.769765, -0.317526, -0.165999, 0.065899],
+            [-0.667977, -4.465342, -2.967232, -1.970673],
+            [1.647156, 6.202558, 0.315151, -0.476882],
+        ]
+    )
+    # All four asset action coordinates have the same extension sign, so the
+    # extension-space and action-space null vectors differ only by a global sign.
+    direction = torch.linalg.svd(jacobian, full_matrices=True).Vh[-1]
+    direction = direction / direction[3]
+    corrected, overlay = nullspace_head_restoring_overlay(
+        torch.zeros((2, 4)),
+        signed_tilt=torch.tensor([0.30, -0.30]),
+        action_nullspace=direction,
+        action_to_tilt_sign=1.0,
+        deadband_rad=0.08,
+        gain=1.0,
+        max_c4_action=0.30,
+    )
+    assert corrected[0, 3] < 0.0 and corrected[1, 3] > 0.0
+    assert torch.allclose(overlay @ jacobian.T, torch.zeros((2, 3)), atol=2e-5)
+
+
+def test_nullspace_head_overlay_is_inactive_inside_deadband():
+    action = torch.tensor([[0.1, -0.2, 0.3, -0.4]])
+    corrected, overlay = nullspace_head_restoring_overlay(
+        action,
+        signed_tilt=torch.tensor([0.05]),
+        action_nullspace=torch.tensor([-0.03, 0.13, -0.85, 1.0]),
+        action_to_tilt_sign=1.0,
+        deadband_rad=0.08,
+        gain=2.0,
+        max_c4_action=0.4,
+    )
+    assert torch.equal(corrected, action)
+    assert torch.count_nonzero(overlay) == 0
 
 
 def _zeros(n: int = 4) -> torch.Tensor:

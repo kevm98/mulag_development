@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 from PPO3_SOLE_PhysX.terrain_rewards import (
     bounded_cost_progress,
     compute_verge_reward,
+    lower_tail_weights,
     sanitize_terminal_reward,
+    update_failure_memory,
 )
 
 
@@ -42,6 +44,26 @@ def test_head_barrier_matches_normalized_quadratic_contract():
     terms = _terms(torch.tensor([0.995, 0.990, 0.980, 0.970]))
     expected = torch.tensor([0.0, -1.25, -11.25, -31.25])
     assert torch.allclose(terms.head_penalty, expected, atol=1.0e-5)
+
+
+def test_lower_tail_weights_only_the_worst_active_fraction():
+    values = torch.tensor([0.99, 0.91, 0.95, 0.80, 0.70])
+    active = torch.tensor([True, True, True, True, False])
+    weights = lower_tail_weights(
+        values, active_mask=active, fraction=0.25, multiplier=4.0
+    )
+    assert torch.equal(weights, torch.tensor([1.0, 1.0, 1.0, 4.0, 1.0]))
+
+
+def test_failure_memory_retriggers_and_counts_down_only_while_active():
+    memory = torch.tensor([0, 2, 2])
+    updated = update_failure_memory(
+        memory,
+        trigger=torch.tensor([True, False, False]),
+        active_mask=torch.tensor([True, True, False]),
+        horizon_steps=3,
+    )
+    assert torch.equal(updated, torch.tensor([3, 1, 2]))
 
 
 def test_head_barrier_is_zero_above_margin_and_finite_for_zero_scale():
@@ -347,7 +369,14 @@ def test_messerkopf_level_production_contract():
     # levelling correction, and the policy's own bounded correction. Measured
     # min_head_alignment for each variant: frozen reference 0.8369, coupling
     # without levelling 0.8662, coupling with levelling 0.9296.
-    assert "a * self._joint_ref[:, source]" in env_source
+    # The head reference must TRACK the boom (a frozen reference measured
+    # min_head_alignment 0.8369). The boom angle is now taken either from the
+    # commanded q4 or, under a learned actuator whose command is not reached,
+    # from the measured joint -- so assert the tracking term, not one source.
+    assert "a * source_angle" in env_source
+    assert "source_angle = self._joint_ref[:, source]" in env_source
+    assert "terrain_head_feedforward_from_measured" in env_source
+    assert "self.robot.data.joint_pos[:, int(source_joint)]" in env_source
     assert "+ correction" in env_source
     assert "+ policy_correction" in env_source
 

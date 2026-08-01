@@ -19,23 +19,46 @@ class PPO2ROMPhysXEnv(MulagUpperLevelEnv):
     """PPO2 task using the command ROM instead of the complete ID/FD pair.
     Supports both cylinder-space tracking and EE-space tracking via config.task_type."""
 
+    #: Dynamics models this task is allowed to construct.
+    #:
+    #: PPO2 is the ROM task and stays ROM-only, which is what the guards below
+    #: enforce. A subclass that deliberately runs this same task over a
+    #: different actuator (PPO4 runs it over ID/FD) widens this set; everything
+    #: else about the task, including every ROM-specific prohibition, then
+    #: applies exactly as before. Keeping the default at command_rom means PPO2
+    #: and PPO3 behaviour is bit-identical to before this attribute existed.
+    _supported_dynamics_models: frozenset = frozenset({"command_rom"})
+
+    #: Models that carry their own internal controller and therefore must not be
+    #: combined with the ID/FD residual switches.
+    _rom_dynamics_models: frozenset = frozenset({"command_rom", "base_rom", "rom"})
+
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
-        if str(cfg.cylinder_dynamics_model).lower() != "command_rom":
-            raise ValueError("PPO2-ROM-PhysX requires cylinder_dynamics_model='command_rom'.")
+        dynamics = str(cfg.cylinder_dynamics_model).lower()
+        if dynamics not in self._supported_dynamics_models:
+            raise ValueError(
+                f"{type(self).__name__} supports cylinder_dynamics_model "
+                f"{sorted(self._supported_dynamics_models)}; got {dynamics!r}."
+            )
         if bool(getattr(cfg, "use_sequence_cylinder_models", False)):
             raise ValueError("PPO2-ROM-PhysX cannot construct sequence ID/FD models.")
         if str(getattr(cfg, "low_level_servo_mode", "none")).lower() != "none":
             raise ValueError("PPO2-ROM-PhysX uses the ROM's internal controller; external PID/servo must be off.")
-        forbidden_switches = (
-            "id_residual_over_zero_target",
-            "fd_residual_over_zero_valve",
-            "paired_id_fd_residual",
-        )
-        enabled = [name for name in forbidden_switches if bool(getattr(cfg, name, False))]
-        if enabled:
-            raise ValueError(f"PPO2-ROM-PhysX forbids ID/FD switches: {enabled}")
-        if float(getattr(cfg, "cylinder_idfd_reference_blend", 0.0)) != 0.0:
-            raise ValueError("PPO2-ROM-PhysX forbids the ID/FD reference blend.")
+        if dynamics in self._rom_dynamics_models:
+            # ROM-only prohibitions. The ROM predicts its own valve, so an ID/FD
+            # residual switch layered on top would silently mix two actuator
+            # models. Under a genuine ID/FD actuator these same switches are the
+            # validated contract, not a misconfiguration.
+            forbidden_switches = (
+                "id_residual_over_zero_target",
+                "fd_residual_over_zero_valve",
+                "paired_id_fd_residual",
+            )
+            enabled = [name for name in forbidden_switches if bool(getattr(cfg, name, False))]
+            if enabled:
+                raise ValueError(f"PPO2-ROM-PhysX forbids ID/FD switches: {enabled}")
+            if float(getattr(cfg, "cylinder_idfd_reference_blend", 0.0)) != 0.0:
+                raise ValueError("PPO2-ROM-PhysX forbids the ID/FD reference blend.")
         super().__init__(cfg, render_mode=render_mode, **kwargs)
         self._prev_action = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self._current_action = torch.zeros_like(self._prev_action)

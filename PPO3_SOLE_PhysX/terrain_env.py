@@ -47,7 +47,12 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_apply, quat_inv, quat_mul
 
 from PPO3_SOLE_PhysX.env import SolePolicyEnv
-from PPO3_SOLE_PhysX.actions import apply_sole_action, directional_tilt_shield
+from PPO3_SOLE_PhysX.actions import (
+    apply_sole_action,
+    directional_tilt_shield,
+    limit_shield,
+    nullspace_head_restoring_overlay,
+)
 from PPO3_SOLE_PhysX.terrain_observations import (
     HEIGHT_PROFILE_BINS,
     PATH_PREVIEW_BINS,
@@ -58,7 +63,9 @@ from PPO3_SOLE_PhysX.terrain_observations import (
 from PPO3_SOLE_PhysX.terrain_rewards import (
     bounded_cost_progress,
     compute_verge_reward,
+    lower_tail_weights,
     sanitize_terminal_reward,
+    update_failure_memory,
 )
 from PPO3_SOLE_PhysX.terrain import (
     MOW_STRIP_CFG,
@@ -164,10 +171,72 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             self._terrain_nominal_arm_damping * scale,
             joint_ids=self._terrain_held_joint_ids,
         )
+        # Compliance in the vertical load path, at the only place in this plant
+        # where a spring can actually be inserted: the cylinder drives.
+        #
+        # The head-tool bounce is ejection off a rigid contact -- 94.4 % of
+        # separations leave the ground moving UPWARD at +0.92 m/s mean after
+        # 53 kN median force spikes (reports/contact_loss_policy_v5.json). With
+        # the hydraulic lock at ~5e6 N/m, contact force IS commanded position
+        # (5.6 mm penetration = 28 kN), so riding gently would need
+        # sub-millimetre regulation at 60 Hz that the command path cannot
+        # deliver.
+        #
+        # PhysX compliant contacts were tried first and are the cleaner physical
+        # model, but they are NOT honoured here: sweeping
+        # terrain_compliant_contact_stiffness 1e6 -> 1e5 (a 10x range that
+        # should have cut force ~10x) moved median peak force only 50.4 -> 46.9
+        # kN and made ejection worse. Softening the drive is the mechanism that
+        # demonstrably takes effect, because it is an articulation drive gain.
+        #
+        # Damping is deliberately NOT scaled with stiffness. Holding damping
+        # while cutting stiffness by N raises the damping ratio by sqrt(N), so
+        # the same knob that adds compliance also dissipates the impact energy
+        # instead of returning it as ejection velocity.
+        stiffness_scale = float(
+            getattr(self.cfg, "terrain_arm_stiffness_scale", 1.0)
+        )
+        if not 0.0 < stiffness_scale <= 1.0:
+            raise ValueError(
+                "terrain_arm_stiffness_scale must be in (0, 1], got "
+                f"{stiffness_scale}"
+            )
+        # Compliance belongs on the CYLINDERS ONLY. `_terrain_held_joint_ids`
+        # also contains the tool joint, which is Messerkopf_joint -- the head
+        # orientation joint. Scaling it along with the cylinders was measured to
+        # cost exactly what it should: min_head_alignment 0.9500 -> 0.9150
+        # against a 0.950 gate, because a softer head joint holds the head down
+        # less firmly. The head joint carries orientation, not the vertical
+        # impact load, so softening it buys none of the bounce reduction and
+        # pays for it in the one gate that had zero margin.
+        head_scale = float(
+            getattr(self.cfg, "terrain_head_joint_stiffness_scale", 1.0)
+        )
+        if not 0.0 < head_scale <= 1.0:
+            raise ValueError(
+                "terrain_head_joint_stiffness_scale must be in (0, 1], got "
+                f"{head_scale}"
+            )
+        if stiffness_scale != 1.0 or head_scale != 1.0:
+            per_joint = torch.full(
+                (self._terrain_held_joint_ids.numel(),),
+                stiffness_scale,
+                dtype=self._terrain_nominal_arm_stiffness.dtype,
+                device=self._terrain_nominal_arm_stiffness.device,
+            )
+            head_positions = (
+                self._terrain_held_joint_ids == int(self._tool_joint_id)
+            ).nonzero(as_tuple=True)[0]
+            per_joint[head_positions] = head_scale
+            self.robot.write_joint_stiffness_to_sim(
+                self._terrain_nominal_arm_stiffness * per_joint.reshape(1, -1),
+                joint_ids=self._terrain_held_joint_ids,
+            )
         if not self._terrain_damping_logged:
             print(
                 f"[PPO3-VERGE] scored terrain arm damping scale={scale:.3f} "
-                "(deployment remains at stock damping)",
+                f"stiffness scale={stiffness_scale:.4f} "
+                "(deployment remains at stock drive)",
                 flush=True,
             )
             self._terrain_damping_logged = True
@@ -179,6 +248,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             return
         self.robot.write_joint_damping_to_sim(
             self._terrain_nominal_arm_damping,
+            joint_ids=self._terrain_held_joint_ids,
+        )
+        # Stiffness too: the deployment ramp was validated at the stock drive,
+        # and unfolding a compliant arm to the deployment pose is a different
+        # (and unvalidated) problem from mowing with one.
+        self.robot.write_joint_stiffness_to_sim(
+            self._terrain_nominal_arm_stiffness,
             joint_ids=self._terrain_held_joint_ids,
         )
 
@@ -214,6 +290,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._truck_travel_m = torch.zeros(
             (self.num_envs,), dtype=torch.float32, device=self.device
         )
+        # How far `_truck_travel_m` advanced in the current control step, and
+        # how many physics substeps still have to run before the truck should
+        # have covered it. Together they let the fixture aim at where the truck
+        # belongs *at this substep* instead of where it belongs at the end of
+        # the step. See `_pin_target_travel_m`.
+        self._truck_step_advance_m = torch.zeros(
+            (self.num_envs,), dtype=torch.float32, device=self.device
+        )
+        self._pin_substeps_pending = 0
         self._last_advance_step = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device
         )
@@ -244,7 +329,19 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim
 
         # +1 for the trailing scan-validity channel.
-        return verge_observation_dim() + 1
+        # Follows terrain_model_error_observation: 54 without the
+        # actuator-model-error channels, 66 with them.
+        return (
+            verge_observation_dim(
+                model_error=bool(
+                    getattr(self.cfg, "terrain_model_error_observation", False)
+                ),
+                model_error_history=int(
+                    getattr(self.cfg, "terrain_model_error_history", 1)
+                ),
+            )
+            + 1
+        )
 
     def _mow_strip_cfg(self):
         held_out = bool(getattr(self.cfg, "use_eval_terrain", False))
@@ -707,6 +804,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         line_pieces = []
         path_y_samples = []
         path_family_names = []
+        path_start_phases = []
         terrain_height_scales = []
         requested_family = str(
             getattr(self.cfg, "tracking_path_family", "mixed")
@@ -717,6 +815,32 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 f"{TRACKING_PATH_FAMILIES}, got {requested_family!r}"
             )
         family_offset = int(getattr(self.cfg, "tracking_path_family_offset", 0))
+        family_schedule = tuple(
+            str(value)
+            for value in getattr(self.cfg, "tracking_path_family_schedule", ())
+        )
+        start_phase_schedule = tuple(
+            float(value)
+            for value in getattr(
+                self.cfg, "tracking_path_start_phase_schedule", ()
+            )
+        )
+        unknown_scheduled = sorted(set(family_schedule) - set(TRACKING_PATH_FAMILIES))
+        if unknown_scheduled:
+            raise ValueError(
+                "tracking_path_family_schedule contains unknown families: "
+                f"{unknown_scheduled}"
+            )
+        if start_phase_schedule and len(start_phase_schedule) != len(family_schedule):
+            raise ValueError(
+                "tracking_path_start_phase_schedule must be empty or match "
+                "tracking_path_family_schedule length"
+            )
+        if any(value > 1.0 for value in start_phase_schedule):
+            raise ValueError(
+                "tracking path start phases must be <= 1.0; use a negative "
+                "entry to preserve the authored reference"
+            )
         configured_height_scales = tuple(
             float(value)
             for value in getattr(
@@ -727,13 +851,16 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             getattr(self.cfg, "terrain_height_scale_override", 0.0)
         )
         for env_index, origin in enumerate(origins):
-            family = (
-                TRACKING_PATH_FAMILIES[
+            if requested_family != "mixed":
+                family = requested_family
+            elif family_schedule:
+                family = family_schedule[
+                    (env_index + family_offset) % len(family_schedule)
+                ]
+            else:
+                family = TRACKING_PATH_FAMILIES[
                     (env_index + family_offset) % len(TRACKING_PATH_FAMILIES)
                 ]
-                if requested_family == "mixed"
-                else requested_family
-            )
             env_strip_cfg = (
                 replace(
                     strip_cfg,
@@ -743,6 +870,28 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 if vary_seed
                 else replace(strip_cfg, tracking_path_family=family)
             )
+            if start_phase_schedule:
+                start_phase = start_phase_schedule[
+                    (env_index + family_offset) % len(start_phase_schedule)
+                ]
+                if start_phase >= 0.0:
+                    phase_anchor_x = float(
+                        getattr(
+                            self.cfg,
+                            "tracking_path_phase_anchor_x_m",
+                            -27.12,
+                        )
+                    )
+                    env_strip_cfg = replace(
+                        env_strip_cfg,
+                        tracking_reference_x_m=(
+                            phase_anchor_x
+                            - start_phase * env_strip_cfg.tracking_active_length_m
+                        ),
+                    )
+            else:
+                start_phase = -1.0
+            path_start_phases.append(start_phase)
             # Height difficulty is independent of lateral family. Because 11
             # families and four scales are coprime, consecutive environments
             # cover every family x height pair exactly once per 44 envs.
@@ -806,12 +955,57 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             np.stack(path_y_samples), dtype=torch.float32, device=self.device
         )
         self._tracking_path_family_names = tuple(path_family_names)
+        self._tracking_path_start_phases = tuple(path_start_phases)
         self._terrain_height_scales = tuple(terrain_height_scales)
 
+        # Compliance in the vertical load path. Measured cause of the head-tool
+        # bounce (reports/contact_loss_policy_v5.json): 94.4 % of separations
+        # leave the ground moving UPWARD at +0.92 m/s mean (max 3.99), after
+        # force spikes of 53 kN median / 162 kN max. The tool is not being left
+        # behind by falling ground -- it is being catapulted off a rigid contact.
+        #
+        # With rigid contacts the series stiffness is the arm's own hydraulic
+        # lock (~5e6 N/m), so force IS position: 0.40 mm of penetration is 2 kN
+        # and the measured 5.6 mm mean is 28 kN. Riding gently would need
+        # sub-millimetre regulation at 60 Hz while the terrain moves 1.5 mm per
+        # control step, with no force feedback in the loop -- authority the
+        # plant does not have, which is why no reward shaping moved this.
+        #
+        # An implicit contact spring puts a real compliance in series with that
+        # lock and gives the damping somewhere to dissipate the stored energy
+        # instead of returning it as ejection velocity. This is the simulation
+        # equivalent of the floating/suspended cutter head a real verge mower
+        # uses, and it acts only at the tool/ground interface, so the boom's own
+        # dynamics are untouched.
+        #
+        # Zero stiffness disables the model and restores rigid contacts exactly.
+        compliant_stiffness = float(
+            getattr(self.cfg, "terrain_compliant_contact_stiffness", 0.0)
+        )
+        compliant_damping = float(
+            getattr(self.cfg, "terrain_compliant_contact_damping", 0.0)
+        )
+        if compliant_stiffness < 0.0 or compliant_damping < 0.0:
+            raise ValueError(
+                "terrain_compliant_contact_stiffness/damping must be >= 0, got "
+                f"{compliant_stiffness}/{compliant_damping}"
+            )
         physics_material = sim_utils.RigidBodyMaterialCfg(
             static_friction=float(getattr(self.cfg, "terrain_static_friction", 1.0)),
             dynamic_friction=float(getattr(self.cfg, "terrain_dynamic_friction", 1.0)),
             restitution=float(getattr(self.cfg, "terrain_restitution", 0.0)),
+            compliant_contact_stiffness=compliant_stiffness,
+            compliant_contact_damping=compliant_damping,
+        )
+        print(
+            "[PPO3-VERGE] contact model: "
+            + (
+                f"COMPLIANT stiffness={compliant_stiffness:.4g} N/m "
+                f"damping={compliant_damping:.4g} Ns/m"
+                if compliant_stiffness > 0.0
+                else "rigid (compliant contacts disabled)"
+            ),
+            flush=True,
         )
         visual_material = sim_utils.PreviewSurfaceCfg(
             diffuse_color=tuple(getattr(self.cfg, "mow_strip_color", (0.20, 0.45, 0.18)))
@@ -851,11 +1045,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             f"{scale:.2f}": terrain_height_scales.count(scale)
             for scale in sorted(set(terrain_height_scales))
         }
+        focused_phase_count = sum(value >= 0.0 for value in path_start_phases)
         print(
             f"[PPO3-VERGE] verge strip: {len(mesh.faces):,} triangles across "
             f"{len(origins)} environments (single merged mesh, "
             f"{'per-env seeds' if vary_seed else 'shared seed'}; paths="
-            f"{family_counts}; height_scales={height_scale_counts})",
+            f"{family_counts}; height_scales={height_scale_counts}; "
+            f"focused_start_phases={focused_phase_count})",
             flush=True,
         )
 
@@ -992,9 +1188,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             return
         active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
         step = (speed_kmh / 3.6) * float(self.step_dt)
-        self._truck_travel_m = self._truck_travel_m + torch.where(
-            active, step, torch.zeros_like(step)
-        )
+        advance = torch.where(active, step, torch.zeros_like(step))
+        self._truck_travel_m = self._truck_travel_m + advance
+        # Remember the advance and open the substep window. Envs still in
+        # preposition/settle advance by zero, so their interpolated target
+        # equals their held target and the fixture cannot drag them backwards.
+        self._truck_step_advance_m = advance.detach()
+        self._pin_substeps_pending = max(int(getattr(self.cfg, "decimation", 2)), 1)
 
     @torch.no_grad()
     def _initialize_contact_tracking_demo(self, *, apply_compliance: bool = True) -> None:
@@ -1328,24 +1528,34 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             desired_usd_delta / action_scale, -raw_limit, raw_limit
         )
         head_axis = self._head_down_axis_world()
-        # atan2 keeps the error directional even beyond 90 degrees. Using only
-        # axis_y becomes zero again when the head is upside down and allowed a
-        # long-horizon controller to mistake the inverted pose for the goal.
+        # q5's measured authority is the world Y-Z tilt: a held positive q5
+        # command drives axis_y negative. The held-out failure is likewise
+        # dominated by axis_y (0.654 max versus 0.064 axis_x), so train the
+        # policy on the direction it can actually correct.
         signed_tilt = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
         tilt_response_sign = float(
             getattr(self.cfg, "terrain_c4_action_to_axis_y_sign", 1.0)
         )
         head_gain = float(getattr(self.cfg, "terrain_teacher_head_gain", 4.0))
-        raw_teacher[:, 3] = torch.clamp(
-            raw_teacher[:, 3]
-            - head_gain * signed_tilt / tilt_response_sign,
+        head_mix = max(
+            abs(float(getattr(self.cfg, "sole_head_action_to_c4_gain", 0.5))),
+            1.0e-6,
+        )
+        head_command = torch.clamp(
+            -head_gain * signed_tilt / (tilt_response_sign * head_mix),
+            -1.0,
+            1.0,
+        )
+        mixed_teacher = raw_teacher.clone()
+        mixed_teacher[:, 3] = torch.clamp(
+            mixed_teacher[:, 3] + head_mix * head_command,
             -raw_limit,
             raw_limit,
         )
 
         low, high = self._cylinder_headroom(measured)
         output = apply_sole_action(
-            policy_action=raw_teacher,
+            policy_action=mixed_teacher,
             # ``SolePolicyEnv`` computes the student's candidate first and
             # latches the action that actually drove the previous transition in
             # ``_prev_sole_applied``.  Teacher reachability must start from that
@@ -1369,42 +1579,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         ).detach().clone()
 
         if bool(getattr(self.cfg, "sole_head_joint_action", False)):
-            # c1-c4 above are untouched: c4 keeps its validated tilt assist, so
-            # the boom still ORIENTS the head. This adds the head joint itself as
-            # a separate, finer channel -- it is not hydraulic and c4 does not
-            # command it.
-            #
-            # Proportional over a BAND plus rate damping. Normalizing by the
-            # 0.010 rad per-step action scale saturated this at 0.57 deg of tilt,
-            # i.e. bang-bang, and a demonstration that slams between +-1 is the
-            # worst possible thing to clone.
-            band = max(
-                float(getattr(self.cfg, "sole_head_teacher_band_rad", 0.05)), 1e-6
-            )
-            head_gain_joint = float(
-                getattr(self.cfg, "sole_head_teacher_gain", 1.0)
-            )
-            previous_tilt = getattr(self, "_head_teacher_prev_tilt", None)
-            if previous_tilt is None or previous_tilt.shape != signed_tilt.shape:
-                previous_tilt = signed_tilt.detach().clone()
-            tilt_rate = signed_tilt - previous_tilt
-            self._head_teacher_prev_tilt = signed_tilt.detach().clone()
-            damping = float(getattr(self.cfg, "sole_head_teacher_damping", 4.0))
-            # Sign MEASURED, not inherited from c4: a held +1 head action drove
-            # the joint to q=0.34034 rad and produced signed_tilt=-0.12261, i.e.
-            # about 0.36 rad of tilt per radian of joint, negative-going. So
-            # cancelling a POSITIVE tilt needs a POSITIVE command. The first
-            # version negated this by copying c4's convention and lost to a
-            # STATIC head reference at every gain, with and without c4's assist,
-            # while nearly doubling tool acceleration (67.8 -> 105-117).
-            head_sign = float(getattr(self.cfg, "sole_head_teacher_sign", 1.0))
-            head_command = torch.clamp(
-                head_sign
-                * (head_gain_joint * signed_tilt + damping * tilt_rate)
-                / band,
-                -1.0,
-                1.0,
-            )
+            # q5 is the explicit decomposition of the teacher's head correction
+            # from its general cylinder-4 command. The environment mixes it
+            # back into c4 before ID/FD, so student and teacher use the same
+            # physical hydraulic path.
             head_command = torch.nan_to_num(head_command).reshape(-1, 1)
             raw_teacher = torch.cat([raw_teacher, head_command], dim=-1)
             applied = torch.cat([applied, head_command], dim=-1)
@@ -1478,6 +1656,49 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 self.num_envs, device=self.device
             )
 
+    def _pin_target_travel_m(self) -> torch.Tensor:
+        """Where the chassis belongs at THIS substep, not at the end of the step.
+
+        ``_pre_physics_step`` advances ``_truck_travel_m`` by a whole control
+        step before any physics runs, but the fixture pins the chassis several
+        times inside that step (once pre-physics, once per decimation substep,
+        once in the inherited ``_get_dones``). Every one of those pins used the
+        end-of-step target, so the sequence measured at 4 km/h was:
+
+            pin +18.52 mm (teleport a full step ahead of the physics)
+            substep integrates  +8.1 mm
+            pin  -8.10 mm (drag it back to the same end-of-step target)
+            substep integrates  +8.1 mm
+            pin  -8.10 mm
+
+        i.e. a +-8 mm longitudinal square wave at 60-120 Hz on top of a correct
+        18.52 mm/step mean. Nothing measured it: ``p95_tool_acceleration`` is a
+        truck-frame finite difference and a root teleport moves chassis and tool
+        rigidly together, so it cancels exactly; the chassis-reaction gates keep
+        only the component perpendicular to the heading; and ``truck_drift`` is
+        assigned literal zero after the correction. Under the cutter the shake
+        is not invisible at all -- 8 mm of longitudinal travel over 0.15 m verge
+        facets changes the ground height beneath a rigidly-pinned tool, and that
+        modulates contact penetration directly.
+
+        Subtracting the not-yet-simulated share of the advance makes each pin
+        aim at the position the truck should actually hold at that instant, so
+        the correction collapses to the friction gap between commanded and
+        integrated travel. The mean speed is unchanged: the window closes at
+        ``_get_dones`` with the full advance applied.
+        """
+        if not bool(
+            getattr(self.cfg, "terrain_kinematic_drive_substep_interpolation", True)
+        ):
+            return self._truck_travel_m
+        pending = int(getattr(self, "_pin_substeps_pending", 0))
+        advance = getattr(self, "_truck_step_advance_m", None)
+        if pending <= 0 or advance is None:
+            return self._truck_travel_m
+        decimation = max(int(getattr(self.cfg, "decimation", 2)), 1)
+        remaining = min(pending, decimation) / decimation
+        return self._truck_travel_m - advance * remaining
+
     def _constrain_truck_xy(self) -> None:
         """Advance the chassis along the road at exactly the commanded speed.
 
@@ -1513,7 +1734,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
         desired_base_xy = (
             self._drive_anchor_base_xy
-            + self._truck_travel_m.reshape(-1, 1) * heading
+            + self._pin_target_travel_m().reshape(-1, 1) * heading
         )
         base_state = self.robot.data.body_link_state_w[
             :, self._truck_base_body_id()
@@ -1952,6 +2173,36 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self.scene.update(float(self.sim.get_physics_dt()))
         self._constrain_truck_xy()
 
+    @torch.no_grad()
+    def _randomize_actuator(self, env_ids) -> None:
+        """Scatter the cylinder drive gains per episode.
+
+        The third lever for model error, and the one teacher_student uses
+        (`randomize_joint_parameters` at reset): instead of telling the policy
+        what the actuator error is, make the actuator vary so the policy has to
+        be robust to it. Cheap -- a reset-time CPU write, no extra sensor and no
+        per-step cost.
+
+        Applied to the cylinders only. The head joint is left alone: it carries
+        orientation rather than the vertical load, and softening it was measured
+        to cost head alignment for nothing.
+        """
+        span = float(getattr(self.cfg, "terrain_actuator_randomization", 0.0))
+        if span <= 0.0 or not hasattr(self, "_terrain_nominal_arm_stiffness"):
+            return
+        ids = self._cylinder_joint_ids
+        nominal_k = self._terrain_nominal_arm_stiffness[:, : len(ids)]
+        nominal_d = self._terrain_nominal_arm_damping[:, : len(ids)]
+        base = float(getattr(self.cfg, "terrain_arm_stiffness_scale", 1.0))
+        low, high = 1.0 - span, 1.0 + span
+        shape = (self.num_envs, len(ids))
+        k_scale = torch.empty(shape, device=self.device).uniform_(low, high)
+        d_scale = torch.empty(shape, device=self.device).uniform_(low, high)
+        self.robot.write_joint_stiffness_to_sim(
+            nominal_k * base * k_scale, joint_ids=ids
+        )
+        self.robot.write_joint_damping_to_sim(nominal_d * d_scale, joint_ids=ids)
+
     def _reset_idx(self, env_ids):
         import torch as _t
         if not isinstance(env_ids, _t.Tensor):
@@ -1968,6 +2219,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         drive_was_ready = getattr(self, "_kinematic_drive_ready", False)
         if drive_was_ready:
             self._truck_travel_m[env_ids] = 0.0
+            # Clear the advance with it. A reset env's travel restarts at zero,
+            # so a carried-over advance would make the deployment pins aim
+            # behind the anchor for the rest of the step.
+            self._truck_step_advance_m[env_ids] = 0.0
 
         super()._reset_idx(env_ids)
         # The first parent deployment calls _constrain_truck_xy(), which creates
@@ -1991,6 +2246,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             env_ids, self._truck_base_body_id(), 3:7
         ].detach().clone()
         self._apply_terrain_arm_drive_tuning()
+        self._randomize_actuator(env_ids)
         self._relatch_terrain_temporal_state(env_ids)
         if hasattr(self, "_terrain_step_nonfinite"):
             self._terrain_step_nonfinite[env_ids] = False
@@ -2022,6 +2278,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         alignment = self._measure_head_down_alignment().detach()
         self._prev_head_alignment[env_ids] = alignment[env_ids]
         self._head_alignment_rate[env_ids] = 0.0
+        if hasattr(self, "_head_tail_failure_memory"):
+            self._head_tail_failure_memory[env_ids] = 0
         if not hasattr(self, "_head_down_failed"):
             self._head_down_failed = torch.zeros(
                 self.num_envs, dtype=torch.bool, device=self.device
@@ -2131,6 +2389,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         ).expand(self.num_envs, -1)
         return quat_apply(q, local_axis)
 
+    def _head_joint_signed_tilt(self) -> torch.Tensor:
+        """Signed tilt in the plane the moving Messerkopf joint can correct."""
+        head_axis = self._head_down_axis_world()
+        axis_index = int(getattr(self.cfg, "terrain_head_tilt_axis_index", 0))
+        local_axis = torch.zeros_like(head_axis)
+        local_axis[:, axis_index] = 1.0
+        quat = self.robot.data.body_link_state_w[:, self._ee_body_id, 3:7]
+        quat = quat / quat.norm(dim=-1, keepdim=True).clamp(min=1.0e-8)
+        joint_axis = quat_apply(quat, local_axis)
+        world_down = torch.zeros_like(head_axis)
+        world_down[:, 2] = -1.0
+        target_p = world_down - (
+            world_down * joint_axis
+        ).sum(-1, keepdim=True) * joint_axis
+        head_p = head_axis - (
+            head_axis * joint_axis
+        ).sum(-1, keepdim=True) * joint_axis
+        cross = torch.cross(head_p, target_p, dim=-1)
+        return -torch.atan2(
+            (cross * joint_axis).sum(-1),
+            (head_p * target_p).sum(-1),
+        )
+
     @torch.no_grad()
     def _apply_action(self):
         """Level the cutter head before the inherited joint targets are written.
@@ -2166,7 +2447,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         gain = float(getattr(self.cfg, "terrain_messerkopf_level_gain", 0.0))
         target = getattr(self, "_joint6_coupling_target_ref_index", None)
         source = getattr(self, "_joint6_coupling_source_ref_index", None)
-        if gain != 0.0 and target is not None and source is not None:
+        policy_correction = getattr(self, "_head_joint_correction", None)
+        if (
+            (gain != 0.0 or policy_correction is not None)
+            and target is not None
+            and source is not None
+        ):
             head_axis = self._head_down_axis_world()
             # Same projection the c4 tilt shield uses: the signed tilt in the
             # plane this joint actually acts in. Out-of-plane (X) excursions are
@@ -2254,11 +2540,76 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             # Dropping any one of them was measured worse -- no levelling gives
             # min_head_alignment 0.8662, a frozen (non-tracking) reference gives
             # 0.8369, and both together give 0.9296.
-            policy_correction = getattr(self, "_head_joint_correction", None)
             if policy_correction is None:
                 policy_correction = torch.zeros_like(correction)
+            # Feedforward source: COMMANDED q4, or MEASURED q4.
+            #
+            # The head hangs off the boom, so its levelling feedforward is only
+            # right if it points at where the boom actually IS. Under ROM-A the
+            # commanded and measured q4 agree closely, so using the command is
+            # harmless. Under a LEARNED actuator (PPO4's ID/FD) they do not:
+            # the model has a systematic tracking error, so a command-based
+            # feedforward aims the head at a boom pose that was never reached,
+            # and the resulting head-alignment offset is injected downstream of
+            # the policy every substep -- which is why PPO could not move
+            # p01_head_alignment off 0.79 in ten blocks (~500 updates) while
+            # every other metric improved.
+            #
+            # Reading the measured joint closes that loop and lets the head
+            # compensate actuator model error structurally, instead of asking
+            # the policy to learn a correction for an error it cannot observe.
+            source_angle = self._joint_ref[:, source]
+            if bool(
+                getattr(self.cfg, "terrain_head_feedforward_from_measured", False)
+            ):
+                source_joint = getattr(
+                    self, "_joint6_coupling_source_joint_id", None
+                )
+                if source_joint is not None:
+                    source_angle = self.robot.data.joint_pos[:, int(source_joint)]
+
+            # Pose-dependent head reference (the fix PPO3's own notes ask for:
+            # "a pose-dependent reference that solves for the Messerkopf angle
+            # putting the head at world-down given the current boom attitude").
+            #
+            # Measured on ID/FD, 30 080 scored samples: the a*q4 feedforward is
+            # wrong by 0.296 rad mean / 0.783 rad max, while q4 itself spans
+            # only 0.033-0.096 rad and the head tilt spans 0.68 rad. The head
+            # angle is therefore NOT a function of q4, and re-fitting a/b cannot
+            # help -- a least-squares fit over that range returns a=11.5, which
+            # is fitting noise.
+            #
+            # Because the levelling term is PROPORTIONAL, it trims but cannot
+            # null a standing offset, which is why releasing its clamp topped
+            # out at p01 0.821 and cost 14/17 -> 11/17.
+            #
+            # Anchoring on the head's own measured angle removes the offset by
+            # construction: the reference becomes "where the head is now, minus
+            # how far it is currently off world-down".
+            if bool(getattr(self.cfg, "terrain_head_pose_solve", False)):
+                tool_joint = getattr(self, "_tool_joint_id", None)
+                if tool_joint is not None:
+                    measured_head = self.robot.data.joint_pos[:, int(tool_joint)]
+                    solve_gain = float(
+                        getattr(self.cfg, "terrain_head_pose_solve_gain", 1.0)
+                    )
+                    self._joint_ref[:, target] = (
+                        measured_head
+                        - solve_gain * signed_tilt
+                        + policy_correction
+                    )
+                    self._terrain_head_level_correction = -solve_gain * signed_tilt
+                    super()._apply_action()
+                    if bool(
+                        getattr(self.cfg, "terrain_constrain_truck_per_substep", True)
+                    ):
+                        self._constrain_truck_xy()
+                    self._pin_substeps_pending = max(
+                        int(getattr(self, "_pin_substeps_pending", 0)) - 1, 0
+                    )
+                    return
             self._joint_ref[:, target] = (
-                a * self._joint_ref[:, source]
+                a * source_angle
                 + b
                 + correction
                 + policy_correction
@@ -2275,11 +2626,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # extra call costs a pose write and cannot accumulate.
         if bool(getattr(self.cfg, "terrain_constrain_truck_per_substep", True)):
             self._constrain_truck_xy()
+        # One physics substep is about to run, so consume one substep of the
+        # advance. Decremented after the pin (the pin above serves the substep
+        # that has NOT run yet) and outside the flag, so the inherited
+        # `_get_dones` pin sees a closed window either way. Clamped at zero
+        # because the reset deployment loops also call `_apply_action` with the
+        # window already closed and travel frozen.
+        self._pin_substeps_pending = max(
+            int(getattr(self, "_pin_substeps_pending", 0)) - 1, 0
+        )
 
     def _task_action_shield(
         self, applied_action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Prevent c4 from continuing to drive the cutter away from world-down."""
+        """Block worsening c4 motion and optionally add XYZ-neutral recovery."""
         head_axis = self._head_down_axis_world()
         signed_head_angle = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
         # NOTE: atan2(y, -z) is the tilt projected into the Y-Z plane, so this
@@ -2293,7 +2653,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # that holds the head down in c4's own plane. Out-of-plane excursions are
         # the head barrier's job, not the shield's; it sees alignment directly
         # and is direction-agnostic.
-        return directional_tilt_shield(
+        shielded, shield_gain = directional_tilt_shield(
             applied_action,
             signed_tilt=signed_head_angle,
             action_channel=3,
@@ -2307,6 +2667,152 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 getattr(self.cfg, "terrain_head_tilt_shield_hard", 0.16)
             ),
         )
+        restore_gain = float(
+            getattr(self.cfg, "terrain_head_nullspace_restore_gain", 0.0)
+        )
+        if restore_gain <= 0.0:
+            self._terrain_head_nullspace_overlay = torch.zeros_like(shielded)
+            return shielded, shield_gain
+
+        preserve_xyz = bool(
+            getattr(self.cfg, "terrain_head_restore_preserve_xyz", True)
+        )
+        direction = getattr(self, "_terrain_head_nullspace_direction", None)
+        if not preserve_xyz:
+            direction = torch.tensor(
+                [0.0, 0.0, 0.0, 1.0],
+                device=shielded.device,
+                dtype=shielded.dtype,
+            )
+        elif direction is None:
+            # The fixed ground-pose Jacobian maps learned cylinder extension to
+            # cutter XYZ. Convert it to policy-action coordinates, then take its
+            # one-dimensional nullspace. Normalizing c4 to +1 makes the existing
+            # measured action-to-tilt sign directly applicable.
+            jacobian = self._cascade.jacobian.to(
+                device=shielded.device, dtype=shielded.dtype
+            )
+            action_jacobian = jacobian * self._action_to_learned_sign.reshape(1, 4)
+            direction = torch.linalg.svd(action_jacobian, full_matrices=True).Vh[-1]
+            if direction[3] < 0.0:
+                direction = -direction
+            direction = direction / direction[3].clamp(min=1.0e-6)
+            self._terrain_head_nullspace_direction = direction.detach().clone()
+
+        _, overlay = nullspace_head_restoring_overlay(
+            shielded,
+            signed_tilt=signed_head_angle,
+            action_nullspace=direction,
+            action_to_tilt_sign=float(
+                getattr(self.cfg, "terrain_c4_action_to_axis_y_sign", 1.0)
+            ),
+            deadband_rad=float(
+                getattr(self.cfg, "terrain_head_nullspace_restore_deadband_rad", 0.08)
+            ),
+            gain=restore_gain,
+            max_c4_action=float(
+                getattr(self.cfg, "terrain_head_nullspace_restore_max_action", 0.30)
+            ),
+        )
+        measured, _ = self._refresh_cylinder_state()
+        low, high = self._cylinder_headroom(measured)
+        safe_overlay, overlay_gain = limit_shield(
+            overlay,
+            headroom_low_m=low,
+            headroom_high_m=high,
+            margin_m=float(getattr(self.cfg, "sole_limit_shield_margin_m", 0.0)),
+            action_to_extension_sign=self._action_to_learned_sign,
+        )
+        restored = torch.clamp(shielded + safe_overlay, -1.0, 1.0)
+        self._terrain_head_nullspace_overlay = safe_overlay.detach().clone()
+        active_overlay = overlay.abs() > 1.0e-8
+        combined_gain = shield_gain * torch.where(
+            active_overlay, overlay_gain, torch.ones_like(overlay_gain)
+        )
+        return restored, combined_gain
+
+    @torch.no_grad()
+    def _model_error_channels(self, measured_x: torch.Tensor) -> torch.Tensor | None:
+        """Twelve columns describing how wrong the actuator model currently is.
+
+        Returns ``None`` when the feature is off, which keeps PPO3's frozen 54-D
+        observation byte-identical.
+
+        The three groups answer three different questions, and a learned
+        actuator gets all three wrong in different ways:
+
+        * tracking residual -- did the cylinder arrive where it was commanded?
+        * prediction residual -- did it move by what the model predicted it
+          would move LAST step? This is the only channel that carries the
+          model's own error signal, and it needs the stored previous
+          prediction, which is why a memoryless policy cannot derive it.
+        * effort -- what load is the actuator working against? Contact load is
+          where a model fitted on free motion degrades first.
+        """
+        if not bool(getattr(self.cfg, "terrain_model_error_observation", False)):
+            return None
+        # Per-cylinder stroke span, a tensor -- not a scalar. The rest of the
+        # observation already normalizes headroom by it the same way.
+        span = getattr(self, "_learned_span", None)
+        if span is None:
+            span = torch.ones_like(measured_x)
+        span = torch.as_tensor(span, dtype=measured_x.dtype, device=measured_x.device)
+        span = torch.where(span.abs() < 1.0e-6, torch.ones_like(span), span)
+        target = getattr(self, "_cylinder_pos_target", None)
+        if target is None:
+            target = measured_x
+        tracking = (measured_x - target) / span
+
+        previous_x = getattr(self, "_prev_measured_x_model_error", None)
+        previous_pred = getattr(self, "_prev_predicted_delta_model_error", None)
+        if previous_x is None or previous_x.shape != measured_x.shape:
+            realized = torch.zeros_like(measured_x)
+        else:
+            realized = measured_x - previous_x
+        if previous_pred is None or previous_pred.shape != measured_x.shape:
+            previous_pred = torch.zeros_like(measured_x)
+        prediction_residual = (realized - previous_pred) / span
+
+        self._prev_measured_x_model_error = measured_x.detach().clone()
+        predicted = getattr(self, "_fd_delta_corrected", None)
+        self._prev_predicted_delta_model_error = (
+            torch.zeros_like(measured_x)
+            if predicted is None
+            else predicted.detach().clone()
+        )
+
+        scale = float(getattr(self.cfg, "terrain_model_error_effort_scale_n", 2.0e5))
+        effort = self.robot.data.applied_torque[:, self._cylinder_joint_ids]
+        effort = torch.clamp(effort / max(scale, 1.0e-6), -5.0, 5.0)
+
+        current = torch.cat(
+            (
+                torch.clamp(tracking, -5.0, 5.0),
+                torch.clamp(prediction_residual, -5.0, 5.0),
+                effort,
+            ),
+            dim=-1,
+        )
+
+        # Optional history stack. A single-step residual says how wrong the
+        # model is NOW; it says nothing about whether the error is growing, or
+        # how it tracks load. teacher_student reaches the same conclusion from
+        # the other direction and puts history_length=3 on its rate-bearing
+        # terms (height map, joint pos/vel, distance-to-goal). Stacking only
+        # these 12 channels keeps the cost trivial -- depth 3 adds 24 inputs to
+        # an MLP, versus the depth camera that repo also uses, which will not
+        # fit alongside 512 environments on a 6 GB card.
+        depth = max(int(getattr(self.cfg, "terrain_model_error_history", 1)), 1)
+        if depth <= 1:
+            return current
+        buffer = getattr(self, "_model_error_history", None)
+        if buffer is None or buffer.shape != (depth, *current.shape):
+            buffer = current.unsqueeze(0).repeat(depth, 1, 1)
+        else:
+            buffer = torch.roll(buffer, shifts=1, dims=0)
+            buffer[0] = current
+        self._model_error_history = buffer.detach()
+        return buffer.permute(1, 0, 2).reshape(current.shape[0], -1)
 
     def _get_observations(self) -> dict:
         if getattr(self, "_sole_applied", None) is None:
@@ -2358,6 +2864,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             truck_speed_mps=speed_mps,
             scan_valid_fraction=self.scan_valid_fraction(),
             head_down_axis_xy=head_axis_world[:, :2],
+            model_error=self._model_error_channels(x),
             cutter_contact_force_normalized=torch.clamp(
                 self.cutter_terrain_contact_force_n()
                 / max(
@@ -2510,6 +3017,28 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             scale=float(getattr(cfg, "terrain_head_progress_scale", 0.002)),
             weight=float(getattr(cfg, "terrain_head_progress_weight", 0.25)),
         )
+        tail_weights = lower_tail_weights(
+            alignment,
+            active_mask=active,
+            fraction=float(getattr(cfg, "terrain_head_tail_fraction", 0.0)),
+            multiplier=float(getattr(cfg, "terrain_head_tail_multiplier", 1.0)),
+        )
+        weighted_head_penalty = terms.head_penalty * tail_weights
+        if not hasattr(self, "_head_tail_failure_memory"):
+            self._head_tail_failure_memory = torch.zeros(
+                self.num_envs, dtype=torch.long, device=self.device
+            )
+        memory_steps = int(getattr(cfg, "terrain_head_tail_memory_steps", 0))
+        self._head_tail_failure_memory = update_failure_memory(
+            self._head_tail_failure_memory,
+            trigger=alignment
+            < float(getattr(cfg, "terrain_head_tail_memory_trigger", 0.975)),
+            active_mask=active,
+            horizon_steps=memory_steps,
+        )
+        tail_memory_penalty = float(
+            getattr(cfg, "terrain_head_tail_memory_penalty", 0.0)
+        ) * (self._head_tail_failure_memory > 0).float()
         task_reward = (
             terms.cut_tracking
             + terms.lateral
@@ -2581,7 +3110,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             chassis_penalty = torch.zeros_like(terms.limit_penalty)
         safety_reward = (
             terms.smoothness
-            + terms.head_penalty
+            + weighted_head_penalty
+            + tail_memory_penalty
             + terms.clearance_barrier
             + terms.limit_penalty
             + terms.acceleration_penalty
@@ -2697,7 +3227,18 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                     acceleration[valid_active], 0.95
                 ),
                 "reward/nonfinite_fraction": reward_nonfinite.float().mean(),
-                "reward/mean_head_penalty": terms.head_penalty[valid_active].mean(),
+                "reward/mean_head_penalty": weighted_head_penalty[
+                    valid_active
+                ].mean(),
+                "reward/head_tail_weighted_fraction": (
+                    tail_weights[valid_active] > 1.0
+                ).float().mean(),
+                "reward/head_tail_memory_fraction": (
+                    self._head_tail_failure_memory[valid_active] > 0
+                ).float().mean(),
+                "reward/mean_head_tail_memory_penalty": tail_memory_penalty[
+                    valid_active
+                ].mean(),
                 "reward/mean_clearance_barrier": terms.clearance_barrier[
                     valid_active
                 ].mean(),

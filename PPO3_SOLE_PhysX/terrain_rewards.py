@@ -100,6 +100,53 @@ def bounded_cost_progress(
     return direction * magnitude * normalized
 
 
+def lower_tail_weights(
+    values: torch.Tensor,
+    *,
+    active_mask: torch.Tensor,
+    fraction: float,
+    multiplier: float,
+) -> torch.Tensor:
+    """Weight the lowest active fraction without changing non-tail rows."""
+    if values.ndim != 1 or active_mask.shape != values.shape:
+        raise ValueError("values and active_mask must be matching rank-1 tensors")
+    weights = torch.ones_like(values)
+    fraction = float(fraction)
+    multiplier = float(multiplier)
+    if fraction <= 0.0 or multiplier <= 1.0:
+        return weights
+    if fraction > 1.0 or not math.isfinite(multiplier):
+        raise ValueError("tail fraction must be <= 1 and multiplier must be finite")
+    eligible = torch.where(active_mask & torch.isfinite(values))[0]
+    if eligible.numel() == 0:
+        return weights
+    count = max(1, int(math.ceil(fraction * int(eligible.numel()))))
+    tail_local = torch.topk(values[eligible], count, largest=False).indices
+    weights[eligible[tail_local]] = multiplier
+    return weights
+
+
+def update_failure_memory(
+    memory: torch.Tensor,
+    *,
+    trigger: torch.Tensor,
+    active_mask: torch.Tensor,
+    horizon_steps: int,
+) -> torch.Tensor:
+    """Maintain a bounded per-environment countdown after a safety event."""
+    if memory.ndim != 1 or trigger.shape != memory.shape or active_mask.shape != memory.shape:
+        raise ValueError("memory, trigger, and active_mask must have matching rank-1 shapes")
+    horizon = int(horizon_steps)
+    if horizon <= 0:
+        return torch.zeros_like(memory)
+    updated = torch.where(active_mask, torch.clamp(memory - 1, min=0), memory)
+    return torch.where(
+        active_mask & trigger,
+        torch.full_like(updated, horizon),
+        updated,
+    )
+
+
 def compute_verge_reward(
     *,
     cut_height: torch.Tensor,
