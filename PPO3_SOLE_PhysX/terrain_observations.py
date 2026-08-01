@@ -44,8 +44,20 @@ def nonfinite_row_mask(*tensors: torch.Tensor | None) -> torch.Tensor:
     return mask
 
 
-def verge_observation_dim(*, profile_bins: int = HEIGHT_PROFILE_BINS) -> int:
-    return profile_bins + 44
+#: Extra columns exposing ACTUATOR MODEL ERROR. See build_verge_observation.
+MODEL_ERROR_CHANNELS = 12
+
+
+def verge_observation_dim(
+    *,
+    profile_bins: int = HEIGHT_PROFILE_BINS,
+    model_error: bool = False,
+    model_error_history: int = 1,
+) -> int:
+    extra = (
+        MODEL_ERROR_CHANNELS * max(int(model_error_history), 1) if model_error else 0
+    )
+    return profile_bins + 44 + extra
 
 
 def collapse_scan_width(scan: torch.Tensor, *, bins: int = HEIGHT_PROFILE_BINS) -> torch.Tensor:
@@ -86,6 +98,7 @@ def build_verge_observation(
     head_down_axis_xy: torch.Tensor,
     cutter_contact_force_normalized: torch.Tensor,
     path_preview: torch.Tensor,
+    model_error: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Build the verge-mowing observation.
 
@@ -113,6 +126,29 @@ def build_verge_observation(
         50     filtered cutter-to-terrain interaction force, normalized
         51:54  red-path lateral offsets 0.5, 1.0 and 2.0 m ahead,
                relative to the current path target
+
+    With ``model_error`` supplied, 12 further columns are appended:
+
+        54:58  cylinder tracking residual = measured extension - commanded
+               target. Under ROM-A this is near zero because the ROM reaches
+               what it is told; under a LEARNED actuator it is the model's
+               standing error.
+        58:62  actuator prediction residual = realized delta extension - the
+               delta the actuator model predicted for the PREVIOUS step. This
+               is literally "how wrong was the model last step".
+        62:66  normalized cylinder effort -- the hydraulic load the actuator is
+               working against, which is what a learned model gets wrong first
+               when the tool is in contact.
+
+    Why these are needed at all: the policy is a memoryless MLP. It already
+    sees the model's PREDICTION (rom_delta_extension) and the CURRENT measured
+    extension, but computing the error requires differencing position across
+    two steps and comparing against the previous prediction. A feedforward
+    network cannot form that from one observation, so model error is invisible
+    to it no matter how much it trains. Measured 2026-08-01: p01 head alignment
+    sat at 0.79-0.80 across ten PPO blocks and was unmoved by feedforward
+    source or levelling gain -- the policy had no observable evidence of the
+    error it was being asked to correct.
 
     ``scan_valid_fraction`` lets the policy tell a measured
     profile from a fallback one. A sensor that sees nothing returns the strip's
@@ -145,8 +181,16 @@ def build_verge_observation(
         cutter_contact_force_normalized.reshape(-1, 1),
         path_preview,
     ]
+    if model_error is not None:
+        columns.append(model_error)
     obs = torch.nan_to_num(torch.cat(columns, dim=-1), nan=0.0, posinf=0.0, neginf=0.0)
-    expected = verge_observation_dim(profile_bins=height_profile.shape[-1]) + 1
+    expected = (
+        verge_observation_dim(
+            profile_bins=height_profile.shape[-1],
+            model_error=model_error is not None,
+        )
+        + 1
+    )
     if obs.shape[-1] != expected:
         raise RuntimeError(
             f"Verge observation dim mismatch: got {obs.shape[-1]}, expected {expected}."

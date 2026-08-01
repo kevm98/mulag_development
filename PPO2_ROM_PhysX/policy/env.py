@@ -689,9 +689,19 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self._zero_pipeline_diagnostics(
             torch.arange(self.num_envs, device=self.device)[:, None].eq(env_ids).any(dim=1)
         )
-        if self._command_cylinder_rom is None:
+        # The command ROM is recurrent, so a reset must clear its hidden state or
+        # the new episode inherits the previous one's hydraulic history. Under a
+        # ROM this is mandatory and a missing runtime is a real bug. The ID/FD
+        # actuator is feed-forward and carries no state across a reset, so there
+        # is nothing to clear -- raising there would only forbid a valid plant.
+        if self._command_cylinder_rom is not None:
+            self._command_cylinder_rom.reset(env_ids)
+        elif str(getattr(self.cfg, "cylinder_dynamics_model", "")).lower() in {
+            "command_rom",
+            "base_rom",
+            "rom",
+        }:
             raise RuntimeError("PPO2 residual reset requires the command ROM runtime")
-        self._command_cylinder_rom.reset(env_ids)
         self._cylinder_dls.reset(env_ids)
         self._cascade.reset(env_ids)
 

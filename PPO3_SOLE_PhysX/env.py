@@ -98,9 +98,24 @@ class SolePolicyEnv(ResidualPolicyEnv):
             self._usd_per_extension_scale
         )
 
+        # Report the actuator this env ACTUALLY built, not a hard-coded label.
+        # PPO4 runs this same class over ID/FD, and a banner that always says
+        # "ROM-A" makes a log look like a ROM run when it is not -- precisely the
+        # mislabelling the actuator tagging elsewhere exists to prevent.
+        _dynamics = str(getattr(cfg, "cylinder_dynamics_model", "command_rom")).lower()
+        _plant_label = {
+            "command_rom": "ROM-A command ROM",
+            "base_rom": "base ROM",
+            "rom": "ROM",
+            "fd": "ID -> FD",
+            "direct_valve": "direct valve",
+        }.get(_dynamics, _dynamics)
+        _path_label = "policy -> ID -> FD -> PhysX" if _dynamics == "fd" else (
+            "policy -> ROM -> PhysX"
+        )
         print(
-            f"[PPO3-SOLE] obs={expected_obs} action=4 | plant=ROM-A command ROM | "
-            "scored adaptive path = policy -> ROM -> PhysX (no EE cascade, no "
+            f"[PPO3-SOLE] obs={expected_obs} action=4 | plant={_plant_label} | "
+            f"scored adaptive path = {_path_label} (no EE cascade, no "
             f"cylinder DLS) | action_scale={float(cfg.action_scale):.4f} m "
             f"rate<={float(getattr(cfg, 'sole_max_action_rate', 0.2)):.3f}/step "
             f"shield_margin={float(getattr(cfg, 'sole_limit_shield_margin_m', 0.0)):.3f} m"
@@ -272,10 +287,10 @@ class SolePolicyEnv(ResidualPolicyEnv):
             if bool(getattr(cfg, "force_zero_policy", False))
             else actions
         )
-        # Split off the head channel BEFORE the cylinder pipeline so that every
-        # validated 4-cylinder contract below sees exactly the tensor it always
-        # saw. The head is not hydraulic and does not belong in the cylinder
-        # limit shield, the ID pipeline, or the ROM command.
+        # Split off the dedicated head channel, then route it through cylinder
+        # 4 -- the physical Messerkopf_Schwenk tilt DOF. Runtime probes proved
+        # that the separate Messerkopf_joint coordinate does not change the
+        # cutter down-axis, so directly integrating it was a vacuous action.
         if bool(getattr(cfg, "sole_head_joint_action", False)):
             self._head_action_raw = torch.clamp(
                 torch.nan_to_num(
@@ -284,7 +299,11 @@ class SolePolicyEnv(ResidualPolicyEnv):
                 -1.0,
                 1.0,
             )
-            effective = effective[:, :4]
+            effective = effective[:, :4].clone()
+            head_mix = float(getattr(cfg, "sole_head_action_to_c4_gain", 0.5))
+            effective[:, 3] = torch.clamp(
+                effective[:, 3] + head_mix * self._head_action_raw, -1.0, 1.0
+            )
         else:
             self._head_action_raw = None
         self._prev_sole_applied = self._sole_applied.clone()
@@ -375,14 +394,11 @@ class SolePolicyEnv(ResidualPolicyEnv):
             source = self._joint6_coupling_source_ref_index
             target = self._joint6_coupling_target_ref_index
             if source is not None and target is not None:
-                if getattr(self, "_head_action_raw", None) is not None:
-                    self._integrate_head_joint_action(target)
-                else:
-                    self._joint_ref[:, target] = (
-                        float(getattr(cfg, "joint6_coupling_a", 0.76))
-                        * self._joint_ref[:, source]
-                        + float(getattr(cfg, "joint6_coupling_b", 0.0))
-                    )
+                self._joint_ref[:, target] = (
+                    float(getattr(cfg, "joint6_coupling_a", 0.76))
+                    * self._joint_ref[:, source]
+                    + float(getattr(cfg, "joint6_coupling_b", 0.0))
+                )
 
         self._hold_wheels()
         self._constrain_truck_xy()

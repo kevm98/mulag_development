@@ -45,6 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval_envs", type=int, default=128)
     parser.add_argument("--block_iterations", type=int, default=50)
     parser.add_argument("--eval_steps", type=int, default=960)
+    parser.add_argument(
+        "--head_joint_action",
+        action="store_true",
+        help="Forward the fifth hydraulic head-residual action to training and evaluation.",
+    )
+    parser.add_argument(
+        "--head_action_to_c4_gain",
+        type=float,
+        default=None,
+        help="Forward the q5-to-cylinder-4 mixer gain to training and evaluation.",
+    )
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--learning_rate", type=float, default=1.0e-5)
     parser.add_argument("--entropy_coef", type=float, default=0.0)
@@ -93,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--q5_exploration_std",
+        type=float,
+        default=None,
+        help="Exploration std forced on q5 at the start of every training block.",
+    )
+    parser.add_argument(
         "--stage",
         type=int,
         default=4,
@@ -120,8 +137,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Optional safety cap; zero keeps training until convergence.",
     )
+    parser.add_argument(
+        "--actuator",
+        default="rom",
+        choices=("rom", "idfd"),
+        help=(
+            "Actuator for BOTH the training blocks and the held-out evaluation. "
+            "rom = PPO3 command ROM; idfd = PPO4 ID->FD. Forwarded verbatim to "
+            "train.py and evaluate.py so a block and its evaluation can never "
+            "disagree about which plant they measured."
+        ),
+    )
     parser.add_argument("--trajectory_library_path", default="")
     parser.add_argument("--command_rom_checkpoint", default="")
+    parser.add_argument(
+        "--tail_focus",
+        action="store_true",
+        help="Oversample the measured late head-alignment failure cases in training.",
+    )
+    parser.add_argument(
+        "--head_tail_risk",
+        action="store_true",
+        help="Enable the training-only CVaR head objective and failure memory.",
+    )
+    parser.add_argument(
+        "--drive_substep_interpolation",
+        default="",
+        choices=("", "true", "false"),
+        help="Use the same corrected truck/terrain substep dynamics in training and evaluation.",
+    )
     parser.add_argument(
         "--restart",
         action="store_true",
@@ -156,6 +200,12 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--exploration_std must be positive")
     if args.c4_exploration_std is not None and args.c4_exploration_std <= 0.0:
         parser.error("--c4_exploration_std must be positive")
+    if args.q5_exploration_std is not None and args.q5_exploration_std <= 0.0:
+        parser.error("--q5_exploration_std must be positive")
+    if args.q5_exploration_std is not None and not args.head_joint_action:
+        parser.error("--q5_exploration_std requires --head_joint_action")
+    if args.head_action_to_c4_gain is not None and args.head_action_to_c4_gain <= 0.0:
+        parser.error("--head_action_to_c4_gain must be positive")
     if args.save_interval <= 0:
         parser.error("--save_interval must be positive")
     if not 1 <= args.stage <= 5:
@@ -180,6 +230,8 @@ def training_command(
         str(Path(args.python).expanduser()),
         str(ROOT / "PPO3_SOLE_PhysX/scripts/train.py"),
         "--headless",
+        "--actuator",
+        str(args.actuator),
         "--device",
         str(args.device),
         "--num_envs",
@@ -208,12 +260,28 @@ def training_command(
         command.extend(["--trajectory_library_path", args.trajectory_library_path])
     if args.command_rom_checkpoint:
         command.extend(["--command_rom_checkpoint", args.command_rom_checkpoint])
+    if args.drive_substep_interpolation:
+        command.extend(
+            ["--drive_substep_interpolation", args.drive_substep_interpolation]
+        )
+    if args.head_joint_action:
+        command.append("--head_joint_action")
+    if args.tail_focus:
+        command.append("--tail_focus")
+    if args.head_tail_risk:
+        command.append("--head_tail_risk")
+    if args.head_action_to_c4_gain is not None:
+        command.extend(
+            ["--head_action_to_c4_gain", str(args.head_action_to_c4_gain)]
+        )
     if args.exploration_std is not None:
         command.extend(["--resume_std", str(args.exploration_std)])
     # Applied after --resume_std so the head axis wins, and on EVERY block: the
     # head can flip in any block, not just the first.
     if args.c4_exploration_std is not None:
         command.extend(["--resume_c4_std", str(args.c4_exploration_std)])
+    if args.q5_exploration_std is not None:
+        command.extend(["--resume_q5_std", str(args.q5_exploration_std)])
     if int(block_index) == 1:
         if args.reset_optimizer_first_block:
             command.append("--reset_optimizer_on_resume")
@@ -232,6 +300,8 @@ def evaluation_command(
         str(ROOT / "PPO3_SOLE_PhysX/scripts/evaluate.py"),
         str(checkpoint),
         "--headless",
+        "--actuator",
+        str(args.actuator),
         "--device",
         str(args.device),
         "--num_envs",
@@ -250,6 +320,16 @@ def evaluation_command(
         command.extend(["--trajectory_library_path", args.trajectory_library_path])
     if args.command_rom_checkpoint:
         command.extend(["--command_rom_checkpoint", args.command_rom_checkpoint])
+    if args.drive_substep_interpolation:
+        command.extend(
+            ["--drive_substep_interpolation", args.drive_substep_interpolation]
+        )
+    if args.head_joint_action:
+        command.append("--head_joint_action")
+    if args.head_action_to_c4_gain is not None:
+        command.extend(
+            ["--head_action_to_c4_gain", str(args.head_action_to_c4_gain)]
+        )
     return command
 
 
@@ -569,6 +649,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "convergence; state is resumable",
         flush=True,
     )
+    state["status"] = "stopped_max_blocks"
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    atomic_write_json(state_path, state)
     return 2
 
 

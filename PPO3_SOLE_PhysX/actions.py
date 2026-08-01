@@ -156,6 +156,59 @@ def directional_tilt_shield(
     return action * gain, gain
 
 
+def nullspace_head_restoring_overlay(
+    action: torch.Tensor,
+    *,
+    signed_tilt: torch.Tensor,
+    action_nullspace: torch.Tensor,
+    action_to_tilt_sign: float,
+    deadband_rad: float,
+    gain: float,
+    max_c4_action: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Actively restore head tilt without commanding first-order tool motion.
+
+    ``action_nullspace`` is a four-cylinder action direction whose Cartesian
+    cutter Jacobian product is zero and whose c4 component is +1.  Moving along
+    it therefore gives c4 orientation authority while c1-c3 cancel c4's XYZ
+    translation.  This avoids the head-vs-contact trade produced by correcting
+    c4 or ``Messerkopf_joint`` alone.
+
+    The returned second tensor is the additive overlay before the final unit-box
+    clamp, allowing the environment to apply its cylinder-limit shield to the
+    controller contribution separately from the policy command.
+    """
+    if action.ndim != 2 or action.shape[1] != 4:
+        raise ValueError(f"action must have shape (N, 4), got {tuple(action.shape)}")
+    response_sign = float(action_to_tilt_sign)
+    if response_sign not in (-1.0, 1.0):
+        raise ValueError("action_to_tilt_sign must be exactly -1 or +1")
+    deadband = max(float(deadband_rad), 0.0)
+    max_action = max(float(max_c4_action), 0.0)
+    direction = torch.as_tensor(
+        action_nullspace, dtype=action.dtype, device=action.device
+    ).reshape(-1)
+    if direction.numel() != 4:
+        raise ValueError("action_nullspace must contain four values")
+    if abs(float(direction[3])) < 1.0e-6:
+        raise ValueError("action_nullspace c4 component must be non-zero")
+    direction = direction / direction[3]
+
+    tilt = signed_tilt.to(device=action.device, dtype=action.dtype).reshape(-1)
+    if tilt.shape[0] != action.shape[0]:
+        raise ValueError(
+            f"signed_tilt batch {tilt.shape[0]} != action batch {action.shape[0]}"
+        )
+    error = torch.sign(tilt) * torch.relu(tilt.abs() - deadband)
+    c4 = torch.clamp(
+        -float(gain) * error / response_sign,
+        min=-max_action,
+        max=max_action,
+    )
+    overlay = c4[:, None] * direction[None, :]
+    return torch.clamp(action + overlay, -1.0, 1.0), overlay
+
+
 def invert_sole_chain(
     *,
     target_applied: torch.Tensor,

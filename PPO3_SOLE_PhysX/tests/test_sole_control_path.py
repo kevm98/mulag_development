@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import ast
+import pytest
 import torch
 
 from PPO3_SOLE_PhysX.observations import finite_difference_kinematics
@@ -147,11 +148,22 @@ def test_ppo_and_evaluation_instantiate_the_terrain_task():
     """The A/B task must not silently train against the legacy stored path."""
     for script in ("train.py", "evaluate.py"):
         source = (ROOT / "PPO3_SOLE_PhysX" / "scripts" / script).read_text()
-        assert "PPO3_SOLE_PhysX.TERRAIN_TASK_ID" in source, (
-            f"{script} does not instantiate the terrain-following gym task"
+        # Resolved via the actuator switch (PPO3 = rom, PPO4 = idfd) rather than
+        # hard-coded, so both packages run this one implementation.
+        assert "resolve_actuator(a.actuator)" in source, (
+            f"{script} does not resolve the terrain task through the actuator switch"
         )
-        assert "verge_observation_dim() + 1" in source, (
+        assert "gym.make(TASK_ID" in source, (
+            f"{script} does not instantiate the resolved terrain gym task"
+        )
+        # Width follows terrain_model_error_observation: 54 without the
+        # actuator-model-error channels, 66 with them. Asserting the bare
+        # 54-D literal would forbid PPO4 from observing its own model error.
+        assert "verge_observation_dim(" in source, (
             f"{script} does not use the terrain observation contract"
+        )
+        assert "terrain_model_error_observation" in source, (
+            f"{script} pins the observation width instead of following the flag"
         )
 
 
@@ -357,7 +369,11 @@ def test_terrain_distillation_uses_terrain_task_and_exact_raw_labels():
     source = (
         ROOT / "PPO3_SOLE_PhysX" / "scripts" / "distill_terrain.py"
     ).read_text()
-    assert "PPO3_SOLE_PhysX.TERRAIN_TASK_ID" in source
+    # The task is now resolved through the actuator switch so PPO3 and PPO4
+    # share one distillation implementation. What must stay true is that the
+    # resolved task is a TERRAIN (verge) task, never the legacy stored path.
+    assert "resolve_actuator(a.actuator)" in source
+    assert "gym.make(TASK_ID" in source
     assert "raw.terrain_teacher_raw_action" in source
     assert 'cfg.sole_teacher_mode = "execute"' in source
     assert "ReplayBuffer" in source
@@ -369,6 +385,14 @@ def test_every_vectorized_terrain_entrypoint_resizes_gpu_physx_buffers():
         assert "configure_terrain_gpu_physx_memory" in source, (
             f"{script} can silently drop contacts at large environment counts"
         )
+
+
+def test_q5_action_contract_is_explicit_in_all_terrain_entrypoints():
+    for script in ("distill_terrain.py", "train.py", "evaluate.py"):
+        source = (ROOT / "PPO3_SOLE_PhysX" / "scripts" / script).read_text()
+        assert '"--head_joint_action"' in source
+        assert "action_space = 5 if" in source
+        assert '"action_width"' in source
 
 
 def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
@@ -656,3 +680,243 @@ def test_head_joint_bypasses_the_hydraulic_rom():
 
     # sanitize_cylinder_action is the hydraulic command gate and stays 4-wide.
     assert "action_dim=4" in source
+
+
+# ----------------------------------------------------------------------
+# Kinematic drive: the chassis fixture must not teleport the truck
+# ----------------------------------------------------------------------
+
+
+def _load_pin_target_travel():
+    """Compile the real ``_pin_target_travel_m`` body for numerical checks.
+
+    Executed from source rather than imported because these tests deliberately
+    run without Isaac Sim. Testing a re-implementation would test the test.
+    """
+    import textwrap
+    import types
+
+    source = textwrap.dedent(
+        ast.get_source_segment(
+            _TERRAIN_ENV_SOURCE, _terrain_method("_pin_target_travel_m")
+        )
+    )
+    namespace: dict = {"torch": torch}
+    exec(compile(source, "<pin_target_travel>", "exec"), namespace)
+    return namespace["_pin_target_travel_m"], types.SimpleNamespace
+
+
+def test_pin_target_travel_interpolates_across_the_decimation_window():
+    """Each pin aims at this substep's travel, not the end of the control step.
+
+    The fixture pins the chassis up to four times per control step while
+    ``_truck_travel_m`` advances once, before any physics. Aiming every pin at
+    the end-of-step target teleported the truck a full step ahead and then
+    dragged it back once per substep -- measured +18.52/-8.10/-8.10 mm at
+    4 km/h, a 60-120 Hz longitudinal square wave that no gate observes because
+    p95_tool_acceleration is a truck-frame difference in which a root teleport
+    cancels exactly.
+    """
+    fn, ns = _load_pin_target_travel()
+    advance = torch.tensor([0.01852])  # 4 km/h x 1/60 s
+    travel = torch.tensor([1.0])
+
+    def target(pending: int, interpolate: bool = True) -> float:
+        env = ns(
+            cfg=ns(
+                decimation=2,
+                terrain_kinematic_drive_substep_interpolation=interpolate,
+            ),
+            _pin_substeps_pending=pending,
+            _truck_step_advance_m=advance,
+            _truck_travel_m=travel,
+        )
+        return float(fn(env))
+
+    start_of_step = float(travel - advance)
+    # Window open (both substeps pending): the truck belongs where it started.
+    assert target(2) == pytest.approx(start_of_step, abs=1e-6)
+    # One substep simulated: half the advance is owed.
+    assert target(1) == pytest.approx(start_of_step + 0.5 * float(advance), abs=1e-6)
+    # Window closed (_get_dones): the full advance has been earned.
+    assert target(0) == pytest.approx(float(travel), abs=1e-6)
+
+    # Monotone and evenly spaced -- never ahead of the physics, never backwards.
+    steps = [target(2), target(1), target(0)]
+    assert steps == sorted(steps)
+    assert steps[1] - steps[0] == pytest.approx(steps[2] - steps[1], abs=1e-6)
+    # The largest single jump is one substep of travel, not one whole step.
+    assert max(steps[1] - steps[0], steps[2] - steps[1]) <= float(advance) / 2 + 1e-9
+
+    # Opting out restores the end-of-step target every stored report used.
+    assert target(2, interpolate=False) == pytest.approx(float(travel), abs=1e-6)
+
+
+def test_pin_target_travel_never_drags_a_prepositioning_env_backwards():
+    """Envs still deploying advance by zero, so their target must not move.
+
+    ``_pre_physics_step`` masks the advance by the preposition/settle counters
+    while the pending-substep counter is global. Interpolating on a per-env
+    advance rather than on a scalar speed is what keeps a held env held.
+    """
+    fn, ns = _load_pin_target_travel()
+    env = ns(
+        cfg=ns(decimation=2, terrain_kinematic_drive_substep_interpolation=True),
+        _pin_substeps_pending=2,
+        # env 0 is driving, env 1 is still prepositioning.
+        _truck_step_advance_m=torch.tensor([0.01852, 0.0]),
+        _truck_travel_m=torch.tensor([1.0, 0.5]),
+    )
+    target = fn(env)
+    assert float(target[1]) == pytest.approx(0.5, abs=1e-6)
+    assert float(target[0]) == pytest.approx(1.0 - 0.01852, abs=1e-6)
+
+
+def test_constrain_truck_xy_pins_to_the_interpolated_target():
+    """The fixture must consume the interpolated target, not raw travel."""
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_constrain_truck_xy")
+    )
+    assert "self._pin_target_travel_m()" in source
+    assert "self._truck_travel_m.reshape" not in source, (
+        "_constrain_truck_xy must aim at the substep-interpolated travel; using "
+        "_truck_travel_m directly reinstates the end-of-step teleport"
+    )
+
+
+def test_substep_window_opens_on_advance_and_closes_once_per_substep():
+    """Open the window where travel advances, close it once per substep.
+
+    The decrement lives outside the per-substep pin flag so the inherited
+    ``_get_dones`` pin sees a closed window in both configurations, and it must
+    follow the pin: the pin serves the substep that has not run yet.
+    """
+    pre_physics = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_pre_physics_step")
+    )
+    assert "_pin_substeps_pending" in pre_physics
+    assert pre_physics.index("_truck_travel_m = self._truck_travel_m + advance") < (
+        pre_physics.index("self._pin_substeps_pending =")
+    ), "the window must be opened after the advance it accounts for"
+
+    apply_action = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_apply_action")
+    )
+    pin_at = apply_action.index("self._constrain_truck_xy()")
+    decrement_at = apply_action.index("self._pin_substeps_pending = max(")
+    assert pin_at < decrement_at, (
+        "the substep counter must be decremented AFTER the pin, which serves "
+        "the substep that has not been simulated yet"
+    )
+    # The decrement must not sit inside the per-substep pin branch.
+    branch = apply_action[
+        apply_action.index('getattr(self.cfg, "terrain_constrain_truck_per_substep"') :
+    ]
+    guarded = branch[: branch.index("self._pin_substeps_pending")]
+    assert guarded.count("if ") == 0, (
+        "the decrement must run regardless of terrain_constrain_truck_per_substep"
+    )
+
+
+# ----------------------------------------------------------------------
+# Compliance in the vertical load path
+# ----------------------------------------------------------------------
+
+
+def test_arm_stiffness_scale_is_applied_to_the_held_joints_and_validated():
+    """Compliance must reach the cylinder drives, bounded, during scored driving.
+
+    The head-tool bounce is ejection off a rigid contact: with the hydraulic
+    lock at ~5e6 N/m, contact force IS commanded position, so no command can
+    ride the verge gently. Softening the drive is the only mechanism in this
+    plant that measurably changes that -- PhysX compliant contacts are written
+    but not honoured here (a 10x stiffness sweep moved force <8%).
+    """
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_apply_terrain_arm_drive_tuning")
+    )
+    assert "terrain_arm_stiffness_scale" in source
+    assert "write_joint_stiffness_to_sim" in source
+    assert "_terrain_held_joint_ids" in source
+    # An unbounded or zero scale is a silently broken plant, not a soft one.
+    assert "0.0 < stiffness_scale <= 1.0" in source, (
+        "terrain_arm_stiffness_scale must be validated in (0, 1]"
+    )
+
+
+def test_deployment_restores_stock_stiffness_not_only_damping():
+    """The reset ramp was validated stiff; unfolding a soft arm is untested.
+
+    Restoring damping alone would leave a compliant arm to run the physical
+    deployment sequence, which is a different problem from mowing with one.
+    """
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("_restore_terrain_arm_deployment_damping"),
+    )
+    assert "write_joint_stiffness_to_sim" in source, (
+        "deployment restore must put the stock stiffness back, not just damping"
+    )
+    assert "_terrain_nominal_arm_stiffness" in source
+
+
+def test_compliance_and_drive_fixture_default_to_the_measured_baseline():
+    """Both plant knobs must default to what the stored reports were measured on."""
+    cfg_source = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
+    assert "terrain_arm_stiffness_scale: float = 0.35" in cfg_source, (
+        "arm stiffness default must be the measured 0.35 operating point; the "
+        "response is non-monotonic, so any other value needs its own A/B"
+    )
+    assert "terrain_head_joint_stiffness_scale: float = 1.0" in cfg_source, (
+        "Messerkopf_joint carries head orientation, not impact load, and must "
+        "stay at full stiffness"
+    )
+    # Compliant contacts are inert here and must stay disabled so nobody reads
+    # a configured-but-ignored parameter as an active one.
+    assert "terrain_compliant_contact_stiffness: float = 0.0" in cfg_source
+    assert "terrain_compliant_contact_damping: float = 0.0" in cfg_source
+
+
+def test_every_package_module_parses():
+    """Every PPO3 source file must be syntactically valid Python.
+
+    This exists because a docstring edit to terrain_env_cfg.py once closed the
+    string early and left prose as bare code, and the whole suite still passed:
+    these tests read sources as TEXT (ast.parse of terrain_env.py, read_text of
+    the config) and none of them import the config module, which needs a running
+    Isaac app. The break surfaced only when a training run spawned the evaluator
+    hours later. Parsing is import-free, so it is safe to do here and catches
+    exactly that class of failure at the same moment the rest of the contracts
+    are checked.
+    """
+    package = ROOT / "PPO3_SOLE_PhysX"
+    sources = sorted(
+        list(package.glob("*.py"))
+        + list((package / "scripts").glob("*.py"))
+        + list((package / "tests").glob("*.py"))
+    )
+    assert sources, "no PPO3 sources discovered"
+    broken = []
+    for path in sources:
+        try:
+            ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError as error:
+            broken.append(f"{path.relative_to(ROOT)}:{error.lineno}: {error.msg}")
+    assert not broken, "unparseable PPO3 sources:\n  " + "\n  ".join(broken)
+
+
+def test_actuator_resolver_maps_only_to_terrain_verge_tasks():
+    """Both actuators must resolve to a verge task, never the legacy stored path.
+
+    The old hard-coded ``PPO3_SOLE_PhysX.TERRAIN_TASK_ID`` guaranteed this by
+    construction. Now that the task is resolved at runtime, the guarantee moves
+    here.
+    """
+    source = (ROOT / "PPO3_SOLE_PhysX" / "actuators.py").read_text()
+    assert "TERRAIN_TASK_ID" in source
+    # Neither branch may reach for the non-terrain task ids.
+    for forbidden in ("package.TASK_ID", "PLAY_TASK_ID"):
+        assert forbidden not in source, (
+            f"actuator resolver may reach a non-terrain task via {forbidden}"
+        )
+    assert '"rom"' in source and '"idfd"' in source

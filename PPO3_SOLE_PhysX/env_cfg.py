@@ -173,6 +173,16 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     True adds a 5th action and CHANGES THE POLICY INTERFACE, so a 4-action
     checkpoint cannot be resumed into it -- the policy must relearn.
     """
+    sole_head_action_to_c4_gain: float = 0.5
+    """Mix q5 into hydraulic cylinder 4 as a dedicated head-tilt residual.
+
+    Runtime authority testing showed that moving ``Messerkopf_joint`` changes
+    its joint coordinate but not the cutter down-axis. The tilt DOF is
+    ``Messerkopf_Schwenk_joint``, actuated by cylinder 4. q5 therefore remains
+    a distinct policy output but reaches the plant through the validated ID/FD
+    cylinder path instead of pretending an alignment-invariant joint can level
+    the cutter.
+    """
     sole_head_action_scale_rad: float = 0.010
     """Radians of head-joint reference commanded per unit action per step.
 

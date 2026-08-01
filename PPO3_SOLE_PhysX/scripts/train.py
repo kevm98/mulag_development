@@ -53,8 +53,41 @@ p.add_argument(
 p.add_argument("--init_std", type=float, default=None)
 p.add_argument("--entropy_coef", type=float, default=None)
 p.add_argument("--vehicle_speed_kmh", type=float, default=4.0)
+p.add_argument(
+    "--head_joint_action",
+    action="store_true",
+    help="Use a fifth policy output as the hydraulic head-tilt residual.",
+)
+p.add_argument(
+    "--head_action_to_c4_gain",
+    type=float,
+    default=None,
+    help="Override the q5 residual gain mixed into cylinder-4 action.",
+)
+p.add_argument(
+    "--drive_substep_interpolation",
+    default="",
+    choices=("", "true", "false"),
+    help=(
+        "Override terrain_kinematic_drive_substep_interpolation. Use true for "
+        "new runs trained against the corrected per-substep terrain dynamics."
+    ),
+)
 p.add_argument("--trajectory_library_path", default="")
 p.add_argument("--command_rom_checkpoint", default="")
+p.add_argument(
+    "--tail_focus",
+    action="store_true",
+    help=(
+        "Training-only oversampling of measured head-tail path families and "
+        "relief scales. Held-out evaluation is unchanged."
+    ),
+)
+p.add_argument(
+    "--head_tail_risk",
+    action="store_true",
+    help="Enable worst-2-percent head weighting and hard-gate failure memory.",
+)
 p.add_argument(
     "--sole_ik_hint",
     action="store_true",
@@ -91,6 +124,12 @@ p.add_argument(
     help="Optional exploration std for the head-pitch action after resume.",
 )
 p.add_argument(
+    "--resume_q5_std",
+    type=float,
+    default=None,
+    help="Optional exploration std for the fifth hydraulic head-residual action.",
+)
+p.add_argument(
     "--resume_std",
     type=float,
     default=None,
@@ -119,6 +158,16 @@ p.add_argument(
     help="Step 100 zero actions before training and report plant motion.",
 )
 p.add_argument("--probe_only", action="store_true")
+p.add_argument(
+    "--actuator",
+    default="rom",
+    choices=("rom", "idfd"),
+    help=(
+        "Which actuator converts the cylinder command into motion. "
+        "rom = PPO3 command ROM; idfd = PPO4 ID->FD. Everything else about "
+        "training is identical, which is the point."
+    ),
+)
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
@@ -136,6 +185,10 @@ if a.init_std is not None and a.init_std <= 0.0:
     p.error("--init_std must be positive")
 if a.resume_c4_std is not None and a.resume_c4_std <= 0.0:
     p.error("--resume_c4_std must be positive")
+if a.resume_q5_std is not None and a.resume_q5_std <= 0.0:
+    p.error("--resume_q5_std must be positive")
+if a.resume_q5_std is not None and not a.head_joint_action:
+    p.error("--resume_q5_std requires --head_joint_action")
 if a.convergence_check_interval <= 0 or a.convergence_steps <= 0:
     p.error("convergence interval and steps must be positive")
 
@@ -151,11 +204,17 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 import PPO3_SOLE_PhysX  # noqa: F401,E402  (registers the gym task)
 from PPO3_SOLE_PhysX.distill import assert_teacher_disabled  # noqa: E402
 from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
-    TerrainSolePolicyPPORunnerCfg,
+    TerrainSolePolicyPPORunnerCfg,  # noqa: F401  (default actuator)
     apply_terrain_curriculum_stage,
     configure_terrain_gpu_physx_memory,
 )
+from PPO3_SOLE_PhysX.actuators import resolve_actuator  # noqa: E402
 from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+
+# One task, two actuators. Resolved once here so every downstream use --
+# env construction, runner config, checkpoint tagging -- cannot disagree.
+TASK_ID, RUNNER_CFG_CLS, ACTUATOR_LABEL = resolve_actuator(a.actuator)
+print(f"[PPO-TERRAIN] actuator={a.actuator} ({ACTUATOR_LABEL}) task={TASK_ID}", flush=True)
 from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence  # noqa: E402
 
 
@@ -171,7 +230,9 @@ def zero_action_probe(raw, steps: int = 100) -> dict[str, float]:
     """
     raw.reset(seed=int(a.seed))
     start = raw._compute_ee_pos_local().detach().clone()
-    zero = torch.zeros((raw.num_envs, 4), device=raw.device)
+    zero = torch.zeros(
+        (raw.num_envs, int(raw.cfg.action_space)), device=raw.device
+    )
     max_drift = 0.0
     for _ in range(steps):
         raw.step(zero)
@@ -306,6 +367,8 @@ def main() -> None:
         )
         infos = resume_payload.get("infos") or {}
         resume_source = str(infos.get("source", ""))
+        from PPO3_SOLE_PhysX.actuators import assert_checkpoint_actuator
+        assert_checkpoint_actuator(infos, a.actuator, context="PPO3/PPO4 resume")
         schema = str(infos.get("schema", ""))
         if schema != "terrain_teacher_student_v1" or resume_source not in {
             "PPO3 terrain teacher distillation v1",
@@ -319,26 +382,55 @@ def main() -> None:
             )
 
     env_cfg = parse_env_cfg(
-        PPO3_SOLE_PhysX.TERRAIN_TASK_ID, device=a.device, num_envs=a.num_envs
+        TASK_ID, device=a.device, num_envs=a.num_envs
     )
+    env_cfg.sole_head_joint_action = bool(a.head_joint_action)
+    env_cfg.action_space = 5 if env_cfg.sole_head_joint_action else 4
+    if env_cfg.sole_head_joint_action:
+        env_cfg.terrain_messerkopf_level_gain = 0.0
+        env_cfg.terrain_messerkopf_level_quadratic_gain = 0.0
+    if a.head_action_to_c4_gain is not None:
+        if a.head_action_to_c4_gain <= 0.0:
+            raise ValueError("--head_action_to_c4_gain must be positive")
+        env_cfg.sole_head_action_to_c4_gain = float(a.head_action_to_c4_gain)
     if a.sole_ik_hint:
         raise ValueError("--sole_ik_hint is not part of the terrain observation contract")
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = verge_observation_dim() + 1
+    env_cfg.observation_space = (
+        verge_observation_dim(
+            model_error=bool(
+                getattr(env_cfg, "terrain_model_error_observation", False)
+            ),
+            model_error_history=int(
+                getattr(env_cfg, "terrain_model_error_history", 1)
+            ),
+        )
+        + 1
+    )
     env_cfg.enable_contact_tracking_demo = False
     resume_load_path = resume_path
     if resume_payload is not None:
-        checkpoint_width = int(
-            (resume_payload.get("infos") or {}).get("observation_width", -1)
-        )
+        resume_infos = resume_payload.get("infos") or {}
+        checkpoint_width = int(resume_infos.get("observation_width", -1))
         if checkpoint_width != int(env_cfg.observation_space):
             raise RuntimeError(
                 f"checkpoint observation width {checkpoint_width} does not match "
                 f"the frozen terrain contract {env_cfg.observation_space}; automatic "
                 "migration is disabled for production training"
             )
+        checkpoint_action_width = int(resume_infos.get("action_width", 4))
+        if checkpoint_action_width != int(env_cfg.action_space):
+            raise RuntimeError(
+                f"checkpoint action width {checkpoint_action_width} does not match "
+                f"environment width {env_cfg.action_space}; q4/q5 checkpoints are "
+                "not shape-compatible"
+            )
     env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
     env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    if a.drive_substep_interpolation:
+        env_cfg.terrain_kinematic_drive_substep_interpolation = (
+            a.drive_substep_interpolation == "true"
+        )
     env_cfg.terrain_base_seed = int(a.seed)
     if a.trajectory_library_path:
         env_cfg.trajectory_library_path = str(Path(a.trajectory_library_path).resolve())
@@ -348,7 +440,7 @@ def main() -> None:
         env_cfg.sole_limit_shield_margin_m = float(a.sole_limit_shield_margin_m)
     configure_terrain_gpu_physx_memory(env_cfg, int(a.num_envs))
 
-    runner_cfg = TerrainSolePolicyPPORunnerCfg()
+    runner_cfg = RUNNER_CFG_CLS()
     # RSL-RL seeds policy sampling from the runner config, not from raw.reset().
     # The block supervisor varies this seed so separate resumed processes do not
     # replay the same stochastic update sequence from checkpoints that omit RNG
@@ -372,6 +464,45 @@ def main() -> None:
     # rather than to them. Per-scale tracking is logged as
     # height_scale/<scale>_* so an unservable scale is visible, not averaged.
     env_cfg.terrain_height_scales = (0.35, 0.50, 0.70, 0.85, 1.00, 1.15)
+    if a.tail_focus:
+        # CUDA tail probe (seed 17, 64 x 960) localized all 144 samples below
+        # alignment 0.95 to offset_return/lane_change_hold at relief 0.85/1.0.
+        # Keep one copy of every family to prevent forgetting, then repeat the
+        # two failure families six more times each (~61% hard-family exposure).
+        env_cfg.tracking_path_family_schedule = (
+            "boom_sweep",
+            "double_s_curve",
+            "fourier_meander",
+            "gaussian_slalom",
+            "lane_change_hold",
+            "lateral_chirp",
+            "lateral_sine",
+            "offset_return",
+            "random_spline",
+            "s_curve",
+            "straight",
+            *("offset_return",) * 6,
+            *("lane_change_hold",) * 6,
+        )
+        # The two hard families fail as q approaches 0.7, but with the authored
+        # reference all parallel environments encounter that transition in the
+        # same PPO rollout. Keep one canonical copy of every family, then make
+        # the repeated hard-family copies begin across the measured failure
+        # window. This supplies recovery examples in every episode without
+        # changing the held-out mesh or teleporting the physical truck.
+        hard_start_phases = (0.55, 0.60, 0.65, 0.70, 0.72, 0.75)
+        env_cfg.tracking_path_start_phase_schedule = (
+            *(-1.0 for _ in range(11)),
+            *hard_start_phases,
+            *hard_start_phases,
+        )
+        env_cfg.terrain_height_scales = (0.85, 1.0, 1.0, 1.0)
+    if a.head_tail_risk:
+        env_cfg.terrain_head_tail_fraction = 0.02
+        env_cfg.terrain_head_tail_multiplier = 2.0
+        env_cfg.terrain_head_tail_memory_trigger = 0.95
+        env_cfg.terrain_head_tail_memory_steps = 30
+        env_cfg.terrain_head_tail_memory_penalty = -1.0
     # Training-only path widening, same rationale and same pattern as the relief
     # spread above: the gated held-out path deliberately keeps the cfg default so
     # scores stay comparable, while PPO is exercised over a wider lateral band
@@ -389,7 +520,10 @@ def main() -> None:
     # tilts the head, so this widening AMPLIFIES the outstanding head coupling.
     # Expect a policy trained here to need the head driven as a real joint
     # rather than the 0.76 feedforward with a bounded correction.
-    env_cfg.terrain_tracking_amplitude_scale = 1.8
+    # Tail-focus must reproduce the measured failure geometry. The diagnostic
+    # tail is on the held-out 1.0x paths; applying the generic 1.8x widening
+    # changes the problem and previously drove head alignment as low as 0.338.
+    env_cfg.terrain_tracking_amplitude_scale = 1.0 if a.tail_focus else 1.8
 
     # The inherited trajectory exists only for reset deployment. Scored terrain
     # episodes always use the sensed verge reference and a fixed deployment.
@@ -399,7 +533,7 @@ def main() -> None:
     # PPO always runs teacher-free. Distillation is scripts/distill_terrain.py, and it
     # hands over a checkpoint, not a teacher.
     assert_teacher_disabled(env_cfg, context="PPO3 PPO training")
-    env = gym.make(PPO3_SOLE_PhysX.TERRAIN_TASK_ID, cfg=env_cfg, render_mode=None)
+    env = gym.make(TASK_ID, cfg=env_cfg, render_mode=None)
     raw = env.unwrapped
     # DirectRLEnv construction leaves the asset at its spawn pose. Without an
     # explicit reset, PPO's first rollout starts before the production arm
@@ -460,6 +594,7 @@ def main() -> None:
     )
     startup_manifest = {
         "schema": "terrain_teacher_student_v1",
+        "actuator": str(a.actuator),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "log_dir": str(log_dir),
         "initialization_source": resume_source,
@@ -468,13 +603,18 @@ def main() -> None:
         "direct_target_demo": bool(raw.cfg.enable_contact_tracking_demo),
         "num_envs": int(raw.num_envs),
         "observation_width": int(raw.cfg.observation_space),
-        "action_width": 4,
+        "action_width": int(raw.cfg.action_space),
+        "head_joint_action": bool(raw.cfg.sole_head_joint_action),
+        "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
+        "automatic_head_level_gain": float(raw.cfg.terrain_messerkopf_level_gain),
         "path_families": sorted(set(raw._tracking_path_family_names)),
         "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
         "terrain_base_seed": int(raw._mow_strip_cfg().seed),
         "terrain_height_scales": sorted(
             set(float(value) for value in raw._terrain_height_scales)
         ),
+        "tail_focus": bool(a.tail_focus),
+        "head_tail_risk": bool(a.head_tail_risk),
         "actor_parameters": int(
             sum(parameter.numel() for parameter in runner.alg.actor.parameters())
         ),
@@ -538,7 +678,7 @@ def main() -> None:
                 distribution.std_param[:] = float(a.resume_std)
             print(
                 f"[PPO3-VERGE] set exploration std to {float(a.resume_std)} "
-                "on all four actions after resume",
+                f"on all {int(raw.cfg.action_space)} actions after resume",
                 flush=True,
             )
         if a.resume_c4_std is not None:
@@ -547,6 +687,12 @@ def main() -> None:
                 raise RuntimeError("terrain actor distribution has no std_param")
             with torch.no_grad():
                 distribution.std_param[3] = float(a.resume_c4_std)
+        if a.resume_q5_std is not None:
+            distribution = runner.alg.actor.distribution
+            if not hasattr(distribution, "std_param"):
+                raise RuntimeError("terrain actor distribution has no std_param")
+            with torch.no_grad():
+                distribution.std_param[4] = float(a.resume_q5_std)
         # rsl_rl restores the optimizer param-group LR but not PPO's separate
         # ``learning_rate`` scalar. On the next adaptive-KL update that stale
         # scalar overwrites the restored optimizer LR (3e-4 instead of the
@@ -576,6 +722,11 @@ def main() -> None:
         if a.resume_c4_std is not None:
             print(
                 f"[PPO3-SOLE] set resumed c4 exploration std={a.resume_c4_std:.6g}",
+                flush=True,
+            )
+        if a.resume_q5_std is not None:
+            print(
+                f"[PPO3-SOLE] set resumed q5 exploration std={a.resume_q5_std:.6g}",
                 flush=True,
             )
     else:
@@ -657,7 +808,13 @@ def main() -> None:
                 infos={
                     "source": "PPO3 terrain PPO",
                     "schema": "terrain_teacher_student_v1",
+                    "actuator": str(a.actuator),
                     "observation_width": int(raw.cfg.observation_space),
+                    "action_width": int(raw.cfg.action_space),
+                    "head_joint_action": bool(raw.cfg.sole_head_joint_action),
+                    "head_action_to_c4_gain": float(
+                        raw.cfg.sole_head_action_to_c4_gain
+                    ),
                     "convergence": result,
                 },
             )
@@ -672,7 +829,13 @@ def main() -> None:
                     infos={
                         "source": "PPO3 terrain PPO",
                         "schema": "terrain_teacher_student_v1",
+                        "actuator": str(a.actuator),
                         "observation_width": int(raw.cfg.observation_space),
+                        "action_width": int(raw.cfg.action_space),
+                        "head_joint_action": bool(raw.cfg.sole_head_joint_action),
+                        "head_action_to_c4_gain": float(
+                            raw.cfg.sole_head_action_to_c4_gain
+                        ),
                         "convergence": result,
                     },
                 )
@@ -688,6 +851,10 @@ def main() -> None:
         checkpoint_info = {
             "source": "PPO3 terrain PPO",
             "schema": "terrain_teacher_student_v1",
+            # Every save path must carry this. The supervisor evaluates THIS
+            # checkpoint, and an untagged one is read as 'rom', which made the
+            # held-out evaluator refuse an ID/FD block and killed the run.
+            "actuator": str(a.actuator),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "iteration": int(runner.current_learning_iteration),
             "num_envs": int(raw.num_envs),
@@ -697,6 +864,9 @@ def main() -> None:
             "fixed_learning_rate": bool(a.fixed_learning_rate),
             "convergence": last_convergence_result,
             "observation_width": int(raw.cfg.observation_space),
+            "action_width": int(raw.cfg.action_space),
+            "head_joint_action": bool(raw.cfg.sole_head_joint_action),
+            "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
             "initialization_source": resume_source,
             "teacher_enabled_during_ppo": False,
             "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
@@ -708,6 +878,8 @@ def main() -> None:
             "optimizer_reset_on_resume": bool(a.reset_optimizer_on_resume),
             "critic_head_reset_on_resume": bool(a.reset_critic_head_on_resume),
             "resume_c4_std": a.resume_c4_std,
+            "resume_q5_std": a.resume_q5_std,
+            "head_tail_risk": bool(a.head_tail_risk),
         }
         runner.save(str(checkpoint_out), infos=checkpoint_info)
         manifest = checkpoint_out.with_suffix(".json")

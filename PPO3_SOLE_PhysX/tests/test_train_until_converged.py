@@ -48,6 +48,119 @@ def test_evaluation_is_forced_onto_held_out_terrain():
     assert command[command.index("--num_envs") + 1] == "128"
 
 
+def test_head_joint_action_is_forwarded_to_training_and_evaluation():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--resume", "/tmp/model.pt", "--head_joint_action"]
+    )
+    validate_args(parser, args)
+    train = training_command(
+        args,
+        resume=Path("/tmp/model.pt"),
+        checkpoint_out=Path("/tmp/latest.pt"),
+        block_index=1,
+    )
+    evaluate = evaluation_command(
+        args,
+        checkpoint=Path("/tmp/model.pt"),
+        report=Path("/tmp/report.json"),
+    )
+    assert "--head_joint_action" in train
+    assert "--head_joint_action" in evaluate
+
+
+def test_head_action_mixer_gain_is_forwarded_to_training_and_evaluation():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--resume",
+            "/tmp/model.pt",
+            "--head_joint_action",
+            "--head_action_to_c4_gain",
+            "0.6",
+        ]
+    )
+    validate_args(parser, args)
+    train = training_command(
+        args,
+        resume=Path("/tmp/model.pt"),
+        checkpoint_out=Path("/tmp/latest.pt"),
+        block_index=1,
+    )
+    evaluate = evaluation_command(
+        args,
+        checkpoint=Path("/tmp/model.pt"),
+        report=Path("/tmp/report.json"),
+    )
+    assert train[train.index("--head_action_to_c4_gain") + 1] == "0.6"
+    assert evaluate[evaluate.index("--head_action_to_c4_gain") + 1] == "0.6"
+
+
+def test_q5_exploration_cap_is_forwarded_to_training_only():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--resume",
+            "/tmp/model.pt",
+            "--head_joint_action",
+            "--q5_exploration_std",
+            "0.04",
+        ]
+    )
+    validate_args(parser, args)
+    train = training_command(
+        args,
+        resume=Path("/tmp/model.pt"),
+        checkpoint_out=Path("/tmp/latest.pt"),
+        block_index=2,
+    )
+    evaluate = evaluation_command(
+        args,
+        checkpoint=Path("/tmp/model.pt"),
+        report=Path("/tmp/report.json"),
+    )
+    assert train[train.index("--resume_q5_std") + 1] == "0.04"
+    assert "--resume_q5_std" not in evaluate
+
+
+def test_tail_focus_is_forwarded_to_training_only():
+    parser = build_parser()
+    args = parser.parse_args(["--resume", "/tmp/model.pt", "--tail_focus"])
+    validate_args(parser, args)
+    train = training_command(
+        args,
+        resume=Path("/tmp/model.pt"),
+        checkpoint_out=Path("/tmp/latest.pt"),
+        block_index=1,
+    )
+    evaluate = evaluation_command(
+        args,
+        checkpoint=Path("/tmp/model.pt"),
+        report=Path("/tmp/report.json"),
+    )
+    assert "--tail_focus" in train
+    assert "--tail_focus" not in evaluate
+
+
+def test_head_tail_risk_is_forwarded_to_training_only():
+    parser = build_parser()
+    args = parser.parse_args(["--resume", "/tmp/model.pt", "--head_tail_risk"])
+    validate_args(parser, args)
+    train = training_command(
+        args,
+        resume=Path("/tmp/model.pt"),
+        checkpoint_out=Path("/tmp/latest.pt"),
+        block_index=1,
+    )
+    evaluate = evaluation_command(
+        args,
+        checkpoint=Path("/tmp/model.pt"),
+        report=Path("/tmp/report.json"),
+    )
+    assert "--head_tail_risk" in train
+    assert "--head_tail_risk" not in evaluate
+
+
 def test_semantic_reset_flags_apply_only_to_first_training_block():
     parser = build_parser()
     args = parser.parse_args(

@@ -256,4 +256,7 @@ def test_training_widens_the_path_but_the_gated_config_does_not():
     assert "terrain_tracking_amplitude_scale: float = 1.0" in cfg_source
 
     train_source = (root / "scripts" / "train.py").read_text()
-    assert "env_cfg.terrain_tracking_amplitude_scale = 1.8" in train_source
+    assert (
+        "env_cfg.terrain_tracking_amplitude_scale = 1.0 if a.tail_focus else 1.8"
+        in train_source
+    )

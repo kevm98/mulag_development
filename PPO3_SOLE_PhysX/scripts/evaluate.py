@@ -35,6 +35,17 @@ p.add_argument("--num_envs", type=int, default=64)
 p.add_argument("--seed", type=int, default=17)
 p.add_argument("--steps", type=int, default=120)
 p.add_argument("--stage", type=int, default=4)
+p.add_argument(
+    "--head_joint_action",
+    action="store_true",
+    help="Evaluate a five-output policy with a hydraulic head-tilt residual.",
+)
+p.add_argument(
+    "--head_action_to_c4_gain",
+    type=float,
+    default=None,
+    help="Override the q5 residual gain mixed into cylinder-4 action.",
+)
 p.add_argument("--eval_terrain", action="store_true")
 p.add_argument(
     "--path_family",
@@ -104,6 +115,60 @@ p.add_argument(
     default=1.0,
     help="DIAGNOSTIC ONLY: multiplier on damping of the five held arm joints.",
 )
+p.add_argument(
+    "--drive_substep_interpolation",
+    default="",
+    choices=("", "true", "false"),
+    help=(
+        "Override terrain_kinematic_drive_substep_interpolation. Empty keeps the "
+        "config default. 'false' restores the end-of-step pin target that "
+        "teleported the chassis +18.52/-8.10/-8.10 mm per control step, which is "
+        "what every report stored before 2026-07-31 was measured under."
+    ),
+)
+p.add_argument(
+    "--arm_stiffness_scale",
+    type=float,
+    default=None,
+    help=(
+        "Override terrain_arm_stiffness_scale: compliance in the vertical load "
+        "path. 1.0 is the stock hydraulic lock every stored report used."
+    ),
+)
+p.add_argument(
+    "--head_termination_alignment",
+    type=float,
+    default=None,
+    help=(
+        "Override the head-down safety threshold. The evaluator normally pins "
+        "it to the head_alignment_hard_min gate value, which makes the gate "
+        "censor its own metric. Pass a low value (e.g. -1) to measure the "
+        "uncensored worst-case alignment."
+    ),
+)
+p.add_argument("--head_pose_solve", default="", choices=("", "true", "false"))
+p.add_argument("--head_pose_solve_gain", type=float, default=None)
+p.add_argument("--level_gain", type=float, default=None)
+p.add_argument("--level_quadratic_gain", type=float, default=None)
+p.add_argument("--level_max_rad", type=float, default=None)
+p.add_argument("--head_nullspace_restore_gain", type=float, default=None)
+p.add_argument("--head_nullspace_restore_deadband_rad", type=float, default=None)
+p.add_argument("--head_nullspace_restore_max_action", type=float, default=None)
+p.add_argument(
+    "--head_restore_mode", default="", choices=("", "nullspace", "c4")
+)
+p.add_argument(
+    "--actuator",
+    default="rom",
+    choices=("rom", "idfd"),
+    help="rom = PPO3 command ROM; idfd = PPO4 ID->FD. Same evaluation either way.",
+)
+p.add_argument(
+    "--head_ff_from_measured",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_head_feedforward_from_measured for an A/B.",
+)
 p.add_argument("--control-path-audit", dest="audit", action="store_true")
 p.add_argument(
     "--zero_action",
@@ -139,7 +204,16 @@ from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
     apply_terrain_curriculum_stage,
     configure_terrain_gpu_physx_memory,
 )
+from PPO3_SOLE_PhysX.actuators import (  # noqa: E402
+    assert_checkpoint_actuator,
+    resolve_actuator,
+)
 from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+
+# One task, two actuators. Resolved once here so every downstream use --
+# env construction, runner config, checkpoint tagging -- cannot disagree.
+TASK_ID, RUNNER_CFG_CLS, ACTUATOR_LABEL = resolve_actuator(a.actuator)
+print(f"[PPO-TERRAIN] actuator={a.actuator} ({ACTUATOR_LABEL}) task={TASK_ID}", flush=True)
 from PPO3_SOLE_PhysX.terrain_convergence import (  # noqa: E402
     GATE_SPECS,
     summarize_convergence,
@@ -148,13 +222,32 @@ from PPO3_SOLE_PhysX.terrain_convergence import (  # noqa: E402
 
 def build_env():
     env_cfg = parse_env_cfg(
-        PPO3_SOLE_PhysX.TERRAIN_TASK_ID, device=a.device, num_envs=a.num_envs
+        TASK_ID, device=a.device, num_envs=a.num_envs
     )
     apply_terrain_curriculum_stage(env_cfg, int(a.stage))
+    env_cfg.sole_head_joint_action = bool(a.head_joint_action)
+    env_cfg.action_space = 5 if env_cfg.sole_head_joint_action else 4
+    if env_cfg.sole_head_joint_action:
+        env_cfg.terrain_messerkopf_level_gain = 0.0
+        env_cfg.terrain_messerkopf_level_quadratic_gain = 0.0
+    if a.head_action_to_c4_gain is not None:
+        if a.head_action_to_c4_gain <= 0.0:
+            raise ValueError("--head_action_to_c4_gain must be positive")
+        env_cfg.sole_head_action_to_c4_gain = float(a.head_action_to_c4_gain)
     if a.sole_ik_hint:
         raise ValueError("--sole_ik_hint is not part of the terrain observation contract")
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = verge_observation_dim() + 1
+    env_cfg.observation_space = (
+        verge_observation_dim(
+            model_error=bool(
+                getattr(env_cfg, "terrain_model_error_observation", False)
+            ),
+            model_error_history=int(
+                getattr(env_cfg, "terrain_model_error_history", 1)
+            ),
+        )
+        + 1
+    )
     env_cfg.use_eval_terrain = bool(a.eval_terrain)
     env_cfg.terrain_base_seed = int(a.seed)
     env_cfg.terrain_height_scale_override = float(a.terrain_height_scale)
@@ -176,7 +269,43 @@ def build_env():
     env_cfg.defer_safety_terminations = True
     env_cfg.head_down_termination_alignment = float(
         GATE_SPECS["head_alignment_hard_min"].threshold
+        if a.head_termination_alignment is None
+        else a.head_termination_alignment
     )
+    if a.head_pose_solve:
+        env_cfg.terrain_head_pose_solve = a.head_pose_solve == "true"
+    if a.head_pose_solve_gain is not None:
+        env_cfg.terrain_head_pose_solve_gain = float(a.head_pose_solve_gain)
+    if a.level_gain is not None:
+        env_cfg.terrain_messerkopf_level_gain = float(a.level_gain)
+    if a.level_quadratic_gain is not None:
+        env_cfg.terrain_messerkopf_level_quadratic_gain = float(a.level_quadratic_gain)
+    if a.level_max_rad is not None:
+        env_cfg.terrain_messerkopf_level_max_rad = float(a.level_max_rad)
+    if a.head_nullspace_restore_gain is not None:
+        env_cfg.terrain_head_nullspace_restore_gain = float(
+            a.head_nullspace_restore_gain
+        )
+    if a.head_nullspace_restore_deadband_rad is not None:
+        env_cfg.terrain_head_nullspace_restore_deadband_rad = float(
+            a.head_nullspace_restore_deadband_rad
+        )
+    if a.head_nullspace_restore_max_action is not None:
+        env_cfg.terrain_head_nullspace_restore_max_action = float(
+            a.head_nullspace_restore_max_action
+        )
+    if a.head_restore_mode:
+        env_cfg.terrain_head_restore_preserve_xyz = a.head_restore_mode == "nullspace"
+    if a.head_ff_from_measured:
+        env_cfg.terrain_head_feedforward_from_measured = (
+            a.head_ff_from_measured == "true"
+        )
+    if a.arm_stiffness_scale is not None:
+        env_cfg.terrain_arm_stiffness_scale = float(a.arm_stiffness_scale)
+    if a.drive_substep_interpolation:
+        env_cfg.terrain_kinematic_drive_substep_interpolation = (
+            a.drive_substep_interpolation == "true"
+        )
     env_cfg.randomize_start_phase = False
     env_cfg.randomize_trajectory_shape = False
     env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
@@ -188,7 +317,7 @@ def build_env():
     # A gate number produced with the DLS teacher active is a distillation
     # diagnostic, not a sole-controller result. Refuse before spending the run.
     assert_teacher_disabled(env_cfg, context="PPO3 evaluation")
-    env = gym.make(PPO3_SOLE_PhysX.TERRAIN_TASK_ID, cfg=env_cfg, render_mode=None)
+    env = gym.make(TASK_ID, cfg=env_cfg, render_mode=None)
     return env, env.unwrapped
 
 
@@ -265,7 +394,10 @@ def control_path_audit(raw, steps: int = 60) -> dict:
     """
     torch.manual_seed(int(a.seed))
     script = torch.tanh(
-        torch.randn((steps, raw.num_envs, 4), device=raw.device) * 0.5
+        torch.randn(
+            (steps, raw.num_envs, int(raw.cfg.action_space)), device=raw.device
+        )
+        * 0.5
     )
 
     def rollout(corrupt: bool) -> torch.Tensor:
@@ -290,26 +422,36 @@ def control_path_audit(raw, steps: int = 60) -> dict:
 
 @torch.no_grad()
 def head_action_direction_probe(raw, steps: int = 12) -> dict:
-    """Measure the sign from c4 action to the signed lateral head-axis tilt."""
+    """Measure direct q5 authority (or legacy c4 authority in q4 mode)."""
     rows = {}
+    channel = 4 if bool(raw.cfg.sole_head_joint_action) else 3
     for label, command in (("positive", 0.5), ("negative", -0.5)):
         raw.reset(seed=int(a.seed))
         start_axis = raw._head_down_axis_world().detach().clone()
         start_x = raw._refresh_cylinder_state()[0][:, 3].detach().clone()
-        action = torch.zeros((raw.num_envs, 4), device=raw.device)
-        action[:, 3] = command
+        start_head_q = raw.robot.data.joint_pos[:, raw._tool_joint_id].detach().clone()
+        action = torch.zeros(
+            (raw.num_envs, int(raw.cfg.action_space)), device=raw.device
+        )
+        action[:, channel] = command
         for _ in range(int(steps)):
             raw.step(action)
         final_axis = raw._head_down_axis_world()
         final_x = raw._refresh_cylinder_state()[0][:, 3]
+        final_head_q = raw.robot.data.joint_pos[:, raw._tool_joint_id]
         rows[label] = {
             "command": command,
+            "action_channel": channel,
             "mean_axis_y_start": float(start_axis[:, 1].mean()),
             "mean_axis_y_final": float(final_axis[:, 1].mean()),
             "mean_axis_y_delta": float(
                 (final_axis[:, 1] - start_axis[:, 1]).mean()
             ),
             "mean_c4_extension_delta_m": float((final_x - start_x).mean()),
+            "mean_head_joint_delta_rad": float((final_head_q - start_head_q).mean()),
+            "mean_integrated_q5_correction_rad": float(
+                getattr(raw, "_head_joint_correction", torch.zeros(1, device=raw.device)).mean()
+            ),
             "min_head_alignment": float((-final_axis[:, 2]).min()),
         }
     return {"steps_per_sign": int(steps), "responses": rows}
@@ -703,6 +845,20 @@ def main() -> None:
         "direct_hold_probe": bool(a.direct_hold_probe),
         "hold_effort_floor_n": float(a.hold_effort_floor_n),
         "hold_damping_scale": float(a.hold_damping_scale),
+        "actuator": str(a.actuator),
+        "action_width": int(raw.cfg.action_space),
+        "head_joint_action": bool(raw.cfg.sole_head_joint_action),
+        "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
+        "automatic_head_level_gain": float(raw.cfg.terrain_messerkopf_level_gain),
+        # Chassis-fixture discretization. Reports stored before 2026-07-31 were
+        # all measured with this False (the end-of-step pin target).
+        "drive_substep_interpolation": bool(
+            raw.cfg.terrain_kinematic_drive_substep_interpolation
+        ),
+        "constrain_truck_per_substep": bool(
+            raw.cfg.terrain_constrain_truck_per_substep
+        ),
+        "arm_stiffness_scale": float(raw.cfg.terrain_arm_stiffness_scale),
         "terrain_provenance": {
             "curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "split": "held_out_validation" if a.eval_terrain else "training",
@@ -738,7 +894,7 @@ def main() -> None:
         )
 
     if a.checkpoint:
-        runner_cfg = TerrainSolePolicyPPORunnerCfg()
+        runner_cfg = RUNNER_CFG_CLS()
         runner_cfg.seed = int(a.seed)
         wrapped = RslRlVecEnvWrapper(env, clip_actions=runner_cfg.clip_actions)
         runner = OnPolicyRunner(
@@ -750,6 +906,7 @@ def main() -> None:
         source = str(infos.get("source", ""))
         schema = str(infos.get("schema", ""))
         checkpoint_width = int(infos.get("observation_width", -1))
+        checkpoint_action_width = int(infos.get("action_width", 4))
         if schema != "terrain_teacher_student_v1" or source not in {
             "PPO3 terrain teacher distillation v1",
             "PPO3 terrain PPO",
@@ -763,6 +920,12 @@ def main() -> None:
                 f"checkpoint observation width {checkpoint_width} != "
                 f"environment width {raw.cfg.observation_space}"
             )
+        if checkpoint_action_width != int(raw.cfg.action_space):
+            raise RuntimeError(
+                f"checkpoint action width {checkpoint_action_width} != "
+                f"environment width {raw.cfg.action_space}; pass "
+                "--head_joint_action only for q5 checkpoints"
+            )
         runner.load(
             str(checkpoint_path),
             load_cfg={
@@ -773,10 +936,14 @@ def main() -> None:
                 "rnd": False,
             },
         )
+        assert_checkpoint_actuator(infos, a.actuator, context="PPO3/PPO4 evaluation")
         report["checkpoint_contract"] = {
             "source": source,
+            "actuator": str(a.actuator),
             "schema": schema,
             "observation_width": checkpoint_width,
+            "action_width": checkpoint_action_width,
+            "head_joint_action": bool(raw.cfg.sole_head_joint_action),
             "teacher_mode": str(raw.cfg.sole_teacher_mode),
             "direct_target_demo": bool(raw.cfg.enable_contact_tracking_demo),
         }

@@ -306,6 +306,18 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     tracking_path_family: str = "mixed"
     """Cycle every path family across parallel environments."""
     tracking_path_family_offset: int = 0
+    tracking_path_family_schedule: tuple = ()
+    """Optional training-only weighted family schedule; empty stays balanced."""
+    tracking_path_start_phase_schedule: tuple = ()
+    """Optional phase-at-spawn schedule aligned with the family schedule.
+
+    Negative entries preserve the authored straight lead-in.  Entries in
+    ``[0, 1]`` shift that environment's path reference so the deployed cutter
+    begins at the requested normalized path phase.  This changes only the
+    training geometry; held-out evaluation leaves the schedule empty.
+    """
+    tracking_path_phase_anchor_x_m: float = -27.12
+    """Measured deployed cutter x used to place a requested start phase."""
     # The GATE terrain. Held-out geometry is pinned at seed 1337 precisely so a
     # stage-5 score means the same thing across runs, and this tuple is read for
     # every environment including evaluation -- widening it here silently moved
@@ -437,6 +449,12 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # -48.9. Deliberately shallow -- see the note above for why steepening it
     # to -2.0 backfired.
     terrain_head_penalty_far_weight: float = -0.5
+    terrain_head_tail_fraction: float = 0.0
+    """Training-only CVaR fraction; zero preserves the standard reward."""
+    terrain_head_tail_multiplier: float = 1.0
+    terrain_head_tail_memory_trigger: float = 0.975
+    terrain_head_tail_memory_steps: int = 0
+    terrain_head_tail_memory_penalty: float = 0.0
     # Head-down is a precondition for earning tracking reward. An env that drops
     # below this alignment while tracking earns no cut/lateral/contact reward for
     # the rest of the episode.
@@ -519,7 +537,204 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
         supplies the smoothness, not the lateral one.
 
     Default False keeps the verified 15/15. Set True to trade one 2.6 %-margin
-    gate for visibly smoother motion and no sway."""
+    gate for visibly smoother motion and no sway.
+
+    NOTE: every number above was measured while each of those pins aimed at the
+    END-of-step travel target, which teleported the chassis +18.52/-8.10/-8.10 mm
+    per control step. See terrain_kinematic_drive_substep_interpolation."""
+    terrain_arm_stiffness_scale: float = 0.35
+    """Compliance in the vertical load path: scale on the cylinder drive gains.
+
+    1.0 is the stock hydraulic lock and reproduces every stored report.
+
+    0.35 measured on the held-out verge (128 envs x 960 steps, v5/model_best,
+    reports/compliant_arm_035_stiffhead_heldout.json vs
+    reports/drive_sawtooth_baseline_16of17.json):
+
+        metric                          rigid    0.35     gate
+        p95_tool_acceleration           91.71   48.69     <=120
+        p95_cut_height_error_m         0.0631  0.0000     <=0.080
+        mean_cutter_contact_force_n     28022   16904       --
+        ground_contact_fraction        0.9350  0.9468     >=0.90
+        safety_termination_rate        0.0133  0.0067     <=0.05
+        min_wheel_road_duty            0.1947  0.2128     >=0.20   PASS now
+        min_head_alignment             0.9500  0.9165     >=0.950  FAIL now
+        gates                           16/17   16/17
+
+    And on the bounce itself, which is what this is for (64 envs x 480 steps,
+    reports/contact_loss_stiff_035.json vs contact_loss_policy_v5.json):
+    ejection velocity at separation 0.92 -> 0.30 m/s, peak force before
+    separation 53 -> 17 kN, ballistic hop height 43 -> 4.6 mm, at an unchanged
+    separation rate (9.1 -> 9.2 per 1000 samples).
+
+    The response is NOT monotonic and this is not a knob to bisect: 0.5 leaves a
+    19.7 mm hop, 0.2 and 0.1 buy gentleness by losing contact (0.885/0.853), 0.05
+    is worse than 0.2 on force, and 0.01 collapses contact to 0.347 because the
+    cylinders can no longer hold the boom against gravity. 0.35 is the only value
+    measured that improves contact AND smoothness together.
+
+    Known cost: `head_alignment_hard_min` 0.9500 -> 0.9165. p01 alignment is
+    essentially unchanged (0.9854 -> 0.9840), so this is the extreme tail, not a
+    systematic loss of head control. Note the rigid checkpoint already measures
+    0.9111 / 0.9185 / 0.9396 on other terrain seeds (FINAL_17of17_varied17,
+    FINAL_varied_seed909, FINAL_varied_seed17), so this gate is marginal for v5
+    on every mesh and its 0.9500 here is the top of that spread. Recovering it
+    wants a fine-tune on the compliant plant, which v5 has never seen.
+
+    This is the knob that actually inserts a spring between the tool and the
+    world. `terrain_compliant_contact_stiffness` below is the cleaner physical
+    model and was tried first, but PhysX does not honour it in this scene --
+    sweeping it 1e6 -> 1e5 N/m, a 10x range that should have cut contact force
+    roughly 10x, moved median peak force only 50.4 -> 46.9 kN.
+
+    Applied to the cylinder joints plus the tool joint, and only during scored
+    driving: `_restore_terrain_arm_deployment_damping` puts the stock drive back
+    for the reset ramp, which was validated stiff.
+
+    Damping is deliberately left at nominal rather than scaled alongside.
+    Holding damping while cutting stiffness by N raises the damping ratio by
+    sqrt(N), so one knob buys both the compliance and the dissipation that stops
+    stored contact energy coming back as ejection velocity."""
+    terrain_model_error_history: int = 1
+    """Stack this many past model-error samples. 1 = current sample only.
+
+    teacher_student puts history_length=3 on its rate-bearing observation terms
+    for the same reason: a snapshot cannot express a trend. Depth 3 costs 24
+    extra MLP inputs here. Its depth camera is deliberately NOT copied -- it
+    will not run alongside 512 environments on a 6 GB card."""
+    terrain_actuator_randomization: float = 0.0
+    """Per-episode uniform scatter on cylinder stiffness/damping, e.g. 0.2 = +-20 %.
+
+    The robustness route to model-error tolerance rather than the observability
+    one: vary the plant so the policy cannot rely on an exact actuator. Costs a
+    reset-time write and nothing per step."""
+    terrain_model_error_observation: bool = False
+    """Expose ACTUATOR MODEL ERROR to the policy (12 extra observation columns).
+
+    The policy is a memoryless MLP. It already sees the actuator model's
+    prediction and the current measured extension, but forming the error needs
+    two steps of history, so it cannot compute it. Under ROM-A that costs
+    nothing -- the ROM reaches its command. Under PPO4's learned ID/FD it is the
+    difference between a policy that can compensate model error and one that
+    cannot even see it.
+
+    Changes the observation width, so no existing checkpoint can be resumed.
+    Default False keeps PPO3's frozen 54-D contract."""
+    terrain_head_pose_solve: bool = False
+    """Command the head from its own measured angle minus its measured tilt.
+
+    Replaces the `a * q4 + b` coupling with a pose-dependent solve. Measured on
+    ID/FD: the coupling is wrong by 0.296 rad mean / 0.783 rad max while q4
+    spans only 0.06 rad, so the head angle is not a function of q4 and the
+    proportional levelling term cannot null the resulting standing offset.
+
+    Default False keeps PPO3's validated coupling, which its notes record as
+    crude but the only configuration measured to hold the head there."""
+    terrain_head_pose_solve_gain: float = 1.0
+    """How much of the measured tilt to remove per step in the pose solve."""
+    terrain_head_feedforward_from_measured: bool = False
+    """Build the head levelling feedforward from MEASURED q4, not commanded q4.
+
+    The head is slaved to the boom by `joint6_coupling_a * q4`. Taking q4 from
+    the command assumes the actuator reaches what it was told. ROM-A effectively
+    does; a learned ID/FD actuator does not, and the residual becomes a fixed
+    head-alignment offset the policy cannot correct because it is applied after
+    the policy's own contribution, every substep.
+
+    Default False preserves every stored PPO3 number. PPO4 sets it True."""
+    terrain_head_joint_stiffness_scale: float = 1.0
+    """Stiffness scale for Messerkopf_joint alone. Keep at 1.0.
+
+    `terrain_arm_stiffness_scale` applies to the held joints, and that set
+    includes the tool joint -- which is Messerkopf_joint, the head ORIENTATION
+    joint, not part of the vertical impact load path. Softening it with the
+    cylinders was measured to cost exactly what it should: min_head_alignment
+    0.9500 -> 0.9150 against a 0.950 gate, while buying none of the bounce
+    reduction, which comes from the cylinders carrying the boom."""
+    terrain_compliant_contact_stiffness: float = 0.0
+    """PhysX implicit contact-spring stiffness on the verge, N/m. 0 = rigid.
+
+    The head-tool bounce is ejection off a rigid contact, not a tracking
+    failure: 94.4 % of separations leave the ground moving UPWARD (+0.92 m/s
+    mean, 3.99 max) after force spikes of 53 kN median and 162 kN max, on ground
+    that is on average RISING (reports/contact_loss_policy_v5.json, 269 events
+    in 29 440 scored samples).
+
+    With rigid contacts the series stiffness is the cylinders' hydraulic lock
+    (~5e6 N/m), so contact force is purely commanded position:
+
+        0.40 mm penetration ->   2 kN
+        5.60 mm             ->  28 kN   (measured mean)
+       32.50 mm             -> 162 kN   (measured max)
+
+    while the terrain under the cutter moves 1.5 mm per control step. Holding a
+    gentle contact therefore demands sub-millimetre regulation at 60 Hz through
+    an EMA-filtered, slew-limited velocity command with no force feedback. That
+    authority does not exist, which is why contact fraction never moved under
+    any reward or physics change tried.
+
+    This adds a real spring in series with that lock, at the tool/ground
+    interface only, leaving the boom's own dynamics alone -- the simulation
+    equivalent of the floating cutter head a real verge mower carries."""
+    terrain_compliant_contact_damping: float = 0.0
+    """Damping of the contact spring, Ns/m. Only used when stiffness > 0.
+
+    This is what actually kills the bounce. Stiffness alone stores the impact
+    energy and returns it; damping dissipates it, so the head settles onto the
+    verge instead of being thrown off it."""
+    terrain_kinematic_drive_substep_interpolation: bool = False
+    """Aim each chassis pin at this substep's travel, not the end of the step.
+
+    `_pre_physics_step` advances `_truck_travel_m` by a whole control step before
+    any physics runs, while the fixture pins the chassis up to four times inside
+    that step. Every pin therefore targeted a position up to 18.52 mm (4 km/h x
+    1/60 s) ahead of where the truck belonged at that instant, and the substeps
+    in between kept integrating the truck past it. Measured live from the PhysX
+    root transform, per control step:
+
+        pin phase 0 (pre-physics)      0.00 mm
+        pin phase 1 (substep A)      +18.52 mm   <- teleport a full step ahead
+        pin phase 2 (substep B)       -8.10 mm   <- dragged back
+        pin phase 3 (_get_dones)      -8.10 mm
+
+    A +-8 mm longitudinal square wave at 60-120 Hz, on a correct 18.52 mm/step
+    mean. No gate could see it: p95_tool_acceleration is a TRUCK-FRAME finite
+    difference and a root teleport moves chassis and tool rigidly together, so it
+    cancels identically; the chassis-reaction gates keep only the component
+    perpendicular to the heading; truck_drift is assigned literal zero after the
+    correction. It is not invisible under the cutter, where 8 mm of longitudinal
+    travel across 0.15 m verge facets modulates the ground height beneath a
+    rigidly pinned tool.
+
+    TRUE subtracts the not-yet-simulated share of the advance, so each pin aims
+    where the truck should be at that substep and the correction collapses to the
+    commanded-vs-integrated friction gap. Mean speed is unchanged -- the window
+    closes at `_get_dones` with the full advance applied. FALSE restores the
+    end-of-step target every stored report in reports/ was measured under.
+
+    Measured (lawn_rough_stage5_v5/model_best.pt, 128 envs x 960 held-out steps,
+    reports/drive_sawtooth_{baseline_16of17,interpolated_15of17}.json). FALSE
+    reproduces the stored FINAL_16of17 score to every digit (0.026448503), which
+    is the control proving this refactor is inert when disabled:
+
+        metric                       FALSE      TRUE     gate
+        min_wheel_road_duty         0.1947    0.2263    >=0.20   <- FIXED
+        max_chassis_lateral_mm     121.13    101.13       --
+        p95_cut_height_error_m      0.0631    0.1039    <=0.080  <- BROKE
+        min_head_alignment          0.9500    0.9248    >=0.950  <- BROKE
+        p95_tool_acceleration      91.71    116.41      <=120
+        ground_contact_fraction     0.9350    0.9180    >=0.90
+        gates passed                 16/17     15/17
+
+    DEFAULT FALSE IS NOT A JUDGEMENT THAT THE END-OF-STEP TARGET IS CORRECT --
+    it is not; an 8 mm 120 Hz teleport is a defect. The default protects the one
+    checkpoint this package ships, which was TRAINED against that teleport and is
+    co-adapted to it: enabling the fix is an off-distribution plant change for
+    it, and it degrades accordingly. Note the failure axis -- head alignment and
+    cut error, i.e. tracking -- not the chassis quantities the fix targets, which
+    all improve. Whether the corrected fixture supports a BETTER policy is
+    unmeasured and needs a fine-tune, not another evaluation of this checkpoint.
+    Turn this on for the next training run; do not turn it on under v5."""
     # Set to 0.0 once terrain_constrain_truck_per_substep=True drove the measured
     # reaction to the floor: p95 17.72 mm / 0.206 deg against a zero-action floor
     # of 16.40 mm / 0.202 deg. There is nothing left for a policy to remove, and
@@ -566,6 +781,14 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     the measured max, so ordinary sway is shaped and a single strike is bounded
     at -6.25 rather than being allowed to swamp a ~10 task reward."""
     terrain_head_tilt_arm_frame: bool = False
+    # Active c4 recovery along the four-cylinder Cartesian nullspace. Unlike
+    # the directional shield, this contributes a restoring command; unlike a
+    # c4-only correction, c1-c3 cancel its first-order cutter XYZ motion. Off in
+    # PPO3 until an actuator-specific held-out evaluation enables it.
+    terrain_head_nullspace_restore_gain: float = 0.0
+    terrain_head_nullspace_restore_deadband_rad: float = 0.08
+    terrain_head_nullspace_restore_max_action: float = 0.30
+    terrain_head_restore_preserve_xyz: bool = True
     """Measure head tilt about the joint's own axis instead of world Y-Z.
 
     World-X tilt is in-plane tilt rotated by the arm's slew, so the world
@@ -721,7 +944,13 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
         # independently generated height profile.
         self.scene.env_spacing = 28.0
         from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim
-        self.observation_space = verge_observation_dim() + 1
+        self.observation_space = (
+            verge_observation_dim(
+                model_error=bool(self.terrain_model_error_observation),
+                model_error_history=int(self.terrain_model_error_history),
+            )
+            + 1
+        )
 
         pos = self.robot_cfg.init_state.pos
         self.robot_cfg.init_state.pos = (pos[0], pos[1], float(self.truck_spawn_z))
