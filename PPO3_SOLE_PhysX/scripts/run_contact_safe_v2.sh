@@ -93,6 +93,7 @@ common=(
   --cylinder_target_max_lead_m "$TARGET_LEAD"
   --cylinder_target_leak "$TARGET_LEAK"
   --strict_contact
+  --contact_latch_release_steps 60
   --restart
 )
 
@@ -117,21 +118,22 @@ stage() {
   fi
 }
 
-# Stage B1: grace 4, full relief, boom_sweep-heavy. Termination ON, as required.
-# The reset arithmetic is the risk here: resets are all-or-nothing, so one
-# environment lifting resets all 256. Block 1's provenance ledger and its
-# termination/contact_safety log tell us whether the run is training or
-# thrashing; that is measured, not assumed.
+# Stage B1: grace 4, full relief, boom_sweep-heavy. A visible lift LATCHES for
+# the rest of the episode rather than terminating -- termination was measured
+# to collapse the mean episode length to 10 of 960 steps at 256 environments,
+# because resets are all-or-nothing. The latch gives the same incentive (no
+# task reward after a lift) at zero reset cost, releasing after 60 consecutive
+# recovered contact steps so a policy that recovers is not punished forever.
 stage B1 A "0.70,0.85,1.00" "${BLOCKS_B1:-3}" "$SEED_CKPT" \
-  --boom_focus --contact_termination true \
+  --boom_focus --contact_latch true \
   --reset_optimizer_first_block --reset_critic_head_first_block
 
 # Stage B2: grace 2, same distribution.
 stage B2 B "0.70,0.85,1.00" "${BLOCKS_B2:-3}" "$ROOT_DIR/stage_B1/model_best.pt" \
-  --boom_focus --contact_termination true
+  --boom_focus --contact_latch true
 
 # Stage C: grace 1, teacher-free, balanced families AND heights, full horizon.
 stage C C "0.50,0.70,0.85,1.00" "${BLOCKS_C:-3}" "$ROOT_DIR/stage_B2/model_best.pt" \
-  --boom_focus --contact_termination true
+  --boom_focus --contact_latch true
 
 echo "[V2 DONE] $EXPERIMENT -> $ROOT_DIR/model_best.pt"

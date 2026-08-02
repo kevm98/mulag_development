@@ -212,6 +212,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("", "true", "false"),
         help="Training-only. The evaluator never terminates on contact loss.",
     )
+    parser.add_argument(
+        "--contact_latch", default="", choices=("", "true", "false")
+    )
+    parser.add_argument("--contact_latch_release_steps", type=int, default=None)
     parser.add_argument("--model_error_history", type=int, default=None)
     parser.add_argument("--action_scale", type=float, default=None)
     parser.add_argument("--max_action_rate", type=float, default=None)
@@ -402,6 +406,12 @@ def _shared_contact_options(args: argparse.Namespace) -> list[str]:
         options.extend(["--contact_observation", args.contact_observation])
     if args.contact_safety_reward:
         options.extend(["--contact_safety_reward", args.contact_safety_reward])
+    if args.contact_latch:
+        options.extend(["--contact_latch", args.contact_latch])
+    if args.contact_latch_release_steps is not None:
+        options.extend(
+            ["--contact_latch_release_steps", str(args.contact_latch_release_steps)]
+        )
     if args.model_error_history is not None:
         options.extend(["--model_error_history", str(args.model_error_history)])
     if args.action_scale is not None:

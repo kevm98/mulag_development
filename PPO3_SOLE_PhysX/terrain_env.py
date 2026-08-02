@@ -2071,6 +2071,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._visible_lift_level = zeros_b.clone()
         self._hard_impact_onset = zeros_b.clone()
         self._visible_lift_onset = zeros_b.clone()
+        self._contact_loss_failed = zeros_b.clone()
+        self._contact_loss_latch_released = zeros_b.clone()
+        self._contact_recovery_steps = zeros_l.clone()
         self._contact_loss_event = zeros_b.clone()
 
         # --- cached per-step measurements ---
@@ -2113,6 +2116,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "_visible_lift_level",
             "_hard_impact_onset",
             "_visible_lift_onset",
+            "_contact_loss_failed",
+            "_contact_loss_latch_released",
             "_contact_loss_event",
             "_contact_state",
             "_contact_support",
@@ -2128,6 +2133,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "_visible_lift_event_count",
             "_hard_impact_steps",
             "_visible_lift_steps",
+            "_contact_recovery_steps",
             "_post_acquisition_steps",
             "_post_acquisition_contact_steps",
             "_max_consecutive_airborne_steps",
@@ -2305,6 +2311,32 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._max_airborne_gap_m = torch.maximum(
             self._max_airborne_gap_m, self._airborne_gap_m
         )
+
+        # --- contact-loss failure latch ---
+        # The affordable form of "must not be rewarded for completing the path
+        # after visibly lifting". Termination cannot do this here: resets are
+        # all-or-nothing, and at 256 environments a 0.0039 per-step termination
+        # rate collapsed the mean episode length to 10 steps of a 960-step
+        # horizon. See terrain_contact_loss_latches_failure.
+        if bool(getattr(cfg, "terrain_contact_loss_latches_failure", False)):
+            self._contact_loss_failed |= visible_lift
+            release_steps = int(
+                getattr(cfg, "terrain_contact_loss_latch_release_steps", 0)
+            )
+            recovered_run = torch.where(
+                contact & active,
+                self._contact_recovery_steps + 1,
+                torch.zeros_like(self._contact_recovery_steps),
+            )
+            self._contact_recovery_steps = recovered_run
+            if release_steps > 0:
+                released = self._contact_loss_failed & (recovered_run >= release_steps)
+                self._contact_loss_failed &= ~released
+                self._contact_loss_latch_released = released
+            else:
+                self._contact_loss_latch_released = torch.zeros_like(
+                    self._contact_loss_failed
+                )
 
         # --- cached measurements for reward/observation ---
         self._contact_force_rate_nps = (force - self._previous_contact_force_n) / dt
@@ -3606,6 +3638,17 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         else:
             self._head_down_latch_released = torch.zeros_like(self._head_down_failed)
 
+        # Contact-loss latch. Applied alongside the head-down latch and for the
+        # same reason: an environment that has visibly lifted must not be paid
+        # for finishing the path. The safety group below stays live, so the
+        # contact reward keeps charging for the lift and paying for recovery.
+        if bool(getattr(cfg, "terrain_contact_loss_latches_failure", False)):
+            task_reward = torch.where(
+                self._contact_loss_failed,
+                torch.zeros_like(task_reward),
+                task_reward,
+            )
+
         # terms.reward less its three task components; these stay live whether or
         # not the head has failed, so barriers keep shaping and recovery pays.
         chassis_penalty = terms.chassis_reaction_penalty
@@ -3805,6 +3848,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                     valid_active
                 ].float().mean(),
                 "contact/hard_impact_event_fraction": self._hard_impact_event[
+                    valid_active
+                ].float().mean(),
+                "contact/latched_failure_fraction": self._contact_loss_failed[
+                    valid_active
+                ].float().mean(),
+                "contact/latch_released_fraction": self._contact_loss_latch_released[
                     valid_active
                 ].float().mean(),
                 "contact/visible_lift_event_fraction": self._visible_lift_event[

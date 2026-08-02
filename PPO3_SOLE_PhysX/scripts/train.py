@@ -144,6 +144,18 @@ p.add_argument(
     choices=("", "true", "false"),
     help="Override terrain_terminate_on_contact_loss.",
 )
+p.add_argument(
+    "--contact_latch",
+    default="",
+    choices=("", "true", "false"),
+    help=(
+        "Latch a visible lift for the rest of the episode instead of "
+        "terminating. Termination cannot do this job here: resets are "
+        "all-or-nothing, and a 0.0039 per-step termination rate at 256 envs "
+        "collapsed the mean episode length to 10 of 960 steps."
+    ),
+)
+p.add_argument("--contact_latch_release_steps", type=int, default=None)
 p.add_argument("--contact_loss_weight", type=float, default=None)
 p.add_argument("--contact_gap_weight", type=float, default=None)
 p.add_argument("--contact_force_target_n", type=float, default=None)
@@ -527,6 +539,12 @@ def main() -> None:
         env_cfg.terrain_contact_loss_grace_steps = {
             "A": 4, "B": 2, "C": 1
         }[a.contact_stage]
+    if a.contact_latch:
+        env_cfg.terrain_contact_loss_latches_failure = a.contact_latch == "true"
+    if a.contact_latch_release_steps is not None:
+        env_cfg.terrain_contact_loss_latch_release_steps = int(
+            a.contact_latch_release_steps
+        )
     if a.contact_loss_weight is not None:
         env_cfg.terrain_contact_loss_weight = float(a.contact_loss_weight)
     if a.contact_gap_weight is not None:

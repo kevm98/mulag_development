@@ -743,6 +743,83 @@ def test_dones_rewards_and_observations_all_share_one_update():
     )
 
 
+def test_the_contact_loss_latch_is_the_affordable_form_of_termination():
+    """Termination cannot do this job here, and that was MEASURED.
+
+    With `terrain_terminate_on_contact_loss = True` at 256 environments, a
+    per-step contact-termination rate of 0.0039 collapsed the mean episode
+    length to 10-11 steps of a 960-step horizon, because resets are
+    all-or-nothing. The latch gives the same incentive at zero reset cost.
+    """
+    m = Machine(
+        terrain_contact_acquire_steps=1,
+        terrain_contact_loss_grace_steps=0,
+        terrain_contact_loss_latches_failure=True,
+        terrain_contact_loss_latch_release_steps=0,
+    )
+    m.advance(force=5000.0, height_above_support=0.0)
+    assert not bool(m._contact_loss_failed[0])
+    m.advance(force=0.0, height_above_support=0.05)
+    assert bool(m._contact_loss_failed[0]), "a visible lift must latch"
+    # Regaining contact does not clear a monotone latch.
+    for _ in range(50):
+        m.advance(force=5000.0, height_above_support=0.0)
+    assert bool(m._contact_loss_failed[0])
+
+
+def test_the_latch_releases_after_sustained_recovery():
+    m = Machine(
+        terrain_contact_acquire_steps=1,
+        terrain_contact_loss_grace_steps=0,
+        terrain_contact_loss_latches_failure=True,
+        terrain_contact_loss_latch_release_steps=5,
+    )
+    m.advance(force=5000.0, height_above_support=0.0)
+    m.advance(force=0.0, height_above_support=0.05)
+    assert bool(m._contact_loss_failed[0])
+    for _ in range(4):
+        m.advance(force=5000.0, height_above_support=0.0)
+    assert bool(m._contact_loss_failed[0]), "released too early"
+    m.advance(force=5000.0, height_above_support=0.0)
+    assert not bool(m._contact_loss_failed[0])
+    assert bool(m._contact_loss_latch_released[0])
+
+
+def test_the_latch_is_off_by_default():
+    m = Machine(terrain_contact_acquire_steps=1, terrain_contact_loss_grace_steps=0)
+    m.advance(force=5000.0, height_above_support=0.0)
+    m.advance(force=0.0, height_above_support=0.05)
+    assert not bool(m._contact_loss_failed[0])
+
+
+def test_reset_clears_the_latch():
+    m = Machine(
+        terrain_contact_acquire_steps=1,
+        terrain_contact_loss_grace_steps=0,
+        terrain_contact_loss_latches_failure=True,
+    )
+    m.advance(force=5000.0, height_above_support=0.0)
+    m.advance(force=0.0, height_above_support=0.05)
+    assert bool(m._contact_loss_failed[0])
+    m._reset_contact_safety(torch.tensor([0]))
+    assert not bool(m._contact_loss_failed[0])
+    assert int(m._contact_recovery_steps[0]) == 0
+
+
+def test_the_latch_zeroes_the_task_reward_in_get_rewards():
+    """The latch must act where the head-down latch acts, on task reward only.
+
+    Zeroing the safety group too would stop charging for the lift and stop
+    paying for recovery, which is the opposite of what it is for.
+    """
+    body = _ENV_SOURCE[_ENV_SOURCE.index("def _get_rewards(self)") :]
+    latch = body.index("terrain_contact_loss_latches_failure")
+    assign = body.index("task_reward = torch.where(", latch)
+    safety = body.index("safety_reward = (", latch)
+    assert assign < safety, "the latch does not zero task reward before the sum"
+    assert "self._contact_loss_failed" in body[latch : latch + 400]
+
+
 def test_contact_termination_synchronizes_like_every_other_termination():
     """A partial reset does not merely reset less -- it CRASHES.
 

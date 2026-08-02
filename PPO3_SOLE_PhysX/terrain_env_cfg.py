@@ -932,6 +932,35 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
 
     Never fires during preposition, reset correction or settling -- see
     `contact_safety_terminal`."""
+    terrain_contact_loss_latches_failure: bool = False
+    """Once support is visibly lost, earn NO task reward for the rest of the
+    episode -- instead of ending it.
+
+    This is the affordable form of the requirement "a policy must not be
+    rewarded for completing the path after visibly lifting", and it is the
+    pattern this codebase already uses for exactly this problem. From
+    `_get_rewards` on the head-down latch: *"Terminating on a violation is not
+    affordable here: any termination synchronizes and _run_reset_preposition
+    steps the whole scene, so at 512 envs a per-step head check would reset
+    continuously. Latching the failure for the rest of the episode buys the
+    same guarantee for free."*
+
+    MEASURED, on this task, with `terrain_terminate_on_contact_loss = True` at
+    256 environments, grace 4, boom_sweep-heavy Stage B: **mean episode length
+    10-11 steps** against a 960-step horizon, at a per-step contact-termination
+    rate of only 0.0039. One environment in 256 lifting resets all 256, so the
+    policy never saw more than ~1 % of an episode and every reset paid a full
+    deployment ramp. Training was impossible, not merely slow.
+
+    The latch gives the same incentive -- finishing the path after a visible
+    lift pays nothing -- at zero reset cost, and unlike termination it keeps
+    the safety barriers live so recovery still has a gradient.
+
+    Released by `terrain_contact_loss_latch_release_steps` of continuous
+    re-acquired support, so a policy that recovers is not punished for the
+    whole remaining episode. Set that to 0 for a monotone episode-long latch."""
+    terrain_contact_loss_latch_release_steps: int = 60
+    """Consecutive in-contact steps that clear the latch. 0 = never."""
     terrain_terminate_on_hard_impact: bool = False
     terrain_lift_terminal_reward: float = -100.0
     """Finite terminal penalty for a contact-safety termination.

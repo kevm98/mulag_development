@@ -215,6 +215,8 @@ p.add_argument(
     choices=("", "true", "false"),
     help="Override terrain_contact_safety_reward.",
 )
+p.add_argument("--contact_latch", default="", choices=("", "true", "false"))
+p.add_argument("--contact_latch_release_steps", type=int, default=None)
 p.add_argument("--model_error_history", type=int, default=None)
 p.add_argument("--action_scale", type=float, default=None)
 p.add_argument("--max_action_rate", type=float, default=None)
@@ -297,6 +299,12 @@ def build_env():
         env_cfg.terrain_contact_observation = a.contact_observation == "true"
     if a.contact_safety_reward:
         env_cfg.terrain_contact_safety_reward = a.contact_safety_reward == "true"
+    if a.contact_latch:
+        env_cfg.terrain_contact_loss_latches_failure = a.contact_latch == "true"
+    if a.contact_latch_release_steps is not None:
+        env_cfg.terrain_contact_loss_latch_release_steps = int(
+            a.contact_latch_release_steps
+        )
     if a.model_error_history is not None:
         if a.model_error_history < 1:
             raise ValueError("--model_error_history must be >= 1")
