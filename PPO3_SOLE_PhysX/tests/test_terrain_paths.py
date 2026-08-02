@@ -256,7 +256,17 @@ def test_training_widens_the_path_but_the_gated_config_does_not():
     assert "terrain_tracking_amplitude_scale: float = 1.0" in cfg_source
 
     train_source = (root / "scripts" / "train.py").read_text()
-    assert (
-        "env_cfg.terrain_tracking_amplitude_scale = 1.0 if a.tail_focus else 1.8"
-        in train_source
+    # Asserted as two halves rather than one literal line, because the set of
+    # focus modes that must keep the path at 1.0 grows: `--tail_focus`
+    # reproduces the measured head-alignment tail, `--contact_focus` the
+    # measured contact-loss region, and both were measured at 1.0x. Pinning
+    # the exact expression made adding the second one look like a regression.
+    assert "env_cfg.terrain_tracking_amplitude_scale = (" in train_source, (
+        "train.py no longer sets the training path amplitude"
+    )
+    assert "a.tail_focus or a.contact_focus" in train_source, (
+        "a focus mode would train against a widened path it was not measured on"
+    )
+    assert "else 1.8" in train_source, (
+        "unfocused training no longer widens the path beyond the gated 1.0"
     )

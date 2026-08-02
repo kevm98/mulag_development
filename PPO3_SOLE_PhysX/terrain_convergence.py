@@ -129,30 +129,124 @@ GATE_SPECS: dict[str, GateSpec] = {
 }
 
 
-def check_gates(metrics: Mapping[str, float]) -> dict[str, bool]:
-    """Evaluate every gate, raising clearly when a metric is absent."""
+#: Contact-safety promotion gates, kept OUT of ``GATE_SPECS`` on purpose.
+#:
+#: Every stored report in ``reports/`` was scored against the 17 gates above,
+#: and silently making the set 26 wide would change the denominator of every
+#: historical "16/17" in this repository. These are requested explicitly
+#: (``summarize_convergence(..., contact_safety=True)``, ``evaluate.py
+#: --strict_contact``) and reported as their own block.
+#:
+#: The thresholds are ZERO wherever the requirement is "this must not happen".
+#: That is deliberate and is the whole point: ``ground_contact`` at 0.90 is a
+#: duty cycle, and a duty cycle of 0.9486 was measured on a policy that spent
+#: 45 consecutive steps up to 297 mm off the verge
+#: (reports/contact_safe_v1/prefix_ppo3_s_curve_seed17.json). A gate that
+#: cannot distinguish continuous light support from 428 short flights is not a
+#: contact gate.
+CONTACT_SAFETY_GATE_SPECS: dict[str, GateSpec] = {
+    "visible_lift_events": GateSpec("visible_lift_event_count", 0.0, "max"),
+    "impact_ejection_events": GateSpec(
+        "impact_ejection_event_count", 0.0, "max"
+    ),
+    "hard_impacts": GateSpec("hard_impact_event_count", 0.0, "max"),
+    "consecutive_airborne_steps": GateSpec(
+        "maximum_consecutive_airborne_steps", 0.0, "max"
+    ),
+    # Strict tolerance, matching `terrain_max_airborne_gap_m`. Kept as an
+    # absolute rather than a fraction of anything: 5 mm of lift is 5 mm of
+    # unmowed verge regardless of how long the path was.
+    "airborne_gap": GateSpec("maximum_airborne_gap_m", 0.005, "max"),
+    "post_acquisition_contact": GateSpec(
+        "post_acquisition_contact_fraction", 1.0, "min"
+    ),
+    "contact_acquired": GateSpec("contact_acquired_fraction", 1.0, "min"),
+    "takeoff_events": GateSpec("takeoff_event_count", 0.0, "max"),
+    "contact_force_peak": GateSpec("maximum_contact_force_n", 30000.0, "max"),
+}
+
+
+def _evaluate(
+    specs: Mapping[str, GateSpec], metrics: Mapping[str, float]
+) -> dict[str, bool]:
     return {
         name: spec.passes(float(metrics[spec.metric]))
-        for name, spec in GATE_SPECS.items()
+        for name, spec in specs.items()
     }
 
 
-def normalized_gate_violations(metrics: Mapping[str, float]) -> dict[str, float]:
+def active_gate_specs(*, contact_safety: bool = False) -> dict[str, GateSpec]:
+    """The gate set a run is scored against."""
+    specs = dict(GATE_SPECS)
+    if contact_safety:
+        specs.update(CONTACT_SAFETY_GATE_SPECS)
+    return specs
+
+
+def check_gates(
+    metrics: Mapping[str, float], *, contact_safety: bool = False
+) -> dict[str, bool]:
+    """Evaluate every gate, raising clearly when a metric is absent."""
+    return _evaluate(active_gate_specs(contact_safety=contact_safety), metrics)
+
+
+def normalized_gate_violations(
+    metrics: Mapping[str, float], *, contact_safety: bool = False
+) -> dict[str, float]:
     """Relative violation per gate; lower is better and zero means pass."""
     return {
         name: spec.normalized_violation(float(metrics[spec.metric]))
-        for name, spec in GATE_SPECS.items()
+        for name, spec in active_gate_specs(
+            contact_safety=contact_safety
+        ).items()
     }
 
 
-def summarize_convergence(metrics: Mapping[str, float]) -> dict:
+def contact_safety_promotion_blockers(metrics: Mapping[str, float]) -> list[str]:
+    """Named reasons a checkpoint may not be promoted, contact safety only.
+
+    Separate from the gate dict because two of the promotion requirements are
+    not numeric thresholds at all -- they are statements about how the run was
+    produced, and a run made with the teacher executing or with the direct
+    target-writing contact demo active is not a sole-controller result no
+    matter what its contact numbers say.
+    """
+    blockers = [
+        name
+        for name, passed in _evaluate(
+            CONTACT_SAFETY_GATE_SPECS, metrics
+        ).items()
+        if not passed
+    ]
+    teacher = str(metrics.get("teacher_mode", "off")).lower()
+    if teacher != "off":
+        blockers.append(f"teacher_mode={teacher!r} (must be 'off')")
+    if bool(metrics.get("direct_target_contact_demo", False)):
+        blockers.append("direct target-writing contact demo was active")
+    return blockers
+
+
+def summarize_convergence(
+    metrics: Mapping[str, float], *, contact_safety: bool = False
+) -> dict:
     """Build the machine-readable gate result used for checkpoint selection."""
-    gates = check_gates(metrics)
-    violations = normalized_gate_violations(metrics)
-    return {
+    gates = check_gates(metrics, contact_safety=contact_safety)
+    violations = normalized_gate_violations(
+        metrics, contact_safety=contact_safety
+    )
+    summary = {
         "metrics": dict(metrics),
         "gates": gates,
         "normalized_gate_violations": violations,
         "score": float(sum(violations.values())),
         "passed": all(gates.values()),
     }
+    if contact_safety:
+        summary["contact_safety_promotion_blockers"] = (
+            contact_safety_promotion_blockers(metrics)
+        )
+        summary["promotable"] = (
+            summary["passed"]
+            and not summary["contact_safety_promotion_blockers"]
+        )
+    return summary

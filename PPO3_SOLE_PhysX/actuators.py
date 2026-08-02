@@ -1,6 +1,6 @@
 """Actuator selection for the shared terrain task.
 
-PPO3 and PPO4 are the SAME task, the same 54-D observation, the same 4-action
+PPO3 and PPO4 are the SAME task, the same 66-D observation, the same 5-action
 contract, the same terrain, the same compliant plant and the same gates. They
 differ in exactly one thing: what converts a cylinder command into motion.
 

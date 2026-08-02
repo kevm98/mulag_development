@@ -356,7 +356,7 @@ def test_messerkopf_level_production_contract():
     future head work must be scored on ALL THREE terrains before adoption.
     """
     cfg_source = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
-    assert "terrain_messerkopf_level_gain: float = 0.5" in cfg_source
+    assert "terrain_messerkopf_level_gain: float = 0.0" in cfg_source
     assert "terrain_messerkopf_level_max_rad: float = 0.05" in cfg_source
     assert "terrain_messerkopf_level_quadratic_gain: float = 0.0" in cfg_source
     assert "terrain_messerkopf_level_filter: float = 0.5" in cfg_source

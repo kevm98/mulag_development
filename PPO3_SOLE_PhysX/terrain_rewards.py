@@ -22,6 +22,169 @@ import torch
 
 
 @dataclass(frozen=True)
+class ContactSafetyRewardTerms:
+    """The seven contact terms, kept separately so each can be logged."""
+
+    total: torch.Tensor
+    support: torch.Tensor
+    contact_loss: torch.Tensor
+    force_regulation: torch.Tensor
+    excess_force: torch.Tensor
+    hard_impact: torch.Tensor
+    takeoff: torch.Tensor
+    airborne_gap: torch.Tensor
+
+
+def airborne_task_reward_bound(
+    *,
+    cut_tracking_weight: float,
+    lateral_weight: float,
+    cut_progress_weight: float,
+    lateral_progress_weight: float,
+) -> float:
+    """Largest positive task reward an AIRBORNE environment can still collect.
+
+    ``cut_tracking`` peaks at its weight, ``lateral`` at its weight, and both
+    bounded progress terms at their magnitudes. The binary contact bonus is
+    zero while airborne by construction, and both dense error terms are
+    non-positive, so this is a strict upper bound.
+
+    It exists to be asserted against: the contact-loss penalty must exceed it,
+    or floating through a rise stays profitable and no amount of tuning the
+    other terms will fix that.
+    """
+    return (
+        abs(float(cut_tracking_weight))
+        + abs(float(lateral_weight))
+        + abs(float(cut_progress_weight))
+        + abs(float(lateral_progress_weight))
+    )
+
+
+def compute_contact_safety_reward(
+    *,
+    contact: torch.Tensor,
+    contact_acquired: torch.Tensor,
+    contact_force_n: torch.Tensor,
+    airborne_gap_m: torch.Tensor,
+    cutter_vertical_velocity_mps: torch.Tensor,
+    hard_impact: torch.Tensor,
+    active: torch.Tensor,
+    # Defaults mirror TerrainSolePolicyEnvCfg exactly, and
+    # tests/test_contact_safety.py asserts they still do -- a signature default
+    # that drifts from the config is a term that behaves one way under the
+    # environment and another way under every unit test written against it.
+    support_weight: float = 4.0,
+    loss_weight: float = 20.0,
+    force_weight: float = 2.0,
+    force_target_n: float = 6000.0,
+    force_std_n: float = 8000.0,
+    excess_weight: float = 2.0,
+    force_soft_limit_n: float = 20000.0,
+    excess_max_ratio: float = 5.0,
+    hard_impact_weight: float = 20.0,
+    takeoff_weight: float = 4.0,
+    takeoff_velocity_scale_mps: float = 0.10,
+    takeoff_max_ratio: float = 5.0,
+    weak_support_force_n: float = 500.0,
+    gap_weight: float = 8.0,
+    gap_scale_m: float = 0.005,
+    gap_max_ratio: float = 4.0,
+) -> ContactSafetyRewardTerms:
+    """Price the CONTACT STATE, not just the contact bit.
+
+    A binary contact bonus pays a violent impact exactly what it pays stable
+    support, and the impact is what throws the tool off the verge one step
+    later -- so raising that bonus buys more ejection, which is what
+    ``terrain_contact_reward_weight`` 2.0 -> 4.0 measured. These seven terms
+    separate the states that bonus conflates:
+
+        r_support  = +w_support * contact
+        r_loss     = -w_loss * acquired * (1 - contact)
+        r_force    = +w_force * contact * exp(-((F - F_target)/F_std)^2)
+        r_excess   = -w_excess * clamp(relu((F - F_soft)/F_soft), 0, m)^2
+        r_hard     = -w_hard * hard_impact
+        r_takeoff  = -w_takeoff * weak * clamp(relu(v_z)/v_scale, 0, m)^2
+        r_gap      = -w_gap * clamp(gap/gap_scale, 0, m)^2
+
+    ``r_force`` is a band, not a ramp: it peaks at ``force_target_n`` and falls
+    off in BOTH directions, so pressing harder stops paying past the target
+    instead of paying more. ``r_gap`` is continuous in the gap rather than a
+    bonus that merely switches off, so a cutter 40 mm up is strictly worse than
+    one 4 mm up -- with a binary term those two score identically and PPO has
+    no gradient back down.
+
+    Every term is bounded. ``active`` zeroes the whole group during
+    deployment, preposition, reset correction and settling, where the arm is
+    being driven by the reset ramp and none of this is attributable to the
+    policy.
+    """
+    contact_f = contact.float()
+    acquired_f = contact_acquired.float()
+    force = torch.nan_to_num(contact_force_n, nan=0.0, posinf=0.0, neginf=0.0)
+
+    support = float(support_weight) * contact_f
+
+    contact_loss = -abs(float(loss_weight)) * acquired_f * (1.0 - contact_f)
+
+    std = max(float(force_std_n), 1.0e-6)
+    force_regulation = (
+        float(force_weight)
+        * contact_f
+        * torch.exp(-((force - float(force_target_n)) / std).square())
+    )
+
+    soft = max(float(force_soft_limit_n), 1.0e-6)
+    excess_ratio = torch.clamp(
+        torch.relu((force - soft) / soft), max=max(float(excess_max_ratio), 0.0)
+    )
+    excess_force = -abs(float(excess_weight)) * excess_ratio.square()
+
+    hard_impact_penalty = -abs(float(hard_impact_weight)) * hard_impact.float()
+
+    # Weak support is the state an upward velocity is dangerous in: either no
+    # contact at all, or contact so light it is about to be lost. Penalizing
+    # upward motion while firmly supported would fight the tool following a
+    # rising verge, which is the task.
+    weak = ((~contact) | (force < float(weak_support_force_n))).float()
+    v_scale = max(float(takeoff_velocity_scale_mps), 1.0e-6)
+    takeoff_ratio = torch.clamp(
+        torch.relu(cutter_vertical_velocity_mps) / v_scale,
+        max=max(float(takeoff_max_ratio), 0.0),
+    )
+    takeoff = -abs(float(takeoff_weight)) * weak * takeoff_ratio.square()
+
+    gap_ratio = torch.clamp(
+        torch.relu(airborne_gap_m) / max(float(gap_scale_m), 1.0e-9),
+        max=max(float(gap_max_ratio), 0.0),
+    )
+    airborne_gap = -abs(float(gap_weight)) * gap_ratio.square()
+
+    active_f = active.float()
+    terms = (
+        support,
+        contact_loss,
+        force_regulation,
+        excess_force,
+        hard_impact_penalty,
+        takeoff,
+        airborne_gap,
+    )
+    scaled = tuple(term * active_f for term in terms)
+    total = sum(scaled[1:], scaled[0])
+    return ContactSafetyRewardTerms(
+        total=total,
+        support=scaled[0],
+        contact_loss=scaled[1],
+        force_regulation=scaled[2],
+        excess_force=scaled[3],
+        hard_impact=scaled[4],
+        takeoff=scaled[5],
+        airborne_gap=scaled[6],
+    )
+
+
+@dataclass(frozen=True)
 class VergeRewardTerms:
     reward: torch.Tensor
     cut_tracking: torch.Tensor

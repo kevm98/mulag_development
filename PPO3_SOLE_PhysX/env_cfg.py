@@ -154,7 +154,7 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     sole_action_authority: tuple = (1.0, 1.0, 1.0, 1.0)
     """Per-cylinder policy authority; zero is an evidence-backed safety lock."""
 
-    sole_head_joint_action: bool = False
+    sole_head_joint_action: bool = True
     """Drive ``Messerkopf_joint`` as a real 5th action instead of slaving it to c4.
 
     ``Messerkopf_joint`` carries no cylinder and is not hydraulic, but the
@@ -170,10 +170,10 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     on the held-out one. ``min_head_alignment`` fails on varied terrain in every
     coupled configuration measured, while p01 stays healthy at 0.976-0.988.
 
-    True adds a 5th action and CHANGES THE POLICY INTERFACE, so a 4-action
-    checkpoint cannot be resumed into it -- the policy must relearn.
+    This is part of the shared PPO3/PPO4 interface. Legacy four-action
+    checkpoints must be migrated before they can be resumed.
     """
-    sole_head_action_to_c4_gain: float = 0.5
+    sole_head_action_to_c4_gain: float = 0.4
     """Mix q5 into hydraulic cylinder 4 as a dedicated head-tilt residual.
 
     Runtime authority testing showed that moving ``Messerkopf_joint`` changes

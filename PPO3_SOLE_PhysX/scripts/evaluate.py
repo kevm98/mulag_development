@@ -38,7 +38,14 @@ p.add_argument("--stage", type=int, default=4)
 p.add_argument(
     "--head_joint_action",
     action="store_true",
+    default=None,
     help="Evaluate a five-output policy with a hydraulic head-tilt residual.",
+)
+p.add_argument(
+    "--legacy_four_action",
+    dest="head_joint_action",
+    action="store_false",
+    help="Compatibility only: evaluate the retired 54x4 PPO3 interface.",
 )
 p.add_argument(
     "--head_action_to_c4_gain",
@@ -47,6 +54,16 @@ p.add_argument(
     help="Override the q5 residual gain mixed into cylinder-4 action.",
 )
 p.add_argument("--eval_terrain", action="store_true")
+p.add_argument(
+    "--eval_terrain_seed",
+    type=int,
+    default=0,
+    help=(
+        "Move the HELD-OUT mesh off its pinned seed 1337. --seed cannot do "
+        "this: a held-out rollout is deterministic and every --seed returns "
+        "identical numbers. Zero keeps the gate mesh."
+    ),
+)
 p.add_argument(
     "--path_family",
     default="mixed",
@@ -155,6 +172,13 @@ p.add_argument("--head_nullspace_restore_gain", type=float, default=None)
 p.add_argument("--head_nullspace_restore_deadband_rad", type=float, default=None)
 p.add_argument("--head_nullspace_restore_max_action", type=float, default=None)
 p.add_argument(
+    "--head_action_to_tilt_sign",
+    type=float,
+    choices=(-1.0, 1.0),
+    default=None,
+    help="Diagnostic override for measured cylinder-4 action-to-head-tilt polarity.",
+)
+p.add_argument(
     "--head_restore_mode", default="", choices=("", "nullspace", "c4")
 )
 p.add_argument(
@@ -169,6 +193,33 @@ p.add_argument(
     choices=("", "true", "false"),
     help="Override terrain_head_feedforward_from_measured for an A/B.",
 )
+p.add_argument(
+    "--strict_contact",
+    action="store_true",
+    help=(
+        "Also score the contact-safety promotion gates (zero visible lifts, "
+        "zero impact ejections, zero hard impacts, zero consecutive airborne "
+        "steps after support acquisition). Reported as their own block so the "
+        "historical 17-gate score stays comparable."
+    ),
+)
+p.add_argument(
+    "--contact_observation",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_contact_observation (changes the observation width).",
+)
+p.add_argument(
+    "--contact_safety_reward",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_contact_safety_reward.",
+)
+p.add_argument("--model_error_history", type=int, default=None)
+p.add_argument("--action_scale", type=float, default=None)
+p.add_argument("--max_action_rate", type=float, default=None)
+p.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
+p.add_argument("--cylinder_target_leak", type=float, default=None)
 p.add_argument("--control-path-audit", dest="audit", action="store_true")
 p.add_argument(
     "--zero_action",
@@ -208,13 +259,16 @@ from PPO3_SOLE_PhysX.actuators import (  # noqa: E402
     assert_checkpoint_actuator,
     resolve_actuator,
 )
-from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
+    observation_space_for_cfg,
+)
 
 # One task, two actuators. Resolved once here so every downstream use --
 # env construction, runner config, checkpoint tagging -- cannot disagree.
 TASK_ID, RUNNER_CFG_CLS, ACTUATOR_LABEL = resolve_actuator(a.actuator)
 print(f"[PPO-TERRAIN] actuator={a.actuator} ({ACTUATOR_LABEL}) task={TASK_ID}", flush=True)
 from PPO3_SOLE_PhysX.terrain_convergence import (  # noqa: E402
+    CONTACT_SAFETY_GATE_SPECS,
     GATE_SPECS,
     summarize_convergence,
 )
@@ -225,7 +279,8 @@ def build_env():
         TASK_ID, device=a.device, num_envs=a.num_envs
     )
     apply_terrain_curriculum_stage(env_cfg, int(a.stage))
-    env_cfg.sole_head_joint_action = bool(a.head_joint_action)
+    if a.head_joint_action is not None:
+        env_cfg.sole_head_joint_action = bool(a.head_joint_action)
     env_cfg.action_space = 5 if env_cfg.sole_head_joint_action else 4
     if env_cfg.sole_head_joint_action:
         env_cfg.terrain_messerkopf_level_gain = 0.0
@@ -237,31 +292,42 @@ def build_env():
     if a.sole_ik_hint:
         raise ValueError("--sole_ik_hint is not part of the terrain observation contract")
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = (
-        verge_observation_dim(
-            model_error=bool(
-                getattr(env_cfg, "terrain_model_error_observation", False)
-            ),
-            model_error_history=int(
-                getattr(env_cfg, "terrain_model_error_history", 1)
-            ),
-        )
-        + 1
-    )
+    if a.contact_observation:
+        env_cfg.terrain_contact_observation = a.contact_observation == "true"
+    if a.contact_safety_reward:
+        env_cfg.terrain_contact_safety_reward = a.contact_safety_reward == "true"
+    if a.model_error_history is not None:
+        if a.model_error_history < 1:
+            raise ValueError("--model_error_history must be >= 1")
+        env_cfg.terrain_model_error_history = int(a.model_error_history)
+    if a.action_scale is not None:
+        env_cfg.sole_action_scale = float(a.action_scale)
+    if a.max_action_rate is not None:
+        env_cfg.sole_max_action_rate = float(a.max_action_rate)
+    if a.cylinder_target_max_lead_m is not None:
+        env_cfg.cylinder_target_max_lead_m = float(a.cylinder_target_max_lead_m)
+    if a.cylinder_target_leak is not None:
+        env_cfg.cylinder_target_leak = float(a.cylinder_target_leak)
+    # The evaluator MEASURES contact loss; it must never terminate on it.
+    # Terminating would truncate the airborne interval the strict gates are
+    # trying to size, and a gate that shortens its own evidence is the
+    # censoring defect `--head_termination_alignment` exists to work around.
+    env_cfg.terrain_terminate_on_contact_loss = False
+    env_cfg.terrain_terminate_on_hard_impact = False
+    env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.use_eval_terrain = bool(a.eval_terrain)
+    env_cfg.terrain_eval_seed_override = int(a.eval_terrain_seed)
     env_cfg.terrain_base_seed = int(a.seed)
     env_cfg.terrain_height_scale_override = float(a.terrain_height_scale)
     env_cfg.enable_contact_tracking_demo = False
     env_cfg.tracking_path_family = str(a.path_family)
     env_cfg.enable_visual_grid_floor = bool(a.visual_grid) or not bool(a.headless)
-    # Presentation scene: marked two-lane road between grass verges, on a pale
-    # studio floor. Visual-only (see _spawn_road_scenery), so gate numbers from a
+    # Presentation scene: marked two-lane road between mixed grass/soil verges.
+    # Visual-only (see _spawn_road_scenery), so gate numbers from a
     # --road_scene run are comparable with headless ones.
     env_cfg.enable_road_scenery = bool(a.road_scene) or not bool(a.headless)
     if env_cfg.enable_road_scenery:
         env_cfg.dark_visual_background = False
-        env_cfg.visual_floor_color = (0.82, 0.83, 0.84)
-        env_cfg.visual_grid_color = (0.90, 0.90, 0.91)
         env_cfg.enable_visual_grid_floor = True
     # Count raw terrain safety violations in the evaluator without triggering a
     # synchronized physical redeployment. Nonfinite state still terminates in
@@ -293,6 +359,10 @@ def build_env():
     if a.head_nullspace_restore_max_action is not None:
         env_cfg.terrain_head_nullspace_restore_max_action = float(
             a.head_nullspace_restore_max_action
+        )
+    if a.head_action_to_tilt_sign is not None:
+        env_cfg.terrain_c4_action_to_axis_y_sign = float(
+            a.head_action_to_tilt_sign
         )
     if a.head_restore_mode:
         env_cfg.terrain_head_restore_preserve_xyz = a.head_restore_mode == "nullspace"
@@ -547,6 +617,11 @@ def evaluate_verge(
     cutter_contact_forces, wheel_support, wheel_forces = [], [], []
     applied_actions, shield_gains, head_extensions = [], [], []
     chassis_lateral_reactions, chassis_attitude_reactions = [], []
+    # Contact-safety instrumentation. `ground_contact_fraction` is a duty cycle
+    # and reads 0.9486 -- a PASS -- on a policy measured 45 consecutive steps
+    # and 297 mm off the verge, so none of these can be derived from it.
+    airborne_gaps, contact_force_rates, cutter_vertical_velocities = [], [], []
+    contact_acquired_steps, target_leads, cylinder_headrooms = [], [], []
     safety_terminations = 0
     for step in range(steps):
         # get_inference_policy returns the MLPModel; its forward consumes the
@@ -625,6 +700,22 @@ def evaluate_verge(
         )
         chassis_attitude_reactions.append(
             raw._chassis_attitude_reaction_rad.detach().clone()
+        )
+        # Cached: the state machine already ran inside raw.step() for this
+        # transition, so these are reads, not a second evaluation.
+        airborne_gaps.append(raw._airborne_gap_m.detach().clone())
+        contact_force_rates.append(raw._contact_force_rate_nps.detach().clone())
+        cutter_vertical_velocities.append(
+            raw._cutter_vertical_velocity_mps.detach().clone()
+        )
+        contact_acquired_steps.append(raw._contact_acquired.detach().clone())
+        measured_x, _ = raw._refresh_cylinder_state()
+        target_leads.append(
+            raw._commanded_target_lead(measured_x).abs().amax(dim=-1)
+        )
+        headroom_low, headroom_high = raw._cylinder_headroom(measured_x)
+        cylinder_headrooms.append(
+            torch.minimum(headroom_low, headroom_high).amin(dim=-1)
         )
         safety_terminations += int(raw.terrain_safety_violation().sum())
         if tracking_plot is not None:
@@ -744,6 +835,86 @@ def evaluate_verge(
         ),
         "safety_termination_rate": safety_terminations / max(steps * raw.num_envs, 1),
     }
+
+    # --- contact safety -------------------------------------------------
+    # Event COUNTS come from the environment's per-episode accumulators, not
+    # from re-deriving transitions out here: the state machine is the single
+    # definition of what a contact-loss event is, and a second implementation
+    # in the evaluator is how a gate and a training signal end up measuring
+    # different things.
+    gap_steps = torch.stack(airborne_gaps)
+    force_rate_steps = torch.stack(contact_force_rates)
+    vertical_velocity_steps = torch.stack(cutter_vertical_velocities)
+    acquired_steps = torch.stack(contact_acquired_steps)
+    target_lead_steps = torch.stack(target_leads)
+    headroom_steps = torch.stack(cylinder_headrooms)
+    post_acquisition_contact = (contact_steps > 0.5) & acquired_steps
+    post_acquisition_total = int(acquired_steps.sum())
+    row.update(
+        {
+            "contact_acquired_fraction": float(
+                (raw._contact_acquired).float().mean()
+            ),
+            "post_acquisition_contact_fraction": (
+                float(post_acquisition_contact.sum()) / post_acquisition_total
+                if post_acquisition_total
+                else 1.0
+            ),
+            "contact_loss_event_count": int(raw._contact_loss_event_count.sum()),
+            "contact_loss_steps": int(
+                (acquired_steps & (contact_steps <= 0.5)).sum()
+            ),
+            "maximum_consecutive_airborne_steps": int(
+                raw._max_consecutive_airborne_steps.max()
+            ),
+            "maximum_airborne_gap_m": float(raw._max_airborne_gap_m.max()),
+            "p95_airborne_gap_m": float(torch.quantile(gap_steps, 0.95)),
+            "mean_airborne_gap_m": float(gap_steps.mean()),
+            "takeoff_event_count": int(raw._takeoff_event_count.sum()),
+            "impact_ejection_event_count": int(
+                raw._impact_ejection_event_count.sum()
+            ),
+            "hard_impact_event_count": int(raw._hard_impact_event_count.sum()),
+            "visible_lift_event_count": int(raw._visible_lift_event_count.sum()),
+            "mean_contact_force_n": float(cutter_contact_force_steps.mean()),
+            "p95_contact_force_n": float(
+                torch.quantile(cutter_contact_force_steps, 0.95)
+            ),
+            "maximum_contact_force_n": float(cutter_contact_force_steps.max()),
+            "mean_force_rate_nps": float(force_rate_steps.abs().mean()),
+            "p95_force_rate_nps": float(
+                torch.quantile(force_rate_steps.abs(), 0.95)
+            ),
+            "maximum_positive_cutter_vertical_velocity_mps": float(
+                vertical_velocity_steps.max()
+            ),
+            "minimum_scan_valid_fraction": float(scan_steps.min()),
+            "target_lead_p95_m": float(torch.quantile(target_lead_steps, 0.95)),
+            "target_lead_max_m": float(target_lead_steps.max()),
+            "shield_active_fraction": float(
+                (shield_gain_steps < 0.999).float().mean()
+            ),
+            "min_cylinder_headroom_m": float(headroom_steps.min()),
+            # Recorded so a report cannot be read as a sole-controller result
+            # without the reader being able to check that it was one.
+            "teacher_mode": str(raw.cfg.sole_teacher_mode),
+            "direct_target_contact_demo": bool(
+                raw.cfg.enable_contact_tracking_demo
+            ),
+            "contact_termination_active": bool(
+                getattr(raw.cfg, "terrain_terminate_on_contact_loss", False)
+            ),
+            "contact_acquire_steps": int(
+                getattr(raw.cfg, "terrain_contact_acquire_steps", 3)
+            ),
+            "contact_loss_grace_steps": int(
+                getattr(raw.cfg, "terrain_contact_loss_grace_steps", 2)
+            ),
+            "max_airborne_gap_tolerance_m": float(
+                getattr(raw.cfg, "terrain_max_airborne_gap_m", 0.005)
+            ),
+        }
+    )
     family_rows = []
     for family in sorted(set(raw._tracking_path_family_names)):
         family_mask = torch.as_tensor(
@@ -907,12 +1078,12 @@ def main() -> None:
         schema = str(infos.get("schema", ""))
         checkpoint_width = int(infos.get("observation_width", -1))
         checkpoint_action_width = int(infos.get("action_width", 4))
-        if schema != "terrain_teacher_student_v1" or source not in {
+        if schema not in {"terrain_teacher_student_v1", "terrain_shared_v2"} or source not in {
             "PPO3 terrain teacher distillation v1",
             "PPO3 terrain PPO",
         }:
             raise RuntimeError(
-                "evaluation accepts only terrain_teacher_student_v1 checkpoints; "
+                "evaluation accepts only supported terrain policy checkpoints; "
                 f"got source={source!r}, schema={schema!r}"
             )
         if checkpoint_width != int(raw.cfg.observation_space):
@@ -971,6 +1142,8 @@ def main() -> None:
             tracking_plot=tracking_plot,
             zero_action=bool(a.zero_action),
         )
+        # Always score the historical 17 so the number stays comparable with
+        # every stored report, then add the strict block separately.
         summary = summarize_convergence(row)
         report["verge"] = row
         report["gates"] = summary["gates"]
@@ -979,18 +1152,28 @@ def main() -> None:
         ]
         report["score"] = summary["score"]
         report["passed"] = summary["passed"]
-        print(
-            json.dumps(
-                {
-                    "verge": row,
-                    "gates": report["gates"],
-                    "score": report["score"],
-                    "passed": report["passed"],
-                },
-                indent=2,
-            ),
-            flush=True,
-        )
+        printable = {
+            "verge": row,
+            "gates": report["gates"],
+            "score": report["score"],
+            "passed": report["passed"],
+        }
+        if a.strict_contact:
+            strict = summarize_convergence(row, contact_safety=True)
+            report["contact_safety_gates"] = {
+                name: strict["gates"][name] for name in CONTACT_SAFETY_GATE_SPECS
+            }
+            report["contact_safety_promotion_blockers"] = strict[
+                "contact_safety_promotion_blockers"
+            ]
+            report["promotable"] = strict["promotable"]
+            report["strict_score"] = strict["score"]
+            printable["contact_safety_gates"] = report["contact_safety_gates"]
+            printable["contact_safety_promotion_blockers"] = report[
+                "contact_safety_promotion_blockers"
+            ]
+            printable["promotable"] = report["promotable"]
+        print(json.dumps(printable, indent=2), flush=True)
 
     if a.report:
         path = Path(a.report)

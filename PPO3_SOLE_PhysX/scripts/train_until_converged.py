@@ -48,7 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--head_joint_action",
         action="store_true",
+        default=True,
         help="Forward the fifth hydraulic head-residual action to training and evaluation.",
+    )
+    parser.add_argument(
+        "--legacy_four_action",
+        dest="head_joint_action",
+        action="store_false",
+        help="Compatibility only: supervise the retired 54x4 interface.",
     )
     parser.add_argument(
         "--head_action_to_c4_gain",
@@ -166,6 +173,46 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("", "true", "false"),
         help="Use the same corrected truck/terrain substep dynamics in training and evaluation.",
     )
+    # --- contact-safe experiment ------------------------------------------
+    # Every one of these is forwarded to BOTH train.py and evaluate.py. The
+    # observation flags in particular MUST reach the evaluator: they change the
+    # network's input width, and a block evaluated at a different width would
+    # either crash or -- with the shapes forced -- score a permuted policy.
+    parser.add_argument(
+        "--contact_focus",
+        action="store_true",
+        help="Oversample the measured contact-loss region (s_curve, late path).",
+    )
+    parser.add_argument(
+        "--contact_stage",
+        default="",
+        choices=("", "A", "B", "C"),
+        help="Contact-loss grace curriculum: A=4 steps, B=2, C=1.",
+    )
+    parser.add_argument(
+        "--contact_observation", default="", choices=("", "true", "false")
+    )
+    parser.add_argument(
+        "--contact_safety_reward", default="", choices=("", "true", "false")
+    )
+    parser.add_argument(
+        "--contact_termination",
+        default="",
+        choices=("", "true", "false"),
+        help="Training-only. The evaluator never terminates on contact loss.",
+    )
+    parser.add_argument("--model_error_history", type=int, default=None)
+    parser.add_argument("--action_scale", type=float, default=None)
+    parser.add_argument("--max_action_rate", type=float, default=None)
+    parser.add_argument("--arm_stiffness_scale", type=float, default=None)
+    parser.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
+    parser.add_argument("--cylinder_target_leak", type=float, default=None)
+    parser.add_argument("--height_schedule", default="")
+    parser.add_argument(
+        "--strict_contact",
+        action="store_true",
+        help="Score the contact-safety promotion gates in every block evaluation.",
+    )
     parser.add_argument(
         "--restart",
         action="store_true",
@@ -282,6 +329,15 @@ def training_command(
         command.extend(["--resume_c4_std", str(args.c4_exploration_std)])
     if args.q5_exploration_std is not None:
         command.extend(["--resume_q5_std", str(args.q5_exploration_std)])
+    if args.contact_focus:
+        command.append("--contact_focus")
+    if args.contact_stage:
+        command.extend(["--contact_stage", args.contact_stage])
+    if args.contact_termination:
+        command.extend(["--contact_termination", args.contact_termination])
+    if args.height_schedule:
+        command.extend(["--height_schedule", args.height_schedule])
+    command.extend(_shared_contact_options(args))
     if int(block_index) == 1:
         if args.reset_optimizer_first_block:
             command.append("--reset_optimizer_on_resume")
@@ -290,6 +346,37 @@ def training_command(
         if args.first_block_c4_std is not None:
             command.extend(["--resume_c4_std", str(args.first_block_c4_std)])
     return command
+
+
+def _shared_contact_options(args: argparse.Namespace) -> list[str]:
+    """Options that MUST be identical in training and in evaluation.
+
+    Two of them (`--contact_observation`, `--model_error_history`) change the
+    observation width, and the rest change the plant. Forwarding them to only
+    one child is how a block gets evaluated against a network shape or a plant
+    it was not trained on -- the same class of mistake the supervisor's
+    existing `--actuator` forwarding test guards against.
+    """
+    options: list[str] = []
+    if args.contact_observation:
+        options.extend(["--contact_observation", args.contact_observation])
+    if args.contact_safety_reward:
+        options.extend(["--contact_safety_reward", args.contact_safety_reward])
+    if args.model_error_history is not None:
+        options.extend(["--model_error_history", str(args.model_error_history)])
+    if args.action_scale is not None:
+        options.extend(["--action_scale", str(args.action_scale)])
+    if args.max_action_rate is not None:
+        options.extend(["--max_action_rate", str(args.max_action_rate)])
+    if args.arm_stiffness_scale is not None:
+        options.extend(["--arm_stiffness_scale", str(args.arm_stiffness_scale)])
+    if args.cylinder_target_max_lead_m is not None:
+        options.extend(
+            ["--cylinder_target_max_lead_m", str(args.cylinder_target_max_lead_m)]
+        )
+    if args.cylinder_target_leak is not None:
+        options.extend(["--cylinder_target_leak", str(args.cylinder_target_leak)])
+    return options
 
 
 def evaluation_command(
@@ -330,6 +417,9 @@ def evaluation_command(
         command.extend(
             ["--head_action_to_c4_gain", str(args.head_action_to_c4_gain)]
         )
+    if args.strict_contact:
+        command.append("--strict_contact")
+    command.extend(_shared_contact_options(args))
     return command
 
 

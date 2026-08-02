@@ -98,7 +98,9 @@ from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
     apply_terrain_curriculum_stage,
     configure_terrain_gpu_physx_memory,
 )
-from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
+    observation_space_for_cfg,
+)
 from PPO3_SOLE_PhysX.terrain_convergence import GATE_SPECS  # noqa: E402
 
 GATE_MPS2 = float(GATE_SPECS["p95_tool_acceleration"].threshold)
@@ -118,7 +120,7 @@ def build_env():
     )
     apply_terrain_curriculum_stage(env_cfg, int(a.stage))
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = verge_observation_dim() + 1
+    env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.use_eval_terrain = bool(a.eval_terrain)
     env_cfg.terrain_base_seed = int(a.seed)
     env_cfg.enable_contact_tracking_demo = False

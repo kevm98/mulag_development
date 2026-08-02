@@ -50,6 +50,16 @@ def test_ppo4_inherits_ppo3_rather_than_copying_the_plant():
     assert "class TerrainIDFDEnv(TerrainSolePolicyEnv)" in _ENV_SOURCE
 
 
+def test_ppo4_corrects_measured_head_polarity_and_restores_in_xyz_nullspace():
+    ppo3_cfg = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
+    assert "terrain_c4_action_to_axis_y_sign: float = -1.0" in ppo3_cfg
+    assert "terrain_head_nullspace_restore_gain: float = 1.0" in ppo3_cfg
+    assert "terrain_head_nullspace_restore_deadband_rad: float = 0.01" in ppo3_cfg
+    assert "terrain_head_nullspace_restore_max_action: float = 0.60" in ppo3_cfg
+    assert "terrain_head_restore_preserve_xyz: bool = True" in ppo3_cfg
+    assert "terrain_head_nullspace_restore_gain =" not in _CFG_SOURCE
+
+
 def test_ppo4_does_not_redefine_plant_or_task_physics():
     """Only the actuator may differ. Anything else breaks attribution."""
     forbidden = (
@@ -62,6 +72,42 @@ def test_ppo4_does_not_redefine_plant_or_task_physics():
         "terrain_contact_reward_weight",
         "sole_action_filter",
         "max_depenetration_velocity",
+        "sole_head_joint_action",
+        "sole_head_action_to_c4_gain",
+        "terrain_model_error_observation",
+        "terrain_head_feedforward_from_measured",
+        "terrain_head_penalty_far_weight",
+        "terrain_head_shield_soft_alignment",
+        "terrain_head_shield_hard_alignment",
+        "terrain_c4_action_to_axis_y_sign",
+        "terrain_head_nullspace_restore_gain",
+        "terrain_head_nullspace_restore_deadband_rad",
+        "terrain_head_nullspace_restore_max_action",
+        "terrain_head_restore_preserve_xyz",
+        "terrain_messerkopf_level_gain",
+        # Contact safety is a TASK definition, not an actuator property. If
+        # PPO4 set its own acquisition hysteresis, gap tolerance or contact
+        # reward weights, "PPO4 lifts more than PPO3" would stop being a
+        # statement about ID/FD and become a statement about two different
+        # definitions of lifting.
+        "terrain_contact_acquire_steps",
+        "terrain_contact_loss_grace_steps",
+        "terrain_max_airborne_gap_m",
+        "terrain_takeoff_velocity_threshold_mps",
+        "terrain_hard_impact_force_n",
+        "terrain_impact_ejection_force_n",
+        "terrain_contact_safety_reward",
+        "terrain_contact_support_weight",
+        "terrain_contact_loss_weight",
+        "terrain_contact_force_target_n",
+        "terrain_contact_force_std_n",
+        "terrain_contact_force_soft_limit_n",
+        "terrain_contact_gap_weight",
+        "terrain_contact_takeoff_weight",
+        "terrain_contact_observation",
+        "terrain_terminate_on_contact_loss",
+        "terrain_terminate_on_hard_impact",
+        "terrain_lift_terminal_reward",
     )
     # Mentioning a name in prose is fine; assigning it is not.
     tree = ast.parse(_CFG_SOURCE)
@@ -338,10 +384,34 @@ def test_every_train_checkpoint_save_is_actuator_tagged():
     because one of train.py's three save paths omitted the tag.
     """
     source = (_SCRIPTS / "train.py").read_text()
-    infos_blocks = source.count('"schema": "terrain_teacher_student_v1"')
+    infos_blocks = source.count('"schema": "terrain_shared_v2"')
     tagged = source.count('"actuator": str(a.actuator)')
     assert tagged >= infos_blocks, (
         f"{infos_blocks} checkpoint-info blocks but only {tagged} actuator tags"
+    )
+
+
+def test_the_target_lead_bound_is_shared_by_both_actuators():
+    """`cylinder_target_max_lead_m` is not an ID/FD-only field.
+
+    It is read once, in ``mulag_upper_level_env._run_cylinder_id_pipeline``,
+    on the path BOTH actuators take, and the pre-fix probe measured it
+    saturated on both (ROM-A p95 0.0262 / max 0.0300; ID/FD p95 0.0265 /
+    max 0.0406 against the inherited 0.025 cap). Treating it as a PPO4 knob
+    would leave PPO3 storing the same command error and releasing it into the
+    ground.
+    """
+    runtime = (
+        ROOT / "PPO2_ROM_PhysX" / "runtime" / "mulag_upper_level_env.py"
+    ).read_text()
+    consumption = runtime[runtime.index('getattr(self.cfg, "cylinder_target_max_lead_m"'):]
+    consumption = consumption[: consumption.index("self._cylinder_pos_target =")]
+    assert "dynamics_model" not in consumption, (
+        "the lead clamp is applied unconditionally, so it governs ROM-A too"
+    )
+    train = (ROOT / "PPO3_SOLE_PhysX" / "scripts" / "train.py").read_text()
+    assert '"--cylinder_target_max_lead_m"' in train, (
+        "PPO3's training entry point must be able to sweep the shared bound"
     )
 
 
@@ -355,8 +425,6 @@ def test_ppo4_closes_the_head_feedforward_on_the_measured_boom():
     0.79 across ten PPO blocks while contact, cut error and acceleration all
     improved.
     """
-    assert "terrain_head_feedforward_from_measured = True" in _CFG_SOURCE
     ppo3_cfg = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
-    assert "terrain_head_feedforward_from_measured: bool = False" in ppo3_cfg, (
-        "PPO3 must keep the commanded-q4 feedforward so its stored numbers hold"
-    )
+    assert "terrain_head_feedforward_from_measured: bool = True" in ppo3_cfg
+    assert "terrain_head_feedforward_from_measured =" not in _CFG_SOURCE

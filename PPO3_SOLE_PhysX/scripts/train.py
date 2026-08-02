@@ -56,7 +56,14 @@ p.add_argument("--vehicle_speed_kmh", type=float, default=4.0)
 p.add_argument(
     "--head_joint_action",
     action="store_true",
+    default=None,
     help="Use a fifth policy output as the hydraulic head-tilt residual.",
+)
+p.add_argument(
+    "--legacy_four_action",
+    dest="head_joint_action",
+    action="store_false",
+    help="Compatibility only: run the retired 54x4 PPO3 interface.",
 )
 p.add_argument(
     "--head_action_to_c4_gain",
@@ -87,6 +94,74 @@ p.add_argument(
     "--head_tail_risk",
     action="store_true",
     help="Enable worst-2-percent head weighting and hard-gate failure memory.",
+)
+# --- contact-safe experiment (fix/ppo3-ppo4-zero-contact-loss) -------------
+p.add_argument(
+    "--contact_focus",
+    action="store_true",
+    help=(
+        "Training-only oversampling of the MEASURED contact-loss region: "
+        "s_curve, full relief, late path phases. Held-out evaluation is "
+        "unchanged. See reports/CONTACT_SAFE_V1_REPORT.md."
+    ),
+)
+p.add_argument(
+    "--contact_stage",
+    default="",
+    choices=("", "A", "B", "C"),
+    help=(
+        "Contact-loss grace curriculum: A=4 steps, B=2, C=1. Strict "
+        "evaluation tolerates none. Empty keeps the config default."
+    ),
+)
+p.add_argument(
+    "--contact_observation",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_contact_observation (changes the observation width).",
+)
+p.add_argument(
+    "--contact_safety_reward",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_contact_safety_reward (the seven-term contact group).",
+)
+p.add_argument(
+    "--contact_termination",
+    default="",
+    choices=("", "true", "false"),
+    help="Override terrain_terminate_on_contact_loss.",
+)
+p.add_argument("--contact_loss_weight", type=float, default=None)
+p.add_argument("--contact_gap_weight", type=float, default=None)
+p.add_argument("--contact_force_target_n", type=float, default=None)
+p.add_argument("--contact_force_soft_limit_n", type=float, default=None)
+p.add_argument("--lift_terminal_reward", type=float, default=None)
+p.add_argument("--model_error_history", type=int, default=None)
+# --- Phase 6 impact-energy sweep knobs ------------------------------------
+p.add_argument("--action_scale", type=float, default=None)
+p.add_argument("--max_action_rate", type=float, default=None)
+p.add_argument("--arm_stiffness_scale", type=float, default=None)
+p.add_argument(
+    "--cylinder_target_max_lead_m",
+    type=float,
+    default=None,
+    help=(
+        "Anti-windup bound on how far the commanded PhysX target may lead the "
+        "measured cylinder. Shared by ROM-A and ID/FD -- both read it in "
+        "mulag_upper_level_env._run_cylinder_id_pipeline. Measured saturated "
+        "at the inherited 25 mm on BOTH actuators before the fix."
+    ),
+)
+p.add_argument("--cylinder_target_leak", type=float, default=None)
+p.add_argument(
+    "--height_schedule",
+    default="",
+    help=(
+        "Comma-separated training relief scales, e.g. '0.50,0.70'. Empty keeps "
+        "the wide default (0.35..1.15). The held-out gate tuple is never "
+        "changed by this."
+    ),
 )
 p.add_argument(
     "--sole_ik_hint",
@@ -187,7 +262,7 @@ if a.resume_c4_std is not None and a.resume_c4_std <= 0.0:
     p.error("--resume_c4_std must be positive")
 if a.resume_q5_std is not None and a.resume_q5_std <= 0.0:
     p.error("--resume_q5_std must be positive")
-if a.resume_q5_std is not None and not a.head_joint_action:
+if a.resume_q5_std is not None and a.head_joint_action is False:
     p.error("--resume_q5_std requires --head_joint_action")
 if a.convergence_check_interval <= 0 or a.convergence_steps <= 0:
     p.error("convergence interval and steps must be positive")
@@ -209,7 +284,9 @@ from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
     configure_terrain_gpu_physx_memory,
 )
 from PPO3_SOLE_PhysX.actuators import resolve_actuator  # noqa: E402
-from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
+    observation_space_for_cfg,
+)
 
 # One task, two actuators. Resolved once here so every downstream use --
 # env construction, runner config, checkpoint tagging -- cannot disagree.
@@ -370,12 +447,12 @@ def main() -> None:
         from PPO3_SOLE_PhysX.actuators import assert_checkpoint_actuator
         assert_checkpoint_actuator(infos, a.actuator, context="PPO3/PPO4 resume")
         schema = str(infos.get("schema", ""))
-        if schema != "terrain_teacher_student_v1" or resume_source not in {
+        if schema not in {"terrain_teacher_student_v1", "terrain_shared_v2"} or resume_source not in {
             "PPO3 terrain teacher distillation v1",
             "PPO3 terrain PPO",
         }:
             raise RuntimeError(
-                "Checkpoint is outside the terrain_teacher_student_v1 contract "
+                "Checkpoint is outside the supported terrain policy contracts "
                 f"(source={resume_source!r}, schema={schema!r}). All pre-correction "
                 "terrain PPO and legacy stored-path distillation checkpoints are "
                 "intentionally invalid."
@@ -384,7 +461,8 @@ def main() -> None:
     env_cfg = parse_env_cfg(
         TASK_ID, device=a.device, num_envs=a.num_envs
     )
-    env_cfg.sole_head_joint_action = bool(a.head_joint_action)
+    if a.head_joint_action is not None:
+        env_cfg.sole_head_joint_action = bool(a.head_joint_action)
     env_cfg.action_space = 5 if env_cfg.sole_head_joint_action else 4
     if env_cfg.sole_head_joint_action:
         env_cfg.terrain_messerkopf_level_gain = 0.0
@@ -396,17 +474,49 @@ def main() -> None:
     if a.sole_ik_hint:
         raise ValueError("--sole_ik_hint is not part of the terrain observation contract")
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = (
-        verge_observation_dim(
-            model_error=bool(
-                getattr(env_cfg, "terrain_model_error_observation", False)
-            ),
-            model_error_history=int(
-                getattr(env_cfg, "terrain_model_error_history", 1)
-            ),
+    # --- contact-safe overrides, applied BEFORE the observation width is
+    # derived so a widened observation and the network built for it cannot
+    # disagree. ---
+    if a.contact_observation:
+        env_cfg.terrain_contact_observation = a.contact_observation == "true"
+    if a.contact_safety_reward:
+        env_cfg.terrain_contact_safety_reward = a.contact_safety_reward == "true"
+    if a.contact_termination:
+        env_cfg.terrain_terminate_on_contact_loss = a.contact_termination == "true"
+        env_cfg.terrain_terminate_on_hard_impact = a.contact_termination == "true"
+    if a.contact_stage:
+        # Stage A tolerates a burst of missed samples so early exploration is
+        # not deleted by sensor noise; C is one step from strict.
+        env_cfg.terrain_contact_loss_grace_steps = {
+            "A": 4, "B": 2, "C": 1
+        }[a.contact_stage]
+    if a.contact_loss_weight is not None:
+        env_cfg.terrain_contact_loss_weight = float(a.contact_loss_weight)
+    if a.contact_gap_weight is not None:
+        env_cfg.terrain_contact_gap_weight = float(a.contact_gap_weight)
+    if a.contact_force_target_n is not None:
+        env_cfg.terrain_contact_force_target_n = float(a.contact_force_target_n)
+    if a.contact_force_soft_limit_n is not None:
+        env_cfg.terrain_contact_force_soft_limit_n = float(
+            a.contact_force_soft_limit_n
         )
-        + 1
-    )
+    if a.lift_terminal_reward is not None:
+        env_cfg.terrain_lift_terminal_reward = float(a.lift_terminal_reward)
+    if a.model_error_history is not None:
+        if a.model_error_history < 1:
+            raise ValueError("--model_error_history must be >= 1")
+        env_cfg.terrain_model_error_history = int(a.model_error_history)
+    if a.action_scale is not None:
+        env_cfg.sole_action_scale = float(a.action_scale)
+    if a.max_action_rate is not None:
+        env_cfg.sole_max_action_rate = float(a.max_action_rate)
+    if a.arm_stiffness_scale is not None:
+        env_cfg.terrain_arm_stiffness_scale = float(a.arm_stiffness_scale)
+    if a.cylinder_target_max_lead_m is not None:
+        env_cfg.cylinder_target_max_lead_m = float(a.cylinder_target_max_lead_m)
+    if a.cylinder_target_leak is not None:
+        env_cfg.cylinder_target_leak = float(a.cylinder_target_leak)
+    env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.enable_contact_tracking_demo = False
     resume_load_path = resume_path
     if resume_payload is not None:
@@ -424,6 +534,13 @@ def main() -> None:
                 f"checkpoint action width {checkpoint_action_width} does not match "
                 f"environment width {env_cfg.action_space}; q4/q5 checkpoints are "
                 "not shape-compatible"
+            )
+        if bool(resume_infos.get("migration_requires_optimizer_reset", False)) and not bool(
+            a.reset_optimizer_on_resume
+        ):
+            raise RuntimeError(
+                "migrated shared-policy checkpoints require "
+                "--reset_optimizer_on_resume"
             )
     env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
     env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
@@ -497,6 +614,39 @@ def main() -> None:
             *hard_start_phases,
         )
         env_cfg.terrain_height_scales = (0.85, 1.0, 1.0, 1.0)
+    if a.contact_focus:
+        # The measured contact-loss region, not a guessed one. The pre-fix
+        # probe put all 428 ROM-A events (and all 458 ID/FD events) on s_curve
+        # at relief 1.0 on the held-out mesh, concentrated late in the path
+        # (reports/contact_safe_v1/prefix_*_s_curve_seed*.json).
+        #
+        # Keep one copy of every family so the policy does not forget the ten
+        # it already handles, then repeat s_curve seven more times (~39 % hard-
+        # family exposure) with start phases spread across the late window so
+        # every rollout contains the final mound/hollow region rather than
+        # reaching it once, simultaneously, in all parallel environments.
+        env_cfg.tracking_path_family_schedule = (
+            "boom_sweep",
+            "double_s_curve",
+            "fourier_meander",
+            "gaussian_slalom",
+            "lane_change_hold",
+            "lateral_chirp",
+            "lateral_sine",
+            "offset_return",
+            "random_spline",
+            "s_curve",
+            "straight",
+            *("s_curve",) * 7,
+        )
+        late_phases = (0.55, 0.65, 0.75, 0.85, 0.90, 0.95, 0.75)
+        env_cfg.tracking_path_start_phase_schedule = (
+            *(-1.0 for _ in range(11)),
+            *late_phases,
+        )
+        # Height schedule is supplied by the caller through --height_schedule
+        # so the three-block ramp (easy -> full -> balanced) is explicit in the
+        # driver script rather than hidden in a flag.
     if a.head_tail_risk:
         env_cfg.terrain_head_tail_fraction = 0.02
         env_cfg.terrain_head_tail_multiplier = 2.0
@@ -523,7 +673,18 @@ def main() -> None:
     # Tail-focus must reproduce the measured failure geometry. The diagnostic
     # tail is on the held-out 1.0x paths; applying the generic 1.8x widening
     # changes the problem and previously drove head alignment as low as 0.338.
-    env_cfg.terrain_tracking_amplitude_scale = 1.0 if a.tail_focus else 1.8
+    # Contact focus is the same argument: the contact-loss events were measured
+    # at 1.0x, so widening the path would train against a different failure.
+    env_cfg.terrain_tracking_amplitude_scale = (
+        1.0 if (a.tail_focus or a.contact_focus) else 1.8
+    )
+    if a.height_schedule:
+        scales = tuple(
+            float(part) for part in a.height_schedule.split(",") if part.strip()
+        )
+        if not scales or any(value <= 0.0 for value in scales):
+            raise ValueError("--height_schedule must be positive comma-separated scales")
+        env_cfg.terrain_height_scales = scales
 
     # The inherited trajectory exists only for reset deployment. Scored terrain
     # episodes always use the sensed verge reference and a fixed deployment.
@@ -593,7 +754,7 @@ def main() -> None:
         wrapped, runner_cfg.to_dict(), log_dir=str(log_dir), device=a.device
     )
     startup_manifest = {
-        "schema": "terrain_teacher_student_v1",
+        "schema": "terrain_shared_v2",
         "actuator": str(a.actuator),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "log_dir": str(log_dir),
@@ -807,7 +968,7 @@ def main() -> None:
                 str(checkpoint),
                 infos={
                     "source": "PPO3 terrain PPO",
-                    "schema": "terrain_teacher_student_v1",
+                    "schema": "terrain_shared_v2",
                     "actuator": str(a.actuator),
                     "observation_width": int(raw.cfg.observation_space),
                     "action_width": int(raw.cfg.action_space),
@@ -828,7 +989,7 @@ def main() -> None:
                     str(converged_path),
                     infos={
                         "source": "PPO3 terrain PPO",
-                        "schema": "terrain_teacher_student_v1",
+                        "schema": "terrain_shared_v2",
                         "actuator": str(a.actuator),
                         "observation_width": int(raw.cfg.observation_space),
                         "action_width": int(raw.cfg.action_space),
@@ -850,7 +1011,7 @@ def main() -> None:
         checkpoint_out.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_info = {
             "source": "PPO3 terrain PPO",
-            "schema": "terrain_teacher_student_v1",
+            "schema": "terrain_shared_v2",
             # Every save path must carry this. The supervisor evaluates THIS
             # checkpoint, and an untagged one is read as 'rom', which made the
             # held-out evaluator refuse an ID/FD block and killed the run.

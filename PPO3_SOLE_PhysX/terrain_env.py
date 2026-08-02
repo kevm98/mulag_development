@@ -62,6 +62,7 @@ from PPO3_SOLE_PhysX.terrain_observations import (
 )
 from PPO3_SOLE_PhysX.terrain_rewards import (
     bounded_cost_progress,
+    compute_contact_safety_reward,
     compute_verge_reward,
     lower_tail_weights,
     sanitize_terminal_reward,
@@ -330,7 +331,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
         # +1 for the trailing scan-validity channel.
         # Follows terrain_model_error_observation: 54 without the
-        # actuator-model-error channels, 66 with them.
+        # actuator-model-error channels, 66 with them at depth 1, 90 at depth
+        # 3, and 96 with the contact-state block on top.
         return (
             verge_observation_dim(
                 model_error=bool(
@@ -338,6 +340,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 ),
                 model_error_history=int(
                     getattr(self.cfg, "terrain_model_error_history", 1)
+                ),
+                contact_state=bool(
+                    getattr(self.cfg, "terrain_contact_observation", False)
                 ),
             )
             + 1
@@ -349,11 +354,21 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # Held-out geometry remains fixed at seed 1337. Training entry points
         # deliberately vary this seed between resumed blocks so the policy does
         # not replay the same 512 static meshes forever.
-        seed = (
-            int(base.seed)
-            if held_out
-            else int(getattr(self.cfg, "terrain_base_seed", base.seed))
-        )
+        #
+        # `terrain_eval_seed_override` is the ONE way to move the held-out mesh,
+        # and it exists because `--seed` cannot: with the mesh pinned, the start
+        # phase fixed and the actor evaluated at its mean, a held-out rollout is
+        # fully deterministic and every seed returns bit-identical numbers.
+        # Measured directly -- seeds 17/909/1337/4242 produced identical event
+        # counts to the digit across all four runs of the pre-fix diagnostic.
+        # A "multi-seed" claim made by varying `--seed` on held-out terrain is
+        # therefore four copies of one measurement, and the override is what
+        # makes it a real robustness check. Zero keeps the pinned gate mesh.
+        eval_override = int(getattr(self.cfg, "terrain_eval_seed_override", 0))
+        if held_out:
+            seed = eval_override if eval_override > 0 else int(base.seed)
+        else:
+            seed = int(getattr(self.cfg, "terrain_base_seed", base.seed))
         resolution = float(
             getattr(self.cfg, "mow_strip_resolution_m", base.resolution_m)
         )
@@ -435,7 +450,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
 
     def _spawn_visual_grid_floor(self) -> None:
-        """Spawn a non-colliding gray Isaac-style floor with metric grid lines."""
+        """Spawn a non-colliding dark-grass floor with subtle grid lines."""
         import numpy as np
         import trimesh
 
@@ -504,7 +519,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             )
         print(
-            f"[PPO3-VISUAL] gray grid floor enabled ({spacing:.1f} m spacing, visual-only)",
+            f"[PPO3-VISUAL] grass grid floor enabled ({spacing:.1f} m spacing, visual-only)",
             flush=True,
         )
 
@@ -750,18 +765,6 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                     roughness=0.6,
                 ),
             ),
-            (
-                VERGE_APRON_ROOT,
-                grass,
-                sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=tuple(
-                        getattr(
-                            self.cfg, "verge_visual_color", (0.16, 0.42, 0.13)
-                        )
-                    ),
-                    roughness=1.0,
-                ),
-            ),
         ):
             if not pieces:
                 continue
@@ -773,8 +776,72 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 mesh_prim.GetPrimPath(),
                 sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             )
+
+        # Reuse the exact apron triangles but sort them into broad, irregular
+        # color regions.  This is material variation only: no vertex is moved,
+        # no triangle is added, and every resulting prim remains visual-only.
+        # The low-frequency field avoids the artificial single-color carpet
+        # look while keeping the result deterministic across screenshots.
+        palette = tuple(
+            getattr(
+                self.cfg,
+                "verge_visual_palette",
+                (
+                    getattr(self.cfg, "verge_visual_color", (0.08, 0.27, 0.05)),
+                ),
+            )
+        )
+        if not palette:
+            raise ValueError("verge_visual_palette must contain at least one color")
+        grass_by_color: list[list[trimesh.Trimesh]] = [
+            [] for _ in range(len(palette))
+        ]
+        # The last palette entry is soil. Wide outer thresholds keep that
+        # region sparse while the four green shades occupy most of the lawn.
+        thresholds = np.linspace(-1.05, 1.05, len(palette) - 1)
+        for piece in grass:
+            centers = piece.triangles_center
+            color_field = (
+                np.sin(0.31 * centers[:, 0] + 0.73 * centers[:, 1])
+                + 0.55 * np.sin(0.83 * centers[:, 0] - 0.29 * centers[:, 1])
+            )
+            color_ids = np.digitize(color_field, thresholds)
+            for color_id in range(len(palette)):
+                faces = piece.faces[color_ids == color_id]
+                if len(faces) == 0:
+                    continue
+                grass_by_color[color_id].append(
+                    trimesh.Trimesh(
+                        vertices=piece.vertices.copy(),
+                        faces=faces.copy(),
+                        process=False,
+                    )
+                )
+        for color_id, (color, color_pieces) in enumerate(
+            zip(palette, grass_by_color, strict=True)
+        ):
+            if not color_pieces:
+                continue
+            root = (
+                VERGE_APRON_ROOT
+                if color_id == 0
+                else f"{VERGE_APRON_ROOT}Shade{color_id + 1}"
+            )
+            create_prim_from_mesh(
+                root,
+                trimesh.util.concatenate(color_pieces),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=tuple(color), roughness=1.0
+                ),
+            )
+            mesh_prim = sim_utils.get_prim_at_path(f"{root}/mesh")
+            sim_utils.define_collision_properties(
+                mesh_prim.GetPrimPath(),
+                sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            )
         print(
-            f"[PPO3-SCENERY] {lanes}-lane marked road with grass verges "
+            f"[PPO3-SCENERY] {lanes}-lane marked road with "
+            f"{len(palette)}-tone grass verges "
             f"(visual-only, y=[{strip_outer_y - apron_m:.2f}, "
             f"{far_edge_y + apron_m:.2f}])",
             flush=True,
@@ -1008,7 +1075,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             flush=True,
         )
         visual_material = sim_utils.PreviewSurfaceCfg(
-            diffuse_color=tuple(getattr(self.cfg, "mow_strip_color", (0.20, 0.45, 0.18)))
+            diffuse_color=tuple(
+                getattr(self.cfg, "mow_strip_color", (0.06, 0.30, 0.045))
+            ),
+            roughness=1.0,
         )
 
         create_prim_from_mesh(
@@ -1969,6 +2039,265 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
         return (self.wheel_road_contact_forces_n() > threshold).float().mean(dim=-1)
 
+    # ------------------------------------------------------------------
+    # Contact-support state machine
+    # ------------------------------------------------------------------
+
+    def _ensure_contact_safety_buffers(self) -> None:
+        """Allocate the contact-support state once the scene exists."""
+        if getattr(self, "_contact_acquired", None) is not None:
+            return
+        n = self.num_envs
+        zeros_b = torch.zeros(n, dtype=torch.bool, device=self.device)
+        zeros_l = torch.zeros(n, dtype=torch.long, device=self.device)
+        zeros_f = torch.zeros(n, dtype=torch.float32, device=self.device)
+
+        # --- machine state ---
+        self._contact_acquired = zeros_b.clone()
+        self._contact_acquisition_steps = zeros_l.clone()
+        self._contact_loss_steps = zeros_l.clone()
+        self._previous_contact_force_n = zeros_f.clone()
+        self._previous_contact_state = zeros_b.clone()
+        self._previous_cutter_z = torch.full_like(zeros_f, float("nan"))
+        self._airborne_gap_m = zeros_f.clone()
+
+        # --- per-step event flags (consumed by reward, dones and metrics) ---
+        self._takeoff_event = zeros_b.clone()
+        self._impact_ejection_event = zeros_b.clone()
+        self._hard_impact_event = zeros_b.clone()
+        self._visible_lift_event = zeros_b.clone()
+        self._contact_loss_event = zeros_b.clone()
+
+        # --- cached per-step measurements ---
+        self._contact_state = zeros_b.clone()
+        self._contact_force_n = zeros_f.clone()
+        self._contact_force_rate_nps = zeros_f.clone()
+        self._geometric_gap_m = zeros_f.clone()
+        self._cutter_vertical_velocity_mps = zeros_f.clone()
+        self._contact_support = zeros_b.clone()
+
+        # --- episode accumulators, reported by the evaluator ---
+        self._contact_loss_event_count = zeros_l.clone()
+        self._takeoff_event_count = zeros_l.clone()
+        self._impact_ejection_event_count = zeros_l.clone()
+        self._hard_impact_event_count = zeros_l.clone()
+        self._visible_lift_event_count = zeros_l.clone()
+        self._post_acquisition_steps = zeros_l.clone()
+        self._post_acquisition_contact_steps = zeros_l.clone()
+        self._max_consecutive_airborne_steps = zeros_l.clone()
+        self._max_airborne_gap_m = zeros_f.clone()
+
+    def _reset_contact_safety(self, env_ids: torch.Tensor) -> None:
+        """Clear every contact-support variable for the given environments.
+
+        A stale ``_contact_acquired`` across a reset would let a fresh episode
+        inherit the previous one's support claim and immediately terminate
+        during its own deployment ramp.
+        """
+        self._ensure_contact_safety_buffers()
+        for name in (
+            "_contact_acquired",
+            "_previous_contact_state",
+            "_takeoff_event",
+            "_impact_ejection_event",
+            "_hard_impact_event",
+            "_visible_lift_event",
+            "_contact_loss_event",
+            "_contact_state",
+            "_contact_support",
+        ):
+            getattr(self, name)[env_ids] = False
+        for name in (
+            "_contact_acquisition_steps",
+            "_contact_loss_steps",
+            "_contact_loss_event_count",
+            "_takeoff_event_count",
+            "_impact_ejection_event_count",
+            "_hard_impact_event_count",
+            "_visible_lift_event_count",
+            "_post_acquisition_steps",
+            "_post_acquisition_contact_steps",
+            "_max_consecutive_airborne_steps",
+        ):
+            getattr(self, name)[env_ids] = 0
+        for name in (
+            "_previous_contact_force_n",
+            "_airborne_gap_m",
+            "_contact_force_n",
+            "_contact_force_rate_nps",
+            "_geometric_gap_m",
+            "_cutter_vertical_velocity_mps",
+            "_max_airborne_gap_m",
+        ):
+            getattr(self, name)[env_ids] = 0.0
+        # NaN, not zero: the first post-reset sample must produce no vertical
+        # velocity at all. Seeding with 0.0 would differentiate the deployed
+        # cutter height against the world origin and manufacture a takeoff.
+        self._previous_cutter_z[env_ids] = float("nan")
+        self._contact_safety_step = None
+
+    @torch.no_grad()
+    def _update_contact_safety(self) -> None:
+        """Advance the contact-support state machine, exactly once per step.
+
+        ``DirectRLEnv.step`` increments ``common_step_counter`` and then calls
+        ``_get_dones``, ``_get_rewards``, ``_reset_idx`` and
+        ``_get_observations`` in that order. All four consumers call this
+        method, so it caches on the counter -- otherwise one contact-loss
+        transition would be counted three times and the termination and the
+        penalty would disagree about how long support had been missing.
+
+        Nothing here is a controller. It only observes the PhysX contact
+        sensor and the cutter's own kinematics; no target, valve command or
+        joint reference is written anywhere in this method.
+        """
+        self._ensure_contact_safety_buffers()
+        marker = int(getattr(self, "common_step_counter", -1))
+        if getattr(self, "_contact_safety_step", None) == marker:
+            return
+        self._contact_safety_step = marker
+
+        cfg = self.cfg
+        dt = max(float(self.step_dt), 1.0e-6)
+        force = self.cutter_terrain_contact_force_n().detach()
+        contact = force > float(
+            getattr(cfg, "cutter_contact_force_threshold_n", 10.0)
+        )
+        cutter_z = self._cutter_world_z().detach()
+        reference = float(
+            getattr(cfg, "cutter_contact_reference_height_m", -0.30)
+        )
+        # Height of the cutter above the calibrated ground-support coordinate.
+        # Contact-independent by construction: this is geometry, so a missed
+        # contact sample cannot make it read zero, and a stuck contact sample
+        # cannot make it read large.
+        geometric_gap = torch.relu(
+            (cutter_z - self.ground_height_under_cutter().detach()) - reference
+        )
+
+        previous_z = self._previous_cutter_z
+        vertical_velocity = torch.where(
+            torch.isfinite(previous_z),
+            (cutter_z - previous_z) / dt,
+            torch.zeros_like(cutter_z),
+        )
+
+        # Deployment, preposition, reset correction and settling are not scored
+        # and must never acquire support or raise an event -- the arm is being
+        # driven to its pose by the reset ramp, not by the policy.
+        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+
+        acquire_steps = max(int(getattr(cfg, "terrain_contact_acquire_steps", 3)), 1)
+        grace = max(int(getattr(cfg, "terrain_contact_loss_grace_steps", 2)), 0)
+        max_gap = float(getattr(cfg, "terrain_max_airborne_gap_m", 0.005))
+        takeoff_v = float(
+            getattr(cfg, "terrain_takeoff_velocity_threshold_mps", 0.02)
+        )
+        hard_force = float(getattr(cfg, "terrain_hard_impact_force_n", 30000.0))
+        ejection_force = float(
+            getattr(cfg, "terrain_impact_ejection_force_n", 0.0)
+        )
+        if ejection_force <= 0.0:
+            ejection_force = hard_force
+
+        # --- hysteresis: acquisition ---
+        run = torch.where(
+            contact & active,
+            self._contact_acquisition_steps + 1,
+            torch.zeros_like(self._contact_acquisition_steps),
+        )
+        self._contact_acquisition_steps = run
+        newly_acquired = active & (run >= acquire_steps)
+        self._contact_acquired = self._contact_acquired | newly_acquired
+
+        # --- hysteresis: loss ---
+        loss_steps = torch.where(
+            contact | ~active,
+            torch.zeros_like(self._contact_loss_steps),
+            self._contact_loss_steps + 1,
+        )
+        self._contact_loss_steps = loss_steps
+        # Support is still claimed while inside the grace window, so a single
+        # missed physics substep does not destroy the episode during training.
+        self._contact_support = contact | (
+            self._contact_acquired & (loss_steps <= grace) & (loss_steps > 0)
+        )
+
+        # --- events ---
+        separated = active & self._contact_acquired & self._previous_contact_state & ~contact
+        takeoff = separated & (vertical_velocity > takeoff_v)
+        impact_ejection = takeoff & (self._previous_contact_force_n > ejection_force)
+        hard_impact = active & (force > hard_force)
+        # A visible lift is a GEOMETRIC claim about a cutter that is genuinely
+        # unsupported -- not a single sensor miss. Requiring the loss to have
+        # outlived the grace window is what makes "zero visible lifts" a
+        # statement about the tool and not about the sensor.
+        unsupported = active & self._contact_acquired & ~contact & (loss_steps > grace)
+        visible_lift = unsupported & (geometric_gap > max_gap)
+
+        self._contact_loss_event = separated
+        self._takeoff_event = takeoff
+        self._impact_ejection_event = impact_ejection
+        self._hard_impact_event = hard_impact
+        self._visible_lift_event = visible_lift
+        self._airborne_gap_m = torch.where(
+            unsupported, geometric_gap, torch.zeros_like(geometric_gap)
+        )
+
+        # --- accumulators ---
+        self._contact_loss_event_count += separated.long()
+        self._takeoff_event_count += takeoff.long()
+        self._impact_ejection_event_count += impact_ejection.long()
+        self._hard_impact_event_count += hard_impact.long()
+        self._visible_lift_event_count += visible_lift.long()
+        scored = active & self._contact_acquired
+        self._post_acquisition_steps += scored.long()
+        self._post_acquisition_contact_steps += (scored & contact).long()
+        self._max_consecutive_airborne_steps = torch.maximum(
+            self._max_consecutive_airborne_steps,
+            torch.where(scored, loss_steps, torch.zeros_like(loss_steps)),
+        )
+        self._max_airborne_gap_m = torch.maximum(
+            self._max_airborne_gap_m, self._airborne_gap_m
+        )
+
+        # --- cached measurements for reward/observation ---
+        self._contact_force_rate_nps = (force - self._previous_contact_force_n) / dt
+        self._contact_state = contact
+        self._contact_force_n = force
+        self._geometric_gap_m = geometric_gap
+        self._cutter_vertical_velocity_mps = vertical_velocity
+
+        self._previous_contact_force_n = force.clone()
+        self._previous_contact_state = contact.clone()
+        self._previous_cutter_z = cutter_z.clone()
+
+    def contact_safety_terminal(self) -> torch.Tensor:
+        """Environments whose contact behaviour makes the episode a failure.
+
+        Deliberately separate from ``terrain_safety_violation``: that predicate
+        is deferred (``defer_safety_terminations``) so exploratory excursions do
+        not redeploy the whole vectorized scene, and deferring a lift would
+        leave the policy free to finish the path after visibly leaving the
+        verge -- which is the exact behaviour this is meant to forbid.
+        """
+        self._update_contact_safety()
+        cfg = self.cfg
+        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        grace = max(int(getattr(cfg, "terrain_contact_loss_grace_steps", 2)), 0)
+        terminal = torch.zeros_like(self._contact_acquired)
+        if bool(getattr(cfg, "terrain_terminate_on_contact_loss", False)):
+            terminal = terminal | (
+                self._contact_acquired & (self._contact_loss_steps > grace)
+            )
+            terminal = terminal | self._visible_lift_event
+        if bool(getattr(cfg, "terrain_terminate_on_hard_impact", False)):
+            terminal = terminal | self._hard_impact_event
+        repeats = int(getattr(cfg, "terrain_max_takeoff_events", 0))
+        if repeats > 0:
+            terminal = terminal | (self._impact_ejection_event_count >= repeats)
+        return terminal & active
+
     def terrain_safety_violation(self) -> torch.Tensor:
         """Raw per-environment safety predicate without synchronized reset side effects."""
         cfg = self.cfg
@@ -2059,11 +2388,16 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
         self._terrain_step_nonfinite = nonfinite
         terminated = terminated | nonfinite
+        # This is the FIRST consumer of the state machine each step, so the
+        # update happens here and the reward and observation reuse it.
+        contact_terminal = self.contact_safety_terminal()
+        self._contact_safety_terminated = contact_terminal
+        terminated = terminated | contact_terminal
         if bool(getattr(self.cfg, "synchronize_resets", True)) and nonfinite.any():
             terminated = torch.ones_like(terminated)
-        self.extras.setdefault("log", {})["termination/terrain_nonfinite"] = (
-            nonfinite.float().mean()
-        )
+        log = self.extras.setdefault("log", {})
+        log["termination/terrain_nonfinite"] = nonfinite.float().mean()
+        log["termination/contact_safety"] = contact_terminal.float().mean()
         return terminated, truncated
 
     def truck_ride_height(self) -> torch.Tensor:
@@ -2299,6 +2633,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._previous_abs_lateral_error[env_ids] = self.verge_lateral_error()[
             env_ids
         ].abs()
+        # Contact support is an episode-scoped claim. Clearing it here, in the
+        # same place every other temporal latch is cleared, is what stops a new
+        # episode inheriting the previous one's acquisition and terminating on
+        # its own deployment ramp.
+        self._reset_contact_safety(env_ids)
 
     # ------------------------------------------------------------------
     # Verge-mowing task: reference, observation, reward
@@ -2735,8 +3074,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
     def _model_error_channels(self, measured_x: torch.Tensor) -> torch.Tensor | None:
         """Twelve columns describing how wrong the actuator model currently is.
 
-        Returns ``None`` when the feature is off, which keeps PPO3's frozen 54-D
-        observation byte-identical.
+        Returns ``None`` only in legacy compatibility mode.
 
         The three groups answer three different questions, and a learned
         actuator gets all three wrong in different ways:
@@ -2814,6 +3152,46 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._model_error_history = buffer.detach()
         return buffer.permute(1, 0, 2).reshape(current.shape[0], -1)
 
+    @torch.no_grad()
+    def _contact_state_channels(self) -> torch.Tensor | None:
+        """Six columns describing the physical contact state. See
+        ``terrain_observations.build_verge_observation`` for the ordering and
+        for why the pre-existing clipped force column is not enough."""
+        if not bool(getattr(self.cfg, "terrain_contact_observation", False)):
+            return None
+        self._update_contact_safety()
+        cfg = self.cfg
+        force_scale = max(
+            float(getattr(cfg, "cutter_contact_force_observation_scale_n", 1000.0)),
+            1.0,
+        )
+        rate_scale = max(
+            float(getattr(cfg, "terrain_contact_force_rate_scale_nps", 1.0e6)), 1.0
+        )
+        gap_scale = max(
+            float(getattr(cfg, "terrain_contact_gap_observation_scale_m", 0.02)),
+            1.0e-6,
+        )
+        grace = max(int(getattr(cfg, "terrain_contact_loss_grace_steps", 2)), 1)
+
+        contact = self._contact_state.float()
+        # log1p, not a clip: the measured force spans 0 to 170 kN and a linear
+        # channel clipped at 10 kN makes the whole operating range one value.
+        log_force = torch.log1p(
+            torch.clamp(self._contact_force_n, min=0.0) / force_scale
+        )
+        force_rate = torch.clamp(
+            self._contact_force_rate_nps / rate_scale, -5.0, 5.0
+        )
+        gap = torch.clamp(self._airborne_gap_m / gap_scale, 0.0, 10.0)
+        acquired = self._contact_acquired.float()
+        loss_steps = torch.clamp(
+            self._contact_loss_steps.float() / float(grace), 0.0, 10.0
+        )
+        return torch.stack(
+            (contact, log_force, force_rate, gap, acquired, loss_steps), dim=-1
+        )
+
     def _get_observations(self) -> dict:
         if getattr(self, "_sole_applied", None) is None:
             return super()._get_observations()
@@ -2865,6 +3243,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             scan_valid_fraction=self.scan_valid_fraction(),
             head_down_axis_xy=head_axis_world[:, :2],
             model_error=self._model_error_channels(x),
+            model_error_history=int(
+                getattr(self.cfg, "terrain_model_error_history", 1)
+            ),
+            contact_state=self._contact_state_channels(),
             cutter_contact_force_normalized=torch.clamp(
                 self.cutter_terrain_contact_force_n()
                 / max(
@@ -2893,6 +3275,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # acceleration penalty is attached to the action/transition that caused
         # it; _get_observations reuses this step's cached sample.
         self._update_measured_tool_kinematics()
+        # Cached: `_get_dones` already ran the state machine for this step, so
+        # this returns immediately and reward, termination and metrics all read
+        # the SAME transition.
+        self._update_contact_safety()
         x, _ = self._refresh_cylinder_state()
         low, high = self._cylinder_headroom(x)
         acceleration = torch.linalg.norm(self._measured_tool_acceleration_truck, dim=-1)
@@ -2985,6 +3371,61 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
 
         active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        contact_terms = None
+        if bool(getattr(cfg, "terrain_contact_safety_reward", False)):
+            contact_terms = compute_contact_safety_reward(
+                contact=self._contact_state,
+                contact_acquired=self._contact_acquired,
+                contact_force_n=self._contact_force_n,
+                airborne_gap_m=self._airborne_gap_m,
+                cutter_vertical_velocity_mps=self._cutter_vertical_velocity_mps,
+                hard_impact=self._hard_impact_event,
+                active=active,
+                support_weight=float(
+                    getattr(cfg, "terrain_contact_support_weight", 4.0)
+                ),
+                loss_weight=float(getattr(cfg, "terrain_contact_loss_weight", 20.0)),
+                force_weight=float(
+                    getattr(cfg, "terrain_contact_force_weight", 2.0)
+                ),
+                force_target_n=float(
+                    getattr(cfg, "terrain_contact_force_target_n", 6000.0)
+                ),
+                force_std_n=float(
+                    getattr(cfg, "terrain_contact_force_std_n", 8000.0)
+                ),
+                excess_weight=float(
+                    getattr(cfg, "terrain_contact_excess_weight", 2.0)
+                ),
+                force_soft_limit_n=float(
+                    getattr(cfg, "terrain_contact_force_soft_limit_n", 20000.0)
+                ),
+                excess_max_ratio=float(
+                    getattr(cfg, "terrain_contact_excess_max_ratio", 5.0)
+                ),
+                hard_impact_weight=float(
+                    getattr(cfg, "terrain_contact_hard_impact_weight", 20.0)
+                ),
+                takeoff_weight=float(
+                    getattr(cfg, "terrain_contact_takeoff_weight", 4.0)
+                ),
+                takeoff_velocity_scale_mps=float(
+                    getattr(cfg, "terrain_contact_takeoff_velocity_scale_mps", 0.10)
+                ),
+                takeoff_max_ratio=float(
+                    getattr(cfg, "terrain_contact_takeoff_max_ratio", 5.0)
+                ),
+                weak_support_force_n=float(
+                    getattr(cfg, "terrain_contact_weak_support_force_n", 500.0)
+                ),
+                gap_weight=float(getattr(cfg, "terrain_contact_gap_weight", 8.0)),
+                gap_scale_m=float(
+                    getattr(cfg, "terrain_contact_gap_scale_m", 0.005)
+                ),
+                gap_max_ratio=float(
+                    getattr(cfg, "terrain_contact_gap_max_ratio", 4.0)
+                ),
+            )
         dense_cut = -float(getattr(cfg, "dense_cut_error_weight", 5.0)) * torch.clamp(
             terms.cut_height_error.abs(), max=1.0
         ) * scan_confidence
@@ -3120,10 +3561,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             # once is free to shove the chassis for the rest of the episode.
             + chassis_penalty
         )
+        if contact_terms is not None:
+            # Safety group, for the same reason: an env whose head has latched
+            # must still be paid for staying planted and charged for lifting,
+            # or a single head dip licenses it to fly for the rest of the
+            # episode with the contact penalty switched off.
+            safety_reward = safety_reward + contact_terms.total
         shaped_reward = safety_reward + task_reward + head_progress
         shaped_reward = torch.where(
             active, shaped_reward, torch.zeros_like(shaped_reward)
         )
+        # A contact-safety termination must not be able to pay. Applied after
+        # the `active` mask so a warm-up step cannot receive it, and before the
+        # non-finite sanitizer so the two cannot disagree about the same row.
+        contact_terminal = getattr(self, "_contact_safety_terminated", None)
+        if contact_terminal is not None and bool(contact_terminal.any()):
+            shaped_reward = torch.where(
+                contact_terminal & active,
+                torch.full_like(
+                    shaped_reward,
+                    float(getattr(cfg, "terrain_lift_terminal_reward", -100.0)),
+                ),
+                shaped_reward,
+            )
         reward, reward_nonfinite = sanitize_terminal_reward(
             shaped_reward,
             invalid_mask=getattr(
@@ -3266,7 +3726,73 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 ).float().mean(),
                 "cylinder/min_low_headroom_m": low[valid_active].min(),
                 "cylinder/min_high_headroom_m": high[valid_active].min(),
+                # Contact-safety instrumentation. `ground_contact_fraction`
+                # above is a DUTY CYCLE and reads 0.9486 on a policy measured
+                # 45 consecutive steps and 297 mm off the verge, so it cannot
+                # be the signal training watches for lift.
+                "contact/acquired_fraction": self._contact_acquired[
+                    valid_active
+                ].float().mean(),
+                "contact/loss_event_fraction": self._contact_loss_event[
+                    valid_active
+                ].float().mean(),
+                "contact/takeoff_event_fraction": self._takeoff_event[
+                    valid_active
+                ].float().mean(),
+                "contact/impact_ejection_event_fraction": self._impact_ejection_event[
+                    valid_active
+                ].float().mean(),
+                "contact/hard_impact_event_fraction": self._hard_impact_event[
+                    valid_active
+                ].float().mean(),
+                "contact/visible_lift_event_fraction": self._visible_lift_event[
+                    valid_active
+                ].float().mean(),
+                "contact/mean_airborne_gap_m": self._airborne_gap_m[
+                    valid_active
+                ].mean(),
+                "contact/max_airborne_gap_m": self._airborne_gap_m[
+                    valid_active
+                ].max(),
+                "contact/max_consecutive_airborne_steps": self._max_consecutive_airborne_steps[
+                    valid_active
+                ].float().max(),
+                "contact/mean_force_rate_nps": self._contact_force_rate_nps[
+                    valid_active
+                ].abs().mean(),
+                "contact/max_positive_cutter_vertical_velocity_mps": self._cutter_vertical_velocity_mps[
+                    valid_active
+                ].max(),
             }
+            if contact_terms is not None:
+                self._last_reward_terms.update(
+                    {
+                        "reward/contact_total": contact_terms.total[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_support": contact_terms.support[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_loss": contact_terms.contact_loss[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_force_regulation": contact_terms.force_regulation[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_excess_force": contact_terms.excess_force[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_hard_impact": contact_terms.hard_impact[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_takeoff": contact_terms.takeoff[
+                            valid_active
+                        ].mean(),
+                        "reward/contact_airborne_gap": contact_terms.airborne_gap[
+                            valid_active
+                        ].mean(),
+                    }
+                )
             for channel in range(4):
                 self._last_reward_terms[
                     f"action/c{channel + 1}_mean"

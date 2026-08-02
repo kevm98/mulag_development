@@ -1,25 +1,5 @@
 #!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-"""Is the ID/FD pipeline trained and ready to visualize?
-
-Answers one question with evidence rather than vibes: can someone open the GUI
-right now and watch this policy mow, and will what they see be the ID/FD plant?
-
-Checks, in the order they can fail:
-
-1.  A trained checkpoint exists, loads, and is tagged ``actuator=idfd``. ROM and
-    ID/FD checkpoints are structurally identical (same 54-D observation, same 4
-    actions), so without the tag a ROM policy would load silently and the
-    "ID/FD demo" would be a ROM demo.
-2.  The PLAY environment builds with one environment and the visual scene on --
-    that is the configuration the viewer uses, and it is not the one training
-    exercises, so it can be broken while every training number looks fine.
-3.  A short deterministic rollout produces finite observations, rewards and
-    actions, the ID/FD runtime is the one in the loop, and no ROM object exists.
-4.  Tracking is live: the cutter actually moves over the terrain and follows the
-    path, so the viewer will show mowing rather than a frozen arm.
-
-Exit code 0 = ready, 1 = not ready. Prints the exact GUI command on success.
-"""
+"""Check the PPO4 checkpoint, ID/FD runtime, viewer path, and cutter motion."""
 
 from __future__ import annotations
 
@@ -49,7 +29,7 @@ sys.argv = [sys.argv[0], *unknown]
 
 DEFAULT_CKPT = (
     ROOT
-    / "logs/rsl_rl/ppo4_sole_idfd/q5_hydraulic_gain040_stable_v6/convergence/model_best.pt"
+    / "logs/rsl_rl/ppo4_sole_idfd/shared_v2_idfd/model_validated.pt"
 )
 CKPT = Path(a.checkpoint).resolve() if a.checkpoint else DEFAULT_CKPT
 
@@ -68,7 +48,9 @@ from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
     apply_terrain_curriculum_stage,
     configure_terrain_gpu_physx_memory,
 )
-from PPO3_SOLE_PhysX.terrain_observations import verge_observation_dim  # noqa: E402
+from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
+    observation_space_for_cfg,
+)
 from PPO4_ID_FD_PhysX.terrain_env_cfg import TerrainIDFDPPORunnerCfg  # noqa: E402
 
 CHECKS: list[tuple[str, bool, str]] = []
@@ -91,8 +73,8 @@ def main() -> int:
     tag = str(infos.get("actuator", "") or "rom")
     check("checkpoint tagged actuator=idfd", tag == "idfd", f"tag={tag!r}")
     check(
-        "checkpoint schema is terrain_teacher_student_v1",
-        str(infos.get("schema", "")) == "terrain_teacher_student_v1",
+        "checkpoint schema is terrain_shared_v2",
+        str(infos.get("schema", "")) == "terrain_shared_v2",
         str(infos.get("schema", "")),
     )
     # 54 without the actuator-model-error channels, 66 with them. The
@@ -116,17 +98,7 @@ def main() -> int:
     )
     env_cfg.terrain_kinematic_drive_substep_interpolation = True
     env_cfg.sole_ik_hint = False
-    env_cfg.observation_space = (
-        verge_observation_dim(
-            model_error=bool(
-                getattr(env_cfg, "terrain_model_error_observation", False)
-            ),
-            model_error_history=int(
-                getattr(env_cfg, "terrain_model_error_history", 1)
-            ),
-        )
-        + 1
-    )
+    env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.use_eval_terrain = True
     env_cfg.terrain_base_seed = int(a.seed)
     env_cfg.tracking_path_family = str(a.path_family)

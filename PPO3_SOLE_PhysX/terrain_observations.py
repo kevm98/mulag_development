@@ -47,17 +47,55 @@ def nonfinite_row_mask(*tensors: torch.Tensor | None) -> torch.Tensor:
 #: Extra columns exposing ACTUATOR MODEL ERROR. See build_verge_observation.
 MODEL_ERROR_CHANNELS = 12
 
+#: Extra columns exposing CONTACT STATE. See build_verge_observation.
+CONTACT_STATE_CHANNELS = 6
+
+#: Names of the contact-state columns, in order. Referenced by the migration
+#: utility and by tests, so the ordering is a contract and not a comment.
+CONTACT_STATE_CHANNEL_NAMES = (
+    "contact_boolean",
+    "log_contact_force",
+    "contact_force_rate",
+    "airborne_gap",
+    "contact_acquired",
+    "contact_loss_steps",
+)
+
 
 def verge_observation_dim(
     *,
     profile_bins: int = HEIGHT_PROFILE_BINS,
     model_error: bool = False,
     model_error_history: int = 1,
+    contact_state: bool = False,
 ) -> int:
     extra = (
         MODEL_ERROR_CHANNELS * max(int(model_error_history), 1) if model_error else 0
     )
+    if contact_state:
+        extra += CONTACT_STATE_CHANNELS
     return profile_bins + 44 + extra
+
+
+def observation_space_for_cfg(cfg) -> int:
+    """Observation width implied by a config, including the trailing channel.
+
+    Seven entry points (training, evaluation, distillation, four probes and
+    two readiness checks) each rebuilt this from the same three flags. Adding
+    an eighth flag to six of seven is how an entry point silently starts
+    constructing a different-width network than the one training produced, so
+    the derivation lives here and every caller asks for it.
+    """
+    return (
+        verge_observation_dim(
+            model_error=bool(getattr(cfg, "terrain_model_error_observation", False)),
+            model_error_history=int(
+                getattr(cfg, "terrain_model_error_history", 1)
+            ),
+            contact_state=bool(getattr(cfg, "terrain_contact_observation", False)),
+        )
+        + 1
+    )
 
 
 def collapse_scan_width(scan: torch.Tensor, *, bins: int = HEIGHT_PROFILE_BINS) -> torch.Tensor:
@@ -99,6 +137,8 @@ def build_verge_observation(
     cutter_contact_force_normalized: torch.Tensor,
     path_preview: torch.Tensor,
     model_error: torch.Tensor | None = None,
+    model_error_history: int = 1,
+    contact_state: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Build the verge-mowing observation.
 
@@ -150,6 +190,30 @@ def build_verge_observation(
     source or levelling gain -- the policy had no observable evidence of the
     error it was being asked to correct.
 
+    With ``contact_state`` supplied, 6 further columns are appended AFTER the
+    model-error block (so a checkpoint migrated to the model-error width keeps
+    every column meaning what it meant):
+
+        +0  contact_boolean     -- the physical PhysX contact bit
+        +1  log_contact_force   -- log1p(F / force_scale)
+        +2  contact_force_rate  -- (F - F_prev) / dt, normalized and clipped
+        +3  airborne_gap        -- geometric gap above the support height,
+                                   normalized, zero while supported
+        +4  contact_acquired    -- has this episode ever had real support
+        +5  contact_loss_steps  -- consecutive missing-contact steps, normalized
+
+    Why the log, specifically. The pre-existing
+    ``cutter_contact_force_normalized`` column clips ``F / 1000`` at 10, i.e.
+    at 10 kN. Measured on the held-out verge the in-contact force runs at
+    19.7 kN mean with a 119 kN maximum on ROM-A and 170 kN on ID/FD
+    (reports/contact_safe_v1/prefix_ppo3_s_curve_seed17.json), so EVERY force
+    the policy has ever had to react to sits on the flat part of that channel:
+    stable support and a 119 kN impact are the same number in the observation.
+    A policy cannot regulate a quantity it cannot see, and it cannot anticipate
+    an impact whose approach is invisible -- which is why the force RATE is
+    here too. The clipped column is retained rather than replaced so migrated
+    checkpoints keep their learned weights on it.
+
     ``scan_valid_fraction`` lets the policy tell a measured
     profile from a fallback one. A sensor that sees nothing returns the strip's
     base height, which is indistinguishable from genuinely flat ground unless the
@@ -183,11 +247,18 @@ def build_verge_observation(
     ]
     if model_error is not None:
         columns.append(model_error)
+    if contact_state is not None:
+        columns.append(contact_state)
     obs = torch.nan_to_num(torch.cat(columns, dim=-1), nan=0.0, posinf=0.0, neginf=0.0)
     expected = (
         verge_observation_dim(
             profile_bins=height_profile.shape[-1],
             model_error=model_error is not None,
+            # Previously omitted, so any history depth above 1 raised a
+            # spurious dimension mismatch and the depth-3 stack the
+            # model-error docstring recommends could never be enabled.
+            model_error_history=int(model_error_history),
+            contact_state=contact_state is not None,
         )
         + 1
     )

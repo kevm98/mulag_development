@@ -156,14 +156,21 @@ def test_ppo_and_evaluation_instantiate_the_terrain_task():
         assert "gym.make(TASK_ID" in source, (
             f"{script} does not instantiate the resolved terrain gym task"
         )
-        # Width follows terrain_model_error_observation: 54 without the
-        # actuator-model-error channels, 66 with them. Asserting the bare
-        # 54-D literal would forbid PPO4 from observing its own model error.
-        assert "verge_observation_dim(" in source, (
-            f"{script} does not use the terrain observation contract"
+        # Width follows the observation flags: 54 without the
+        # actuator-model-error channels, 66 with them at history depth 1, 90 at
+        # depth 3, 96 with the contact-state block. Asserting the bare 54-D
+        # literal would forbid PPO4 from observing its own model error.
+        #
+        # `observation_space_for_cfg` is the single derivation every entry point
+        # shares. Requiring it here is strictly stronger than the old check for
+        # an inline `verge_observation_dim(` call: seven entry points each
+        # rebuilding the width from the same flags is exactly how one of them
+        # ends up a channel short of the network training produced.
+        assert "observation_space_for_cfg(env_cfg)" in source, (
+            f"{script} does not use the shared terrain observation contract"
         )
-        assert "terrain_model_error_observation" in source, (
-            f"{script} pins the observation width instead of following the flag"
+        assert "verge_observation_dim" not in source, (
+            f"{script} rebuilds the observation width instead of sharing it"
         )
 
 
@@ -194,11 +201,11 @@ def test_terrain_head_contract_has_margin_lock_and_strict_evaluation():
     assert "terrain_head_threshold: float = 0.995" in cfg_source
     assert "terrain_head_penalty_max_deviation: float = 2.0" in cfg_source
     assert "terrain_head_penalty_scale: float = 0.02" in cfg_source
-    assert "terrain_head_penalty_far_weight: float = -0.5" in cfg_source
+    assert "terrain_head_penalty_far_weight: float = -8.0" in cfg_source
     assert "head_down_termination_alignment: float = 0.98" in cfg_source
     assert "sole_action_authority: tuple = (1.0, 1.0, 1.0, 1.0)" in cfg_source
-    assert "terrain_head_tilt_shield_soft: float = 0.08" in cfg_source
-    assert "terrain_head_tilt_shield_hard: float = 0.16" in cfg_source
+    assert "terrain_head_tilt_shield_soft: float = 0.30" in cfg_source
+    assert "terrain_head_tilt_shield_hard: float = 0.80" in cfg_source
     eval_source = (ROOT / "PPO3_SOLE_PhysX" / "scripts" / "evaluate.py").read_text()
     assert "env_cfg.defer_safety_terminations = True" in eval_source
     assert 'GATE_SPECS["head_alignment_hard_min"].threshold' in eval_source
@@ -358,11 +365,11 @@ def test_obsolete_stored_path_distillation_entrypoint_is_removed():
     assert (ROOT / "PPO3_SOLE_PhysX" / "scripts" / "distill_terrain.py").is_file()
 
 
-def test_terrain_training_accepts_only_versioned_teacher_student_checkpoints():
+def test_terrain_training_accepts_only_versioned_shared_checkpoints():
     source = (ROOT / "PPO3_SOLE_PhysX" / "scripts" / "train.py").read_text()
-    assert 'schema != "terrain_teacher_student_v1"' in source
+    assert '"terrain_shared_v2"' in source
     assert '"PPO3 terrain teacher distillation v1"' in source
-    assert "All pre-correction" in source
+    assert "supported terrain policy contracts" in source
 
 
 def test_terrain_distillation_uses_terrain_task_and_exact_raw_labels():
@@ -399,8 +406,11 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     cfg_source = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
     assert "road_color: tuple = (0.11, 0.12, 0.13)" in cfg_source
     assert "road_roughness: float = 0.92" in cfg_source
-    assert "visual_floor_color: tuple = (0.30, 0.31, 0.31)" in cfg_source
-    assert "visual_grid_color: tuple = (0.52, 0.53, 0.54)" in cfg_source
+    assert "visual_floor_color: tuple = (0.085, 0.22, 0.045)" in cfg_source
+    assert "visual_grid_color: tuple = (0.13, 0.285, 0.065)" in cfg_source
+    assert "(0.27, 0.16, 0.070)" in cfg_source
+    assert "mow_strip_color: tuple = (0.055, 0.30, 0.040)" in cfg_source
+    assert "verge_visual_palette: tuple = (" in cfg_source
     assert "visual_grid_length_m: float = 70.0" in cfg_source
     assert "dark_visual_background: bool = True" in cfg_source
     theme = ast.get_source_segment(
@@ -413,6 +423,12 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     )
     assert "collision_enabled=False" in grid
     assert "VISUAL_GRID_ROOT" in grid
+    scenery = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_spawn_road_scenery")
+    )
+    assert "piece.faces[color_ids == color_id]" in scenery
+    assert "vertices=piece.vertices.copy()" in scenery
+    assert "collision_enabled=False" in scenery
 
 
 def test_evaluator_selects_one_path_family_and_supports_live_tracking_plot():

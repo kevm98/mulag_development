@@ -45,7 +45,14 @@ p.add_argument(
 p.add_argument(
     "--head_joint_action",
     action="store_true",
+    default=None,
     help="Train the isolated fifth Messerkopf_joint action (q5 experiment).",
+)
+p.add_argument(
+    "--legacy_four_action",
+    dest="head_joint_action",
+    action="store_false",
+    help="Compatibility only: distil the retired 54x4 PPO3 interface.",
 )
 p.add_argument(
     "--head_action_to_c4_gain",
@@ -66,7 +73,7 @@ p.add_argument(
 )
 p.add_argument(
     "--out",
-    default="logs/rsl_rl/ppo3_sole_terrain/terrain_teacher_student_v1.pt",
+    default="logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/model_distilled.pt",
 )
 p.add_argument(
     "--report",
@@ -153,7 +160,8 @@ def build_env():
         TASK_ID, device=a.device, num_envs=a.num_envs
     )
     apply_terrain_curriculum_stage(cfg, int(a.stage))
-    cfg.sole_head_joint_action = bool(a.head_joint_action)
+    if a.head_joint_action is not None:
+        cfg.sole_head_joint_action = bool(a.head_joint_action)
     cfg.action_space = 5 if cfg.sole_head_joint_action else 4
     if cfg.sole_head_joint_action:
         # q5 must own the head reference. Leaving the legacy measured-tilt
@@ -375,7 +383,7 @@ def teacher_preflight(raw, steps: int) -> dict:
 def main() -> None:
     env, raw = build_env()
     report = {
-        "schema": "terrain_teacher_student_v1",
+        "schema": "terrain_shared_v2",
         "actuator": str(a.actuator),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "stage": int(a.stage),
@@ -521,7 +529,7 @@ def main() -> None:
         # Which plant this behaviour was cloned on. ROM and ID/FD share the
         # observation and action contract, so nothing else distinguishes them.
         "actuator": str(a.actuator),
-        "schema": "terrain_teacher_student_v1",
+        "schema": "terrain_shared_v2",
         "observation_width": int(raw.cfg.observation_space),
         "action_width": int(raw.cfg.action_space),
         "head_joint_action": bool(raw.cfg.sole_head_joint_action),

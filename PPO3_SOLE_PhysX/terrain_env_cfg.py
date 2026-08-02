@@ -129,7 +129,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     #
     # This changes the action interface from 4 to 5, so no existing checkpoint
     # can be resumed. The policy relearns from scratch.
-    sole_head_joint_action: bool = False
+    sole_head_joint_action: bool = True
     terrain_head_reference_per_substep: bool = True
     """Assemble the head joint reference in _apply_action, every substep.
 
@@ -198,8 +198,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     dark_visual_background: bool = True
     """Hide the bright dome from camera rays while retaining its illumination."""
     enable_visual_grid_floor: bool = False
-    visual_floor_color: tuple = (0.30, 0.31, 0.31)
-    visual_grid_color: tuple = (0.52, 0.53, 0.54)
+    visual_floor_color: tuple = (0.085, 0.22, 0.045)
+    """Dark grass base; exposed soil appears only in the apron palette."""
+    visual_grid_color: tuple = (0.13, 0.285, 0.065)
     visual_grid_length_m: float = 70.0
     visual_grid_width_m: float = 26.0
     visual_grid_spacing_m: float = 2.0
@@ -224,7 +225,15 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     road_lane_dash_gap_m: float = 3.0
     verge_visual_apron_m: float = 3.2
     """Grass width added outboard of the mowed verge and beyond the far kerb."""
-    verge_visual_color: tuple = (0.16, 0.42, 0.13)
+    verge_visual_color: tuple = (0.075, 0.27, 0.050)
+    verge_visual_palette: tuple = (
+        (0.055, 0.21, 0.035),
+        (0.075, 0.27, 0.050),
+        (0.105, 0.32, 0.060),
+        (0.135, 0.285, 0.055),
+        (0.27, 0.16, 0.070),
+    )
+    """Mostly dark lawn shades with sparse exposed-soil brown patches."""
     uneven_verge_apron: bool = True
     """Displace the roadside grass into lawn relief instead of flat slabs."""
     verge_apron_relief_m: float = 0.09
@@ -272,7 +281,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     terrain_restitution: float = 0.0
 
     # --- Verge strip ---
-    mow_strip_color: tuple = (0.08, 0.55, 0.08)
+    mow_strip_color: tuple = (0.055, 0.30, 0.040)
     mow_strip_collision: bool = True
     """The green verge is a real collider; contact cannot be faked geometrically."""
     terrain_tracking_amplitude_scale: float = 1.0
@@ -328,6 +337,17 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     """Balanced relief levels crossed independently with every path family."""
     terrain_height_scale_override: float = 0.0
     """Positive visualization/probe override; zero uses the balanced curriculum."""
+    terrain_eval_seed_override: int = 0
+    """Move the HELD-OUT mesh off its pinned seed 1337. Zero keeps the gate mesh.
+
+    The held-out geometry is pinned so a stage-5 score means the same thing
+    across runs, which is correct -- but it also means `--seed` cannot vary a
+    held-out evaluation at all. With the mesh pinned, `randomize_start_phase`
+    False and the actor evaluated at its mean, the rollout is deterministic:
+    the pre-fix diagnostic measured seeds 17, 909, 1337 and 4242 returning
+    bit-identical event counts, gaps and forces across all four runs
+    (reports/contact_safe_v1/PREFIX_SUMMARY.md). Robustness across meshes has
+    to be requested explicitly, and this is how. Never set it on a gate run."""
 
     # --- Ground sensing ---
     cutter_body_name: str = "Messerkopf"
@@ -448,7 +468,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # no longer costs exactly what a marginal one does. At alignment=-1 it adds
     # -48.9. Deliberately shallow -- see the note above for why steepening it
     # to -2.0 backfired.
-    terrain_head_penalty_far_weight: float = -0.5
+    terrain_head_penalty_far_weight: float = -8.0
     terrain_head_tail_fraction: float = 0.0
     """Training-only CVaR fraction; zero preserves the standard reward."""
     terrain_head_tail_multiplier: float = 1.0
@@ -490,7 +510,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     #
     # Gain 0.0 reproduces the inherited targets bit-for-bit (verified: score
     # 0.11299147332708048 exactly), so this stays reversible in one number.
-    terrain_messerkopf_level_gain: float = 0.5
+    # The fifth policy output owns head correction. Keep the earlier automatic
+    # loop disabled so direct construction matches train and evaluation.
+    terrain_messerkopf_level_gain: float = 0.0
     terrain_messerkopf_level_sign: float = -1.0
     """Sign that makes the correction oppose the measured tilt, not amplify it."""
     terrain_messerkopf_level_max_rad: float = 0.05
@@ -608,7 +630,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     The robustness route to model-error tolerance rather than the observability
     one: vary the plant so the policy cannot rely on an exact actuator. Costs a
     reset-time write and nothing per step."""
-    terrain_model_error_observation: bool = False
+    terrain_model_error_observation: bool = True
     """Expose ACTUATOR MODEL ERROR to the policy (12 extra observation columns).
 
     The policy is a memoryless MLP. It already sees the actuator model's
@@ -618,8 +640,8 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     difference between a policy that can compensate model error and one that
     cannot even see it.
 
-    Changes the observation width, so no existing checkpoint can be resumed.
-    Default False keeps PPO3's frozen 54-D contract."""
+    Legacy 54-value checkpoints must first be migrated with
+    ``scripts/migrate_shared_policy.py``."""
     terrain_head_pose_solve: bool = False
     """Command the head from its own measured angle minus its measured tilt.
 
@@ -632,7 +654,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     crude but the only configuration measured to hold the head there."""
     terrain_head_pose_solve_gain: float = 1.0
     """How much of the measured tilt to remove per step in the pose solve."""
-    terrain_head_feedforward_from_measured: bool = False
+    terrain_head_feedforward_from_measured: bool = True
     """Build the head levelling feedforward from MEASURED q4, not commanded q4.
 
     The head is slaved to the boom by `joint6_coupling_a * q4`. Taking q4 from
@@ -785,9 +807,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # the directional shield, this contributes a restoring command; unlike a
     # c4-only correction, c1-c3 cancel its first-order cutter XYZ motion. Off in
     # PPO3 until an actuator-specific held-out evaluation enables it.
-    terrain_head_nullspace_restore_gain: float = 0.0
-    terrain_head_nullspace_restore_deadband_rad: float = 0.08
-    terrain_head_nullspace_restore_max_action: float = 0.30
+    terrain_head_nullspace_restore_gain: float = 1.0
+    terrain_head_nullspace_restore_deadband_rad: float = 0.01
+    terrain_head_nullspace_restore_max_action: float = 0.60
     terrain_head_restore_preserve_xyz: bool = True
     """Measure head tilt about the joint's own axis instead of world Y-Z.
 
@@ -817,9 +839,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # TerrainSolePolicyEnv._get_rewards for the five-block measurement that
     # motivated this.
     terrain_head_down_latch_release_alignment: float = 0.97
-    terrain_head_tilt_shield_soft: float = 0.08
-    terrain_head_tilt_shield_hard: float = 0.16
-    terrain_c4_action_to_axis_y_sign: float = 1.0
+    terrain_head_tilt_shield_soft: float = 0.30
+    terrain_head_tilt_shield_hard: float = 0.80
+    terrain_c4_action_to_axis_y_sign: float = -1.0
     # Start warning one centimetre below the 5 cm mowing target, well before a
     # geometric strike. The initial 2 cm / -2 barrier left held-out quarters 1
     # and 2 systematically below target and the strike rate flat at 32.6%.
@@ -840,6 +862,124 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     is worth 12.0 against 5.13. Binary on measured PhysX contact, so it pays for
     being in contact and cannot be farmed by pressing harder -- the cut-height
     term and its gate still bound that direction."""
+    # ------------------------------------------------------------------
+    # Contact safety (shared by PPO3/ROM-A and PPO4/ID-FD)
+    #
+    # Measured pre-fix on the held-out verge, stage 5, s_curve, height scale
+    # 1.0, 960 steps x 32 envs, seed 17, checkpoint shared_v2_rom/model_migrated
+    # (reports/contact_safe_v1/prefix_ppo3_s_curve_seed17.json):
+    #
+    #     ground_contact_fraction            0.9486   <- PASSES the 0.90 gate
+    #     contact-loss events                   428
+    #     visible lifts (gap > 5 mm)            334
+    #     hard impacts (> 30 kN)                286
+    #     max consecutive airborne steps         45   (0.75 s in the air)
+    #     max airborne gap                   0.297 m
+    #     upward separations                  73.4 %
+    #     max upward cutter velocity        4.41 m/s
+    #     max contact force                   119 kN
+    #
+    # The first and last lines are the whole problem: the shipped gate reads a
+    # PASS while the cutter spends three quarters of a second 30 cm off the
+    # verge. `ground_contact_fraction` is a DUTY CYCLE, and a duty cycle cannot
+    # distinguish 428 short flights from continuous light support.
+    # ------------------------------------------------------------------
+    terrain_contact_acquire_steps: int = 3
+    """Consecutive contact steps before the episode claims physical support.
+
+    Support has to be claimed before its loss can be a failure, and it must not
+    be claimable during the reset ramp -- the arm is being driven to its pose
+    there, so contact then says nothing about the policy."""
+    terrain_contact_loss_grace_steps: int = 2
+    """Consecutive missing-contact steps tolerated before support is dropped.
+
+    Curriculum: 4 (stage A) -> 2 (stage B) -> 1 (stage C) -> 0 at strict
+    evaluation. Not zero during early training on purpose: the contact sensor
+    is read per physics substep and one missed sample must not delete an
+    episode, or the policy is trained against sensor noise rather than against
+    the tool leaving the ground."""
+    terrain_max_airborne_gap_m: float = 0.005
+    """Geometric gap above the calibrated support height that counts as a lift.
+
+    Geometric, not sensor-derived, so 'no visible lift' is a claim about where
+    the cutter IS. 5 mm against a measured pre-fix maximum of 297 mm."""
+    terrain_takeoff_velocity_threshold_mps: float = 0.02
+    """Upward cutter velocity at separation that makes it a takeoff."""
+    terrain_hard_impact_force_n: float = 30000.0
+    """Force above which a sample is a hard impact. Pre-fix maximum 119 kN."""
+    terrain_impact_ejection_force_n: float = 30000.0
+    """Force in the sample BEFORE a takeoff that makes it an ejection."""
+    terrain_max_takeoff_events: int = 0
+    """Impact/ejection events per episode before termination. 0 disables."""
+
+    terrain_terminate_on_contact_loss: bool = False
+    """Terminate when support is lost for longer than the grace window.
+
+    Default False so every stored PPO3/PPO4 report remains reproducible; the
+    contact-safe experiment turns it on. Never fires during preposition,
+    reset correction or settling -- see `contact_safety_terminal`."""
+    terrain_terminate_on_hard_impact: bool = False
+    terrain_lift_terminal_reward: float = -100.0
+    """Finite terminal penalty for a contact-safety termination.
+
+    Large enough that finishing the path after lifting cannot pay, finite so it
+    cannot destabilise the value targets the way an infinite penalty would."""
+
+    # --- contact-safety reward group (terrain_rewards.compute_contact_safety_reward) ---
+    terrain_contact_safety_reward: bool = False
+    """Enable the seven-term contact reward. Off reproduces historical scores."""
+    terrain_contact_support_weight: float = 4.0
+    """Pay for physical support. Replaces `terrain_contact_reward_weight`, which
+    the contact-safe configuration sets to 0.0 so support is not paid twice."""
+    terrain_contact_loss_weight: float = 20.0
+    """Penalty per step of lost support after acquisition.
+
+    Must exceed `airborne_task_reward_bound` (cut 8.0 + lateral 3.0 + progress
+    1.5 = 12.5 here) or floating through a rise stays profitable. Asserted in
+    tests/test_contact_safety.py rather than left as a comment."""
+    terrain_contact_force_weight: float = 2.0
+    terrain_contact_force_target_n: float = 6000.0
+    """Force the band peaks at.
+
+    NOT the 2 kN design figure. Measured stable-contact force runs at 18.9 kN
+    mean / 7.2 kN p05, so a band centred on 2 kN with any sane width is flat
+    across the entire region the policy occupies -- the same reward-saturation
+    defect §3.5 of HANDOVER_PPO3_PPO4.md records for the head penalty, where
+    alignment 0.9477, 0.80 and 0.66 all scored -40.00 identically. 6 kN sits at
+    the light end of measured stable contact, so it is both gentler than today
+    and inside the reachable set."""
+    terrain_contact_force_std_n: float = 8000.0
+    """Band width. Wide enough that the measured 18.9 kN mean retains gradient."""
+    terrain_contact_excess_weight: float = 2.0
+    terrain_contact_force_soft_limit_n: float = 20000.0
+    """Force above which the quadratic excess penalty engages."""
+    terrain_contact_excess_max_ratio: float = 5.0
+    terrain_contact_hard_impact_weight: float = 20.0
+    terrain_contact_takeoff_weight: float = 4.0
+    terrain_contact_takeoff_velocity_scale_mps: float = 0.10
+    terrain_contact_takeoff_max_ratio: float = 5.0
+    terrain_contact_weak_support_force_n: float = 500.0
+    terrain_contact_gap_weight: float = 8.0
+    terrain_contact_gap_scale_m: float = 0.005
+    terrain_contact_gap_max_ratio: float = 4.0
+
+    terrain_contact_observation: bool = False
+    """Expose the six contact-state channels to the policy (Phase 5).
+
+    Changes the observation width, so a legacy checkpoint must be migrated with
+    ``scripts/migrate_shared_policy.py`` before it can be loaded."""
+    terrain_contact_force_rate_scale_nps: float = 1.0e6
+    """Normalizer for the force-rate observation channel.
+
+    Measured p95 |dF/dt| is 1.18e6 N/s on ROM-A and 1.12e6 on ID/FD, so 1e6
+    puts the mass of the distribution near unit magnitude and the +-5 clip at
+    5e6, above the measured 6.9e6/8.6e6 maxima only in the extreme tail."""
+    terrain_contact_gap_observation_scale_m: float = 0.02
+    """Normalizer for the airborne-gap observation channel.
+
+    20 mm = 4x the 5 mm visible-lift tolerance, so the channel is well inside
+    its clip across the whole region where recovery is still possible."""
+
     terrain_acceleration_max_ratio: float = 10.0
     """Bound acceleration shaping at 10 x scale while retaining signal to 300 m/s²."""
     terrain_nonfinite_terminal_reward: float = -100.0
@@ -948,6 +1088,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
             verge_observation_dim(
                 model_error=bool(self.terrain_model_error_observation),
                 model_error_history=int(self.terrain_model_error_history),
+                contact_state=bool(self.terrain_contact_observation),
             )
             + 1
         )

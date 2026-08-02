@@ -1,10 +1,9 @@
 """PPO4: the PPO3 verge task with ID/FD in place of ROM-A.
 
-Everything physical is inherited from PPO3 unchanged -- the compliant arm
-(`terrain_arm_stiffness_scale = 0.35`), the verge meshes, the eleven path
-families, the 54-D observation, the reward, and the held-out gates. The ONLY
-difference is the actuator model between the policy's cylinder command and
-PhysX:
+Everything physical is inherited from PPO3 unchanged -- the compliant arm,
+verge meshes, path families, 66-value observation, five policy outputs,
+rewards, controller, and held-out gates. The only difference is the actuator
+model between the policy's cylinder command and PhysX:
 
     PPO3:  policy -> command ROM (ROM-A)      -> PhysX
     PPO4:  policy -> ID (target -> valve)     -> FD (valve -> delta x) -> PhysX
@@ -119,71 +118,9 @@ class TerrainIDFDEnvCfg(TerrainSolePolicyEnvCfg):
     cylinder_target_leak = 0.0
     cylinder_target_max_lead_m = 0.025
 
-    # Close the head feedforward on the MEASURED boom angle. With a learned
-    # actuator the commanded q4 is not reached exactly, and a command-based
-    # feedforward turns that model error into a standing head-alignment offset.
-    terrain_head_feedforward_from_measured = True
-    # Let PPO see the actuator's own error so it can compensate it. Without
-    # these channels a memoryless policy has no evidence of the ID/FD model's
-    # error at all, which is why ten PPO blocks left p01 head alignment at 0.79.
-    terrain_model_error_observation = True
-
-    # Head-alignment penalty gradient, the actual defect behind p01 ~0.795.
-    #
-    # The quadratic term clamps at max_deviation=2.0, i.e. at alignment 0.955.
-    # ROM-A runs at 0.9852 and sits INSIDE that region with a live gradient;
-    # ID/FD runs at 0.9477 mean and sits below it, where the only slope is the
-    # far-field term. At far_weight=-0.5 the penalty is -40.00 at alignment
-    # 0.9477, -40.00 at 0.80 and -40.00 at 0.66 -- PPO cannot distinguish them,
-    # so ten blocks of training left p01 at 0.795 while every other metric
-    # improved. Nothing downstream of the reward could fix that: the levelling
-    # clamp, the pose solve and the model-error channels were all tested and
-    # all failed, because the policy had no signal telling it which boom
-    # attitude was better.
-    #
-    # -8.0 restores a monotone, meaningful slope across the range this policy
-    # actually occupies while leaving the near-threshold behaviour ROM-A was
-    # tuned on untouched (the far term is exactly zero above alignment 0.955).
-    terrain_head_penalty_far_weight = -8.0
-
-    # c4 tilt shield, the second half of the same defect. The shield fades
-    # cylinder 4 in whichever direction would increase head tilt:
-    #     fade = clamp((hard - |tilt|) / (hard - soft), 0, 1)
-    # ROM-A runs at 0.0237 rad mean tilt, below the 0.08 soft limit, so the
-    # shield never engages and its thresholds were never exercised. ID/FD runs
-    # at 0.2371 rad mean -- permanently past the 0.16 hard limit -- so fade is
-    # 0.0 essentially always and HALF of cylinder 4's action space is deleted
-    # every step.
-    #
-    # Together with the saturated head penalty this left the policy with no
-    # gradient telling it to fix the head and no authority to do so in one
-    # direction. Widening to 0.30/0.80 keeps the shield's purpose (block
-    # commands that drive an already-bad head further over) while leaving the
-    # policy real authority in the tilt range it actually occupies.
-    terrain_head_tilt_shield_soft = 0.30
-    terrain_head_tilt_shield_hard = 0.80
-    # Levelling authority, re-tuned for ID/FD at 128 envs x 960 held-out steps
-    # (reports/level_g10c12.json vs headff_{false,true}.json). PPO3's 0.5/0.05
-    # was tuned against ROM-A, whose commanded cylinder motion is reached almost
-    # exactly; the learned actuator needs more corrective range for the same
-    # tilt. The gain is real but small -- score 5.910 -> 5.804, p01 0.7948 ->
-    # 0.7982 -- and is recorded so nobody re-derives it:
-    #
-    #   ff/level              score    p01     min    contact
-    #   commanded, 0.5/0.05   5.9102  0.7948  0.6689  0.9293
-    #   measured,  0.5/0.05   5.8925  0.7952  0.7539  0.9290
-    #   measured,  1.0/0.12   5.8037  0.7982  0.7388  0.9253
-    #
-    # None of these move p01 off ~0.80 against a 0.975 gate, so head alignment
-    # under ID/FD is NOT a levelling-tuning problem. See README.
-    terrain_messerkopf_level_gain = 1.0
-    # Clamp swept 0.05 / 0.12 / 0.40 / 0.80 / unclamped on the full held-out
-    # gates. Releasing it DOES lift p01 (0.7948 -> 0.8211) but pays for every
-    # bit of it in ground contact (0.9293 -> 0.8524) and cut error (0.0105 ->
-    # 0.0178), dropping 14/17 -> 11/17. Unclamped is bit-identical to 0.80, so
-    # 0.8 rad is the mechanism's ceiling and p01 0.821 is as far as levelling
-    # can go -- against a 0.975 gate. 0.12 is the best measured operating point.
-    terrain_messerkopf_level_max_rad = 0.12
+    # Observations, actions, sensors, rewards, shields and head restoration are
+    # inherited from PPO3's shared 66x5 task contract. Only actuator-model
+    # fields belong in this subclass.
 
     def __post_init__(self):
         super().__post_init__()

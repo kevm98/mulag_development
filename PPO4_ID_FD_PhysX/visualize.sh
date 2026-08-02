@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-CHECKPOINT="$ROOT/logs/rsl_rl/ppo4_sole_idfd/q5_hydraulic_gain040_stable_v6/convergence/model_best.pt"
+CHECKPOINT="$ROOT/logs/rsl_rl/ppo4_sole_idfd/shared_v2_idfd/model_validated.pt"
 
 if [[ $# -gt 0 && "$1" != --* ]]; then
   CHECKPOINT="$1"
