@@ -190,6 +190,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Oversample the measured contact-loss region (s_curve, late path).",
     )
     parser.add_argument(
+        "--boom_focus",
+        action="store_true",
+        help="Stage B recovery distribution: half boom_sweep at late phases.",
+    )
+    parser.add_argument(
         "--contact_stage",
         default="",
         choices=("", "A", "B", "C"),
@@ -337,6 +342,8 @@ def training_command(
         command.extend(["--resume_q5_std", str(args.q5_exploration_std)])
     if args.contact_focus:
         command.append("--contact_focus")
+    if args.boom_focus:
+        command.append("--boom_focus")
     if args.contact_stage:
         command.extend(["--contact_stage", args.contact_stage])
     if args.contact_termination:

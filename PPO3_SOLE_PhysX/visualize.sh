@@ -36,7 +36,7 @@ EXTRA=()
 if [[ "$WIDTH" == "96" ]]; then
   EXTRA+=(--contact_observation true --contact_safety_reward true
           --model_error_history 3 --strict_contact
-          --action_scale 0.0035 --cylinder_target_max_lead_m 0.010)
+          --action_scale 0.0035 --cylinder_target_max_lead_m 0.018)
   echo "[VISUALIZE] 96-wide contact-safe checkpoint: contact channels ON"
 else
   echo "[VISUALIZE] ${WIDTH}-wide checkpoint: previous contract"

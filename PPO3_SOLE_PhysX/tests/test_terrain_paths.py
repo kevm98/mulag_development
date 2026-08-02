@@ -264,7 +264,7 @@ def test_training_widens_the_path_but_the_gated_config_does_not():
     assert "env_cfg.terrain_tracking_amplitude_scale = (" in train_source, (
         "train.py no longer sets the training path amplitude"
     )
-    assert "a.tail_focus or a.contact_focus" in train_source, (
+    assert "a.tail_focus or a.contact_focus or a.boom_focus" in train_source, (
         "a focus mode would train against a widened path it was not measured on"
     )
     assert "else 1.8" in train_source, (

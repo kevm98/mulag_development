@@ -106,6 +106,18 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--boom_focus",
+    action="store_true",
+    help=(
+        "Stage B recovery distribution: HALF the environments are boom_sweep "
+        "at late path phases (0.55-0.95), the measured worst contact region "
+        "(251 consecutive airborne steps, 1.18 m gap, while passing all 17 "
+        "historical gates). The other half keeps one copy of every family to "
+        "prevent forgetting. Supersedes --contact_focus, which oversampled "
+        "s_curve -- the second-worst region."
+    ),
+)
+p.add_argument(
     "--contact_stage",
     default="",
     choices=("", "A", "B", "C"),
@@ -631,6 +643,44 @@ def main() -> None:
             *hard_start_phases,
         )
         env_cfg.terrain_height_scales = (0.85, 1.0, 1.0, 1.0)
+    if a.boom_focus:
+        # The MEASURED worst region, found by the V1 strict gate matrix and not
+        # by the V1 diagnostic. `boom_sweep` at relief 1.0 produced 251
+        # consecutive airborne steps and a 1.18 m gap -- while passing all 17
+        # historical gates, because its contact duty cycle was 0.9012.
+        #
+        # The V1 diagnostic used `s_curve` because that is where the lift is
+        # visible, and treated `boom_sweep` as a control family because it is
+        # the low-tail control for HEAD ALIGNMENT. For contact it is the
+        # opposite, so `--contact_focus` was aimed at the second-worst region.
+        #
+        # Half the environments are boom_sweep at late phases; the remaining
+        # half keeps one copy of every other family so the ten the policy
+        # already handles are not forgotten.
+        late = (0.55, 0.65, 0.75, 0.85, 0.90, 0.95)
+        others = (
+            "double_s_curve",
+            "fourier_meander",
+            "gaussian_slalom",
+            "lane_change_hold",
+            "lateral_chirp",
+            "lateral_sine",
+            "offset_return",
+            "random_spline",
+            "s_curve",
+            "straight",
+            # s_curve twice: it is the second-worst measured family and the one
+            # every V1 artifact is indexed on.
+            "s_curve",
+            "boom_sweep",
+        )
+        boom = ("boom_sweep",) * len(late) * 2
+        env_cfg.tracking_path_family_schedule = (*others, *boom)
+        env_cfg.tracking_path_start_phase_schedule = (
+            *(-1.0 for _ in others),
+            *late,
+            *late,
+        )
     if a.contact_focus:
         # The measured contact-loss region, not a guessed one. The pre-fix
         # probe put all 428 ROM-A events (and all 458 ID/FD events) on s_curve
@@ -693,7 +743,7 @@ def main() -> None:
     # Contact focus is the same argument: the contact-loss events were measured
     # at 1.0x, so widening the path would train against a different failure.
     env_cfg.terrain_tracking_amplitude_scale = (
-        1.0 if (a.tail_focus or a.contact_focus) else 1.8
+        1.0 if (a.tail_focus or a.contact_focus or a.boom_focus) else 1.8
     )
     if a.height_schedule:
         scales = tuple(

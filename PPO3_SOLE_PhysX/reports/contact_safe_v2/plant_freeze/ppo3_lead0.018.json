@@ -1,0 +1,135 @@
+{
+  "timestamp": "2026-08-02T22:03:51",
+  "actuator": "rom",
+  "actuator_label": "command ROM (ROM-A)",
+  "checkpoint": "logs/rsl_rl/ppo3_sole_rom_contact_safe_v1/model_best.pt",
+  "checkpoint_infos": {
+    "source": "PPO3 terrain PPO",
+    "schema": "terrain_shared_v2",
+    "timestamp": "2026-07-30T13:12:46",
+    "iteration": 692,
+    "num_envs": 512,
+    "stage": 5,
+    "seed": 10018,
+    "learning_rate": 5e-05,
+    "fixed_learning_rate": true,
+    "convergence": null,
+    "observation_width": 96,
+    "initialization_source": "PPO3 terrain PPO",
+    "teacher_enabled_during_ppo": false,
+    "terrain_curriculum_version": "path_height_v2",
+    "terrain_base_seed": 10018,
+    "path_families": [
+      "boom_sweep",
+      "double_s_curve",
+      "fourier_meander",
+      "gaussian_slalom",
+      "lane_change_hold",
+      "lateral_chirp",
+      "lateral_sine",
+      "offset_return",
+      "random_spline",
+      "s_curve",
+      "straight"
+    ],
+    "terrain_height_scales": [
+      0.5,
+      0.7,
+      0.85,
+      1.0
+    ],
+    "optimizer_reset_on_resume": true,
+    "critic_head_reset_on_resume": false,
+    "resume_c4_std": null,
+    "actuator": "rom",
+    "action_width": 5,
+    "head_joint_action": true,
+    "head_action_to_c4_gain": 0.4,
+    "migration_requires_optimizer_reset": true,
+    "migrated_at": "2026-08-02T17:54:53",
+    "migrated_from": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/model_migrated.pt",
+    "migrated_observation_from": 66
+  },
+  "path_family": "boom_sweep",
+  "terrain_height_scale": 1.0,
+  "terrain": "held_out",
+  "steps": 480,
+  "num_envs": 16,
+  "effective_config": {
+    "cylinder_target_max_lead_m": 0.018,
+    "cylinder_target_leak": 0.0,
+    "cylinder_target_integrates_from_previous_target": true,
+    "action_scale": 0.0035,
+    "sole_max_action_rate": 0.25,
+    "sole_action_filter": 0.55,
+    "terrain_arm_stiffness_scale": 0.35,
+    "terrain_head_joint_stiffness_scale": 1.0,
+    "terrain_arm_damping_scale": 1.0,
+    "cylinder_dynamics_model": "command_rom",
+    "use_cylinder_id_pipeline": true,
+    "sole_teacher_mode": "off",
+    "enable_contact_tracking_demo": false,
+    "terrain_contact_observation": true,
+    "terrain_model_error_history": 3.0,
+    "terrain_contact_safety_reward": false,
+    "terrain_terminate_on_contact_loss": false,
+    "terrain_terminate_on_hard_impact": false,
+    "terrain_contact_loss_grace_steps": 2.0,
+    "terrain_contact_acquire_steps": 3.0,
+    "terrain_max_airborne_gap_m": 0.005,
+    "sole_head_joint_action": true,
+    "terrain_head_nullspace_restore_gain": 1.0,
+    "terrain_messerkopf_level_gain": 0.0
+  },
+  "realized_arm_stiffness_scale_per_held_joint": [
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    1.0
+  ],
+  "actuator_runtime": {
+    "cylinder_id_constructed": false,
+    "rom_runtimes_constructed": {
+      "_command_cylinder_rom": true,
+      "_base_cylinder_rom": false,
+      "_cylinder_rom": false
+    }
+  },
+  "anti_windup_clamp": {
+    "configured_lead_m": 0.018,
+    "bound_usd_per_cylinder": [
+      0.017999999225139618,
+      0.017999999225139618,
+      0.017999999225139618,
+      0.017999999225139618
+    ],
+    "clamp_binding_fraction": 0.3234049479166667,
+    "clamp_samples": 30720,
+    "lead_usd_at_write_p50": 0.01193351112306118,
+    "lead_usd_at_write_p95": 0.017999999225139618,
+    "lead_usd_at_write_max": 0.018000002950429916,
+    "warmup_samples_excluded": 15360,
+    "neutral_hold_env_steps_excluded": 3840
+  },
+  "observed_lead_learned_space": {
+    "note": "Measured one control step after the clamp, against the joint position at OBSERVATION time. Legitimately exceeds the bound by however far the plant moved in that step; it is not a second measurement of the clamp.",
+    "p50_m": 0.011806875467300415,
+    "p95_m": 0.018804684281349182,
+    "max_m": 0.022859036922454834
+  },
+  "contact": {
+    "mean_force_n": 16602.994140625,
+    "p95_force_n": 31966.83984375,
+    "max_force_n": 120529.796875,
+    "max_airborne_gap_m": 0.24444317817687988,
+    "contact_loss_events": 122,
+    "visible_lift_events": 44,
+    "impact_ejection_events": 5,
+    "max_consecutive_airborne_steps": 20
+  },
+  "failures": [
+    "anti-windup clamp binds on 32.3% of samples; the target integrator is still saturating"
+  ],
+  "passed": false
+}

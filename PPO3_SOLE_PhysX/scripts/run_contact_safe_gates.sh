@@ -42,7 +42,7 @@ run() {
     --num_envs "$ENVS" --seed 17 --steps "$STEPS" --stage 5 --eval_terrain \
     --contact_observation true --contact_safety_reward true \
     --model_error_history 3 --action_scale 0.0035 \
-    --cylinder_target_max_lead_m 0.010 \
+    --cylinder_target_max_lead_m 0.018 \
     --strict_contact "$@" --report "$report" > "$OUT/${TAG}_${label}.log" 2>&1
   echo "[DONE] exit=$? -> $report"
 }
