@@ -6,9 +6,11 @@ Every number below is read from a stored artifact under
 `reports/contact_safe_v1/`; the file is named next to it. Where a claim was
 made and then disproved, both are kept.
 
-**Status of this document.** Sections 1–7 are complete and measured. Section 8
-(training) and Section 9 (final gates) are filled in as the runs land; anything
-not yet measured says so explicitly rather than being predicted.
+**Status of this document.** Complete for the scope that was run. Training was
+reduced to curriculum stage A per actuator (from three stages) on instruction,
+to check direction before committing ~13 h of GPU; §9.5 states exactly what was
+and was not achieved. **The headline requirement — zero contact loss — is NOT
+met**: both checkpoints are rejected by the strict gates in all 16 cells.
 
 ---
 
