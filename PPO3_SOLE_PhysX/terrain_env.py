@@ -2393,7 +2393,24 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         contact_terminal = self.contact_safety_terminal()
         self._contact_safety_terminated = contact_terminal
         terminated = terminated | contact_terminal
-        if bool(getattr(self.cfg, "synchronize_resets", True)) and nonfinite.any():
+        # Resets in this task are ALL-OR-NOTHING. `_run_reset_preposition`
+        # raises outright when it is handed fewer than num_envs environments
+        # ("Residual-policy resets are synchronized"), because the physical
+        # deployment ramp steps the whole scene. A contact termination that
+        # fired on a subset would therefore crash the run rather than reset
+        # those environments, so it has to synchronize exactly like every
+        # other termination the parent produces.
+        #
+        # The cost is real and is why `terrain_terminate_on_contact_loss`
+        # defaults to False: one environment losing support resets all of
+        # them, and the pre-fix policy loses support ~430 times per
+        # 32-env/960-step rollout. Termination is the belt-and-braces; the
+        # seven-term contact reward is the signal that has to do the work,
+        # and it is built so floating is strictly worse than staying planted
+        # without needing an episode to end (see
+        # terrain_rewards.airborne_task_reward_bound).
+        synchronize = bool(getattr(self.cfg, "synchronize_resets", True))
+        if synchronize and (nonfinite.any() or contact_terminal.any()):
             terminated = torch.ones_like(terminated)
         log = self.extras.setdefault("log", {})
         log["termination/terrain_nonfinite"] = nonfinite.float().mean()

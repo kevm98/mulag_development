@@ -915,9 +915,23 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     terrain_terminate_on_contact_loss: bool = False
     """Terminate when support is lost for longer than the grace window.
 
-    Default False so every stored PPO3/PPO4 report remains reproducible; the
-    contact-safe experiment turns it on. Never fires during preposition,
-    reset correction or settling -- see `contact_safety_terminal`."""
+    Default False, and NOT only for reproducibility. Resets in this task are
+    ALL-OR-NOTHING: `_run_reset_preposition` raises outright when handed fewer
+    than num_envs environments, because the physical deployment ramp steps the
+    whole scene. A contact termination therefore has to synchronize like every
+    other termination the parent produces -- one environment lifting resets all
+    of them -- and the pre-fix policy lifts ~430 times per 32-env/960-step
+    rollout, which at 256 training environments is continuous reset work. That
+    is the same trap `defer_safety_terminations` was added to escape.
+
+    So the seven-term contact reward is the signal that has to do the work
+    (`airborne_task_reward_bound` is asserted against the contact-loss penalty
+    precisely so that floating is strictly worse than staying planted WITHOUT
+    needing the episode to end), and this switch is the belt-and-braces for a
+    policy that is already close. Turn it on late, not early.
+
+    Never fires during preposition, reset correction or settling -- see
+    `contact_safety_terminal`."""
     terrain_terminate_on_hard_impact: bool = False
     terrain_lift_terminal_reward: float = -100.0
     """Finite terminal penalty for a contact-safety termination.

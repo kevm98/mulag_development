@@ -78,7 +78,6 @@ common=(
   --contact_focus
   --contact_observation true
   --contact_safety_reward true
-  --contact_termination true
   --model_error_history 3
   --action_scale "$ACTION_SCALE"
   --max_action_rate "$MAX_ACTION_RATE"
@@ -89,6 +88,22 @@ common=(
   --restart
 )
 
+# Termination is OFF by default in every stage, and that is a measured
+# decision, not caution. Resets here are all-or-nothing --
+# `_run_reset_preposition` raises when handed fewer than num_envs
+# environments -- so a contact termination synchronizes the whole scene, and
+# the pre-fix policy loses support ~430 times per 32-env/960-step rollout. At
+# 256 training environments that is continuous reset work rather than
+# training, which is exactly the trap `defer_safety_terminations` exists to
+# escape. The seven-term contact reward carries the signal instead; it is
+# constructed so floating is strictly worse than staying planted without the
+# episode having to end.
+#
+# Set STAGE_C_TERMINATION=true to add termination in the final stage once the
+# policy is already close, and read stage C's block reports to check the run
+# is training rather than resetting.
+STAGE_C_TERMINATION=${STAGE_C_TERMINATION:-false}
+
 stage() {
   local label=$1 grace=$2 heights=$3 blocks=$4 resume=$5
   local dir="$ROOT_DIR/stage_${label}"
@@ -97,6 +112,9 @@ stage() {
   local extra=()
   if [ "$label" = "A" ]; then
     extra+=(--reset_optimizer_first_block --reset_critic_head_first_block)
+  fi
+  if [ "$label" = "C" ] && [ "$STAGE_C_TERMINATION" = "true" ]; then
+    extra+=(--contact_termination true)
   fi
   $PY PPO3_SOLE_PhysX/scripts/train_until_converged.py \
     "${common[@]}" "${extra[@]}" \

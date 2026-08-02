@@ -691,6 +691,39 @@ def test_dones_rewards_and_observations_all_share_one_update():
     )
 
 
+def test_contact_termination_synchronizes_like_every_other_termination():
+    """A partial reset does not merely reset less -- it CRASHES.
+
+    ``_run_reset_preposition`` raises when handed fewer than num_envs
+    environments, because the physical deployment ramp steps the whole scene.
+    A contact termination that fired on a subset would take the run down with
+    a RuntimeError instead of resetting those environments.
+    """
+    parent = (
+        ROOT / "PPO2_ROM_PhysX" / "policy" / "env.py"
+    ).read_text()
+    assert "Residual-policy resets are synchronized" in parent, (
+        "the partial-reset guard this synchronization exists for is gone; "
+        "re-derive whether contact terminations still have to synchronize"
+    )
+    tree = ast.parse(_ENV_SOURCE)
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "TerrainSolePolicyEnv"
+    )
+    dones = next(
+        node
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_get_dones"
+    )
+    source = ast.unparse(dones)
+    assert "contact_terminal.any()" in source, (
+        "_get_dones does not synchronize on a contact termination"
+    )
+    assert "torch.ones_like(terminated)" in source
+
+
 def test_reset_path_clears_contact_state():
     assert "self._reset_contact_safety(env_ids)" in _ENV_SOURCE, (
         "a new episode would inherit the previous one's support claim"
