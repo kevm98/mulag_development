@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-08-02T21:57:31",
+  "actuator": "rom",
+  "actuator_label": "command ROM (ROM-A)",
+  "checkpoint": null,
+  "checkpoint_infos": null,
+  "path_family": "boom_sweep",
+  "terrain_height_scale": 1.0,
+  "terrain": "held_out",
+  "steps": 480,
+  "num_envs": 16,
+  "effective_config": {
+    "cylinder_target_max_lead_m": 0.01,
+    "cylinder_target_leak": 0.0,
+    "cylinder_target_integrates_from_previous_target": true,
+    "action_scale": 0.0035,
+    "sole_max_action_rate": 0.25,
+    "sole_action_filter": 0.55,
+    "terrain_arm_stiffness_scale": 0.35,
+    "terrain_head_joint_stiffness_scale": 1.0,
+    "terrain_arm_damping_scale": 1.0,
+    "cylinder_dynamics_model": "command_rom",
+    "use_cylinder_id_pipeline": true,
+    "sole_teacher_mode": "off",
+    "enable_contact_tracking_demo": false,
+    "terrain_contact_observation": true,
+    "terrain_model_error_history": 3.0,
+    "terrain_contact_safety_reward": false,
+    "terrain_terminate_on_contact_loss": false,
+    "terrain_terminate_on_hard_impact": false,
+    "terrain_contact_loss_grace_steps": 2.0,
+    "terrain_contact_acquire_steps": 3.0,
+    "terrain_max_airborne_gap_m": 0.005,
+    "sole_head_joint_action": true,
+    "terrain_head_nullspace_restore_gain": 1.0,
+    "terrain_messerkopf_level_gain": 0.0
+  },
+  "realized_arm_stiffness_scale_per_held_joint": [
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    1.0
+  ],
+  "actuator_runtime": {
+    "cylinder_id_constructed": false,
+    "rom_runtimes_constructed": {
+      "_command_cylinder_rom": true,
+      "_base_cylinder_rom": false,
+      "_cylinder_rom": false
+    }
+  },
+  "anti_windup_clamp": {
+    "configured_lead_m": 0.01,
+    "bound_usd_per_cylinder": [
+      0.009999999776482582,
+      0.009999999776482582,
+      0.009999999776482582,
+      0.009999999776482582
+    ],
+    "clamp_binding_fraction": 0.21610226208004282,
+    "clamp_samples": 29884,
+    "lead_usd_at_write_p50": 0.004506648983806372,
+    "lead_usd_at_write_p95": 0.009999999776482582,
+    "lead_usd_at_write_max": 0.010000001639127731,
+    "warmup_samples_excluded": 8516,
+    "neutral_hold_env_steps_excluded": 2129
+  },
+  "observed_lead_learned_space": {
+    "note": "Measured one control step after the clamp, against the joint position at OBSERVATION time. Legitimately exceeds the bound by however far the plant moved in that step; it is not a second measurement of the clamp.",
+    "p50_m": 0.004492327570915222,
+    "p95_m": 0.010969304479658604,
+    "max_m": 0.02070140838623047
+  },
+  "contact": {
+    "mean_force_n": 15180.9736328125,
+    "p95_force_n": 31571.73046875,
+    "max_force_n": 122358.09375,
+    "max_airborne_gap_m": 0.26538026332855225,
+    "contact_loss_events": 176,
+    "visible_lift_events": 33,
+    "impact_ejection_events": 2,
+    "max_consecutive_airborne_steps": 35
+  },
+  "failures": [],
+  "passed": true
+}
