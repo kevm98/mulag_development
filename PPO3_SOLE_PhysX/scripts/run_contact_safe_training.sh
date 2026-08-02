@@ -158,12 +158,23 @@ stage() {
     --height_schedule "$heights" \
     --min_blocks "$blocks" --max_blocks "$blocks" \
     --resume "$resume" 2>&1 | tee "$dir/stage.log"
+  # Publish after EVERY stage, not only after C. A run stopped early -- which
+  # is the normal case while the curriculum is being tuned -- otherwise leaves
+  # no `model_best.pt` at the experiment root, and anything downstream that
+  # expects one (the gate matrix driver, visualize.sh) silently finds nothing.
+  # Measured: a stage-A-only run left the gate matrices unable to start.
+  if [ -f "$dir/model_best.pt" ]; then
+    cp "$dir/model_best.pt" "$ROOT_DIR/model_best.pt"
+    [ -f "$dir/convergence_best.json" ] &&
+      cp "$dir/convergence_best.json" "$ROOT_DIR/convergence_best.json"
+    echo "[STAGE $label] published $dir/model_best.pt -> $ROOT_DIR/model_best.pt"
+  fi
 }
 
 stage A A "0.50,0.70"           "${BLOCKS_A:-3}" "$SEED_CKPT"
 stage B B "0.70,0.85,1.00"      "${BLOCKS_B:-3}" "$ROOT_DIR/stage_A/model_best.pt"
 stage C C "0.50,0.70,0.85,1.00" "${BLOCKS_C:-3}" "$ROOT_DIR/stage_B/model_best.pt"
 
-cp "$ROOT_DIR/stage_C/model_best.pt" "$ROOT_DIR/model_best.pt"
-cp "$ROOT_DIR/stage_C/convergence_best.json" "$ROOT_DIR/convergence_best.json"
+# stage() already published each stage; nothing left to copy here.
+
 echo "[CONTACT-SAFE TRAINING DONE] $EXPERIMENT -> $ROOT_DIR/model_best.pt"

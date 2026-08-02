@@ -411,59 +411,117 @@ actuator, so that the reward and observation changes could be checked against
 the contact metrics before the rest of the budget was committed. Everything
 below is stage A.
 
-### 9.1 The plant change alone, before any retraining
+### 9.1 The plant change alone — RETRACTION AND CORRECTED RESULT
 
-The most useful single number here came from the supervisor's *initial*
-held-out validation — the migrated 96-D seed, untrained on the new objective,
-evaluated on the new plant (`action_scale` 0.0035, `lead` 0.010), mixed
-families, balanced relief, 32 envs × 960 steps:
+**An earlier draft of this section claimed the plant change alone takes the
+seed checkpoint from 16/17 to "17/17, score 0.000". That claim was wrong and
+is withdrawn.** It compared two runs that also differed in path family (mixed
+vs `s_curve`) and in which stored report they were read from. The controlled
+A/B was queued precisely because that comparison was not clean, and it
+disagrees.
 
-| | previous plant (66-D production) | new plant, same policy |
-|---|---:|---:|
-| 17 historical gates | 16/17 (`head_alignment_hard_min`) | **17/17, score 0.0** |
-| `min_head_alignment` | 0.9165 | **0.9854** |
-| max cylinder target lead | 0.0300 m | **0.0196 m** |
-| p95 cylinder target lead | 0.0262 m | **0.0112 m** |
-| max contact force | 119 kN | 109 kN |
-| mean contact force | 19.7 kN | 15.8 kN |
-| p95 tool acceleration | 91.7 m/s² | 62.8 m/s² |
-| impact/ejection events | 201 | **14** |
+Controlled A/B (`contact_safe_v1/plant_ab/`): same checkpoint, same 96-D
+observation, same family (`s_curve`), same relief (1.0), same mesh, same seed,
+same 960-step horizon, 32 envs. **Only `action_scale` and
+`cylinder_target_max_lead_m` differ.**
 
-The reference integrator is **no longer saturated** — that is the root-cause
-fix taking effect, and it is visible without a single gradient step. Note the
-two runs are not perfectly like-for-like (mixed families here vs `s_curve` in
-the diagnostic), so §9.3 records the controlled A/B.
+| | PPO3 A: 0.0040 / 0.025 | PPO3 B: 0.0035 / 0.010 | PPO4 A | PPO4 B |
+|---|---:|---:|---:|---:|
+| 17 historical gates | **PASS** | fail | fail | fail |
+| ground contact | 0.9486 | 0.9233 | 0.8945 | 0.8877 |
+| contact-loss events | 428 | **725** | 458 | **606** |
+| visible lifts | 126 | **170** | 207 | 202 |
+| impact/ejection events | 27 | **11** | 26 | **9** |
+| hard impacts | 1703 | **945** | 1550 | **809** |
+| max consecutive airborne | 45 | **31** | 79 | **42** |
+| max airborne gap (m) | 0.2371 | 0.3636 | 0.6749 | **0.4454** |
+| max contact force (kN) | 119.3 | **111.8** | 169.8 | **105.8** |
+| max cylinder lead (m) | 0.0300 | **0.0170** | 0.0406 | **0.0193** |
+| min head alignment | 0.9781 | 0.9472 | 0.9393 | 0.9562 |
+| p95 tool acceleration | 62.2 | 79.3 | 98.6 | **79.0** |
 
-### 9.2 The first PPO block reproduced the documented head collapse
+**What the plant change does, honestly:**
 
-| | initial (seed) | after block 1 |
-|---|---:|---:|
-| 17-gate | **17/17**, score 0.000 | 14/17, score 0.839 |
-| `min_head_alignment` | 0.9854 | **0.5713** |
-| `p01_head_alignment` | — | 0.8752 |
-| ground contact | 0.9390 | 0.9404 |
-| max cylinder target lead | 0.0196 | 0.0196 |
+* It removes the **mechanism**. Impact/ejection events fall 59 % (27→11) and
+  62 % (26→9); hard impacts fall 45 % and 48 %; peak contact force falls to
+  112 kN and **106 kN** (PPO4: −38 %); maximum consecutive airborne steps fall
+  31 % and 47 %; and the reference integrator stops running saturated
+  (max lead 0.030→0.017 and 0.041→0.019). On PPO4 the maximum airborne gap
+  also falls 0.675→0.445 m and p95 tool acceleration 98.6→79.0.
+* It **costs the co-adapted policy contact duty**. Contact-loss events rise
+  (428→725, 458→606) and PPO3's visible lifts rise (126→170), which takes PPO3
+  out of the 17-gate pass it held on the old plant.
 
-`HANDOVER_PPO3_PPO4.md` §4 states this plainly: *"PPO3's failing gate, PPO4's
-three failing gates, all five earlier PPO3 campaigns, and the abandoned
-compliant fine-tune all fail on head alignment, and all fail in the tail."*
-Block 1 of this fine-tune makes it six-for-six on PPO3, now with a different
-reward, a different observation and a different plant. The per-quarter
-breakdown puts it exactly where that document puts it — quarters 1–3 hold
-0.994 / 0.973 / 0.778 and quarter 4 collapses to 0.571.
+That trade is exactly what the sweep predicted and what
+`terrain_kinematic_drive_substep_interpolation` already documents: this policy
+was trained with 25 mm of command authority and is co-adapted to it, so
+halving that authority is an off-distribution plant change for it. **The
+correct conclusion is that the plant fix removes the impact/ejection mechanism
+and requires retraining to recover contact duty — not that it is free.**
 
-**This is a pre-existing failure mode, not one this work introduced**, and it
-is orthogonal to contact: the contact metrics were flat or better across the
-same block (contact 0.9390 → 0.9404, ejections 14 → 5). But it does mean PPO
-fine-tuning cannot currently be relied on to improve this task, which is the
-central open problem of the package and is not solved here.
+### 9.2 The head-alignment collapse is intermittent, not deterministic
 
-The supervisor's rollback behaviour is correct and did the right thing: the
-block regressed, so the next block resumes `model_best.pt`.
+The first attempt at block 1 collapsed `min_head_alignment` 0.9854 → 0.5713
+(quarters 1–3 at 0.994/0.973/0.778, quarter 4 at 0.571), which matched the
+pattern `HANDOVER_PPO3_PPO4.md` §4 describes across five earlier campaigns.
 
-### 9.3 Results
+**It did not reproduce.** The run was restarted after the supervisor fixes,
+with identical configuration, and across all three blocks alignment stayed at
+0.955–0.974 and every block held 17/17. So the collapse is **intermittent**,
+and a single observation of it is not evidence of a deterministic failure
+mode. An earlier draft of this section called it "six-for-six"; that
+overstated one sample and is withdrawn.
 
-*Filled in when the stage-A runs land.*
+Contact metrics were flat or better across the collapsing block too
+(contact 0.9390 → 0.9404, ejections 14 → 5), so whatever it is, it is not
+driven by the contact objective.
+
+### 9.3 Stage-A training results
+
+Three blocks × 40 iterations, LR 1e-5, 256 envs, `--contact_focus`, grace 4,
+relief 0.50/0.70. Held-out evaluation at 32 envs × 960 steps, mixed families,
+balanced relief.
+
+**PPO3 / ROM-A**
+
+| | 17-gate | score | contact | align | loss ev | lifts | eject | max F (kN) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| initial (seed) | 17/17 | 0.0000 | 0.9390 | 0.9854 | 499 | 93 | 14 | 109.0 |
+| block 1 | 17/17 | 0.0000 | 0.9412 | 0.9660 | 471 | 132 | 12 | 100.9 |
+| block 2 | 17/17 | 0.0000 | 0.9506 | 0.9743 | 397 | 102 | 10 | 109.2 |
+| block 3 | 17/17 | 0.0000 | 0.9464 | 0.9555 | 385 | 110 | 8 | 100.0 |
+
+**PPO4 / ID-FD**
+
+| | 17-gate | score | contact | align | loss ev | lifts | eject | max F (kN) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| initial (seed) | 14/17 | 0.0020 | 0.9009 | 0.9504 | 421 | 176 | 2 | 170.5 |
+| block 1 | 14/17 | 0.0521 | 0.9055 | 0.9044 | 393 | 144 | 10 | 179.0 |
+| block 2 | 14/17 | 0.0055 | 0.8981 | 0.9578 | 469 | 183 | 3 | 137.9 |
+| block 3 | 14/17 | 0.0030 | 0.8987 | 0.9550 | 448 | 168 | 5 | 123.7 |
+
+**Reading it.** PPO3 trends the right way — contact-loss events 499→385,
+ejections 14→8, all 17 gates held — but visible lifts do not fall (93→110), so
+**the strict contact gates are not met**. PPO4 is flat: three blocks moved
+nothing decisively, matching the handover's record that PPO contributed
+nothing on this actuator across five earlier blocks; peak force did fall
+171→124 kN. Its `ground_contact` sits at 0.898–0.906 against the 0.90 gate,
+i.e. on the threshold rather than clear of it.
+
+**Neither actuator reached zero contact loss.** Three blocks of 40 iterations
+at 1e-5 is a small amount of training and this is a directional result, not a
+solution. The honest headline is: *the plant fix removes most of the impact
+energy; stage-A training did not close the remaining gap.*
+
+One limitation this exposed: every PPO3 row scores 0.0000 on the 17-gate
+scale, so that score cannot rank them and the supervisor's "best" selection is
+arbitrary among ties. The strict contact metrics do discriminate (block 3 best
+on ejections, block 2 on lifts) and should drive checkpoint selection for this
+experiment.
+
+### 9.4 Strict gate matrix
+
+*Filled in when the eight-cell matrices land.*
 
 ---
 
