@@ -877,6 +877,14 @@ def evaluate_verge(
             ),
             "hard_impact_event_count": int(raw._hard_impact_event_count.sum()),
             "visible_lift_event_count": int(raw._visible_lift_event_count.sum()),
+            # Duty cycles alongside the counts: "how often does it happen" and
+            # "how much of the run is spent in it" are different questions, and
+            # the first version of these metrics silently answered the second
+            # under the first's name.
+            "hard_impact_step_fraction": float(raw._hard_impact_steps.sum())
+            / max(steps * raw.num_envs, 1),
+            "visible_lift_step_fraction": float(raw._visible_lift_steps.sum())
+            / max(steps * raw.num_envs, 1),
             "mean_contact_force_n": float(cutter_contact_force_steps.mean()),
             "p95_contact_force_n": float(
                 torch.quantile(cutter_contact_force_steps, 0.95)

@@ -304,25 +304,102 @@ New metrics in every report: `contact_acquired_fraction`,
 
 ## 8. Impact-energy sweep (Phase 6)
 
-*Filled in from `contact_safe_v1/sweep/` when the runs land.*
+Artifacts: `contact_safe_v1/sweep/`. 960 steps × 16 envs, held-out mesh,
+`s_curve`, relief 1.0, **shipped policy held fixed**. This measures how much
+impact energy a plant configuration admits, not what a policy trained for it
+could do.
 
 One knob at a time from the shipped baseline, not a cross product: the
 repository's own notes record `terrain_arm_stiffness_scale` as **non-monotonic**
 (0.5 leaves a 19.7 mm hop, 0.2/0.1 lose contact, 0.05 is worse than 0.2), so a
 coordinate sweep is the only reading these knobs support. 960 steps, not 480 —
 the events concentrate late in the path, so a half-horizon sweep would compare
-configurations on the easy part. The policy is held fixed; this measures how
-much impact energy a plant configuration admits, not what a policy trained for
-it could do.
+configurations on the easy part.
+
+### PPO3 / ROM-A
+
+| config | contact | events | lifts | peak F (kN) | max gap (m) | max lead (m) | max v_z (m/s) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.9575 | 188 | 146 | 146.2 | 0.2861 | 0.0303 | 2.65 |
+| `action_scale` 0.0035 | **0.9585** | **152** | **114** | 125.0 | 0.2733 | 0.0303 | **2.40** |
+| `action_scale` 0.0030 | 0.9537 | 171 | 130 | 113.8 | **0.2447** | 0.0303 | 2.97 |
+| `rate` 0.20 | 0.9507 | 192 | 156 | 153.9 | 0.2878 | 0.0314 | 3.03 |
+| `rate` 0.15 | 0.9452 | 214 | 174 | 153.3 | 0.2435 | 0.0319 | 2.92 |
+| `stiffness` 0.25 | 0.9444 | 257 | 198 | **96.0** | 0.2554 | 0.0293 | 1.93 |
+| `stiffness` 0.20 | 0.9202 | 346 | 266 | 113.5 | 0.2992 | 0.0332 | 3.68 |
+| `lead` 0.015 | 0.9329 | 321 | 238 | 115.3 | 0.3142 | 0.0197 | 3.43 |
+| `lead` 0.010 | 0.9205 | 336 | 213 | 107.3 | 0.3048 | **0.0166** | 3.18 |
+
+### PPO4 / ID-FD
+
+| config | contact | events | lifts | peak F (kN) | max gap (m) | max lead (m) | max v_z (m/s) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.9048 | 154 | 125 | 186.0 | 0.5531 | 0.0320 | 6.48 |
+| `action_scale` 0.0035 | 0.9147 | 202 | 154 | 146.3 | 0.5562 | 0.0320 | 6.53 |
+| `action_scale` 0.0030 | 0.9159 | 174 | 126 | 148.2 | 0.6470 | 0.0320 | 6.80 |
+| `rate` 0.20 | 0.9079 | 210 | 182 | **386.2** | **1.0926** | 0.0403 | **7.03** |
+| `rate` 0.15 | **0.9398** | **136** | **98** | 130.8 | 0.6456 | 0.0290 | 2.26 |
+| `stiffness` 0.25 | 0.8875 | 240 | 189 | 164.2 | 0.6389 | 0.0348 | 4.60 |
+| `stiffness` 0.20 | 0.8885 | 262 | 196 | 96.6 | 0.4449 | 0.0364 | 4.04 |
+| `lead` 0.015 | 0.8934 | 248 | 168 | 180.0 | 0.3610 | 0.0208 | 3.10 |
+| `lead` 0.010 | 0.8704 | 299 | 218 | 126.5 | **0.3685** | **0.0164** | 2.15 |
+
+### Reading it honestly
+
+* **Every knob that reduces impact energy also costs the FIXED policy
+  contact.** That is expected and is not evidence the knob is wrong: this
+  policy was trained with 25 mm of command authority and is co-adapted to it,
+  the same "off-distribution plant change for a co-adapted checkpoint" pattern
+  `terrain_kinematic_drive_substep_interpolation` already documents (enabling
+  that fix under v5 took 16/17 to 15/17 while improving every quantity it
+  targets). The retrained policy is the test.
+* **`lead` is the only knob that moves the mechanism itself.** It is the only
+  one that takes measured max lead off its bound (0.030 → 0.0166), and it cuts
+  peak force on both actuators (146 → 107 kN, 186 → 127 kN).
+* **`rate` points in opposite directions on the two actuators.** PPO4 at 0.20
+  is a warning, not a candidate: 386 kN peak force, 1.09 m max gap, 7.03 m/s
+  ejection — worse than baseline on every axis — while 0.15 is its best row and
+  PPO3's second worst. These knobs are non-monotonic exactly as the existing
+  notes say. It is therefore **not set**; setting it per-actuator would destroy
+  the attribution PPO4 exists to provide.
+* **`stiffness` 0.25 gives PPO3 its lowest peak force (96 kN) and lowest
+  ejection velocity (1.93 m/s)** but costs contact, and 0.20 is worse on both
+  actuators. Left at 0.35.
+
+### Chosen for training
+
+| field | value |
+|---|---|
+| `action_scale` | 0.0035 |
+| `cylinder_target_max_lead_m` | 0.010 |
+| `terrain_arm_stiffness_scale` | 0.35 (unchanged) |
+| `sole_max_action_rate` | not overridden (curriculum 0.25) |
+| `cylinder_target_leak` | 0.0 (lead reduction first, per the task) |
+| `terrain_head_joint_stiffness_scale` | 1.0 (unchanged) |
 
 `terrain_head_joint_stiffness_scale` stays at 1.0 throughout: softening the
 head orientation joint with the cylinders was already measured to cost
 `min_head_alignment` 0.9500 → 0.9150 while buying none of the bounce reduction.
 
 PhysX compliant contacts (`terrain_compliant_contact_stiffness/damping`) are
-**not** used. A previous 10× sweep that should have cut force ~10× moved
-median peak force 50.4 → 46.9 kN, i.e. the setting is not honoured for this
-contact pair, and no claim here rests on it.
+**not** used and no claim here rests on them. A previous 10× sweep that should
+have cut force ~10× moved median peak force 50.4 → 46.9 kN, i.e. the setting
+is not honoured for this contact pair.
+
+### A bug this sweep found in itself
+
+The first pass returned three **bit-identical** `action_scale` rows on both
+actuators. That was not the knob having no effect — the override was written
+as `sole_action_scale` and the real field is `action_scale`. `configclass`
+accepts arbitrary attribute assignment, so the misspelling was a silent no-op
+producing a perfectly plausible "this knob does nothing" result; only the exact
+duplication gave it away. Two fixes: the name, and
+`terrain_observations.override_cfg`, which refuses to create a config field
+that does not exist and through which every CLI override now passes. A second
+ordering bug surfaced while tracing it — `apply_sole_curriculum_stage` rewrites
+`action_scale` and `sole_max_action_rate` per stage, and `train.py` applied the
+curriculum *after* the CLI overrides — so `apply_plant_overrides()` is now
+re-asserted after every curriculum application.
 
 ---
 

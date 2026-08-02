@@ -282,6 +282,37 @@ def test_hard_impact_is_detected_on_force_alone():
     assert int(m._hard_impact_event_count[0]) == 1
 
 
+def test_event_counters_count_edges_not_samples():
+    """"1559 hard impacts" was really a 5 % duty cycle wearing an event name.
+
+    ``hard_impact`` and ``visible_lift`` are per-step LEVELS, because that is
+    what the reward and the termination need. Accumulating a level gives a
+    sample count, not an event count, and the first measured run reported
+    exactly that.
+    """
+    m = Machine(terrain_hard_impact_force_n=30000.0)
+    for _ in range(10):
+        m.advance(force=50000.0)
+    assert int(m._hard_impact_event_count[0]) == 1, "one sustained impact is one event"
+    assert int(m._hard_impact_steps[0]) == 10, "and ten steps of duty"
+
+    m.advance(force=1000.0)
+    m.advance(force=50000.0)
+    assert int(m._hard_impact_event_count[0]) == 2, "a new rise is a new event"
+    assert int(m._hard_impact_steps[0]) == 11
+
+
+def test_visible_lift_counter_counts_edges_too():
+    m = Machine(
+        terrain_contact_acquire_steps=1, terrain_contact_loss_grace_steps=0
+    )
+    m.advance(force=5000.0, height_above_support=0.0)
+    for _ in range(6):
+        m.advance(force=0.0, height_above_support=0.05)
+    assert int(m._visible_lift_event_count[0]) == 1
+    assert int(m._visible_lift_steps[0]) == 6
+
+
 def test_visible_lift_needs_both_a_geometric_gap_and_a_real_loss():
     # Sensor-only miss: no gap. Must not be a visible lift at any grace.
     sensor = Machine(

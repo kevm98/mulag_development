@@ -2066,6 +2066,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._impact_ejection_event = zeros_b.clone()
         self._hard_impact_event = zeros_b.clone()
         self._visible_lift_event = zeros_b.clone()
+        # Previous LEVEL, so the counters below can count rising edges.
+        self._hard_impact_level = zeros_b.clone()
+        self._visible_lift_level = zeros_b.clone()
+        self._hard_impact_onset = zeros_b.clone()
+        self._visible_lift_onset = zeros_b.clone()
         self._contact_loss_event = zeros_b.clone()
 
         # --- cached per-step measurements ---
@@ -2082,6 +2087,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._impact_ejection_event_count = zeros_l.clone()
         self._hard_impact_event_count = zeros_l.clone()
         self._visible_lift_event_count = zeros_l.clone()
+        self._hard_impact_steps = zeros_l.clone()
+        self._visible_lift_steps = zeros_l.clone()
         self._post_acquisition_steps = zeros_l.clone()
         self._post_acquisition_contact_steps = zeros_l.clone()
         self._max_consecutive_airborne_steps = zeros_l.clone()
@@ -2102,6 +2109,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "_impact_ejection_event",
             "_hard_impact_event",
             "_visible_lift_event",
+            "_hard_impact_level",
+            "_visible_lift_level",
+            "_hard_impact_onset",
+            "_visible_lift_onset",
             "_contact_loss_event",
             "_contact_state",
             "_contact_support",
@@ -2115,6 +2126,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "_impact_ejection_event_count",
             "_hard_impact_event_count",
             "_visible_lift_event_count",
+            "_hard_impact_steps",
+            "_visible_lift_steps",
             "_post_acquisition_steps",
             "_post_acquisition_contact_steps",
             "_max_consecutive_airborne_steps",
@@ -2245,11 +2258,32 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
 
         # --- accumulators ---
+        # Counters count EVENTS, i.e. rising edges.
+        #
+        # `hard_impact` and `visible_lift` are per-step LEVELS -- the force is
+        # extreme now, the tool is off the ground now -- because that is what
+        # the reward and the termination need. Accumulating a level gives a
+        # sample count wearing an event name: the first measured run reported
+        # "1559 hard impacts" in 30 720 samples, which is a 5 % duty cycle, not
+        # 1559 distinct impacts. Separations are already edges (they require
+        # `_previous_contact_state`), so they are counted directly.
+        hard_impact_onset = hard_impact & ~self._hard_impact_level
+        visible_lift_onset = visible_lift & ~self._visible_lift_level
+        self._hard_impact_level = hard_impact
+        self._visible_lift_level = visible_lift
+        self._hard_impact_onset = hard_impact_onset
+        self._visible_lift_onset = visible_lift_onset
+
         self._contact_loss_event_count += separated.long()
         self._takeoff_event_count += takeoff.long()
         self._impact_ejection_event_count += impact_ejection.long()
-        self._hard_impact_event_count += hard_impact.long()
-        self._visible_lift_event_count += visible_lift.long()
+        self._hard_impact_event_count += hard_impact_onset.long()
+        self._visible_lift_event_count += visible_lift_onset.long()
+        # Duty cycles, kept alongside the counts because the two answer
+        # different questions: "how often does it happen" vs "how much of the
+        # run is spent in it".
+        self._hard_impact_steps += hard_impact.long()
+        self._visible_lift_steps += visible_lift.long()
         scored = active & self._contact_acquired
         self._post_acquisition_steps += scored.long()
         self._post_acquisition_contact_steps += (scored & contact).long()
