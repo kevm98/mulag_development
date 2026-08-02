@@ -2147,7 +2147,18 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # velocity at all. Seeding with 0.0 would differentiate the deployed
         # cutter height against the world origin and manufacture a takeoff.
         self._previous_cutter_z[env_ids] = float("nan")
-        self._contact_safety_step = None
+        # The per-step cache marker is deliberately NOT cleared here.
+        #
+        # `_reset_idx` runs between `_get_rewards` and `_get_observations`
+        # within one control step. Clearing the marker would make the
+        # observation call perform a SECOND update for that step -- for every
+        # environment, not just the reset ones. Today that second update
+        # cannot raise an event (the reset clears `_contact_acquired` and
+        # `_previous_contact_state`, and resets here are synchronized), so it
+        # is harmless by accident rather than by construction. Leaving the
+        # marker alone means the observation reads the state this reset just
+        # cleared, which is what it should see, and the next control step gets
+        # its own single update from `_get_dones`.
 
     @torch.no_grad()
     def _update_contact_safety(self) -> None:

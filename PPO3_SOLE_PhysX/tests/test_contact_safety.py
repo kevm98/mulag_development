@@ -425,6 +425,27 @@ def test_the_first_step_after_reset_reports_no_vertical_velocity():
     assert float(m._cutter_vertical_velocity_mps[0]) == pytest.approx(0.0)
 
 
+def test_reset_does_not_invalidate_the_per_step_cache():
+    """`_reset_idx` runs mid-step, between rewards and observations.
+
+    Clearing the marker there would make the observation call perform a second
+    update for that control step, for every environment rather than just the
+    reset ones.
+    """
+    m = Machine(terrain_contact_acquire_steps=1)
+    m.advance(force=5000.0, height_above_support=0.0)
+    marker = m._contact_safety_step
+    m._reset_contact_safety(torch.tensor([0]))
+    assert m._contact_safety_step == marker, (
+        "the reset invalidated the per-step cache; the observation call would "
+        "run a second update for this step"
+    )
+    # And the observation-side call is then a no-op that reads cleared state.
+    m._update_contact_safety()
+    assert not bool(m._contact_acquired[0])
+    assert int(m._contact_loss_event_count[0]) == 0
+
+
 # ----------------------------------------------------------------------
 # Reward group
 # ----------------------------------------------------------------------
