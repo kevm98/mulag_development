@@ -1,0 +1,138 @@
+{
+  "timestamp": "2026-08-02T21:54:45",
+  "actuator": "idfd",
+  "actuator_label": "ID -> FD",
+  "checkpoint": "logs/rsl_rl/ppo4_sole_idfd_contact_safe_v1/model_best.pt",
+  "checkpoint_infos": {
+    "source": "PPO3 terrain PPO",
+    "schema": "terrain_shared_v2",
+    "actuator": "idfd",
+    "timestamp": "2026-08-01T18:02:05",
+    "iteration": 343,
+    "num_envs": 128,
+    "stage": 5,
+    "seed": 10027,
+    "learning_rate": 1e-05,
+    "fixed_learning_rate": true,
+    "convergence": null,
+    "observation_width": 96,
+    "action_width": 5,
+    "head_joint_action": true,
+    "initialization_source": "PPO3 terrain PPO",
+    "teacher_enabled_during_ppo": false,
+    "terrain_curriculum_version": "path_height_v2",
+    "terrain_base_seed": 10027,
+    "path_families": [
+      "boom_sweep",
+      "double_s_curve",
+      "fourier_meander",
+      "gaussian_slalom",
+      "lane_change_hold",
+      "lateral_chirp",
+      "lateral_sine",
+      "offset_return",
+      "random_spline",
+      "s_curve",
+      "straight"
+    ],
+    "terrain_height_scales": [
+      0.35,
+      0.5,
+      0.7,
+      0.85,
+      1.0,
+      1.15
+    ],
+    "optimizer_reset_on_resume": false,
+    "critic_head_reset_on_resume": false,
+    "resume_c4_std": null,
+    "head_action_to_c4_gain": 0.4,
+    "retagged_from": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo4_sole_idfd/q5_hydraulic_gain040_stable_v6/convergence/model_best.pt",
+    "migrated_observation_from": 66,
+    "migration_requires_optimizer_reset": true,
+    "migrated_at": "2026-08-02T17:54:55",
+    "migrated_from": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo4_sole_idfd/shared_v2_idfd/model_validated.pt"
+  },
+  "path_family": "boom_sweep",
+  "terrain_height_scale": 1.0,
+  "terrain": "held_out",
+  "steps": 480,
+  "num_envs": 16,
+  "effective_config": {
+    "cylinder_target_max_lead_m": 0.025,
+    "cylinder_target_leak": 0.0,
+    "cylinder_target_integrates_from_previous_target": true,
+    "action_scale": 0.0035,
+    "sole_max_action_rate": 0.25,
+    "sole_action_filter": 0.55,
+    "terrain_arm_stiffness_scale": 0.35,
+    "terrain_head_joint_stiffness_scale": 1.0,
+    "terrain_arm_damping_scale": 1.0,
+    "cylinder_dynamics_model": "fd",
+    "use_cylinder_id_pipeline": true,
+    "sole_teacher_mode": "off",
+    "enable_contact_tracking_demo": false,
+    "terrain_contact_observation": true,
+    "terrain_model_error_history": 3.0,
+    "terrain_contact_safety_reward": false,
+    "terrain_terminate_on_contact_loss": false,
+    "terrain_terminate_on_hard_impact": false,
+    "terrain_contact_loss_grace_steps": 2.0,
+    "terrain_contact_acquire_steps": 3.0,
+    "terrain_max_airborne_gap_m": 0.005,
+    "sole_head_joint_action": true,
+    "terrain_head_nullspace_restore_gain": 1.0,
+    "terrain_messerkopf_level_gain": 0.0
+  },
+  "realized_arm_stiffness_scale_per_held_joint": [
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    0.3499999940395355,
+    1.0
+  ],
+  "actuator_runtime": {
+    "cylinder_id_constructed": true,
+    "rom_runtimes_constructed": {
+      "_command_cylinder_rom": false,
+      "_base_cylinder_rom": false,
+      "_cylinder_rom": false
+    }
+  },
+  "anti_windup_clamp": {
+    "configured_lead_m": 0.025,
+    "bound_usd_per_cylinder": [
+      0.02500000037252903,
+      0.02500000037252903,
+      0.02500000037252903,
+      0.02500000037252903
+    ],
+    "clamp_binding_fraction": 0.22428385416666666,
+    "clamp_samples": 30720,
+    "lead_usd_at_write_p50": 0.010538993403315544,
+    "lead_usd_at_write_p95": 0.02500000223517418,
+    "lead_usd_at_write_max": 0.02500000223517418,
+    "warmup_samples_excluded": 0,
+    "neutral_hold_env_steps_excluded": 0
+  },
+  "observed_lead_learned_space": {
+    "note": "Measured one control step after the clamp, against the joint position at OBSERVATION time. Legitimately exceeds the bound by however far the plant moved in that step; it is not a second measurement of the clamp.",
+    "p50_m": 0.01024705171585083,
+    "p95_m": 0.025845948606729507,
+    "max_m": 0.029675960540771484
+  },
+  "contact": {
+    "mean_force_n": 19014.037109375,
+    "p95_force_n": 34197.734375,
+    "max_force_n": 99071.5234375,
+    "max_airborne_gap_m": 0.3029266595840454,
+    "contact_loss_events": 84,
+    "visible_lift_events": 17,
+    "impact_ejection_events": 0,
+    "max_consecutive_airborne_steps": 21
+  },
+  "failures": [
+    "the inherited 25 mm lead is still in effect"
+  ],
+  "passed": false
+}

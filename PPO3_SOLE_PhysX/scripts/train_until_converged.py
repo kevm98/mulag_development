@@ -26,6 +26,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from PPO3_SOLE_PhysX.block_provenance import (
+    accept_training_block,
+    append_ledger,
+)
 from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence
 
 
@@ -463,16 +467,37 @@ def run_child(
     timeout_s: int,
     label: str,
     produces: Path | None = None,
-) -> None:
+    capture_to: Path | None = None,
+) -> subprocess.CompletedProcess | None:
+    """Run one child. ``capture_to`` tees its output so it can be parsed.
+
+    Returns the completed process so a caller doing full block acceptance can
+    read the return code without re-deriving it.
+    """
     print(f"[PPO3-SUPERVISOR] starting {label}: {_display_command(command)}", flush=True)
     started = datetime.now()
     try:
-        completed = subprocess.run(
-            list(command),
-            cwd=ROOT,
-            timeout=int(timeout_s),
-            check=False,
-        )
+        if capture_to is not None:
+            # Isaac writes a great deal; stream it to disk and mirror it so the
+            # supervisor's own log stays readable and the child's log can be
+            # parsed for the acceptance criteria afterwards.
+            capture_to.parent.mkdir(parents=True, exist_ok=True)
+            with open(capture_to, "w", encoding="utf-8") as sink:
+                completed = subprocess.run(
+                    list(command),
+                    cwd=ROOT,
+                    timeout=int(timeout_s),
+                    check=False,
+                    stdout=sink,
+                    stderr=subprocess.STDOUT,
+                )
+        else:
+            completed = subprocess.run(
+                list(command),
+                cwd=ROOT,
+                timeout=int(timeout_s),
+                check=False,
+            )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"{label} exceeded {timeout_s} seconds") from exc
     elapsed = (datetime.now() - started).total_seconds()
@@ -507,6 +532,7 @@ def run_child(
                 "to continue from a stale artifact."
             )
     print(f"[PPO3-SUPERVISOR] finished {label} in {elapsed:.1f}s", flush=True)
+    return completed
 
 
 def atomic_write_json(path: Path, row: dict) -> None:
@@ -706,14 +732,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             checkpoint_out=latest_checkpoint,
             block_index=block_index,
         )
-        run_child(
-            train_cmd,
-            timeout_s=args.train_timeout_s,
-            label=f"{args.num_envs}-env training block {block_index}",
-            produces=latest_checkpoint,
+        label = f"{args.num_envs}-env training block {block_index}"
+        child_log = run_dir / "child_logs" / f"train_block_{block_index:04d}.log"
+        block_started = datetime.now()
+        return_code = 0
+        try:
+            completed = run_child(
+                train_cmd,
+                timeout_s=args.train_timeout_s,
+                label=label,
+                capture_to=child_log,
+            )
+            return_code = int(completed.returncode) if completed else 0
+        except RuntimeError as exc:
+            # Do not abandon the run here. A rejected block is a RESULT, and
+            # the ledger has to record it with a reason -- silently dying
+            # leaves no evidence of what was rejected or why.
+            print(f"[PPO3-SUPERVISOR] {label} raised: {exc}", flush=True)
+            return_code = -1
+
+        # Seven criteria, not one return code. Isaac can exit 0 after an
+        # internal failure; the SHA256 comparison is what actually catches a
+        # child that died before saving and left the previous block's file in
+        # place. See PPO3_SOLE_PhysX/block_provenance.py.
+        acceptance = accept_training_block(
+            label=label,
+            input_checkpoint=current_checkpoint,
+            output_checkpoint=latest_checkpoint,
+            started=block_started,
+            finished=datetime.now(),
+            return_code=return_code,
+            iterations_requested=int(args.block_iterations),
+            log_path=child_log,
         )
-        if not latest_checkpoint.is_file():
-            raise RuntimeError(f"training did not write {latest_checkpoint}")
+        append_ledger(run_dir / "block_provenance.jsonl", acceptance.as_row())
+        print(
+            "[PPO3-PROVENANCE] " + json.dumps(acceptance.as_row(), sort_keys=True),
+            flush=True,
+        )
+        if not acceptance.accepted:
+            raise RuntimeError(
+                f"{label} REJECTED: {'; '.join(acceptance.reasons)}. Refusing "
+                "to evaluate an unverified checkpoint."
+            )
         current_checkpoint = latest_checkpoint
 
         report_path = reports_dir / f"heldout_block_{block_index:04d}.json"
