@@ -286,6 +286,7 @@ from PPO3_SOLE_PhysX.terrain_env_cfg import (  # noqa: E402
 from PPO3_SOLE_PhysX.actuators import resolve_actuator  # noqa: E402
 from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
     observation_space_for_cfg,
+    override_cfg,
 )
 
 # One task, two actuators. Resolved once here so every downstream use --
@@ -293,6 +294,30 @@ from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
 TASK_ID, RUNNER_CFG_CLS, ACTUATOR_LABEL = resolve_actuator(a.actuator)
 print(f"[PPO-TERRAIN] actuator={a.actuator} ({ACTUATOR_LABEL}) task={TASK_ID}", flush=True)
 from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence  # noqa: E402
+
+
+def apply_plant_overrides(cfg) -> None:
+    """Re-assert the CLI plant/command overrides on top of a curriculum stage.
+
+    ``apply_terrain_curriculum_stage`` -> ``apply_sole_curriculum_stage`` writes
+    ``action_scale`` and ``sole_max_action_rate`` for the stage it is given, and
+    it runs both at startup and again on every stage transition. An override
+    applied only once, before that, is silently reverted the moment the
+    curriculum is applied -- so this is called after EVERY such call rather
+    than once during construction.
+    """
+    if a.action_scale is not None:
+        override_cfg(cfg, "action_scale", float(a.action_scale))
+    if a.max_action_rate is not None:
+        override_cfg(cfg, "sole_max_action_rate", float(a.max_action_rate))
+    if a.arm_stiffness_scale is not None:
+        override_cfg(cfg, "terrain_arm_stiffness_scale", float(a.arm_stiffness_scale))
+    if a.cylinder_target_max_lead_m is not None:
+        override_cfg(
+            cfg, "cylinder_target_max_lead_m", float(a.cylinder_target_max_lead_m)
+        )
+    if a.cylinder_target_leak is not None:
+        override_cfg(cfg, "cylinder_target_leak", float(a.cylinder_target_leak))
 
 
 @torch.no_grad()
@@ -505,17 +530,8 @@ def main() -> None:
     if a.model_error_history is not None:
         if a.model_error_history < 1:
             raise ValueError("--model_error_history must be >= 1")
-        env_cfg.terrain_model_error_history = int(a.model_error_history)
-    if a.action_scale is not None:
-        env_cfg.sole_action_scale = float(a.action_scale)
-    if a.max_action_rate is not None:
-        env_cfg.sole_max_action_rate = float(a.max_action_rate)
-    if a.arm_stiffness_scale is not None:
-        env_cfg.terrain_arm_stiffness_scale = float(a.arm_stiffness_scale)
-    if a.cylinder_target_max_lead_m is not None:
-        env_cfg.cylinder_target_max_lead_m = float(a.cylinder_target_max_lead_m)
-    if a.cylinder_target_leak is not None:
-        env_cfg.cylinder_target_leak = float(a.cylinder_target_leak)
+        override_cfg(env_cfg, "terrain_model_error_history", int(a.model_error_history))
+    apply_plant_overrides(env_cfg)
     env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.enable_contact_tracking_demo = False
     resume_load_path = resume_path
@@ -575,6 +591,7 @@ def main() -> None:
         runner_cfg.actor.distribution_cfg.init_std = float(a.init_std)
 
     apply_terrain_curriculum_stage(env_cfg, stages[0])
+    apply_plant_overrides(env_cfg)
     # Training-only relief spread. The held-out gate terrain deliberately keeps
     # the narrower cfg tuple so scores stay comparable; PPO sees 0.35 (near-flat)
     # and 1.15 (rougher than anything scored) so it generalizes past the gates
@@ -921,6 +938,7 @@ def main() -> None:
     last_convergence_result = None
     for stage in stages:
         apply_terrain_curriculum_stage(raw.cfg, stage)
+        apply_plant_overrides(raw.cfg)
         raw.cfg.trajectory_shape = str(raw.cfg.terrain_deployment_trajectory_shape)
         raw.cfg.randomize_trajectory_shape = False
         raw.cfg.randomize_start_phase = False

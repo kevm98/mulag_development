@@ -77,6 +77,29 @@ def verge_observation_dim(
     return profile_bins + 44 + extra
 
 
+def override_cfg(cfg, name: str, value):
+    """Set a config field, refusing to invent one.
+
+    ``configclass`` objects accept arbitrary attribute assignment, so a
+    misspelled override is not an error -- it is a silent no-op that produces
+    a sweep row identical to its baseline and looks like "this knob does
+    nothing". That happened here: an ``action_scale`` sweep was written as
+    ``sole_action_scale`` and returned three bit-identical rows on both
+    actuators before the duplication gave it away.
+
+    Every CLI override goes through this, so the next such typo fails at
+    startup naming the field instead of costing a run.
+    """
+    if not hasattr(cfg, name):
+        raise AttributeError(
+            f"{type(cfg).__name__} has no field {name!r}; refusing to create "
+            "it, because an invented config field is silently ignored by the "
+            "environment and produces a result identical to the baseline"
+        )
+    setattr(cfg, name, value)
+    return value
+
+
 def observation_space_for_cfg(cfg) -> int:
     """Observation width implied by a config, including the trailing channel.
 

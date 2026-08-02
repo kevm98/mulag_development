@@ -261,6 +261,7 @@ from PPO3_SOLE_PhysX.actuators import (  # noqa: E402
 )
 from PPO3_SOLE_PhysX.terrain_observations import (  # noqa: E402
     observation_space_for_cfg,
+    override_cfg,
 )
 
 # One task, two actuators. Resolved once here so every downstream use --
@@ -299,15 +300,15 @@ def build_env():
     if a.model_error_history is not None:
         if a.model_error_history < 1:
             raise ValueError("--model_error_history must be >= 1")
-        env_cfg.terrain_model_error_history = int(a.model_error_history)
+        override_cfg(env_cfg, "terrain_model_error_history", int(a.model_error_history))
     if a.action_scale is not None:
-        env_cfg.sole_action_scale = float(a.action_scale)
+        override_cfg(env_cfg, "action_scale", float(a.action_scale))
     if a.max_action_rate is not None:
-        env_cfg.sole_max_action_rate = float(a.max_action_rate)
+        override_cfg(env_cfg, "sole_max_action_rate", float(a.max_action_rate))
     if a.cylinder_target_max_lead_m is not None:
-        env_cfg.cylinder_target_max_lead_m = float(a.cylinder_target_max_lead_m)
+        override_cfg(env_cfg, "cylinder_target_max_lead_m", float(a.cylinder_target_max_lead_m))
     if a.cylinder_target_leak is not None:
-        env_cfg.cylinder_target_leak = float(a.cylinder_target_leak)
+        override_cfg(env_cfg, "cylinder_target_leak", float(a.cylinder_target_leak))
     # The evaluator MEASURES contact loss; it must never terminate on it.
     # Terminating would truncate the airborne interval the strict gates are
     # trying to size, and a gate that shortens its own evidence is the
@@ -371,7 +372,7 @@ def build_env():
             a.head_ff_from_measured == "true"
         )
     if a.arm_stiffness_scale is not None:
-        env_cfg.terrain_arm_stiffness_scale = float(a.arm_stiffness_scale)
+        override_cfg(env_cfg, "terrain_arm_stiffness_scale", float(a.arm_stiffness_scale))
     if a.drive_substep_interpolation:
         env_cfg.terrain_kinematic_drive_substep_interpolation = (
             a.drive_substep_interpolation == "true"
