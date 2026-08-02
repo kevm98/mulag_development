@@ -1,0 +1,438 @@
+{
+  "timestamp": "2026-08-03T00:16:21",
+  "checkpoint": "logs/rsl_rl/ppo3_sole_rom_contact_safe_v1/model_best.pt",
+  "stage": 5,
+  "ik_hint_ablation": false,
+  "direct_hold_probe": false,
+  "hold_effort_floor_n": 0.0,
+  "hold_damping_scale": 1.0,
+  "actuator": "rom",
+  "action_width": 5,
+  "head_joint_action": true,
+  "head_action_to_c4_gain": 0.4,
+  "automatic_head_level_gain": 0.0,
+  "drive_substep_interpolation": false,
+  "constrain_truck_per_substep": true,
+  "arm_stiffness_scale": 0.35,
+  "terrain_provenance": {
+    "curriculum_version": "path_height_v2",
+    "split": "held_out_validation",
+    "base_seed": 1337,
+    "per_env_seed_stride": 7919,
+    "randomize_per_env": true,
+    "amplitude_start_m": 0.01,
+    "amplitude_end_m": 0.042,
+    "length_m": 26.0,
+    "resolution_m": 0.15,
+    "reset_seed": 17,
+    "num_envs": 32,
+    "steps": 960,
+    "path_family": "mixed",
+    "path_families_realized": [
+      "boom_sweep",
+      "double_s_curve",
+      "fourier_meander",
+      "gaussian_slalom",
+      "lane_change_hold",
+      "lateral_chirp",
+      "lateral_sine",
+      "offset_return",
+      "random_spline",
+      "s_curve",
+      "straight"
+    ],
+    "height_scales_realized": [
+      1.0
+    ]
+  },
+  "checkpoint_contract": {
+    "source": "PPO3 terrain PPO",
+    "actuator": "rom",
+    "schema": "terrain_shared_v2",
+    "observation_width": 96,
+    "action_width": 5,
+    "head_joint_action": true,
+    "teacher_mode": "off",
+    "direct_target_demo": false
+  },
+  "verge": {
+    "terrain": "held_out",
+    "steps": 960,
+    "num_envs": 32,
+    "deployment_template_env": 0,
+    "mean_signed_cut_height_error_m": 0.002682613907381892,
+    "mean_abs_cut_height_error_m": 0.002682613907381892,
+    "p95_abs_cut_height_error_m": 0.0,
+    "p95_tool_acceleration_mps2": 68.94200134277344,
+    "p95_abs_tool_acceleration_xyz_mps2": [
+      26.425004959106445,
+      57.867061614990234,
+      29.08949089050293
+    ],
+    "p95_head_origin_acceleration_mps2": 45.58399200439453,
+    "p95_abs_head_origin_acceleration_xyz_mps2": [
+      26.39645004272461,
+      22.764265060424805,
+      29.64934730529785
+    ],
+    "p95_head_angular_speed_radps": 0.8308507204055786,
+    "p95_abs_cylinder_velocity_mps": [
+      0.06885869801044464,
+      0.14096377789974213,
+      0.07070904225111008,
+      0.13435977697372437
+    ],
+    "p95_cylinder_effort_limit_ratio": [
+      0.4490926265716553,
+      0.4506456255912781,
+      0.1607513725757599,
+      0.5809084177017212
+    ],
+    "max_cylinder_effort_limit_ratio": [
+      1.0,
+      0.9183217883110046,
+      0.6610907912254333,
+      1.0
+    ],
+    "min_head_alignment": 0.982365608215332,
+    "p01_head_alignment": 0.9947097301483154,
+    "max_abs_head_axis_x": 0.027718529105186462,
+    "max_abs_head_axis_y": 0.1849040538072586,
+    "p95_head_axis_horizontal_norm": 0.06075266748666763,
+    "max_truck_heading_error_deg": 3.284897320554592e-05,
+    "p95_truck_heading_error_deg": 1.5817930034245364e-05,
+    "truck_ride_height_m_min": -0.015002727508544922,
+    "truck_ride_height_m_max": -0.014997363090515137,
+    "mean_abs_lateral_error_m": 0.12869447469711304,
+    "scan_valid_fraction": 0.9994213581085205,
+    "ground_contact_fraction": 0.95550137758255,
+    "mean_cutter_contact_force_n": 17767.697265625,
+    "p95_cutter_contact_force_n": 33396.3359375,
+    "min_wheel_road_contact_duty_cycle": 0.2734375,
+    "mean_wheel_road_contact_fraction": 0.7667643427848816,
+    "mean_requested_policy_action": [
+      -0.004938957281410694,
+      0.7091038823127747,
+      0.22895531356334686,
+      -0.05090969055891037,
+      0.0
+    ],
+    "mean_abs_requested_policy_action": [
+      0.1844651997089386,
+      0.7408124804496765,
+      0.5523576140403748,
+      0.1915573626756668,
+      0.0
+    ],
+    "mean_applied_action": [
+      -0.003926323261111975,
+      0.688970148563385,
+      0.2175973355770111,
+      -0.04132860153913498
+    ],
+    "mean_abs_applied_action": [
+      0.17971377074718475,
+      0.7188478708267212,
+      0.5253967046737671,
+      0.1961798071861267
+    ],
+    "limit_shield_active_fraction": 0.0021158854942768812,
+    "head_cylinder_extension_min_m": 0.5519832372665405,
+    "head_cylinder_extension_max_m": 0.6306628584861755,
+    "p95_chassis_lateral_reaction_mm": 9.31549072265625,
+    "max_chassis_lateral_reaction_mm": 53.9398193359375,
+    "p95_chassis_attitude_reaction_deg": 0.12511451542377472,
+    "max_chassis_attitude_reaction_deg": 0.6000288128852844,
+    "max_truck_post_constraint_drift_m": 0.0,
+    "safety_termination_rate": 0.0024088541666666668,
+    "contact_acquired_fraction": 1.0,
+    "post_acquisition_contact_fraction": 0.9599409932797902,
+    "contact_loss_event_count": 433,
+    "contact_loss_steps": 1222,
+    "maximum_consecutive_airborne_steps": 25,
+    "maximum_airborne_gap_m": 0.26697206497192383,
+    "p95_airborne_gap_m": 0.0,
+    "mean_airborne_gap_m": 0.0009703617542982101,
+    "takeoff_event_count": 274,
+    "impact_ejection_event_count": 9,
+    "hard_impact_event_count": 1294,
+    "visible_lift_event_count": 96,
+    "hard_impact_step_fraction": 0.08330078125,
+    "visible_lift_step_fraction": 0.011328125,
+    "mean_contact_force_n": 17767.697265625,
+    "p95_contact_force_n": 33396.3359375,
+    "maximum_contact_force_n": 252423.78125,
+    "mean_force_rate_nps": 306828.75,
+    "p95_force_rate_nps": 1095751.5,
+    "maximum_positive_cutter_vertical_velocity_mps": 4.447284698486328,
+    "minimum_scan_valid_fraction": 0.8888888955116272,
+    "target_lead_p95_m": 0.01938939467072487,
+    "target_lead_max_m": 0.02450186014175415,
+    "shield_active_fraction": 0.0021158854942768812,
+    "min_cylinder_headroom_m": 0.005851238965988159,
+    "teacher_mode": "off",
+    "direct_target_contact_demo": false,
+    "contact_termination_active": false,
+    "contact_acquire_steps": 3,
+    "contact_loss_grace_steps": 2,
+    "max_airborne_gap_tolerance_m": 0.005,
+    "path_family_results": [
+      {
+        "family": "boom_sweep",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.007039396092295647,
+        "p95_abs_cut_height_error_m": 0.04931328818202019,
+        "mean_abs_lateral_error_m": 0.1256294846534729,
+        "ground_contact_fraction": 0.9138889312744141
+      },
+      {
+        "family": "double_s_curve",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0016642144182696939,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.16242653131484985,
+        "ground_contact_fraction": 0.975694477558136
+      },
+      {
+        "family": "fourier_meander",
+        "num_envs": 2,
+        "mean_abs_cut_height_error_m": 0.0010641826083883643,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.07941481471061707,
+        "ground_contact_fraction": 0.9760417342185974
+      },
+      {
+        "family": "gaussian_slalom",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0021891980431973934,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.17827606201171875,
+        "ground_contact_fraction": 0.9579861164093018
+      },
+      {
+        "family": "lane_change_hold",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0017380622448399663,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.09762564301490784,
+        "ground_contact_fraction": 0.9541667103767395
+      },
+      {
+        "family": "lateral_chirp",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0043266243301332,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.13950605690479279,
+        "ground_contact_fraction": 0.9381944537162781
+      },
+      {
+        "family": "lateral_sine",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0017487973673269153,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.14894168078899384,
+        "ground_contact_fraction": 0.9621527791023254
+      },
+      {
+        "family": "offset_return",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0024933188688009977,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.08436782658100128,
+        "ground_contact_fraction": 0.9520833492279053
+      },
+      {
+        "family": "random_spline",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.0008668253431096673,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.16533751785755157,
+        "ground_contact_fraction": 0.9868055582046509
+      },
+      {
+        "family": "s_curve",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.003941976930946112,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.15785019099712372,
+        "ground_contact_fraction": 0.9385417103767395
+      },
+      {
+        "family": "straight",
+        "num_envs": 3,
+        "mean_abs_cut_height_error_m": 0.001896678120829165,
+        "p95_abs_cut_height_error_m": 0.0,
+        "mean_abs_lateral_error_m": 0.059836845844984055,
+        "ground_contact_fraction": 0.9618055820465088
+      }
+    ],
+    "worst_family_mean_abs_cut_height_error_m": 0.007039396092295647,
+    "worst_family_mean_abs_lateral_error_m": 0.17827606201171875,
+    "worst_family_ground_contact_fraction": 0.9138889312744141,
+    "trajectory_quarters": [
+      {
+        "quarter": 1,
+        "start_step": 0,
+        "stop_step": 240,
+        "mean_signed_cut_height_error_m": 0.003865808481350541,
+        "mean_abs_cut_height_error_m": 0.003865808481350541,
+        "ground_contact_fraction": 0.94036465883255,
+        "mean_cutter_contact_force_n": 17354.89453125,
+        "mean_wheel_road_contact_fraction": 0.7781575918197632,
+        "mean_abs_lateral_error_m": 0.06419281661510468,
+        "min_head_alignment": 0.993608832359314,
+        "mean_policy_action": [
+          0.005035578738898039,
+          0.4012226462364197,
+          0.2987288236618042,
+          -0.19918102025985718,
+          0.0
+        ],
+        "mean_applied_action": [
+          0.005297534167766571,
+          0.3842032849788666,
+          0.2995728850364685,
+          -0.18539658188819885
+        ]
+      },
+      {
+        "quarter": 2,
+        "start_step": 240,
+        "stop_step": 480,
+        "mean_signed_cut_height_error_m": 0.001835256814956665,
+        "mean_abs_cut_height_error_m": 0.001835256814956665,
+        "ground_contact_fraction": 0.9778646230697632,
+        "mean_cutter_contact_force_n": 17542.41796875,
+        "mean_wheel_road_contact_fraction": 0.7646484971046448,
+        "mean_abs_lateral_error_m": 0.12787221372127533,
+        "min_head_alignment": 0.9863159656524658,
+        "mean_policy_action": [
+          -0.024694669991731644,
+          0.8522981405258179,
+          0.24502135813236237,
+          0.014072324149310589,
+          0.0
+        ],
+        "mean_applied_action": [
+          -0.024048829451203346,
+          0.8359474539756775,
+          0.23239478468894958,
+          0.01828804984688759
+        ]
+      },
+      {
+        "quarter": 3,
+        "start_step": 480,
+        "stop_step": 720,
+        "mean_signed_cut_height_error_m": 0.003102218732237816,
+        "mean_abs_cut_height_error_m": 0.003102218732237816,
+        "ground_contact_fraction": 0.9575521349906921,
+        "mean_cutter_contact_force_n": 17077.265625,
+        "mean_wheel_road_contact_fraction": 0.7573568224906921,
+        "mean_abs_lateral_error_m": 0.16757507622241974,
+        "min_head_alignment": 0.982365608215332,
+        "mean_policy_action": [
+          -0.0071906596422195435,
+          0.7108686566352844,
+          0.1988496333360672,
+          0.014265047386288643,
+          0.0
+        ],
+        "mean_applied_action": [
+          -0.00833191629499197,
+          0.709683895111084,
+          0.16978053748607635,
+          -0.008709794841706753
+        ]
+      },
+      {
+        "quarter": 4,
+        "start_step": 720,
+        "stop_step": 960,
+        "mean_signed_cut_height_error_m": 0.001927171484567225,
+        "mean_abs_cut_height_error_m": 0.001927171484567225,
+        "ground_contact_fraction": 0.94622403383255,
+        "mean_cutter_contact_force_n": 19096.2109375,
+        "mean_wheel_road_contact_fraction": 0.7668945789337158,
+        "mean_abs_lateral_error_m": 0.1551377922296524,
+        "min_head_alignment": 0.9942657947540283,
+        "mean_policy_action": [
+          0.007093916647136211,
+          0.8720263838768005,
+          0.17322136461734772,
+          -0.032795120030641556,
+          0.0
+        ],
+        "mean_applied_action": [
+          0.01137792132794857,
+          0.8260459303855896,
+          0.16864113509655,
+          0.010503913275897503
+        ]
+      }
+    ]
+  },
+  "gates": {
+    "mean_cut_height_error": true,
+    "p95_cut_height_error": true,
+    "p95_tool_acceleration": true,
+    "head_alignment_p01": true,
+    "head_alignment_hard_min": true,
+    "lateral_error": true,
+    "truck_drift": true,
+    "truck_heading": true,
+    "chassis_lateral_reaction": true,
+    "chassis_attitude_reaction": true,
+    "safety_terminations": true,
+    "scan_validity": true,
+    "ground_contact": true,
+    "wheel_road_support": true,
+    "worst_family_cut_height": true,
+    "worst_family_lateral": true,
+    "worst_family_contact": true
+  },
+  "normalized_gate_violations": {
+    "mean_cut_height_error": 0.0,
+    "p95_cut_height_error": 0.0,
+    "p95_tool_acceleration": 0.0,
+    "head_alignment_p01": 0.0,
+    "head_alignment_hard_min": 0.0,
+    "lateral_error": 0.0,
+    "truck_drift": 0.0,
+    "truck_heading": 0.0,
+    "chassis_lateral_reaction": 0.0,
+    "chassis_attitude_reaction": 0.0,
+    "safety_terminations": 0.0,
+    "scan_validity": 0.0,
+    "ground_contact": 0.0,
+    "wheel_road_support": 0.0,
+    "worst_family_cut_height": 0.0,
+    "worst_family_lateral": 0.0,
+    "worst_family_contact": 0.0
+  },
+  "score": 0.0,
+  "passed": true,
+  "contact_safety_gates": {
+    "visible_lift_events": false,
+    "impact_ejection_events": false,
+    "hard_impacts": false,
+    "consecutive_airborne_steps": false,
+    "airborne_gap": false,
+    "post_acquisition_contact": false,
+    "contact_acquired": true,
+    "takeoff_events": false,
+    "contact_force_peak": false
+  },
+  "contact_safety_promotion_blockers": [
+    "visible_lift_events",
+    "impact_ejection_events",
+    "hard_impacts",
+    "consecutive_airborne_steps",
+    "airborne_gap",
+    "post_acquisition_contact",
+    "takeoff_events",
+    "contact_force_peak"
+  ],
+  "promotable": false,
+  "strict_score": 1698000000000055.0
+}

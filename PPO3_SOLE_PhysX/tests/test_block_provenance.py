@@ -125,6 +125,45 @@ def test_3_byte_identical_output_is_rejected(tmp_path):
     assert result.input_sha256 == result.output_sha256
 
 
+def test_3_input_hash_must_be_captured_before_the_child_runs(tmp_path):
+    """resume and checkpoint_out are normally the SAME file.
+
+    The supervisor resumes model_latest.pt and writes model_latest.pt, so
+    hashing the input inside the acceptance check hashes the child's own
+    output and makes criterion 3 compare a file with itself. Measured: PPO4
+    stage B1 block 2 was rejected as "byte-identical to the input" after
+    training 40 iterations perfectly well.
+    """
+    same = _write(tmp_path / "model_latest.pt", b"AFTER-TRAINING")
+    _summary(same.with_suffix(".json"))
+    before = "0" * 64  # what the file hashed to BEFORE the child overwrote it
+
+    naive = _accept(tmp_path, input_checkpoint=same, output_checkpoint=same)
+    assert not naive.accepted, "hashing after the fact cannot detect training"
+
+    correct = _accept(
+        tmp_path,
+        input_checkpoint=same,
+        output_checkpoint=same,
+        input_sha256=before,
+    )
+    assert correct.accepted, correct.reasons
+    assert correct.input_sha256 == before
+
+
+def test_supervisor_hashes_the_input_before_launching(tmp_path):
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts" / "train_until_converged.py"
+    ).read_text()
+    body = source[source.index("while args.max_blocks") :]
+    hashed = body.index("input_sha = (")
+    launched = body.index("run_child(")
+    assert hashed < launched, (
+        "the input checkpoint is hashed after the child ran; with resume and "
+        "checkpoint_out on the same path that hashes the child's own output"
+    )
+
+
 def test_4_missing_summary_is_rejected(tmp_path):
     out = _write(tmp_path / "out.pt", b"TRAINED")
     # deliberately no out.json

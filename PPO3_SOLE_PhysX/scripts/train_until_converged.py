@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 from PPO3_SOLE_PhysX.block_provenance import (
     accept_training_block,
     append_ledger,
+    sha256_file,
 )
 from PPO3_SOLE_PhysX.terrain_convergence import summarize_convergence
 
@@ -355,27 +356,35 @@ def training_command(
     if args.height_schedule:
         command.extend(["--height_schedule", args.height_schedule])
     command.extend(_shared_contact_options(args))
+    needs_reset = checkpoint_requires_optimizer_reset(resume)
     if int(block_index) == 1:
         if args.reset_optimizer_first_block:
             command.append("--reset_optimizer_on_resume")
+            needs_reset = False
         if args.reset_critic_head_first_block:
             command.append("--reset_critic_head_on_resume")
         if args.first_block_c4_std is not None:
             command.extend(["--resume_c4_std", str(args.first_block_c4_std)])
-    elif checkpoint_requires_optimizer_reset(resume):
-        # Not only block 1. When a block regresses, the supervisor rolls back
-        # to model_best.pt -- and if the best checkpoint is still the migrated
-        # seed, the NEXT block resumes a migrated checkpoint without the flag
-        # and train.py refuses it outright ("migrated shared-policy checkpoints
-        # require --reset_optimizer_on_resume"). Measured: block 1 regressed,
-        # block 2 rolled back to the seed and died in 6.3 seconds.
+    if needs_reset:
+        # Checked on EVERY block, including block 1, and independently of
+        # --reset_optimizer_first_block. The requirement is a property of the
+        # CHECKPOINT and it propagates through copies: `copy_checkpoint` keeps
+        # the infos, so if no block beats the initial score then model_best.pt
+        # is still the migrated seed, and the NEXT STAGE -- a fresh supervisor
+        # run whose block 1 does not pass --reset_optimizer_first_block --
+        # resumes a migrated checkpoint without the flag and train.py refuses
+        # it outright.
         #
-        # The requirement is a property of the CHECKPOINT, so read it from the
-        # checkpoint rather than from the block index.
+        # Measured twice. First as a rollback inside one stage (block 1
+        # regressed, block 2 died in 6.3 s). Then again ACROSS stages: PPO3
+        # stage B1 kept the migrated seed as its best, and stage B2 block 1
+        # died on "migrated shared-policy checkpoints require
+        # --reset_optimizer_on_resume". Restricting the check to block_index
+        # != 1 fixed only the first of those.
         command.append("--reset_optimizer_on_resume")
         print(
-            f"[PPO3-SUPERVISOR] resume checkpoint {resume} is a migration; "
-            "adding --reset_optimizer_on_resume",
+            f"[PPO3-SUPERVISOR] resume checkpoint {resume} carries the "
+            "migration flag; adding --reset_optimizer_on_resume",
             flush=True,
         )
     return command
@@ -751,6 +760,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         label = f"{args.num_envs}-env training block {block_index}"
         child_log = run_dir / "child_logs" / f"train_block_{block_index:04d}.log"
+        # Hash the input BEFORE the child runs. `resume` and `checkpoint_out`
+        # are normally the SAME file (model_latest.pt), so hashing afterwards
+        # would hash the child's own output and make the byte-identical check
+        # compare a file with itself.
+        input_sha = (
+            sha256_file(current_checkpoint)
+            if current_checkpoint.is_file()
+            else None
+        )
         block_started = datetime.now()
         return_code = 0
         try:
@@ -781,6 +799,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return_code=return_code,
             iterations_requested=int(args.block_iterations),
             log_path=child_log,
+            input_sha256=input_sha,
         )
         append_ledger(run_dir / "block_provenance.jsonl", acceptance.as_row())
         print(

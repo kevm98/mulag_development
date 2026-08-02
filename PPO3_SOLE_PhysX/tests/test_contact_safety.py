@@ -1011,6 +1011,36 @@ def _supervisor():
     return module
 
 
+def test_a_migrated_checkpoint_resets_the_optimizer_on_EVERY_block(tmp_path):
+    """Including block 1 of a later stage.
+
+    `copy_checkpoint` keeps the checkpoint's infos, so if no block beats the
+    initial score then model_best.pt is still the migrated seed -- and the next
+    STAGE is a fresh supervisor run whose block 1 does not pass
+    --reset_optimizer_first_block. Measured: PPO3 stage B1 kept the migrated
+    seed as its best, and stage B2 block 1 died on "migrated shared-policy
+    checkpoints require --reset_optimizer_on_resume". Restricting the check to
+    block_index != 1 fixed only the earlier within-stage rollback case.
+    """
+    module = _supervisor()
+    migrated = tmp_path / "seed.pt"
+    torch.save({"infos": {"migration_requires_optimizer_reset": True}}, migrated)
+    args = module.build_parser().parse_args(["--resume", str(migrated)])
+    for block in (1, 2, 5):
+        command = module.training_command(
+            args,
+            resume=migrated,
+            checkpoint_out=tmp_path / "o.pt",
+            block_index=block,
+        )
+        assert "--reset_optimizer_on_resume" in command, (
+            f"block {block} resumes a migrated checkpoint without the flag"
+        )
+        assert command.count("--reset_optimizer_on_resume") == 1, (
+            f"block {block} passes the flag twice"
+        )
+
+
 def test_rollback_to_a_migrated_seed_still_resets_the_optimizer(tmp_path):
     """A regressed block rolls back to model_best.pt -- which may BE the seed.
 

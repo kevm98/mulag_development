@@ -177,12 +177,22 @@ def accept_training_block(
     log_text: str | None = None,
     summary_path: Path | None = None,
     mtime_slack_s: float = 2.0,
+    input_sha256: str | None = None,
 ) -> BlockAcceptance:
-    """Apply all seven acceptance criteria and build the provenance row."""
+    """Apply all seven acceptance criteria and build the provenance row.
+
+    ``input_sha256`` MUST be captured before the child runs when the input and
+    output are the same path -- which is the normal case, because the
+    supervisor resumes ``model_latest.pt`` and writes ``model_latest.pt``.
+    Hashing the input here would then hash the child's own output and make
+    criterion 3 compare a file with itself, rejecting every healthy block after
+    the first. Measured: PPO4 stage B1 block 2 was rejected as "byte-identical
+    to the input" after training 40 iterations perfectly well.
+    """
     reasons: list[str] = []
-    input_sha = (
-        sha256_file(input_checkpoint) if Path(input_checkpoint).is_file() else None
-    )
+    input_sha = input_sha256
+    if input_sha is None and Path(input_checkpoint).is_file():
+        input_sha = sha256_file(input_checkpoint)
     output_sha = None
     checkpoint_mtime = None
 
