@@ -36,7 +36,7 @@ run() {
     --checkpoint "$ckpt" --actuator "$act" \
     --headless --device cuda:0 \
     --num_envs "$ENVS" --seed "$SEED" --steps "$STEPS" --stage 5 \
-    --eval_terrain --path_family s_curve --terrain_height_scale 1.0 \
+    --eval_terrain --path_family s_curve --terrain_height_scale 1.0 --max_event_windows 0 \
     "$@" --report "$report" > "$OUT/${tag}.log" 2>&1
   echo "[DONE] exit=$? -> $report"
 }
