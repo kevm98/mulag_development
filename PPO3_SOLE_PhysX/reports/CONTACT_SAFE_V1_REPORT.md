@@ -519,9 +519,90 @@ arbitrary among ties. The strict contact metrics do discriminate (block 3 best
 on ejections, block 2 on lifts) and should drive checkpoint selection for this
 experiment.
 
-### 9.4 Strict gate matrix
+### 9.4 Strict gate matrix — both checkpoints REJECTED
 
-*Filled in when the eight-cell matrices land.*
+Eight cells each, held-out, stage 5, 960 steps × 32 envs, teacher off, contact
+demo off (both verified from the reports, not assumed). Full tables in
+`contact_safe_v1/GATES_PPO3.md` and `GATES_PPO4.md`.
+
+**PPO3 / ROM-A, stage-A checkpoint**
+
+| cell | 17-gate | strict | contact | lifts | eject | airborne | max gap (m) | max F (kN) |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| mixed balanced | PASS | fail | 0.9390 | 93 | 14 | 35 | 0.271 | 109.0 |
+| mixed @ 1.0 | PASS | fail | 0.9281 | 140 | 9 | 36 | 0.297 | 107.5 |
+| mixed mesh 909 | PASS | fail | 0.9299 | 126 | 8 | 48 | 0.391 | 123.6 |
+| mixed mesh 4242 | fail | fail | 0.9326 | 142 | 10 | 38 | 0.419 | 119.1 |
+| lane_change_hold @ 1.0 | PASS | fail | 0.9270 | 142 | 11 | 36 | 0.400 | 96.3 |
+| s_curve @ 1.0 | fail | fail | 0.9233 | 170 | 11 | 31 | 0.364 | 111.8 |
+| s_curve mesh 909 | fail | fail | 0.9236 | 136 | 14 | 36 | 0.359 | **243.3** |
+| **boom_sweep @ 1.0** | PASS | fail | 0.9012 | 149 | 10 | **251** | **1.180** | 100.8 |
+
+**PPO4 / ID-FD, stage-A checkpoint** — 0 of 8 cells pass even the 17 gates.
+
+| cell | 17-gate | strict | contact | lifts | eject | airborne | max gap (m) | max F (kN) |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| mixed balanced | fail | fail | 0.9009 | 176 | 2 | 38 | 0.416 | 170.5 |
+| mixed @ 1.0 | fail | fail | 0.8852 | 188 | 4 | 44 | 0.445 | 110.3 |
+| mixed mesh 909 | fail | fail | 0.9026 | 178 | 4 | 38 | 0.357 | 87.6 |
+| mixed mesh 4242 | fail | fail | 0.9099 | 169 | 4 | 31 | 0.423 | 121.3 |
+| lane_change_hold @ 1.0 | fail | fail | 0.8655 | 265 | 4 | 46 | 0.482 | 108.0 |
+| s_curve @ 1.0 | fail | fail | 0.8877 | 202 | 9 | 42 | 0.445 | 105.8 |
+| s_curve mesh 909 | fail | fail | 0.8940 | 182 | 13 | 41 | 0.371 | 117.4 |
+| boom_sweep @ 1.0 | fail | fail | 0.8689 | 202 | 10 | 58 | 0.421 | 123.9 |
+
+**Verdict: `promotable = False` for both, in every cell.** Five strict gates
+fail in all 16 cells — `visible_lift_events`, `impact_ejection_events`,
+`hard_impacts`, `consecutive_airborne_steps`, `airborne_gap` — plus
+`contact_force_peak`. `contact_acquired` is the only strict gate that passes.
+
+`teacher_mode` is `"off"` and `direct_target_contact_demo` is `False` in all
+16 cells, read from the reports rather than assumed.
+
+**A new failure region the diagnostic missed.** `boom_sweep` at relief 1.0 is
+by far the worst PPO3 cell: **251 consecutive airborne steps (4.2 seconds) and
+a 1.18 m maximum gap**, against 31–48 steps and 0.27–0.42 m everywhere else —
+and it still **passes all 17 historical gates**, because its contact duty cycle
+is 0.9012. The Phase 1 diagnostic only looked at `s_curve`, on the basis that
+that is where the lift is visible; `boom_sweep` was treated as a control
+family because it is the low-tail control for *head alignment*. For contact it
+is the opposite. Any future work should start from `boom_sweep @ 1.0`, not
+`s_curve`.
+
+`s_curve` on mesh 909 also produced a **243 kN** peak contact force, double
+any other cell and above anything in the pre-fix diagnostic.
+
+---
+
+## 9.5 What was and was not achieved
+
+**Achieved**
+
+* The failure is measured, mechanised and attributed, on both actuators, at
+  event level, with the two non-mechanisms (sensing, saturation) eliminated by
+  measurement rather than argument.
+* The root cause is identified and demonstrably relieved: the reference
+  integrator no longer runs saturated (max lead 0.030→0.017 on ROM-A,
+  0.041→0.019 on ID/FD), and impact/ejection events fall ~60 % on both.
+* The failure is now *visible*: nine strict gates, 21 new metrics, an
+  event-level probe, and a promotion verdict that both current checkpoints
+  correctly fail.
+* PPO remains the sole scored controller, enforced structurally.
+* 195 tests, an integration smoke test passing on both actuators, and five
+  bugs fixed — four of them introduced by this work, one pre-existing in the
+  supervisor (a dead training block exiting 0 and a stale checkpoint being
+  evaluated as if it were fresh).
+
+**Not achieved**
+
+* **Zero contact loss.** Neither checkpoint is promotable in any cell. This is
+  the task's headline requirement and it is not met.
+* The plant fix is not free — it costs the co-adapted policy contact duty
+  (§9.1), and stage-A training did not recover it.
+* Curriculum stages B and C were not run (scope was reduced to stage A after
+  the sweep, on instruction, to check direction before committing ~13 h GPU).
+* PPO4 did not improve at all in three blocks, consistent with the handover's
+  record for that actuator.
 
 ---
 
@@ -539,6 +620,18 @@ experiment.
    measured reset arithmetic in §4, not on principle: at 256 environments and
    ~430 lifts per rollout it is continuous reset work. The reward carries the
    signal instead.
+5. **"The plant change alone gives 17/17."** Claimed, then disproved by the
+   controlled A/B I had queued for exactly that purpose (§9.1). The original
+   comparison differed in path family as well as in plant. Retracted.
+6. **"The head-alignment collapse is six-for-six."** One sample, stated as a
+   pattern. It did not reproduce on restart with identical configuration.
+   Retracted; the collapse is intermittent (§9.2).
+7. **`s_curve` as THE failure family.** The Phase 1 diagnostic used it because
+   that is where the lift is visible, and the gate matrix then found
+   `boom_sweep @ 1.0` far worse -- 251 consecutive airborne steps and a 1.18 m
+   gap, while still passing all 17 historical gates (§9.4). The training
+   oversampling (`--contact_focus`) is built around `s_curve` and is therefore
+   aimed at the second-worst region.
 4. **`F_target = 2000 N`.** The design figure, and the obvious starting point.
    Rejected: measured stable contact is 18.9 kN mean / 7.2 kN p05, so a band
    centred at 2 kN has no gradient anywhere the policy operates. Caught by a
