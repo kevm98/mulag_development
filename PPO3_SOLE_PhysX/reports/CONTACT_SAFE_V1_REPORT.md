@@ -405,7 +405,65 @@ re-asserted after every curriculum application.
 
 ## 9. Training and final evaluation
 
-*Filled in when the runs land.*
+**Scope note.** The full plan is three curriculum stages per actuator
+(~13 h GPU). On the user's instruction this run is **stage A only** for each
+actuator, so that the reward and observation changes could be checked against
+the contact metrics before the rest of the budget was committed. Everything
+below is stage A.
+
+### 9.1 The plant change alone, before any retraining
+
+The most useful single number here came from the supervisor's *initial*
+held-out validation — the migrated 96-D seed, untrained on the new objective,
+evaluated on the new plant (`action_scale` 0.0035, `lead` 0.010), mixed
+families, balanced relief, 32 envs × 960 steps:
+
+| | previous plant (66-D production) | new plant, same policy |
+|---|---:|---:|
+| 17 historical gates | 16/17 (`head_alignment_hard_min`) | **17/17, score 0.0** |
+| `min_head_alignment` | 0.9165 | **0.9854** |
+| max cylinder target lead | 0.0300 m | **0.0196 m** |
+| p95 cylinder target lead | 0.0262 m | **0.0112 m** |
+| max contact force | 119 kN | 109 kN |
+| mean contact force | 19.7 kN | 15.8 kN |
+| p95 tool acceleration | 91.7 m/s² | 62.8 m/s² |
+| impact/ejection events | 201 | **14** |
+
+The reference integrator is **no longer saturated** — that is the root-cause
+fix taking effect, and it is visible without a single gradient step. Note the
+two runs are not perfectly like-for-like (mixed families here vs `s_curve` in
+the diagnostic), so §9.3 records the controlled A/B.
+
+### 9.2 The first PPO block reproduced the documented head collapse
+
+| | initial (seed) | after block 1 |
+|---|---:|---:|
+| 17-gate | **17/17**, score 0.000 | 14/17, score 0.839 |
+| `min_head_alignment` | 0.9854 | **0.5713** |
+| `p01_head_alignment` | — | 0.8752 |
+| ground contact | 0.9390 | 0.9404 |
+| max cylinder target lead | 0.0196 | 0.0196 |
+
+`HANDOVER_PPO3_PPO4.md` §4 states this plainly: *"PPO3's failing gate, PPO4's
+three failing gates, all five earlier PPO3 campaigns, and the abandoned
+compliant fine-tune all fail on head alignment, and all fail in the tail."*
+Block 1 of this fine-tune makes it six-for-six on PPO3, now with a different
+reward, a different observation and a different plant. The per-quarter
+breakdown puts it exactly where that document puts it — quarters 1–3 hold
+0.994 / 0.973 / 0.778 and quarter 4 collapses to 0.571.
+
+**This is a pre-existing failure mode, not one this work introduced**, and it
+is orthogonal to contact: the contact metrics were flat or better across the
+same block (contact 0.9390 → 0.9404, ejections 14 → 5). But it does mean PPO
+fine-tuning cannot currently be relied on to improve this task, which is the
+central open problem of the package and is not solved here.
+
+The supervisor's rollback behaviour is correct and did the right thing: the
+block regressed, so the next block resumes `model_best.pt`.
+
+### 9.3 Results
+
+*Filled in when the stage-A runs land.*
 
 ---
 
