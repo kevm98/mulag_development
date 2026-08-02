@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Phase 7: train the contact-safe policy on the MEASURED failure region.
+#
+#   bash PPO3_SOLE_PhysX/scripts/run_contact_safe_training.sh rom
+#   bash PPO3_SOLE_PhysX/scripts/run_contact_safe_training.sh idfd
+#
+# PPO3 and PPO4 are trained SEPARATELY, each from its own migrated seed. The
+# two actuators ARE the experiment; assuming one checkpoint serves both would
+# destroy the only claim PPO4 exists to support.
+#
+# Three curriculum stages, each its own supervisor run directory so each has
+# its own state.json and its own block reports, chained by copying the
+# previous stage's model_best.pt forward:
+#
+#   A  grace 4 steps, relief 0.50/0.70           -- learn to stay planted
+#   B  grace 2 steps, relief 0.70/0.85/1.00      -- at full relief
+#   C  grace 1 step,  relief 0.50/0.70/0.85/1.00 -- balanced, near-strict
+#
+# Strict evaluation tolerates NO post-acquisition contact loss. Stage C stops
+# one step short of that on purpose: a training signal that terminates on a
+# single missed physics substep trains against the contact sensor rather than
+# against the tool leaving the ground.
+#
+# The optimizer and critic head are reset in stage A ONLY. The seed is a
+# widened migration whose new input columns have never had a gradient (Adam's
+# second moment is indexed by shape), and the reward gained seven terms plus a
+# finite terminal penalty, so the resumed value head predicts returns from a
+# different objective. Stages B and C must NOT repeat that -- they would throw
+# away the run's own learning at every curriculum step.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.." || exit 1
+PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+
+ACTUATOR=${1:-rom}
+case "$ACTUATOR" in
+  rom)  EXPERIMENT=ppo3_sole_rom_contact_safe_v1 ;;
+  idfd) EXPERIMENT=ppo4_sole_idfd_contact_safe_v1 ;;
+  *) echo "usage: $0 {rom|idfd}"; exit 2 ;;
+esac
+
+ROOT_DIR=logs/rsl_rl/$EXPERIMENT
+SEED_CKPT=$ROOT_DIR/model_seed_96.pt
+if [ ! -f "$SEED_CKPT" ]; then
+  echo "missing seed checkpoint $SEED_CKPT"
+  echo "create it with: $PY PPO3_SOLE_PhysX/scripts/migrate_shared_policy.py <66-D ckpt> $SEED_CKPT --mode widen_observation --target_observations 96"
+  exit 3
+fi
+
+# --- plant/command settings, chosen from the Phase 6 sweep -----------------
+ACTION_SCALE=${ACTION_SCALE:-0.0035}
+MAX_ACTION_RATE=${MAX_ACTION_RATE:-0.20}
+ARM_STIFFNESS=${ARM_STIFFNESS:-0.35}
+TARGET_LEAD=${TARGET_LEAD:-0.010}
+TARGET_LEAK=${TARGET_LEAK:-0.0}
+
+NUM_ENVS=${NUM_ENVS:-256}
+EVAL_ENVS=${EVAL_ENVS:-32}
+BLOCK_ITERS=${BLOCK_ITERS:-40}
+EVAL_STEPS=${EVAL_STEPS:-960}
+LR=${LR:-1.0e-5}
+TRAIN_TIMEOUT=${TRAIN_TIMEOUT:-7200}
+EVAL_TIMEOUT=${EVAL_TIMEOUT:-3600}
+
+common=(
+  --python "$PY"
+  --actuator "$ACTUATOR"
+  --device cuda:0
+  --num_envs "$NUM_ENVS"
+  --eval_envs "$EVAL_ENVS"
+  --block_iterations "$BLOCK_ITERS"
+  --eval_steps "$EVAL_STEPS"
+  --eval_timeout_s "$EVAL_TIMEOUT"
+  --train_timeout_s "$TRAIN_TIMEOUT"
+  --stage 5
+  --learning_rate "$LR"
+  --head_joint_action
+  --contact_focus
+  --contact_observation true
+  --contact_safety_reward true
+  --contact_termination true
+  --model_error_history 3
+  --action_scale "$ACTION_SCALE"
+  --max_action_rate "$MAX_ACTION_RATE"
+  --arm_stiffness_scale "$ARM_STIFFNESS"
+  --cylinder_target_max_lead_m "$TARGET_LEAD"
+  --cylinder_target_leak "$TARGET_LEAK"
+  --strict_contact
+  --restart
+)
+
+stage() {
+  local label=$1 grace=$2 heights=$3 blocks=$4 resume=$5
+  local dir="$ROOT_DIR/stage_${label}"
+  mkdir -p "$dir"
+  echo "=== contact-safe stage $label ($ACTUATOR) grace=$grace heights=$heights resume=$resume ==="
+  local extra=()
+  if [ "$label" = "A" ]; then
+    extra+=(--reset_optimizer_first_block --reset_critic_head_first_block)
+  fi
+  $PY PPO3_SOLE_PhysX/scripts/train_until_converged.py \
+    "${common[@]}" "${extra[@]}" \
+    --run_dir "$dir" \
+    --contact_stage "$grace" \
+    --height_schedule "$heights" \
+    --min_blocks "$blocks" --max_blocks "$blocks" \
+    --resume "$resume" 2>&1 | tee "$dir/stage.log"
+}
+
+stage A A "0.50,0.70"           "${BLOCKS_A:-3}" "$SEED_CKPT"
+stage B B "0.70,0.85,1.00"      "${BLOCKS_B:-3}" "$ROOT_DIR/stage_A/model_best.pt"
+stage C C "0.50,0.70,0.85,1.00" "${BLOCKS_C:-3}" "$ROOT_DIR/stage_B/model_best.pt"
+
+cp "$ROOT_DIR/stage_C/model_best.pt" "$ROOT_DIR/model_best.pt"
+cp "$ROOT_DIR/stage_C/convergence_best.json" "$ROOT_DIR/convergence_best.json"
+echo "[CONTACT-SAFE TRAINING DONE] $EXPERIMENT -> $ROOT_DIR/model_best.pt"
