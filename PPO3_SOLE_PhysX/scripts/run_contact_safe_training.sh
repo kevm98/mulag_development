@@ -48,8 +48,40 @@ if [ ! -f "$SEED_CKPT" ]; then
 fi
 
 # --- plant/command settings, chosen from the Phase 6 sweep -----------------
+# Measured, 960 steps x 16 envs, held-out, s_curve, relief 1.0, shipped policy
+# held fixed (reports/contact_safe_v1/sweep/). Peak force is the quantity to
+# read: it is the stored command being released into the ground.
+#
+#   action_scale 0.0035  PPO3 best row on EVERY axis vs the 0.004 baseline
+#                        (contact 0.9585 vs 0.9575, events 152 vs 188, lifts
+#                        114 vs 146, peak force 125 vs 146 kN, ejection
+#                        2.40 vs 2.65 m/s). PPO4 0.0035 and 0.0030 are within
+#                        noise of each other and both cut peak force
+#                        186 -> ~147 kN, so 0.0035 is used for BOTH and the
+#                        two actuators keep an identical action contract.
+#
+#   lead 0.010           the only knob that reliably moves the mechanism:
+#                        peak force 146 -> 107 kN (PPO3), 186 -> 127 kN (PPO4),
+#                        and measured max lead 0.030 -> 0.0166, i.e. the
+#                        integrator stops running saturated. It costs the FIXED
+#                        policy contact (0.9575 -> 0.9205) because that policy
+#                        was trained with 25 mm of authority and is co-adapted
+#                        to it; recovering that is what the retraining is for.
+#
+#   stiffness 0.35       UNCHANGED. 0.25 gives PPO3 a lower peak force (96 kN)
+#                        but costs contact, 0.20 is worse on both actuators,
+#                        and the existing notes record this knob as
+#                        non-monotonic. Not a knob to chase.
+#
+#   rate                 NOT overridden -- the curriculum's 0.25 stands. 0.20
+#                        was catastrophic for PPO4 (386 kN peak force, 1.09 m
+#                        max gap, 7.03 m/s ejection) while 0.15 was its best
+#                        row and PPO3's second worst. A knob that points in
+#                        opposite directions on the two actuators cannot be set
+#                        from this sweep, and setting it differently per
+#                        actuator would break the attribution PPO4 exists for.
 ACTION_SCALE=${ACTION_SCALE:-0.0035}
-MAX_ACTION_RATE=${MAX_ACTION_RATE:-0.20}
+MAX_ACTION_RATE=${MAX_ACTION_RATE:-}
 ARM_STIFFNESS=${ARM_STIFFNESS:-0.35}
 TARGET_LEAD=${TARGET_LEAD:-0.010}
 TARGET_LEAK=${TARGET_LEAK:-0.0}
@@ -80,13 +112,16 @@ common=(
   --contact_safety_reward true
   --model_error_history 3
   --action_scale "$ACTION_SCALE"
-  --max_action_rate "$MAX_ACTION_RATE"
   --arm_stiffness_scale "$ARM_STIFFNESS"
   --cylinder_target_max_lead_m "$TARGET_LEAD"
   --cylinder_target_leak "$TARGET_LEAK"
   --strict_contact
   --restart
 )
+# Opt-in only: the sweep points in opposite directions on the two actuators.
+if [ -n "$MAX_ACTION_RATE" ]; then
+  common+=(--max_action_rate "$MAX_ACTION_RATE")
+fi
 
 # Termination is OFF by default in every stage, and that is a measured
 # decision, not caution. Resets here are all-or-nothing --
