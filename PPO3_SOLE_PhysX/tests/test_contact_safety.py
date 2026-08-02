@@ -924,6 +924,80 @@ def test_supervisor_forwards_width_changing_flags_to_both_children():
     assert "--strict_contact" in evaluate and "--strict_contact" not in train
 
 
+def _supervisor():
+    import importlib.util
+
+    script = ROOT / "PPO3_SOLE_PhysX" / "scripts" / "train_until_converged.py"
+    spec = importlib.util.spec_from_file_location("train_until_converged", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_rollback_to_a_migrated_seed_still_resets_the_optimizer(tmp_path):
+    """A regressed block rolls back to model_best.pt -- which may BE the seed.
+
+    Measured: block 1 regressed, block 2 rolled back to the migrated seed
+    without --reset_optimizer_on_resume, and train.py refused it in 6.3
+    seconds. The requirement is a property of the checkpoint, so it has to be
+    read from the checkpoint rather than from the block index.
+    """
+    module = _supervisor()
+    migrated = tmp_path / "seed.pt"
+    torch.save({"infos": {"migration_requires_optimizer_reset": True}}, migrated)
+    plain = tmp_path / "trained.pt"
+    torch.save({"infos": {}}, plain)
+
+    assert module.checkpoint_requires_optimizer_reset(migrated) is True
+    assert module.checkpoint_requires_optimizer_reset(plain) is False
+
+    args = module.build_parser().parse_args(["--resume", str(migrated)])
+    block2 = module.training_command(
+        args, resume=migrated, checkpoint_out=tmp_path / "o.pt", block_index=2
+    )
+    assert "--reset_optimizer_on_resume" in block2
+
+    block2_plain = module.training_command(
+        args, resume=plain, checkpoint_out=tmp_path / "o.pt", block_index=2
+    )
+    assert "--reset_optimizer_on_resume" not in block2_plain, (
+        "resetting the optimizer on every block would discard the run's own "
+        "learning at each rollback"
+    )
+
+
+def test_a_child_that_exits_zero_without_writing_is_a_failure(tmp_path):
+    """Isaac can mask a non-zero exit; the artifact cannot lie.
+
+    Measured: a training block died on a RuntimeError, printed the traceback,
+    exited 0, and the supervisor evaluated the STALE model_latest.pt from the
+    previous block -- reporting block 1's numbers as block 2's.
+    """
+    module = _supervisor()
+    missing = tmp_path / "never_written.pt"
+    with pytest.raises(RuntimeError, match="did not write"):
+        module.run_child(
+            ["true"], timeout_s=30, label="fake block", produces=missing
+        )
+
+    stale = tmp_path / "stale.pt"
+    stale.write_bytes(b"x")
+    import os
+    import time
+
+    old = time.time() - 3600
+    os.utime(stale, (old, old))
+    with pytest.raises(RuntimeError, match="stale artifact"):
+        module.run_child(
+            ["true"], timeout_s=30, label="fake block", produces=stale
+        )
+
+    fresh = tmp_path / "fresh.pt"
+    module.run_child(
+        ["touch", str(fresh)], timeout_s=30, label="fake block", produces=fresh
+    )
+
+
 def test_a_ground_contact_duty_cycle_cannot_replace_these_gates():
     """The measured pre-fix run PASSES `ground_contact` and must still fail.
 

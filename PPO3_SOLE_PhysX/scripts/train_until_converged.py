@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+import torch
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -345,7 +347,34 @@ def training_command(
             command.append("--reset_critic_head_on_resume")
         if args.first_block_c4_std is not None:
             command.extend(["--resume_c4_std", str(args.first_block_c4_std)])
+    elif checkpoint_requires_optimizer_reset(resume):
+        # Not only block 1. When a block regresses, the supervisor rolls back
+        # to model_best.pt -- and if the best checkpoint is still the migrated
+        # seed, the NEXT block resumes a migrated checkpoint without the flag
+        # and train.py refuses it outright ("migrated shared-policy checkpoints
+        # require --reset_optimizer_on_resume"). Measured: block 1 regressed,
+        # block 2 rolled back to the seed and died in 6.3 seconds.
+        #
+        # The requirement is a property of the CHECKPOINT, so read it from the
+        # checkpoint rather than from the block index.
+        command.append("--reset_optimizer_on_resume")
+        print(
+            f"[PPO3-SUPERVISOR] resume checkpoint {resume} is a migration; "
+            "adding --reset_optimizer_on_resume",
+            flush=True,
+        )
     return command
+
+
+def checkpoint_requires_optimizer_reset(path: Path) -> bool:
+    """Does this checkpoint carry the migration's optimizer-reset requirement?"""
+    try:
+        payload = torch.load(str(path), map_location="cpu", weights_only=False)
+    except Exception:  # noqa: BLE001 - a bad checkpoint fails later, loudly
+        return False
+    return bool(
+        (payload.get("infos") or {}).get("migration_requires_optimizer_reset", False)
+    )
 
 
 def _shared_contact_options(args: argparse.Namespace) -> list[str]:
@@ -428,7 +457,13 @@ def _display_command(command: Sequence[str]) -> str:
     return json.dumps(list(command))
 
 
-def run_child(command: Sequence[str], *, timeout_s: int, label: str) -> None:
+def run_child(
+    command: Sequence[str],
+    *,
+    timeout_s: int,
+    label: str,
+    produces: Path | None = None,
+) -> None:
     print(f"[PPO3-SUPERVISOR] starting {label}: {_display_command(command)}", flush=True)
     started = datetime.now()
     try:
@@ -443,6 +478,34 @@ def run_child(command: Sequence[str], *, timeout_s: int, label: str) -> None:
     elapsed = (datetime.now() - started).total_seconds()
     if completed.returncode != 0:
         raise RuntimeError(f"{label} exited with code {completed.returncode}")
+    if produces is not None:
+        # The return code is NOT sufficient here. Isaac's SimulationApp shuts
+        # the process down through omni.kit, and a Python exception raised
+        # inside main() can still exit 0 -- measured: training block 2 died on
+        # a RuntimeError, printed the traceback, exited 0, and the supervisor
+        # cheerfully evaluated the STALE model_latest.pt left by block 1,
+        # reporting block 1's numbers as block 2's.
+        #
+        # So verify the artifact instead: the file the child was told to write
+        # must exist and must have been written during this run.
+        if not produces.is_file():
+            raise RuntimeError(
+                f"{label} exited 0 but did not write {produces}; the child "
+                "almost certainly failed (Isaac can mask a non-zero exit)"
+            )
+        written = datetime.fromtimestamp(produces.stat().st_mtime)
+        # Two seconds of slack. Filesystem mtime resolution is coarse and the
+        # child may finish inside the same second it started, so a strict
+        # comparison rejects a perfectly good fast run. The artifact this is
+        # guarding against is a PREVIOUS block's, which is minutes or hours
+        # old, so the slack costs nothing.
+        if (started - written).total_seconds() > 2.0:
+            raise RuntimeError(
+                f"{label} exited 0 but {produces} was last written at "
+                f"{written.isoformat(timespec='seconds')}, before this run "
+                f"started at {started.isoformat(timespec='seconds')}. Refusing "
+                "to continue from a stale artifact."
+            )
     print(f"[PPO3-SUPERVISOR] finished {label} in {elapsed:.1f}s", flush=True)
 
 
@@ -523,6 +586,7 @@ def evaluate_candidate(
         evaluation_command(args, checkpoint=checkpoint, report=report_path),
         timeout_s=args.eval_timeout_s,
         label=label,
+        produces=report_path,
     )
     report = load_validation_report(
         report_path, expected_steps=int(args.eval_steps)
@@ -645,7 +709,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_child(
             train_cmd,
             timeout_s=args.train_timeout_s,
-            label=f"512-env training block {block_index}",
+            label=f"{args.num_envs}-env training block {block_index}",
+            produces=latest_checkpoint,
         )
         if not latest_checkpoint.is_file():
             raise RuntimeError(f"training did not write {latest_checkpoint}")
