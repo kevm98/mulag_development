@@ -121,7 +121,15 @@ def phase1_cli(driver: Path | None) -> None:
 
     if driver is not None and driver.is_file():
         used = extract_driver_flags(driver)
-        known = declared["train_until_converged.py"] | {"--help"}
+        # The driver legitimately invokes preflight.py itself, so its flags
+        # appear in the driver text and are NOT supervisor flags. Subtract
+        # them rather than special-casing lines: this stays correct if the
+        # invocation moves or gains arguments.
+        known = (
+            declared["train_until_converged.py"]
+            | declared_flags(Path(__file__).resolve())
+            | {"--help"}
+        )
         # Driver text also contains prose; only check flags that look like ours.
         suspicious = {
             f for f in used
