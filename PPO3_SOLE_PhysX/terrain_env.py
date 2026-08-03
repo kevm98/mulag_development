@@ -344,6 +344,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 contact_state=bool(
                     getattr(self.cfg, "terrain_contact_observation", False)
                 ),
+                head_frame=bool(
+                    getattr(self.cfg, "terrain_head_frame_observation", False)
+                ),
             )
             + 1
         )
@@ -3073,8 +3076,18 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self, applied_action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Block worsening c4 motion and optionally add XYZ-neutral recovery."""
-        head_axis = self._head_down_axis_world()
-        signed_head_angle = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
+        # Frame choice, measured rather than assumed. `atan2(y, -z)` is the
+        # tilt projected into the WORLD Y-Z plane, and on stage 6 that
+        # projection under-reads the correctable tilt by 54 % precisely on the
+        # samples where alignment collapses (joint/world ratio 1.545 against
+        # 1.048 when healthy), because the excursion has rotated into world X
+        # as the arm slews. A shield computed on a signal that fades as the
+        # failure grows cannot shield anything.
+        if bool(getattr(self.cfg, "terrain_head_tilt_arm_frame", False)):
+            signed_head_angle = self._head_joint_signed_tilt()
+        else:
+            head_axis = self._head_down_axis_world()
+            signed_head_angle = torch.atan2(head_axis[:, 1], -head_axis[:, 2])
         # NOTE: atan2(y, -z) is the tilt projected into the Y-Z plane, so this
         # shield is blind to an X-Z excursion (see the blind-axis tests in
         # tests/test_sole_actions.py). Fading on the true off-down angle instead
@@ -3286,6 +3299,40 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             (contact, log_force, force_rate, gap, acquired, loss_steps), dim=-1
         )
 
+    @torch.no_grad()
+    def _head_frame_channels(self) -> torch.Tensor | None:
+        """The ACTIONABLE head error, and the variable that rotates its frame.
+
+        The policy already sees `head_down_alignment` (an unsigned cosine, so it
+        cannot tell which way to move) and `head_down_axis_xy` (WORLD frame).
+        Neither is the quantity the head joint can act on.
+
+        Measured on stage 6 at 2.2x path amplitude, 30 720 samples
+        (reports/stage6/head_frame/ppo3_amp2.2.json), splitting on alignment:
+
+                              healthy      collapsed (<0.9)
+            mean |slew|       0.0124 rad   0.1775 rad   (14x)
+            joint/world tilt  1.048        1.545
+            head axis X/Y     0.214        1.305
+
+        with corr(|slew|, joint_tilt - world_tilt) = +0.814 and
+        corr(|slew|, alignment) = -0.755. The correctable tilt rotates into
+        world X as the arm slews, so a world-frame signal under-reads it by
+        half exactly where the head fails. Giving the policy the joint-frame
+        tilt and the slew angle makes the error it is asked to correct
+        observable at all."""
+        if not bool(getattr(self.cfg, "terrain_head_frame_observation", False)):
+            return None
+        tilt = self._head_joint_signed_tilt()
+        slew = self.robot.data.joint_pos[:, int(self._arm_joint_ids[0])]
+        return torch.stack(
+            (
+                torch.clamp(tilt, -3.2, 3.2),
+                torch.clamp(slew, -3.2, 3.2),
+            ),
+            dim=-1,
+        )
+
     def _get_observations(self) -> dict:
         if getattr(self, "_sole_applied", None) is None:
             return super()._get_observations()
@@ -3341,6 +3388,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 getattr(self.cfg, "terrain_model_error_history", 1)
             ),
             contact_state=self._contact_state_channels(),
+            head_frame=self._head_frame_channels(),
             cutter_contact_force_normalized=torch.clamp(
                 self.cutter_terrain_contact_force_n()
                 / max(

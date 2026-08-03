@@ -223,6 +223,14 @@ p.add_argument("--max_action_rate", type=float, default=None)
 p.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
 p.add_argument("--cylinder_target_leak", type=float, default=None)
 p.add_argument("--tracking_amplitude", type=float, default=None)
+p.add_argument(
+    "--head_frame_observation", default="", choices=("", "true", "false"),
+    help="Expose joint-frame head tilt + arm slew (adds 2 observation columns).",
+)
+p.add_argument(
+    "--head_tilt_arm_frame", default="", choices=("", "true", "false"),
+    help="Measure head tilt about the joint's own axis instead of world Y-Z.",
+)
 p.add_argument("--control-path-audit", dest="audit", action="store_true")
 p.add_argument(
     "--zero_action",
@@ -318,6 +326,12 @@ def build_env():
         override_cfg(env_cfg, "cylinder_target_max_lead_m", float(a.cylinder_target_max_lead_m))
     if a.cylinder_target_leak is not None:
         override_cfg(env_cfg, "cylinder_target_leak", float(a.cylinder_target_leak))
+    if a.head_frame_observation:
+        override_cfg(env_cfg, "terrain_head_frame_observation",
+                     a.head_frame_observation == "true")
+    if a.head_tilt_arm_frame:
+        override_cfg(env_cfg, "terrain_head_tilt_arm_frame",
+                     a.head_tilt_arm_frame == "true")
     if a.tracking_amplitude is not None:
         override_cfg(
             env_cfg, "terrain_tracking_amplitude_scale", float(a.tracking_amplitude)

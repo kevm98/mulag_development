@@ -47,6 +47,11 @@ def nonfinite_row_mask(*tensors: torch.Tensor | None) -> torch.Tensor:
 #: Extra columns exposing ACTUATOR MODEL ERROR. See build_verge_observation.
 MODEL_ERROR_CHANNELS = 12
 
+#: Extra columns exposing the HEAD JOINT FRAME. See build_verge_observation.
+HEAD_FRAME_CHANNELS = 2
+
+HEAD_FRAME_CHANNEL_NAMES = ("head_joint_signed_tilt", "arm_slew_rad")
+
 #: Extra columns exposing CONTACT STATE. See build_verge_observation.
 CONTACT_STATE_CHANNELS = 6
 
@@ -68,12 +73,15 @@ def verge_observation_dim(
     model_error: bool = False,
     model_error_history: int = 1,
     contact_state: bool = False,
+    head_frame: bool = False,
 ) -> int:
     extra = (
         MODEL_ERROR_CHANNELS * max(int(model_error_history), 1) if model_error else 0
     )
     if contact_state:
         extra += CONTACT_STATE_CHANNELS
+    if head_frame:
+        extra += HEAD_FRAME_CHANNELS
     return profile_bins + 44 + extra
 
 
@@ -116,6 +124,7 @@ def observation_space_for_cfg(cfg) -> int:
                 getattr(cfg, "terrain_model_error_history", 1)
             ),
             contact_state=bool(getattr(cfg, "terrain_contact_observation", False)),
+            head_frame=bool(getattr(cfg, "terrain_head_frame_observation", False)),
         )
         + 1
     )
@@ -162,6 +171,7 @@ def build_verge_observation(
     model_error: torch.Tensor | None = None,
     model_error_history: int = 1,
     contact_state: torch.Tensor | None = None,
+    head_frame: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Build the verge-mowing observation.
 
@@ -272,6 +282,8 @@ def build_verge_observation(
         columns.append(model_error)
     if contact_state is not None:
         columns.append(contact_state)
+    if head_frame is not None:
+        columns.append(head_frame)
     obs = torch.nan_to_num(torch.cat(columns, dim=-1), nan=0.0, posinf=0.0, neginf=0.0)
     expected = (
         verge_observation_dim(
@@ -282,6 +294,7 @@ def build_verge_observation(
             # model-error docstring recommends could never be enabled.
             model_error_history=int(model_error_history),
             contact_state=contact_state is not None,
+            head_frame=head_frame is not None,
         )
         + 1
     )

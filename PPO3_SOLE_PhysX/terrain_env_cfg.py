@@ -1043,6 +1043,17 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
 
     Changes the observation width, so a legacy checkpoint must be migrated with
     ``scripts/migrate_shared_policy.py`` before it can be loaded."""
+    terrain_head_frame_observation: bool = False
+    """Expose the JOINT-FRAME head tilt and the arm slew to the policy.
+
+    The policy currently sees an unsigned alignment cosine and the WORLD-frame
+    head axis. Neither is the error the head joint can act on. Measured on
+    stage 6 at 2.2x amplitude (reports/stage6/head_frame/ppo3_amp2.2.json),
+    the correctable tilt is 1.545x the world-frame measure on the samples
+    where alignment collapses, against 1.048x when healthy, and
+    corr(|slew|, joint_tilt - world_tilt) = +0.814.
+
+    Adds 2 columns, so a narrower checkpoint must be migrated."""
     terrain_contact_force_rate_scale_nps: float = 1.0e6
     """Normalizer for the force-rate observation channel.
 
