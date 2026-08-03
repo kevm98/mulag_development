@@ -46,6 +46,10 @@ case "$ACTUATOR" in
   *) echo "usage: $0 {rom|idfd}"; exit 2 ;;
 esac
 
+# Overridable so the whole three-stage chain can be REHEARSED into a throwaway
+# experiment before the real run. Copying this script elsewhere to do that does
+# not work: it resolves the repo root from its own location.
+EXPERIMENT=${EXPERIMENT_OVERRIDE:-$EXPERIMENT}
 ROOT_DIR=logs/rsl_rl/$EXPERIMENT
 mkdir -p "$ROOT_DIR"
 SEED_CKPT=${SEED_CKPT:-$ROOT_DIR/model_seed_98.pt}
@@ -61,10 +65,25 @@ EVAL_ENVS=${EVAL_ENVS:-32}
 BLOCK_ITERS=${BLOCK_ITERS:-40}
 LR=${LR:-1.0e-5}
 
+# PREFLIGHT, before a single GPU-hour is committed. Every long run in this work
+# has been killed part-way by something a five-minute rehearsal would have
+# caught: a flag never declared, a flag applied after the observation width was
+# frozen, a migrated checkpoint resumed without its optimizer reset. The static
+# phases cost ~30 s and check exactly those.
+#
+# Set SKIP_PREFLIGHT=1 only if you have just run it yourself.
+if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
+  echo "=== preflight ($ACTUATOR) ==="
+  $PY PPO3_SOLE_PhysX/scripts/preflight.py \
+    --driver PPO3_SOLE_PhysX/scripts/run_headfix_training.sh \
+    --checkpoint "$SEED_CKPT" --expected_width 98 || {
+      echo "PREFLIGHT FAILED -- refusing to start training."; exit 5; }
+fi
+
 common=(
   --python "$PY" --actuator "$ACTUATOR" --device cuda:0
   --num_envs "$NUM_ENVS" --eval_envs "$EVAL_ENVS"
-  --block_iterations "$BLOCK_ITERS" --eval_steps 960
+  --block_iterations "$BLOCK_ITERS" --eval_steps "${EVAL_STEPS:-960}"
   --eval_timeout_s 3600 --train_timeout_s 7200
   --stage 6 --learning_rate "$LR" --head_joint_action
   --contact_observation true --contact_safety_reward true

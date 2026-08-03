@@ -190,6 +190,27 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--head_frame_observation",
+    default="",
+    choices=("", "true", "false"),
+    help=(
+        "Expose the JOINT-FRAME head tilt and the arm slew to the policy "
+        "(2 extra observation columns). The policy otherwise sees only an "
+        "unsigned alignment cosine and a WORLD-frame axis, neither of which is "
+        "the error the head joint can act on."
+    ),
+)
+p.add_argument(
+    "--head_tilt_arm_frame",
+    default="",
+    choices=("", "true", "false"),
+    help=(
+        "Measure head tilt about the joint's own axis instead of the world "
+        "Y-Z plane. Measured: the world projection under-reads the correctable "
+        "tilt by 54 percent exactly where alignment collapses."
+    ),
+)
+p.add_argument(
     "--height_schedule",
     default="",
     help=(
