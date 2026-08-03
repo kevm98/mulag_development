@@ -179,6 +179,17 @@ p.add_argument(
 )
 p.add_argument("--cylinder_target_leak", type=float, default=None)
 p.add_argument(
+    "--tracking_amplitude",
+    type=float,
+    default=None,
+    help=(
+        "Override terrain_tracking_amplitude_scale. Stage 6 sets 2.2 as the "
+        "point of the stage; ramping 1.4 -> 1.8 -> 2.2 exists because a wider "
+        "path demands more slew and slew tilts the head -- jumping straight to "
+        "2.2 measured head alignment 0.5911 on the stage-5 checkpoint."
+    ),
+)
+p.add_argument(
     "--height_schedule",
     default="",
     help=(
@@ -768,6 +779,10 @@ def main() -> None:
         env_cfg.terrain_tracking_amplitude_scale = (
             1.0 if (a.tail_focus or a.contact_focus or a.boom_focus) else 1.8
         )
+    if a.tracking_amplitude is not None:
+        if a.tracking_amplitude <= 0.0:
+            raise ValueError("--tracking_amplitude must be positive")
+        env_cfg.terrain_tracking_amplitude_scale = float(a.tracking_amplitude)
     if a.height_schedule:
         scales = tuple(
             float(part) for part in a.height_schedule.split(",") if part.strip()

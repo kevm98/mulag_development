@@ -223,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arm_stiffness_scale", type=float, default=None)
     parser.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
     parser.add_argument("--cylinder_target_leak", type=float, default=None)
+    parser.add_argument("--tracking_amplitude", type=float, default=None)
     parser.add_argument("--height_schedule", default="")
     parser.add_argument(
         "--strict_contact",
@@ -435,6 +436,8 @@ def _shared_contact_options(args: argparse.Namespace) -> list[str]:
         )
     if args.cylinder_target_leak is not None:
         options.extend(["--cylinder_target_leak", str(args.cylinder_target_leak)])
+    if args.tracking_amplitude is not None:
+        options.extend(["--tracking_amplitude", str(args.tracking_amplitude)])
     return options
 
 

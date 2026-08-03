@@ -222,6 +222,7 @@ p.add_argument("--action_scale", type=float, default=None)
 p.add_argument("--max_action_rate", type=float, default=None)
 p.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
 p.add_argument("--cylinder_target_leak", type=float, default=None)
+p.add_argument("--tracking_amplitude", type=float, default=None)
 p.add_argument("--control-path-audit", dest="audit", action="store_true")
 p.add_argument(
     "--zero_action",
@@ -317,6 +318,10 @@ def build_env():
         override_cfg(env_cfg, "cylinder_target_max_lead_m", float(a.cylinder_target_max_lead_m))
     if a.cylinder_target_leak is not None:
         override_cfg(env_cfg, "cylinder_target_leak", float(a.cylinder_target_leak))
+    if a.tracking_amplitude is not None:
+        override_cfg(
+            env_cfg, "terrain_tracking_amplitude_scale", float(a.tracking_amplitude)
+        )
     # The evaluator MEASURES contact loss; it must never terminate on it.
     # Terminating would truncate the airborne interval the strict gates are
     # trying to size, and a gate that shortens its own evidence is the
