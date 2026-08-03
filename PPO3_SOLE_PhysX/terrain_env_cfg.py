@@ -89,6 +89,38 @@ def apply_terrain_curriculum_stage(cfg, stage: int) -> None:
         # is the only mesh that changes, so the cost is bounded.
         cfg.mow_strip_resolution_m = 0.15
         cfg.uneven_verge_apron = True
+    elif stage == 6:
+        # FLAT GROUND WITH RANDOM RAISED CHUNKS, and a much wider tracking path.
+        #
+        # Stage 5 asks the arm to follow a surface that undulates everywhere,
+        # which makes cut height the dominant difficulty and leaves the lateral
+        # path exercising barely a third of the verge. Stage 6 inverts that: the
+        # ground is flat at road level for long runs with discrete raised
+        # sections between, and the tracking line swings across most of the
+        # available half-strip. Tracking is the objective; the chunks are the
+        # disturbance.
+        #
+        # The patch layout is drawn PER ENVIRONMENT from its own terrain seed
+        # (see terrain.generate_flat_patches), so a policy trained here sees a
+        # different number of chunks in different places at different heights in
+        # every parallel environment and on every resumed block. That is the
+        # robustness this stage exists for -- it cannot be obtained by
+        # memorising one mesh.
+        cfg.cut_tracking_std_m = 0.03
+        cfg.lateral_tracking_std_m = 0.30
+        cfg.episode_length_s = 16.0
+        cfg.sole_action_filter = float(
+            getattr(cfg, "terrain_action_filter", 0.70)
+        )
+        cfg.terrain_relief_profile = "flat_patches"
+        cfg.mow_strip_resolution_m = 0.15
+        cfg.uneven_verge_apron = True
+        # The whole point of this stage. The families author 0.10-0.24 m of
+        # lateral swing against 0.74 m of available half-strip; 2.2x takes the
+        # mean peak-to-peak from ~0.20 m to ~0.44 m and makes the red line
+        # something the arm has to work to stay on. Still bounded by the same
+        # smooth tanh saturation, so it cannot leave the green.
+        cfg.terrain_tracking_amplitude_scale = 2.2
 
 
 @configclass

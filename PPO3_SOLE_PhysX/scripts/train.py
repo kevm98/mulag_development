@@ -272,8 +272,8 @@ a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
 
 stages = tuple(int(part) for part in a.stages.split(",") if part.strip())
-if not stages or any(stage not in (1, 2, 3, 4, 5) for stage in stages):
-    p.error("--stages must be a comma-separated subset of 1,2,3,4,5")
+if not stages or any(stage not in (1, 2, 3, 4, 5, 6) for stage in stages):
+    p.error("--stages must be a comma-separated subset of 1,2,3,4,5,6")
 if a.stage_iterations <= 0 or a.save_interval <= 0:
     p.error("stage iterations and save interval must be positive")
 if a.learning_rate is not None and a.learning_rate <= 0.0:
@@ -760,9 +760,14 @@ def main() -> None:
     # changes the problem and previously drove head alignment as low as 0.338.
     # Contact focus is the same argument: the contact-loss events were measured
     # at 1.0x, so widening the path would train against a different failure.
-    env_cfg.terrain_tracking_amplitude_scale = (
-        1.0 if (a.tail_focus or a.contact_focus or a.boom_focus) else 1.8
-    )
+    # Stage 6 sets its own amplitude (2.2) as the POINT of the stage -- a wide
+    # tracking line over flat ground with discrete chunks. Overwriting it here
+    # would silently turn stage 6 back into a narrow-path task and the whole
+    # stage would measure something else.
+    if 6 not in stages:
+        env_cfg.terrain_tracking_amplitude_scale = (
+            1.0 if (a.tail_focus or a.contact_focus or a.boom_focus) else 1.8
+        )
     if a.height_schedule:
         scales = tuple(
             float(part) for part in a.height_schedule.split(",") if part.strip()

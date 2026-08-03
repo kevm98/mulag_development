@@ -54,8 +54,13 @@ def apply_sole_curriculum_stage(cfg, stage: int) -> None:
     signal and the 0.20 m band.
     """
     stage = int(stage)
-    if stage not in (1, 2, 3, 4, 5):
-        raise ValueError(f"curriculum stage must be 1, 2, 3, 4, or 5; got {stage}")
+    if stage not in (1, 2, 3, 4, 5, 6):
+        raise ValueError(f"curriculum stage must be 1-6; got {stage}")
+    # Stage 6 shares stage 5's arm contract exactly -- same authority, filter,
+    # slew and clearance band. Only the GROUND and the tracking path differ, so
+    # a stage-6 result isolates those and nothing else.
+    if stage == 6:
+        stage = 5
 
     # Shared across all stages. See the note above.
     cfg.trajectory_shape = "line"

@@ -25,7 +25,7 @@ from isaaclab.app import AppLauncher
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--num_envs", type=int, default=128)
 p.add_argument("--seed", type=int, default=17)
-p.add_argument("--stage", type=int, default=4, choices=(1, 2, 3, 4, 5))
+p.add_argument("--stage", type=int, default=4, choices=(1, 2, 3, 4, 5, 6))
 p.add_argument("--iterations", type=int, default=120)
 p.add_argument("--steps_per_iteration", type=int, default=32)
 p.add_argument("--epochs_per_iteration", type=int, default=3)

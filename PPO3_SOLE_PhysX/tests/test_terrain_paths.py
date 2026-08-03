@@ -270,3 +270,130 @@ def test_training_widens_the_path_but_the_gated_config_does_not():
     assert "else 1.8" in train_source, (
         "unfocused training no longer widens the path beyond the gated 1.0"
     )
+
+
+# ----------------------------------------------------------------------
+# Stage 6: flat ground at road level with randomly placed raised chunks
+# ----------------------------------------------------------------------
+
+
+def _flat_patch_cfg(seed: int):
+    from dataclasses import replace
+
+    from PPO3_SOLE_PhysX.terrain import MOW_STRIP_EVAL_CFG, apply_relief_profile
+
+    base = replace(MOW_STRIP_EVAL_CFG, length_m=26.0, resolution_m=0.15, seed=seed)
+    return apply_relief_profile(base, "flat_patches")
+
+
+def _flat_patch_surface(seed: int, step: float = 0.02):
+    from PPO3_SOLE_PhysX.terrain import surface_height_at
+
+    cfg = _flat_patch_cfg(seed)
+    x = np.arange(cfg.start_x_m, cfg.start_x_m + cfg.length_m, step)
+    y = np.full_like(x, cfg.center_y_m)
+    return cfg, x, surface_height_at(cfg, x, y)
+
+
+def test_flat_patches_is_mostly_flat_at_ground_level():
+    """The defining property: long runs at road level, not everywhere-undulating.
+
+    Stage 5's verge undulates everywhere, which makes cut height the dominant
+    difficulty. Stage 6 inverts that -- the ground is flat and the chunks are
+    discrete disturbances -- so 'mostly flat' is the contract, not a nicety.
+    """
+    for seed in (42, 909, 1337, 4242):
+        cfg, _, z = _flat_patch_surface(seed)
+        flat = float((np.abs(z) < 0.03).mean())
+        assert flat > 0.45, f"seed {seed}: only {flat:.2f} of the strip is flat"
+        # Flat means flat AT ROAD LEVEL, not at some raised plateau.
+        assert abs(float(np.median(z))) < 0.03, f"seed {seed}: flat run is offset"
+
+
+def test_flat_patches_actually_has_raised_chunks():
+    for seed in (42, 909, 1337, 4242):
+        cfg, _, z = _flat_patch_surface(seed)
+        assert 3 <= len(cfg.hill_heights_m) <= 6
+        assert z.max() > 0.09, f"seed {seed}: no chunk worth negotiating"
+        # And it dips slightly below road level, so the arm works both ways.
+        assert -0.06 < z.min() < -0.005, f"seed {seed}: z.min()={z.min():.3f}"
+
+
+def test_flat_patch_layout_is_random_per_seed_and_deterministic_per_seed():
+    """Robustness comes from every environment seeing a different layout.
+
+    Each environment carries its own terrain seed (terrain_seed_stride), so a
+    policy trained across them cannot memorise one mesh -- but the SAME seed
+    must still reproduce exactly, or a run and its evaluation diverge.
+    """
+    layouts = {}
+    for seed in (42, 909, 1337, 4242, 17):
+        cfg = _flat_patch_cfg(seed)
+        layouts[seed] = (cfg.hill_centers, cfg.hill_heights_m, cfg.hill_widths)
+        assert _flat_patch_cfg(seed) == cfg, "same seed did not reproduce"
+    assert len({repr(v) for v in layouts.values()}) == len(layouts), (
+        "different seeds produced the same patch layout"
+    )
+    counts = {len(v[1]) for v in layouts.values()}
+    assert len(counts) > 1, "patch COUNT never varies across seeds"
+
+
+def test_flat_patch_slopes_stay_followable():
+    """Width is derived from height so a tall narrow draw cannot make a wall.
+
+    An unfollowable slope produces a failure that looks like a policy problem
+    and is not one.
+    """
+    from PPO3_SOLE_PhysX.terrain import FLAT_PATCH_MAX_SLOPE
+
+    for seed in (42, 909, 1337, 4242, 17, 5, 99):
+        cfg, _, z = _flat_patch_surface(seed)
+        slope = float(np.abs(np.gradient(z, 0.02)).max())
+        # The patch bound plus the small fine-texture term on top of it.
+        assert slope < FLAT_PATCH_MAX_SLOPE + 0.06, f"seed {seed}: slope {slope:.3f}"
+        assert np.isfinite(z).all()
+
+
+def test_flat_patches_drops_the_everywhere_undulation_terms():
+    """The terms that made stage 5 undulate everywhere must be off."""
+    cfg = _flat_patch_cfg(42)
+    assert cfg.elevation_rise_end_m == 0.0
+    assert cfg.cross_slope_end_rad == 0.0
+    assert cfg.lateral_weight == 0.0
+    assert cfg.amplitude_end_m <= 0.012
+
+
+def test_stage_six_widens_the_tracking_path_and_selects_flat_patches():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "terrain_env_cfg.py"
+    ).read_text()
+    stage6 = source[source.index("elif stage == 6:") :]
+    stage6 = stage6[: stage6.index("@configclass")]
+    assert 'cfg.terrain_relief_profile = "flat_patches"' in stage6
+    assert "cfg.terrain_tracking_amplitude_scale = 2.2" in stage6
+    # Stage 6 must not quietly change the arm contract; only ground and path.
+    for forbidden in ("sole_max_action_rate", "action_scale", "arm_stiffness"):
+        assert forbidden not in stage6, (
+            f"stage 6 changes {forbidden}; it must differ from stage 5 only in "
+            "the ground and the tracking path"
+        )
+
+
+def test_training_does_not_clobber_stage_sixs_wide_path():
+    """Stage 6's amplitude IS the stage. train.py must not overwrite it.
+
+    train.py sets terrain_tracking_amplitude_scale after applying the
+    curriculum, so without this guard stage 6 silently becomes a narrow-path
+    task and measures something other than what it was built for.
+    """
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts" / "train.py"
+    ).read_text()
+    assert "if 6 not in stages:" in source
+    guard = source.index("if 6 not in stages:")
+    assign = source.index("env_cfg.terrain_tracking_amplitude_scale = (", guard)
+    assert assign - guard < 400, "the stage-6 guard does not cover the assignment"

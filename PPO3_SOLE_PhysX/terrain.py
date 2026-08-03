@@ -429,7 +429,67 @@ MOW_STRIP_EVAL_CFG = MowStripCfg(
     hill_heights_m=(0.20, 0.55, 0.31),
 )
 
-RELIEF_PROFILES = ("gentle", "lawn_rough")
+RELIEF_PROFILES = ("gentle", "lawn_rough", "flat_patches")
+
+#: Bound on the along-track surface slope any generated patch may produce.
+#: A Gaussian ``A*exp(-0.5*((p-c)/w)^2)`` over a strip of length ``L`` peaks in
+#: slope at ``0.607*A/(w*L)``, so the patch WIDTH is derived from the drawn
+#: height rather than drawn independently -- otherwise a tall narrow draw makes
+#: a wall the arm cannot follow, and the failure looks like a policy problem.
+FLAT_PATCH_MAX_SLOPE = 0.26
+
+
+def generate_flat_patches(
+    cfg: MowStripCfg, *, rng: np.random.Generator
+) -> tuple[tuple, tuple, tuple, tuple, tuple, tuple]:
+    """Draw a random set of raised chunks and shallow scoops for a flat verge.
+
+    Returns ``(hill_centers, hill_heights, hill_widths, hollow_centers,
+    hollow_depths, hollow_widths)``.
+
+    The layout is drawn from ``rng``, which the caller seeds from ``cfg.seed``.
+    Every environment carries its own seed (``terrain_seed_stride``), so each
+    one gets a genuinely different number of patches in different places at
+    different heights -- which is what makes a policy trained across them
+    adaptive rather than fitted to one mesh.
+
+    Centres are drawn on a shuffled grid rather than uniformly, so patches
+    cannot pile up into one long ridge and leave the rest of the strip empty.
+    The flat ground BETWEEN them is the point of this profile.
+    """
+    length = max(float(cfg.length_m), 1.0e-6)
+    count = int(rng.integers(3, 7))
+
+    # Shuffled slots across the usable span, then jittered inside each slot.
+    # 0.08-0.94 keeps a patch off the lead-in, where the cutter is still
+    # settling, and off the very end.
+    slots = np.linspace(0.08, 0.94, count + 2)[1:-1]
+    slot_width = float(slots[1] - slots[0]) if count > 1 else 0.2
+    centers = slots + rng.uniform(-0.35, 0.35, size=count) * slot_width
+
+    heights = rng.uniform(0.10, 0.38, size=count)
+    # Width from height, so the slope bound holds by construction.
+    min_widths = 0.607 * heights / (FLAT_PATCH_MAX_SLOPE * length)
+    widths = min_widths * rng.uniform(1.05, 1.6, size=count)
+
+    # A couple of shallow scoops so the flat sections are not glassy. Kept to a
+    # few centimetres: the arm's measured vertical authority is the limit, and
+    # the existing notes are explicit that deep pits ask for travel it has not
+    # got.
+    hollow_count = int(rng.integers(2, 5))
+    hollow_slots = np.linspace(0.10, 0.92, hollow_count + 2)[1:-1]
+    hollow_centers = hollow_slots + rng.uniform(-0.03, 0.03, size=hollow_count)
+    hollow_depths = -rng.uniform(0.020, 0.045, size=hollow_count)
+    hollow_widths = rng.uniform(0.020, 0.032, size=hollow_count)
+
+    return (
+        tuple(round(float(v), 4) for v in centers),
+        tuple(round(float(v), 4) for v in heights),
+        tuple(round(float(v), 4) for v in widths),
+        tuple(round(float(v), 4) for v in hollow_centers),
+        tuple(round(float(v), 4) for v in hollow_depths),
+        tuple(round(float(v), 4) for v in hollow_widths),
+    )
 
 
 def decoration_seed(base_seed: int, offset: int) -> int:
@@ -473,6 +533,51 @@ def apply_relief_profile(cfg: MowStripCfg, profile: str) -> MowStripCfg:
         )
     if profile == "gentle":
         return cfg
+    if profile == "flat_patches":
+        # Flat ground at road level, with randomly placed raised chunks between
+        # long flat runs. The tracking task, not the terrain-following task:
+        # the arm holds a constant height over most of the strip and has to
+        # negotiate discrete obstacles, instead of continuously chasing an
+        # everywhere-undulating surface.
+        #
+        # Every shaping term that made the verge undulate EVERYWHERE is off:
+        # no background elevation ramp, no cross-slope, no lateral ripple, and
+        # only a whisper of long-wavelength amplitude so the flat is natural
+        # rather than glassy. What is left is the patch set, drawn per seed.
+        #
+        # NOTE the interaction with `terrain_height_scales`: the caller scales
+        # hill heights and amplitudes by the relief scale, so a 0.5 scale here
+        # gives lower chunks on the same flat, which is the intended
+        # difficulty axis.
+        rng = np.random.default_rng(cfg.seed)
+        (
+            hill_centers,
+            hill_heights,
+            hill_widths,
+            hollow_centers,
+            hollow_depths,
+            hollow_widths,
+        ) = generate_flat_patches(cfg, rng=rng)
+        return replace(
+            cfg,
+            hill_centers=hill_centers,
+            hill_heights_m=hill_heights,
+            hill_widths=hill_widths,
+            hollow_centers=hollow_centers,
+            hollow_depths_m=hollow_depths,
+            hollow_widths=hollow_widths,
+            elevation_rise_end_m=0.0,
+            cross_slope_end_rad=0.0,
+            lateral_weight=0.0,
+            # A little fine texture so the flat reads as ground rather than a
+            # table, at an amplitude far below the cutter's tracking band.
+            wavelength_mid_m=1.6,
+            mid_weight=0.05,
+            wavelength_fine_m=0.7,
+            fine_weight=0.03,
+            amplitude_start_m=0.006,
+            amplitude_end_m=0.010,
+        )
     # Four mounds of deliberately unequal height, scaled to whichever base verge
     # this is so the training/held-out difference survives. The monotonic
     # elevation ramp is dropped entirely: it is what held the gentle verge

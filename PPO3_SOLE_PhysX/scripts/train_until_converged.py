@@ -271,8 +271,8 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--head_action_to_c4_gain must be positive")
     if args.save_interval <= 0:
         parser.error("--save_interval must be positive")
-    if not 1 <= args.stage <= 5:
-        parser.error("--stage must be between 1 and 5")
+    if not 1 <= args.stage <= 6:
+        parser.error("--stage must be between 1 and 6")
     if args.min_blocks < 0 or args.max_blocks < 0:
         parser.error("--min_blocks and --max_blocks cannot be negative")
     if args.max_blocks and args.max_blocks < args.min_blocks:
