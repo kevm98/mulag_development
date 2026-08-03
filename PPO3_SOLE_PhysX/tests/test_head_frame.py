@@ -135,3 +135,29 @@ def test_q5_is_a_real_output_and_the_probe_watches_it():
     assert "mean_abs_q5_action" in probe
     cfg = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
     assert "sole_head_joint_action: bool = True" in cfg
+
+
+def test_every_width_changing_flag_is_applied_before_the_width_is_derived():
+    """Ordering, not spelling, is how this keeps breaking.
+
+    Three flags change the observation width. If any is applied AFTER
+    `observation_space_for_cfg`, training builds a network of one width for a
+    checkpoint of another and dies before the first iteration -- which is
+    exactly what happened to both actuators on the head-fix run:
+    "checkpoint observation width 98 does not match the frozen terrain
+    contract 96".
+    """
+    source = (
+        ROOT / "PPO3_SOLE_PhysX" / "scripts" / "train.py"
+    ).read_text()
+    derive = source.index("env_cfg.observation_space = observation_space_for_cfg")
+    for flag in (
+        "env_cfg.terrain_contact_observation = ",
+        "env_cfg.terrain_head_frame_observation = ",
+        'override_cfg(env_cfg, "terrain_model_error_history"',
+    ):
+        assert flag in source, f"{flag} is gone"
+        assert source.index(flag) < derive, (
+            f"{flag} is applied AFTER the observation width is derived; the "
+            "environment will be built at the wrong width"
+        )

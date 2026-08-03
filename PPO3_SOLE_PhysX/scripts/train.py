@@ -539,6 +539,16 @@ def main() -> None:
     # disagree. ---
     if a.contact_observation:
         env_cfg.terrain_contact_observation = a.contact_observation == "true"
+    # WITH the other observation flags, and BEFORE observation_space_for_cfg
+    # below. Applied later -- in the curriculum block, where it reads naturally
+    # next to --tracking_amplitude -- the width was already frozen and training
+    # built a 96-wide env for a 98-wide checkpoint. Both actuators died on
+    # "checkpoint observation width 98 does not match the frozen terrain
+    # contract 96" before a single iteration ran.
+    if a.head_frame_observation:
+        env_cfg.terrain_head_frame_observation = a.head_frame_observation == "true"
+    if a.head_tilt_arm_frame:
+        env_cfg.terrain_head_tilt_arm_frame = a.head_tilt_arm_frame == "true"
     if a.contact_safety_reward:
         env_cfg.terrain_contact_safety_reward = a.contact_safety_reward == "true"
     if a.contact_termination:
@@ -779,10 +789,6 @@ def main() -> None:
         env_cfg.terrain_tracking_amplitude_scale = (
             1.0 if (a.tail_focus or a.contact_focus or a.boom_focus) else 1.8
         )
-    if a.head_frame_observation:
-        env_cfg.terrain_head_frame_observation = a.head_frame_observation == "true"
-    if a.head_tilt_arm_frame:
-        env_cfg.terrain_head_tilt_arm_frame = a.head_tilt_arm_frame == "true"
     if a.tracking_amplitude is not None:
         if a.tracking_amplitude <= 0.0:
             raise ValueError("--tracking_amplitude must be positive")
