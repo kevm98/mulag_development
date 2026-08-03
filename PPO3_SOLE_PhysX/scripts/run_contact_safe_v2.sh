@@ -103,13 +103,32 @@ stage() {
   mkdir -p "$dir"
   echo "=== V2 stage $label ($ACTUATOR) grace=$grace heights=$heights resume=$resume ==="
   local extra=("$@")
+  # The supervisor exits NON-ZERO for "stopped at --max_blocks without
+  # convergence", which for a fixed-block curriculum stage is the NORMAL
+  # outcome, not an error. Under `set -euo pipefail` that aborted the whole
+  # driver: PPO4 completed all three accepted blocks of stage B1 and then
+  # never ran B2 or C, so its strict matrix was scored on a B1 checkpoint
+  # while PPO3's was scored after B1+B2+C -- an unfair comparison produced by
+  # a shell exit code.
+  #
+  # A stage is judged by what it produced, below, not by the exit code.
+  local rc=0
   $PY PPO3_SOLE_PhysX/scripts/train_until_converged.py \
     "${common[@]}" "${extra[@]}" \
     --run_dir "$dir" \
     --contact_stage "$grace" \
     --height_schedule "$heights" \
     --min_blocks "$blocks" --max_blocks "$blocks" \
-    --resume "$resume" 2>&1 | tee "$dir/stage.log"
+    --resume "$resume" 2>&1 | tee "$dir/stage.log" || rc=$?
+  local accepted=0
+  [ -f "$dir/block_provenance.jsonl" ] &&
+    accepted=$(grep -c '"accepted": true' "$dir/block_provenance.jsonl" || true)
+  echo "[STAGE $label] exit=$rc accepted_blocks=$accepted/$blocks"
+  if [ "$accepted" -lt "$blocks" ]; then
+    echo "[STAGE $label] FAILED: only $accepted of $blocks blocks were accepted."
+    echo "                 See $dir/block_provenance.jsonl for the reasons."
+    exit 4
+  fi
   if [ -f "$dir/model_best.pt" ]; then
     cp "$dir/model_best.pt" "$ROOT_DIR/model_best.pt"
     [ -f "$dir/convergence_best.json" ] &&
