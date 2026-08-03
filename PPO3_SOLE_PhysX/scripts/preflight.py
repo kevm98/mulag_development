@@ -203,6 +203,33 @@ def phase3_checkpoints(checkpoints: list[Path], expected_width: int) -> None:
         )
 
 
+def phase3b_smoke(actuators: tuple[str, ...] = ("rom", "idfd")) -> None:
+    """Actually STEP the environment. Static checks cannot see a runtime bug.
+
+    A use-before-definition inside `_get_rewards` -- a reward term whose
+    definition landed AFTER its use -- passed every static phase, every unit
+    test, and then broke 33 of 36 evaluation cells. Nothing but a real rollout
+    catches that, and a 30-step rollout catches it in two minutes.
+    """
+    print("\n=== Phase 3b: 30-step rollout, both actuators (GPU) ===", flush=True)
+    for actuator in actuators:
+        result = subprocess.run(
+            [
+                PY, str(SCRIPTS / "smoke_contact_safe.py"),
+                "--actuator", actuator, "--headless", "--device", "cuda:0",
+                "--num_envs", "4", "--steps", "30",
+            ],
+            capture_output=True, text=True, timeout=2400, cwd=ROOT,
+        )
+        text = result.stdout + result.stderr
+        ok = '"passed": true' in text.lower()
+        check(ok, f"{actuator}: 30-step rollout completes and self-checks")
+        if not ok:
+            for line in text.splitlines():
+                if "FAIL" in line or "Error" in line or "Traceback" in line:
+                    print("       " + line[:160], flush=True)
+
+
 def phase4_live(driver_cmd: list[str], run_dir: Path) -> None:
     """One real supervisor block, tiny, and the ledger must accept it."""
     print("\n=== Phase 4: one live block (GPU) ===", flush=True)
@@ -232,6 +259,10 @@ def main() -> int:
     p.add_argument("--driver", default="", help="Driver script whose flags to verify.")
     p.add_argument("--checkpoint", action="append", default=[])
     p.add_argument("--expected_width", type=int, default=98)
+    p.add_argument(
+        "--smoke", action="store_true",
+        help="Also step the real environment for 30 steps on both actuators.",
+    )
     p.add_argument("--live", action="store_true", help="Also run one real block.")
     p.add_argument("--live_cmd", default="", help="Shell command for the live block.")
     p.add_argument("--live_run_dir", default="")
@@ -241,6 +272,8 @@ def main() -> int:
     phase2_widths()
     if a.checkpoint:
         phase3_checkpoints([Path(c) for c in a.checkpoint], int(a.expected_width))
+    if a.smoke:
+        phase3b_smoke()
     if a.live:
         if not a.live_cmd or not a.live_run_dir:
             FAILURES.append("--live needs --live_cmd and --live_run_dir")

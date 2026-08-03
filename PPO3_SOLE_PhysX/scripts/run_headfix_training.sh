@@ -82,7 +82,7 @@ if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
   echo "=== preflight ($ACTUATOR) ==="
   $PY PPO3_SOLE_PhysX/scripts/preflight.py \
     --driver PPO3_SOLE_PhysX/scripts/run_headfix_training.sh \
-    --checkpoint "$SEED_CKPT" --expected_width 98 || {
+    --checkpoint "$SEED_CKPT" --expected_width 98 --smoke || {
       echo "PREFLIGHT FAILED -- refusing to start training."; exit 5; }
 fi
 

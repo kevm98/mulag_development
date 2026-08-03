@@ -3513,6 +3513,28 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
 
         active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        # q5 head-correction offset. The action-magnitude and rate penalties
+        # act on `_sole_applied`, which is FOUR wide, so the fifth output has
+        # never been penalised at all -- PPO4 could wind the head integrator to
+        # its bound for free, and did (q5 mean 0.324, correction saturated at
+        # 0.35 rad, alignment 0.5303). Penalising the ACTION would tax useful
+        # transient corrections; penalising the accumulated OFFSET taxes only a
+        # standing tilt, which is the thing that breaks alignment.
+        head_offset_weight = float(
+            getattr(cfg, "terrain_head_correction_weight", 0.0)
+        )
+        head_offset_penalty = torch.zeros_like(alignment)
+        if head_offset_weight != 0.0:
+            offset = getattr(self, "_head_joint_correction", None)
+            if offset is not None:
+                bound = max(
+                    float(getattr(cfg, "sole_head_correction_max_rad", 0.35)),
+                    1.0e-6,
+                )
+                head_offset_penalty = -abs(head_offset_weight) * torch.clamp(
+                    offset.abs().amax(dim=-1) / bound, 0.0, 1.0
+                ).square()
+
         contact_terms = None
         if bool(getattr(cfg, "terrain_contact_safety_reward", False)):
             contact_terms = compute_contact_safety_reward(
@@ -3715,28 +3737,6 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             + chassis_penalty
             + head_offset_penalty
         )
-        # q5 head-correction offset. The action-magnitude and rate penalties
-        # act on `_sole_applied`, which is FOUR wide, so the fifth output has
-        # never been penalised at all -- PPO4 could wind the head integrator to
-        # its bound for free, and did (q5 mean 0.324, correction saturated at
-        # 0.35 rad, alignment 0.5303). Penalising the ACTION would tax useful
-        # transient corrections; penalising the accumulated OFFSET taxes only a
-        # standing tilt, which is the thing that breaks alignment.
-        head_offset_weight = float(
-            getattr(cfg, "terrain_head_correction_weight", 0.0)
-        )
-        head_offset_penalty = torch.zeros_like(alignment)
-        if head_offset_weight != 0.0:
-            offset = getattr(self, "_head_joint_correction", None)
-            if offset is not None:
-                bound = max(
-                    float(getattr(cfg, "sole_head_correction_max_rad", 0.35)),
-                    1.0e-6,
-                )
-                head_offset_penalty = -abs(head_offset_weight) * torch.clamp(
-                    offset.abs().amax(dim=-1) / bound, 0.0, 1.0
-                ).square()
-
         if contact_terms is not None:
             # Safety group, for the same reason: an env whose head has latched
             # must still be paid for staying planted and charged for lifting,
