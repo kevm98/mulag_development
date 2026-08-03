@@ -620,7 +620,13 @@ def copy_checkpoint(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def candidate_is_better(candidate: dict, *, best_score: float, best_gates: dict) -> bool:
+def candidate_is_better(
+    candidate: dict,
+    *,
+    best_score: float,
+    best_gates: dict,
+    best_metrics: dict | None = None,
+) -> bool:
     """Promote only monotone gate progress, then use score as the tie-breaker.
 
     The normalized score is dominated by the 1% ground-strike denominator. A
@@ -634,9 +640,51 @@ def candidate_is_better(candidate: dict, *, best_score: float, best_gates: dict)
         return False
     passed_count = sum(bool(value) for value in gates.values())
     best_passed_count = sum(bool(value) for value in best_gates.values())
-    return passed_count > best_passed_count or (
-        passed_count == best_passed_count
-        and float(candidate["score"]) < float(best_score)
+    if passed_count != best_passed_count:
+        return passed_count > best_passed_count
+
+    candidate_score = float(candidate["score"])
+    if candidate_score != float(best_score):
+        return candidate_score < float(best_score)
+
+    # SCORE TIE. The normalized score SATURATES AT ZERO once every gate passes,
+    # so it cannot rank two passing checkpoints at all -- and it silently
+    # discarded a strictly better one. Measured: stage S6a block 2 scored
+    # 0.000000 against a best of 0.000000, was logged "regressed", and was
+    # thrown away despite holding min_head_alignment 0.9911 against the kept
+    # checkpoint's 0.9826 and max_abs_head_axis_x 0.009 against 0.033.
+    #
+    # Break the tie on the quantities the gates are coarse proxies for, in the
+    # order the current failure mode demands: head alignment first (it is what
+    # every campaign dies on), then contact quality. Strictly better on the
+    # primary key wins; ties fall through to the next.
+    return _tie_break_metrics(candidate) > _tie_break_metrics(
+        {"metrics": dict(best_metrics or {})}
+    )
+
+
+def _tie_break_metrics(report: dict) -> tuple:
+    """Rank two gate-equal, score-equal checkpoints by what actually matters.
+
+    Higher is better on every element, so plain tuple comparison works.
+    """
+    metrics = report.get("metrics") or report.get("verge") or {}
+
+    def get(name: str, default: float) -> float:
+        try:
+            return float(metrics.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    return (
+        # Head first: this is the axis six campaigns have died on.
+        get("min_head_alignment", -1.0),
+        get("p01_head_alignment", -1.0),
+        -get("max_abs_head_axis_x", 1.0e9),
+        # Then contact quality, negated so fewer is better.
+        -get("visible_lift_event_count", 1.0e9),
+        -get("maximum_consecutive_airborne_steps", 1.0e9),
+        get("ground_contact_fraction", -1.0),
     )
 
 
@@ -700,6 +748,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed_blocks = int(state.get("completed_blocks", 0))
         best_score = float(state.get("best_score", float("inf")))
         best_gates = dict(state.get("best_gates") or {})
+        best_metrics = dict(state.get("best_metrics") or {})
         if not best_gates:
             saved_best_report = Path(state["best_report"]).resolve()
             if saved_best_report.is_file():
@@ -733,6 +782,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         best_score = float(initial["score"])
         best_gates = dict(initial["gates"])
+        best_metrics = dict(initial.get("metrics") or {})
         copy_checkpoint(current_checkpoint, best_checkpoint)
         shutil.copy2(initial_report_path, best_report_path)
         if initial["passed"] and int(args.min_blocks) == 0:
@@ -754,6 +804,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "best_report": str(best_report_path),
             "best_score": best_score,
             "best_gates": best_gates,
+            "best_metrics": best_metrics,
             "completed_blocks": completed_blocks,
             "training_num_envs": int(args.num_envs),
             "heldout_num_envs": int(args.eval_envs),
@@ -836,10 +887,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed_blocks = block_index
         score = float(report["score"])
         if candidate_is_better(
-            report, best_score=best_score, best_gates=best_gates
+            report,
+            best_score=best_score,
+            best_gates=best_gates,
+            best_metrics=best_metrics,
         ):
             best_score = score
             best_gates = dict(report["gates"])
+            best_metrics = dict(report.get("metrics") or {})
             copy_checkpoint(current_checkpoint, best_checkpoint)
             shutil.copy2(report_path, best_report_path)
             print(

@@ -63,7 +63,13 @@ TARGET_LEAD=${TARGET_LEAD:-0.018}
 NUM_ENVS=${NUM_ENVS:-256}
 EVAL_ENVS=${EVAL_ENVS:-32}
 BLOCK_ITERS=${BLOCK_ITERS:-40}
-LR=${LR:-1.0e-5}
+# Damped, because the head OSCILLATES rather than drifts. Measured on S6a with
+# identical config across three blocks: min_head_alignment 0.622 -> 0.9911 ->
+# 0.522, with max_abs_head_axis_x 0.356 -> 0.009 -> 0.768. A policy that holds
+# the head at 0.9911 demonstrably exists; PPO was stepping past it and back.
+# Every one of the nine blocks regressed, so the step size is the suspect, not
+# the objective.
+LR=${LR:-4.0e-6}
 
 # PREFLIGHT, before a single GPU-hour is committed. Every long run in this work
 # has been killed part-way by something a five-minute rehearsal would have
@@ -100,7 +106,12 @@ common=(
   # PPO4's is 0.398, so it is not structural: the migration zero-initialised it
   # and its 0.04 std (against ~0.12 on c1-c4) never gave PPO enough signal to
   # move it. Forced every block, not just the first, so it cannot decay back.
-  --q5_exploration_std 0.10
+  # 0.10 was 2.5x q5's migrated 0.04 and coincided with the oscillation. The
+  # repository already records that forcing exploration std makes blocks
+  # regress, because PPO's gradient on the action mean scales as 1/sigma.
+  # 0.06 keeps q5 explorable -- it was identically zero before -- without
+  # driving the head residual as hard.
+  --q5_exploration_std 0.06
   --contact_latch true --contact_latch_release_steps 60
   --model_error_history 3
   --action_scale "$ACTION_SCALE" --arm_stiffness_scale "$ARM_STIFFNESS"

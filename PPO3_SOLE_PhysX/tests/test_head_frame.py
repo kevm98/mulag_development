@@ -161,3 +161,88 @@ def test_every_width_changing_flag_is_applied_before_the_width_is_derived():
             f"{flag} is applied AFTER the observation width is derived; the "
             "environment will be built at the wrong width"
         )
+
+
+# ----------------------------------------------------------------------
+# Checkpoint selection: the gate score saturates and cannot rank
+# ----------------------------------------------------------------------
+
+
+def _supervisor_module():
+    import importlib.util
+
+    script = ROOT / "PPO3_SOLE_PhysX" / "scripts" / "train_until_converged.py"
+    spec = importlib.util.spec_from_file_location("tuc_sel", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ALL_PASS = {f"g{i}": True for i in range(17)}
+
+
+def _report(score, **metrics):
+    base = {
+        "min_head_alignment": 0.98,
+        "p01_head_alignment": 0.99,
+        "max_abs_head_axis_x": 0.03,
+        "visible_lift_event_count": 100,
+        "maximum_consecutive_airborne_steps": 10,
+        "ground_contact_fraction": 0.94,
+    }
+    base.update(metrics)
+    return {"gates": dict(ALL_PASS), "score": score, "metrics": base}
+
+
+def test_a_strictly_better_passing_checkpoint_is_not_discarded():
+    """MEASURED: stage S6a block 2 scored 0.000000 against a best of 0.000000,
+    was logged "regressed", and was thrown away -- while holding
+    min_head_alignment 0.9911 against the kept checkpoint's 0.9826 and
+    max_abs_head_axis_x 0.009 against 0.033.
+
+    The normalized score saturates at zero once every gate passes, so it cannot
+    rank two passing checkpoints at all.
+    """
+    module = _supervisor_module()
+    best = _report(0.0, min_head_alignment=0.9826, max_abs_head_axis_x=0.033)
+    better = _report(0.0, min_head_alignment=0.9911, max_abs_head_axis_x=0.009)
+    assert module.candidate_is_better(
+        better, best_score=0.0, best_gates=ALL_PASS, best_metrics=best["metrics"]
+    ), "a strictly better passing checkpoint was discarded on a score tie"
+
+
+def test_a_worse_passing_checkpoint_is_still_rejected_on_a_tie():
+    module = _supervisor_module()
+    best = _report(0.0, min_head_alignment=0.9911)
+    worse = _report(0.0, min_head_alignment=0.9826)
+    assert not module.candidate_is_better(
+        worse, best_score=0.0, best_gates=ALL_PASS, best_metrics=best["metrics"]
+    )
+
+
+def test_head_alignment_outranks_contact_in_the_tie_break():
+    """Head first: it is the axis every campaign has died on."""
+    module = _supervisor_module()
+    best = _report(0.0, min_head_alignment=0.98, visible_lift_event_count=50)
+    # Better head, worse contact -> still promoted.
+    candidate = _report(0.0, min_head_alignment=0.99, visible_lift_event_count=200)
+    assert module.candidate_is_better(
+        candidate, best_score=0.0, best_gates=ALL_PASS, best_metrics=best["metrics"]
+    )
+    # Equal head, better contact -> promoted on the secondary key.
+    equal_head = _report(0.0, visible_lift_event_count=10)
+    base = _report(0.0, visible_lift_event_count=100)
+    assert module.candidate_is_better(
+        equal_head, best_score=0.0, best_gates=ALL_PASS, best_metrics=base["metrics"]
+    )
+
+
+def test_a_lost_gate_still_vetoes_regardless_of_metrics():
+    module = _supervisor_module()
+    lost = dict(ALL_PASS)
+    lost["g0"] = False
+    candidate = {"gates": lost, "score": 0.0, "metrics": _report(0.0, min_head_alignment=1.0)["metrics"]}
+    assert not module.candidate_is_better(
+        candidate, best_score=0.0, best_gates=ALL_PASS,
+        best_metrics=_report(0.0)["metrics"],
+    )
