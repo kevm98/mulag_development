@@ -189,6 +189,18 @@ class SolePolicyEnvCfg(ResidualPolicyEnvCfg):
     the cutter.
     """
     sole_head_action_scale_rad: float = 0.010
+    sole_head_correction_leak: float = 0.0
+    """Leak on the q5 head-correction integrator. 0.0 reproduces stored scores.
+
+    q5 integrates: correction += 0.010 * action, clamped to +-0.35 rad. That is
+    a velocity integrator, so a persistent action bias winds to the bound and
+    stays there. MEASURED on PPO4: q5 mean 0.324 (against mean-abs 0.389, i.e.
+    almost pure DC) saturates the bound in ~108 of 960 steps -- a permanent
+    20 degree head offset, and the entire difference between PPO4's head
+    alignment (0.5303) and PPO3's (0.9875, q5 mean-abs 0.0114).
+
+    With a leak the same bias settles at scale*action/leak. Same anti-windup,
+    and same rationale, as `cylinder_target_leak` on the cylinder reference."""
     """Radians of head-joint reference commanded per unit action per step.
 
     The cylinders get 0.004 m per step; this is the rotational counterpart.

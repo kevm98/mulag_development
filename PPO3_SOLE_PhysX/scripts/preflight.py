@@ -109,6 +109,8 @@ def phase1_cli(driver: Path | None) -> None:
         "--tracking_amplitude",
         "--head_frame_observation",
         "--head_tilt_arm_frame",
+        "--head_correction_leak",
+        "--head_correction_weight",
     }
     for flag in sorted(shared):
         in_sup = flag in declared["train_until_converged.py"]

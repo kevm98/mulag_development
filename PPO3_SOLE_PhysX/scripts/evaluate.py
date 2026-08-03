@@ -222,6 +222,14 @@ p.add_argument("--action_scale", type=float, default=None)
 p.add_argument("--max_action_rate", type=float, default=None)
 p.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
 p.add_argument("--cylinder_target_leak", type=float, default=None)
+p.add_argument(
+    "--head_correction_leak", type=float, default=None,
+    help="Leak on the q5 head-correction integrator (anti-windup).",
+)
+p.add_argument(
+    "--head_correction_weight", type=float, default=None,
+    help="Penalty on the standing q5 head offset.",
+)
 p.add_argument("--tracking_amplitude", type=float, default=None)
 p.add_argument(
     "--head_frame_observation", default="", choices=("", "true", "false"),
@@ -326,6 +334,12 @@ def build_env():
         override_cfg(env_cfg, "cylinder_target_max_lead_m", float(a.cylinder_target_max_lead_m))
     if a.cylinder_target_leak is not None:
         override_cfg(env_cfg, "cylinder_target_leak", float(a.cylinder_target_leak))
+    if a.head_correction_leak is not None:
+        override_cfg(env_cfg, "sole_head_correction_leak", float(a.head_correction_leak))
+    if a.head_correction_weight is not None:
+        override_cfg(
+            env_cfg, "terrain_head_correction_weight", float(a.head_correction_weight)
+        )
     if a.head_frame_observation:
         override_cfg(env_cfg, "terrain_head_frame_observation",
                      a.head_frame_observation == "true")

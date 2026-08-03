@@ -457,7 +457,25 @@ class SolePolicyEnv(ResidualPolicyEnv):
         if correction is None or correction.shape != applied.shape:
             correction = torch.zeros_like(applied)
         bound = float(getattr(cfg, "sole_head_correction_max_rad", 0.35))
-        correction = torch.clamp(correction + scale * applied, -bound, bound)
+        # Leaky integration, exactly as `cylinder_target_leak` does for the
+        # cylinder reference and for the same documented reason: this is a
+        # VELOCITY integrator, so holding a pose needs the action to be exactly
+        # zero, and any persistent bias winds to the bound.
+        #
+        # MEASURED on PPO4: q5 carries a DC bias of 0.324 (mean 0.324 against
+        # mean-abs 0.389, i.e. almost pure offset). At scale 0.010 rad that is
+        # 0.0032 rad/step, which saturates the 0.35 rad bound in ~108 steps of
+        # a 960-step episode -- a permanent 20 degree head offset. PPO3's q5
+        # sits at 0.011 and never winds up, which is the whole difference
+        # between the two actuators' head alignment (0.9875 vs 0.5303).
+        #
+        # With a leak, a persistent bias settles at scale*applied/leak instead
+        # of running to the bound. 0.0 reproduces every stored number.
+        leak = float(getattr(cfg, "sole_head_correction_leak", 0.0))
+        correction = correction + scale * applied
+        if leak > 0.0:
+            correction = correction * (1.0 - leak)
+        correction = torch.clamp(correction, -bound, bound)
         self._head_joint_correction = correction.detach().clone()
 
         # Only integrate here. The REFERENCE itself is assembled in

@@ -224,6 +224,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cylinder_target_max_lead_m", type=float, default=None)
     parser.add_argument("--cylinder_target_leak", type=float, default=None)
     parser.add_argument("--tracking_amplitude", type=float, default=None)
+    parser.add_argument("--head_correction_leak", type=float, default=None)
+    parser.add_argument("--head_correction_weight", type=float, default=None)
     parser.add_argument(
         "--head_frame_observation", default="", choices=("", "true", "false")
     )
@@ -444,6 +446,10 @@ def _shared_contact_options(args: argparse.Namespace) -> list[str]:
         options.extend(["--cylinder_target_leak", str(args.cylinder_target_leak)])
     if args.tracking_amplitude is not None:
         options.extend(["--tracking_amplitude", str(args.tracking_amplitude)])
+    if args.head_correction_leak is not None:
+        options.extend(["--head_correction_leak", str(args.head_correction_leak)])
+    if args.head_correction_weight is not None:
+        options.extend(["--head_correction_weight", str(args.head_correction_weight)])
     if args.head_frame_observation:
         options.extend(["--head_frame_observation", args.head_frame_observation])
     if args.head_tilt_arm_frame:

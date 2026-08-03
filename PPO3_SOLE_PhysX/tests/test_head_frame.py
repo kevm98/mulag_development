@@ -246,3 +246,58 @@ def test_a_lost_gate_still_vetoes_regardless_of_metrics():
         candidate, best_score=0.0, best_gates=ALL_PASS,
         best_metrics=_report(0.0)["metrics"],
     )
+
+
+# ----------------------------------------------------------------------
+# q5 is an INTEGRATOR and was never penalised
+# ----------------------------------------------------------------------
+
+
+def test_q5_integrator_has_a_leak_and_it_defaults_off():
+    """MEASURED: PPO4's q5 carries a DC bias of 0.324 (mean 0.324 against
+    mean-abs 0.389, i.e. almost pure offset). At scale 0.010 rad that is
+    0.0032 rad/step, saturating the 0.35 rad bound in ~108 of 960 steps -- a
+    permanent 20 degree head offset. PPO3's q5 sits at 0.0114 and never winds
+    up. That is the entire difference between their head alignment (0.5303 vs
+    0.9875).
+
+    Same anti-windup, and same rationale, as `cylinder_target_leak`.
+    """
+    env = (ROOT / "PPO3_SOLE_PhysX" / "env.py").read_text()
+    assert "sole_head_correction_leak" in env
+    body = env[env.index("sole_head_correction_leak") - 1200 :]
+    body = body[: body.index("_head_joint_correction = correction")]
+    assert "correction * (1.0 - leak)" in body, "the leak is not applied"
+    cfg = (ROOT / "PPO3_SOLE_PhysX" / "env_cfg.py").read_text()
+    assert "sole_head_correction_leak: float = 0.0" in cfg, (
+        "the leak must default off so every stored score reproduces"
+    )
+
+
+def test_the_standing_head_offset_is_penalised_not_the_action():
+    """The action is a RATE; the accumulated offset is what tilts the head.
+
+    Penalising the action would tax useful transient corrections. And the
+    existing magnitude/rate penalties act on `_sole_applied`, which is FOUR
+    wide -- the fifth output has never been penalised at all.
+    """
+    src = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env.py").read_text()
+    body = src[src.index("terrain_head_correction_weight") :]
+    body = body[: body.index("if contact_terms is not None:")]
+    assert "_head_joint_correction" in body, "penalises something other than the offset"
+    assert "sole_head_correction_max_rad" in body, "the offset is not normalised"
+    assert "head_offset_penalty" in src
+    # It must reach the reward sum, in the SAFETY group (a latched head must
+    # still be charged for holding a standing offset).
+    total = src[src.index("safety_reward = (") :]
+    total = total[: total.index(")", total.index("chassis_penalty"))]
+    assert "head_offset_penalty" in total, "the penalty never reaches the reward"
+    cfg = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env_cfg.py").read_text()
+    assert "terrain_head_correction_weight: float = 0.0" in cfg
+
+
+def test_the_head_offset_is_logged_so_windup_is_visible():
+    """The windup was invisible: nothing reported the integrator's state."""
+    src = (ROOT / "PPO3_SOLE_PhysX" / "terrain_env.py").read_text()
+    assert "action/head_correction_rad_mean_abs" in src
+    assert "action/head_correction_rad_max" in src

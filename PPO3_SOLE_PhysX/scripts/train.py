@@ -179,6 +179,14 @@ p.add_argument(
 )
 p.add_argument("--cylinder_target_leak", type=float, default=None)
 p.add_argument(
+    "--head_correction_leak", type=float, default=None,
+    help="Leak on the q5 head-correction integrator (anti-windup).",
+)
+p.add_argument(
+    "--head_correction_weight", type=float, default=None,
+    help="Penalty on the standing q5 head offset.",
+)
+p.add_argument(
     "--tracking_amplitude",
     type=float,
     default=None,
@@ -566,6 +574,12 @@ def main() -> None:
     # built a 96-wide env for a 98-wide checkpoint. Both actuators died on
     # "checkpoint observation width 98 does not match the frozen terrain
     # contract 96" before a single iteration ran.
+    if a.head_correction_leak is not None:
+        override_cfg(env_cfg, "sole_head_correction_leak", float(a.head_correction_leak))
+    if a.head_correction_weight is not None:
+        override_cfg(
+            env_cfg, "terrain_head_correction_weight", float(a.head_correction_weight)
+        )
     if a.head_frame_observation:
         env_cfg.terrain_head_frame_observation = a.head_frame_observation == "true"
     if a.head_tilt_arm_frame:

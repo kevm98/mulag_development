@@ -1043,6 +1043,17 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
 
     Changes the observation width, so a legacy checkpoint must be migrated with
     ``scripts/migrate_shared_policy.py`` before it can be loaded."""
+    terrain_head_correction_weight: float = 0.0
+    """Penalty on the STANDING q5 head offset, normalised by its bound.
+
+    The action-magnitude and rate penalties act on `_sole_applied`, which is
+    four wide, so the fifth output has never been penalised at all. PPO4 wound
+    the head-correction integrator to its 0.35 rad bound for free (q5 mean
+    0.324, alignment 0.5303) while PPO3 left it at 0.011 (alignment 0.9875).
+
+    Penalising the ACTION would tax useful transient corrections. Penalising
+    the accumulated OFFSET taxes only a standing tilt, which is what actually
+    breaks alignment. 0.0 reproduces every stored score."""
     terrain_head_frame_observation: bool = False
     """Expose the JOINT-FRAME head tilt and the arm slew to the policy.
 
