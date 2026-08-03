@@ -396,6 +396,44 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             str(getattr(self.cfg, "terrain_relief_profile", "gentle")),
         )
 
+    def _mow_strip_cfg_unprofiled(self):
+        """The strip BEFORE the relief profile is drawn.
+
+        `_mow_strip_cfg` applies the profile using the base seed, which fixes
+        the patch layout once. Re-seeding that result per environment -- which
+        is what `_spawn_mow_strip` used to do -- changes only the sinusoid
+        phases and the +-10 % jitter, NOT the chunk layout, so every one of the
+        256 parallel environments carried the SAME chunks.
+
+        MEASURED consequence: a policy trained across nine blocks saw nine
+        layouts, not 9 x 256, and its held-out adaptivity was a coin flip --
+        9/18 cells passing, alignment 0.663-0.995, bimodal rather than
+        smoothly degrading. This helper exists so the profile can be drawn
+        AFTER the per-environment seed is applied."""
+        held_out = bool(getattr(self.cfg, "use_eval_terrain", False))
+        base = MOW_STRIP_EVAL_CFG if held_out else MOW_STRIP_CFG
+        eval_override = int(getattr(self.cfg, "terrain_eval_seed_override", 0))
+        if held_out:
+            seed = eval_override if eval_override > 0 else int(base.seed)
+        else:
+            seed = int(getattr(self.cfg, "terrain_base_seed", base.seed))
+        return replace(
+            base,
+            seed=seed,
+            resolution_m=float(
+                getattr(self.cfg, "mow_strip_resolution_m", base.resolution_m)
+            ),
+            length_m=float(getattr(self.cfg, "mow_strip_length_m", base.length_m)),
+            width_m=float(getattr(self.cfg, "mow_strip_width_m", base.width_m)),
+            tracking_path_amplitude_scale=float(
+                getattr(
+                    self.cfg,
+                    "terrain_tracking_amplitude_scale",
+                    base.tracking_path_amplitude_scale,
+                )
+            ),
+        )
+
     def _cutter_prim_path(self) -> str:
         """Full USD path expression of the cutter body across all envs.
 
@@ -864,6 +902,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         origins = self.scene.env_origins.detach().cpu().numpy()
         vary_seed = bool(getattr(self.cfg, "randomize_terrain_per_env", True))
         seed_stride = int(getattr(self.cfg, "terrain_seed_stride", 7919))
+        unprofiled_cfg = self._mow_strip_cfg_unprofiled()
+        relief_profile = str(getattr(self.cfg, "terrain_relief_profile", "gentle"))
 
         # ONE merged mesh for all environments, not one prim per environment.
         # RayCasterCfg.mesh_prim_paths resolves to a single mesh, so per-env prims
@@ -931,15 +971,22 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 family = TRACKING_PATH_FAMILIES[
                     (env_index + family_offset) % len(TRACKING_PATH_FAMILIES)
                 ]
+            # Draw the relief profile from THIS environment's seed. Applying
+            # it once to the shared cfg and then re-seeding gave every
+            # environment identical chunks -- only phases and jitter varied.
+            # `unprofiled_cfg` is pre-profile precisely so this re-draw is a
+            # first application, not a second one: lawn_rough's hill_scale
+            # reads max(hill_heights_m) and would compound if applied twice.
             env_strip_cfg = (
                 replace(
-                    strip_cfg,
-                    seed=strip_cfg.seed + env_index * seed_stride,
+                    unprofiled_cfg,
+                    seed=unprofiled_cfg.seed + env_index * seed_stride,
                     tracking_path_family=family,
                 )
                 if vary_seed
-                else replace(strip_cfg, tracking_path_family=family)
+                else replace(unprofiled_cfg, tracking_path_family=family)
             )
+            env_strip_cfg = apply_relief_profile(env_strip_cfg, relief_profile)
             if start_phase_schedule:
                 start_phase = start_phase_schedule[
                     (env_index + family_offset) % len(start_phase_schedule)

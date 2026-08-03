@@ -397,3 +397,63 @@ def test_training_does_not_clobber_stage_sixs_wide_path():
     guard = source.index("if 6 not in stages:")
     assign = source.index("env_cfg.terrain_tracking_amplitude_scale = (", guard)
     assert assign - guard < 400, "the stage-6 guard does not cover the assignment"
+
+
+def test_every_environment_gets_its_own_chunk_layout():
+    """The randomisation must reach the PATCH LAYOUT, not just the phases.
+
+    `_mow_strip_cfg` applies the relief profile using the base seed, which
+    fixes hill_centers/heights/widths once. Re-seeding that RESULT per
+    environment -- which the spawner used to do -- changes only the sinusoid
+    phases and the +-10 % jitter, so all 256 parallel environments carried
+    identical chunks.
+
+    Measured consequence: training across nine blocks saw nine layouts, not
+    9 x 256, and held-out adaptivity was a coin flip (9/18 cells, alignment
+    0.663-0.995, bimodal rather than smoothly degrading).
+    """
+    from dataclasses import replace
+
+    from PPO3_SOLE_PhysX.terrain import MOW_STRIP_CFG, apply_relief_profile
+
+    base = replace(MOW_STRIP_CFG, length_m=26.0, resolution_m=0.15, seed=42)
+    stride = 7919
+
+    # WRONG (the old order): profile first, then re-seed.
+    profiled = apply_relief_profile(base, "flat_patches")
+    wrong = [
+        replace(profiled, seed=profiled.seed + i * stride).hill_heights_m
+        for i in range(6)
+    ]
+    assert len(set(map(repr, wrong))) == 1, (
+        "test premise is stale: re-seeding after the profile now varies layout"
+    )
+
+    # RIGHT (the fixed order): re-seed first, then draw the profile.
+    right = [
+        apply_relief_profile(
+            replace(base, seed=base.seed + i * stride), "flat_patches"
+        ).hill_heights_m
+        for i in range(6)
+    ]
+    assert len(set(map(repr, right))) == 6, (
+        "per-environment seeds must produce distinct chunk layouts"
+    )
+    assert len({len(h) for h in right}) > 1, "patch COUNT never varies across envs"
+
+
+def test_the_spawner_draws_the_profile_after_the_per_env_seed():
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "terrain_env.py"
+    ).read_text()
+    body = src[src.index("def _spawn_mow_strip") :]
+    body = body[: body.index("def _add_ground_sensors")]
+    seed_at = body.index("seed=unprofiled_cfg.seed + env_index * seed_stride")
+    draw_at = body.index("apply_relief_profile(env_strip_cfg, relief_profile)")
+    assert seed_at < draw_at, "the profile is drawn before the per-env seed"
+    assert "_mow_strip_cfg_unprofiled()" in body, (
+        "the spawner re-profiles an already-profiled cfg; lawn_rough's "
+        "hill_scale reads max(hill_heights_m) and would compound"
+    )
