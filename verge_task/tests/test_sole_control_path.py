@@ -1,0 +1,955 @@
+"""Contract: no classical controller is in the scored control path.
+
+The whole claim of PPO3 is that the EE Jacobian cascade and the cylinder DLS
+controller have been removed from the loop.  Both objects still exist -- the
+parent class builds them and reset-time deployment uses them -- so "we deleted
+the inner loop" is exactly the kind of statement that quietly stops being true
+after a refactor and that no tracking metric would ever catch.
+
+These checks are structural and run without Isaac Sim, so they execute in the
+same pytest pass as everything else rather than only inside a GPU session.  A
+runtime version that steps the real environment is in ``scripts/evaluate.py``
+under ``--control-path-audit``.
+"""
+
+from __future__ import annotations
+
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import ast
+import pytest
+import torch
+
+from verge_task.observations import finite_difference_kinematics
+
+
+_ENV_SOURCE = (ROOT / "verge_task" / "env.py").read_text()
+_TREE = ast.parse(_ENV_SOURCE)
+_TERRAIN_ENV_SOURCE = (ROOT / "verge_task" / "terrain_env.py").read_text()
+_TERRAIN_TREE = ast.parse(_TERRAIN_ENV_SOURCE)
+
+_FORBIDDEN_IN_CONTROL_PATH = ("_cascade", "_cylinder_dls")
+
+
+def _method(name: str) -> ast.FunctionDef:
+    for node in ast.walk(_TREE):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"SolePolicyEnv.{name} not found in verge_task/env.py")
+
+
+def _terrain_method(name: str) -> ast.FunctionDef:
+    for node in ast.walk(_TERRAIN_TREE):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(
+        f"TerrainSolePolicyEnv.{name} not found in verge_task/terrain_env.py"
+    )
+
+
+def _attributes_used(node: ast.AST) -> set[str]:
+    return {
+        child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)
+    }
+
+
+_TEACHER_SYMBOLS = ("_teacher_action", "_compute_teacher_action", "_teacher_execute_mask")
+
+
+def test_pre_physics_step_touches_no_classical_controller():
+    used = _attributes_used(_method("_pre_physics_step"))
+    leaked = sorted(set(_FORBIDDEN_IN_CONTROL_PATH) & used)
+    assert not leaked, (
+        f"the scored control path references {leaked}; PPO3 must reach the ROM "
+        "without the cascade or the cylinder DLS"
+    )
+
+
+def test_every_teacher_reference_is_behind_the_teacher_mode_guard():
+    """The distillation teacher must be unreachable when the mode is 'off'.
+
+    The teacher is allowed to drive during distillation -- that is the whole
+    point of the phase -- so ordering alone is not the invariant here. The
+    invariant is the guard: with sole_teacher_mode='off' no teacher statement
+    executes at all. Without this check the teacher would be exactly the
+    loophole that lets a cascade-driven number be reported as a sole-controller
+    result.
+    """
+    node = _method("_pre_physics_step")
+
+    guarded: set[int] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.If) and "_teacher_mode" in _attributes_used(child.test):
+            for inner in ast.walk(child):
+                guarded.add(id(inner))
+
+    unguarded = []
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Attribute)
+            and child.attr in _TEACHER_SYMBOLS
+            and id(child) not in guarded
+        ):
+            unguarded.append((child.attr, child.lineno))
+
+    assert not unguarded, (
+        f"teacher symbols {unguarded} are reachable in _pre_physics_step without "
+        "a sole_teacher_mode guard"
+    )
+
+
+def test_teacher_cannot_influence_the_command_before_it_is_final():
+    """No teacher statement may precede the assignment of _current_action."""
+    node = _method("_pre_physics_step")
+    final_command_line = max(
+        (
+            target.lineno
+            for stmt in ast.walk(node)
+            if isinstance(stmt, ast.Assign)
+            for target in stmt.targets
+            if isinstance(target, ast.Attribute) and target.attr == "_current_action"
+        ),
+        default=None,
+    )
+    assert final_command_line is not None, "_current_action is never assigned"
+
+    early = [
+        (child.attr, child.lineno)
+        for child in ast.walk(node)
+        if isinstance(child, ast.Attribute)
+        and child.attr in _TEACHER_SYMBOLS
+        and child.lineno < final_command_line
+    ]
+    assert not early, (
+        f"teacher symbols {early} appear before _current_action is assigned at "
+        f"line {final_command_line}; the teacher must never shape the student's "
+        "own command"
+    )
+
+
+def test_teacher_mode_defaults_to_off_and_evaluation_enforces_it():
+    cfg_source = (ROOT / "verge_task" / "env_cfg.py").read_text()
+    assert 'sole_teacher_mode: str = "off"' in cfg_source, (
+        "the distillation teacher must be off by default"
+    )
+    eval_source = (ROOT / "verge_task" / "scripts" / "evaluate.py").read_text()
+    assert "assert_teacher_disabled" in eval_source, (
+        "evaluation must refuse to report a number produced with the teacher on"
+    )
+
+
+def test_ppo_and_evaluation_instantiate_the_terrain_task():
+    """The A/B task must not silently train against the legacy stored path."""
+    for script in ("train.py", "evaluate.py"):
+        source = (ROOT / "verge_task" / "scripts" / script).read_text()
+        # Resolved via the actuator switch (PPO3 = rom, PPO4 = idfd) rather than
+        # hard-coded, so both packages run this one implementation.
+        assert "resolve_actuator(a.actuator)" in source, (
+            f"{script} does not resolve the terrain task through the actuator switch"
+        )
+        assert "gym.make(TASK_ID" in source, (
+            f"{script} does not instantiate the resolved terrain gym task"
+        )
+        # Width follows the observation flags: 54 without the
+        # actuator-model-error channels, 66 with them at history depth 1, 90 at
+        # depth 3, 96 with the contact-state block. Asserting the bare 54-D
+        # literal would forbid PPO4 from observing its own model error.
+        #
+        # `observation_space_for_cfg` is the single derivation every entry point
+        # shares. Requiring it here is strictly stronger than the old check for
+        # an inline `verge_observation_dim(` call: seven entry points each
+        # rebuilding the width from the same flags is exactly how one of them
+        # ends up a channel short of the network training produced.
+        assert "observation_space_for_cfg(env_cfg)" in source, (
+            f"{script} does not use the shared terrain observation contract"
+        )
+        assert "verge_observation_dim" not in source, (
+            f"{script} rebuilds the observation width instead of sharing it"
+        )
+
+
+def test_terrain_task_never_randomizes_the_legacy_path_start_phase():
+    """Terrain diversity must not change the arm's reset deployment."""
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "randomize_start_phase: bool = False" in cfg_source
+    for script in ("train.py", "evaluate.py"):
+        source = (ROOT / "verge_task" / "scripts" / script).read_text()
+        assert "randomize_start_phase = False" in source, (
+            f"{script} does not explicitly enforce the fixed terrain deployment"
+        )
+
+
+def test_terrain_deployment_uses_measured_target_and_canonical_rom_a():
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "terrain_deployment_cylinder_target_m" in cfg_source
+    assert "plant_reachable_v1_finetune_blend25/best_rom.pt" in cfg_source
+    assert "plant_reachable_trajectory_library_v3_large.json" in cfg_source
+    terrain_source = (ROOT / "verge_task" / "terrain_env.py").read_text()
+    assert "_install_terrain_deployment_target()" in terrain_source
+    assert "self._seeds[0, :] = target" in terrain_source
+    assert "self._seeds[-1, :] = target" in terrain_source
+
+
+def test_terrain_head_contract_has_margin_lock_and_strict_evaluation():
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "terrain_head_threshold: float = 0.995" in cfg_source
+    assert "terrain_head_penalty_max_deviation: float = 2.0" in cfg_source
+    assert "terrain_head_penalty_scale: float = 0.02" in cfg_source
+    assert "terrain_head_penalty_far_weight: float = -8.0" in cfg_source
+    assert "head_down_termination_alignment: float = 0.98" in cfg_source
+    assert "sole_action_authority: tuple = (1.0, 1.0, 1.0, 1.0)" in cfg_source
+    assert "terrain_head_tilt_shield_soft: float = 0.30" in cfg_source
+    assert "terrain_head_tilt_shield_hard: float = 0.80" in cfg_source
+    eval_source = (ROOT / "verge_task" / "scripts" / "evaluate.py").read_text()
+    assert "env_cfg.defer_safety_terminations = True" in eval_source
+    assert 'GATE_SPECS["head_alignment_hard_min"].threshold' in eval_source
+    assert "raw.terrain_safety_violation()" in eval_source
+
+
+def test_terrain_reward_forwards_configured_smoothing_and_safety_scales():
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "terrain_acceleration_max_ratio: float = 10.0" in cfg_source
+
+    reward_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_get_rewards")
+    )
+    for field in (
+        "residual_action_magnitude_weight",
+        "terrain_action_magnitude_weight",
+        "sole_rate_penalty_weight",
+        "sole_limit_penalty_weight",
+        "sole_limit_margin_m",
+        "sole_acceleration_weight",
+        "sole_acceleration_scale_mps2",
+        "terrain_acceleration_max_ratio",
+    ):
+        assert field in reward_source
+
+    for contract in (
+        "terrain_clearance_barrier_weight: float = 0.0",
+        "terrain_clearance_margin_m: float = 0.0",
+        # Raised 2.0 -> 4.0 (2026-07-31) against residual cutter skipping that
+        # no physics change moved; see the config docstring for the derivation.
+        "terrain_contact_reward_weight: float = 4.0",
+        "dense_lateral_error_weight: float = 3.0",
+        "sole_acceleration_scale_mps2: float = 80.0",
+        "sole_acceleration_weight: float = -2.5",
+        "sole_rate_penalty_weight: float = -0.30",
+        # Swept down from 0.70 with the head levelling contract: 0.85 measured
+        # p95_tool_acceleration 133.3 and 0.55 measured 129.88 while carrying
+        # p95_cut_height_error to 0.0628, the pair that reaches 14/15 gates.
+        "terrain_action_filter: float = 0.55",
+        "terrain_action_magnitude_weight: float = -1.0",
+        "terrain_cut_progress_weight: float = 1.0",
+        "terrain_lateral_progress_weight: float = 0.5",
+        "terrain_head_progress_weight: float = 0.25",
+        "terrain_arm_damping_scale: float = 1.0",
+    ):
+        assert contract in cfg_source
+
+
+def test_terrain_observation_updates_live_kinematics_and_reset_relatches_last():
+    obs_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_get_observations")
+    )
+    assert "_update_measured_tool_kinematics()" in obs_source
+    assert "head_down_axis_xy=head_axis_world[:, :2]" in obs_source
+
+    shield_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_task_action_shield")
+    )
+    assert "directional_tilt_shield" in shield_source
+
+    reset_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_reset_idx")
+    )
+    sync_at = reset_source.index("_synchronize_deployed_robot_state(env_ids)")
+    anchor_at = reset_source.index("_drive_anchor_base_xy")
+    relatch_at = reset_source.index("_relatch_terrain_temporal_state(env_ids)")
+    assert sync_at < anchor_at < relatch_at
+
+    reward_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_get_rewards")
+    )
+    update_at = reward_source.index("_update_measured_tool_kinematics()")
+    acceleration_at = reward_source.index(
+        "torch.linalg.norm(self._measured_tool_acceleration_truck"
+    )
+    assert update_at < acceleration_at
+
+    relatch_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_relatch_terrain_temporal_state")
+    )
+    assert "_tool_kinematics_common_step" in relatch_source
+    assert "common_step_counter" in relatch_source
+    assert "_previous_abs_cut_error" in relatch_source
+    assert "_previous_abs_lateral_error" in relatch_source
+
+    progress_at = reward_source.index("cut_progress =")
+    memory_update_at = reward_source.index("self._previous_abs_cut_error = torch.where")
+    assert progress_at < memory_update_at
+    assert "valid_active" in reward_source[memory_update_at:]
+    assert "self._prev_head_alignment =" not in reward_source
+
+
+def test_tool_kinematics_refresh_is_idempotent_within_common_step():
+    """Reward and observation must not finite-difference the same pose twice."""
+    method_node = _method("_update_measured_tool_kinematics")
+    module = ast.Module(body=[method_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "torch": torch,
+        "finite_difference_kinematics": finite_difference_kinematics,
+    }
+    exec(compile(module, filename="<sole-kinematics-method>", mode="exec"), namespace)
+    refresh = namespace["_update_measured_tool_kinematics"]
+
+    class DummyEnv:
+        step_dt = 0.1
+        common_step_counter = 7
+        _tool_kinematics_common_step = None
+
+        def __init__(self):
+            self.position = torch.tensor([[0.1, 0.0, 0.0]])
+            self._prev_tool_pos_truck = torch.zeros_like(self.position)
+            self._measured_tool_velocity_truck = torch.zeros_like(self.position)
+            self._previous_measured_tool_velocity_truck = torch.zeros_like(
+                self.position
+            )
+            self._measured_tool_acceleration_truck = torch.zeros_like(self.position)
+
+        def _compute_ee_pos_local(self):
+            return self.position.clone()
+
+    env = DummyEnv()
+    first = refresh(env)
+    assert torch.equal(first, torch.tensor([[0.1, 0.0, 0.0]]))
+    assert torch.allclose(
+        env._measured_tool_velocity_truck, torch.tensor([[1.0, 0.0, 0.0]])
+    )
+    assert torch.allclose(
+        env._measured_tool_acceleration_truck, torch.tensor([[10.0, 0.0, 0.0]])
+    )
+
+    env.position[:] = torch.tensor([[0.2, 0.0, 0.0]])
+    second = refresh(env)
+    assert torch.equal(second, torch.tensor([[0.2, 0.0, 0.0]]))
+    # Same common step: return the live pose but preserve the one real sample.
+    assert torch.allclose(
+        env._measured_tool_velocity_truck, torch.tensor([[1.0, 0.0, 0.0]])
+    )
+    assert torch.allclose(
+        env._measured_tool_acceleration_truck, torch.tensor([[10.0, 0.0, 0.0]])
+    )
+    assert torch.equal(env._prev_tool_pos_truck, first)
+
+    env.common_step_counter += 1
+    refresh(env)
+    assert torch.allclose(
+        env._measured_tool_velocity_truck, torch.tensor([[1.0, 0.0, 0.0]])
+    )
+    assert torch.equal(
+        env._measured_tool_acceleration_truck,
+        torch.zeros_like(env._measured_tool_acceleration_truck),
+    )
+
+
+def test_obsolete_stored_path_distillation_entrypoint_is_removed():
+    assert not (ROOT / "verge_task" / "scripts" / "distill.py").exists()
+    assert (ROOT / "verge_task" / "scripts" / "distill_terrain.py").is_file()
+
+
+def test_terrain_training_accepts_only_versioned_shared_checkpoints():
+    source = (ROOT / "verge_task" / "scripts" / "train.py").read_text()
+    assert '"terrain_shared_v2"' in source
+    assert '"PPO3 terrain teacher distillation v1"' in source
+    assert "supported terrain policy contracts" in source
+
+
+def test_periodic_training_checkpoints_keep_terrain_provenance():
+    """An interrupted block's last interval save must remain evaluable."""
+
+    source = (ROOT / "verge_task" / "scripts" / "train.py").read_text()
+    wrapper = source.index("def save_with_terrain_provenance")
+    learning = source.index("runner.learn(", wrapper)
+    contract = source[wrapper:learning]
+    for required in (
+        '"source": "PPO3 terrain PPO"',
+        '"schema": "terrain_shared_v2"',
+        '"actuator": str(a.actuator)',
+        '"observation_width": int(raw.cfg.observation_space)',
+        '"action_width": int(raw.cfg.action_space)',
+        "runner.save = save_with_terrain_provenance",
+    ):
+        assert required in contract
+
+
+def test_terrain_teacher_does_not_label_q5_from_down_axis_tilt():
+    """q5 is local-Z yaw; c4/Schwenk owns head-down tilt."""
+
+    source = (ROOT / "verge_task" / "terrain_env.py").read_text()
+    start = source.index("def _compute_teacher_action")
+    stop = source.index("def terrain_teacher_raw_action", start)
+    teacher = source[start:stop]
+    assert "q5_teacher" in teacher
+    assert "sole_head_neutral_position_rad" in teacher
+    assert "raw_teacher = torch.cat([raw_teacher, q5_teacher]" in teacher
+    assert "raw_teacher = torch.cat([raw_teacher, head_command]" not in teacher
+
+    distill = (
+        ROOT / "verge_task" / "scripts" / "distill_terrain.py"
+    ).read_text()
+    assert "recovery.max() <= 1.0e-6" in distill
+    assert "recovery_error.mean() > 0.50" in distill
+
+
+def test_terrain_distillation_uses_terrain_task_and_exact_raw_labels():
+    source = (
+        ROOT / "verge_task" / "scripts" / "distill_terrain.py"
+    ).read_text()
+    # The task is now resolved through the actuator switch so PPO3 and PPO4
+    # share one distillation implementation. What must stay true is that the
+    # resolved task is a TERRAIN (verge) task, never the legacy stored path.
+    assert "resolve_actuator(a.actuator)" in source
+    assert "gym.make(TASK_ID" in source
+    assert "raw.terrain_teacher_raw_action" in source
+    assert 'cfg.sole_teacher_mode = "execute"' in source
+    assert "ReplayBuffer" in source
+
+
+def test_every_vectorized_terrain_entrypoint_resizes_gpu_physx_buffers():
+    for script in ("distill_terrain.py", "train.py", "evaluate.py"):
+        source = (ROOT / "verge_task" / "scripts" / script).read_text()
+        assert "configure_terrain_gpu_physx_memory" in source, (
+            f"{script} can silently drop contacts at large environment counts"
+        )
+
+
+def test_q5_compatibility_contract_is_explicit_in_all_terrain_entrypoints():
+    for script in ("distill_terrain.py", "train.py", "evaluate.py"):
+        source = (ROOT / "verge_task" / "scripts" / script).read_text()
+        assert '"--head_joint_action"' in source
+        assert "action_space = 5 if" in source
+        assert '"action_width"' in source
+
+
+def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "road_color: tuple = (0.11, 0.12, 0.13)" in cfg_source
+    assert "road_roughness: float = 0.92" in cfg_source
+    assert "visual_floor_color: tuple = (0.085, 0.22, 0.045)" in cfg_source
+    assert "visual_grid_color: tuple = (0.13, 0.285, 0.065)" in cfg_source
+    assert "(0.27, 0.16, 0.070)" in cfg_source
+    # The mowed strip now shares the verge's exact green so the tracked band
+    # and the grass around it read as one continuous surface instead of a
+    # lighter slab laid on the lawn. Visual only -- the strip is still its own
+    # collider and no gate metric moves.
+    assert "mow_strip_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
+    assert "verge_visual_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
+    assert "tracking_line_color: tuple = (0.10, 0.42, 0.075)" in cfg_source
+    assert "verge_visual_palette: tuple = (" in cfg_source
+    assert "visual_grid_length_m: float = 70.0" in cfg_source
+    assert "dark_visual_background: bool = True" in cfg_source
+    theme = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_configure_dark_visual_theme")
+    )
+    assert 'GetAttribute("visibleInPrimaryRay")' in theme
+    assert "attribute.Set(False)" in theme
+    grid = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_spawn_visual_grid_floor")
+    )
+    assert "collision_enabled=False" in grid
+    assert "VISUAL_GRID_ROOT" in grid
+    scenery = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_spawn_road_scenery")
+    )
+    assert "piece.faces[color_ids == color_id]" in scenery
+    assert "vertices=piece.vertices.copy()" in scenery
+    assert "collision_enabled=False" in scenery
+
+
+def test_evaluator_selects_one_path_family_and_supports_live_tracking_plot():
+    source = (ROOT / "verge_task" / "scripts" / "evaluate.py").read_text()
+    assert '"--path_family"' in source
+    assert "env_cfg.tracking_path_family = str(a.path_family)" in source
+    assert '"--plot_tracking"' in source
+    for family in (
+        "double_s_curve",
+        "lane_change_hold",
+        "gaussian_slalom",
+        "fourier_meander",
+    ):
+        assert f'"{family}"' in source
+    assert "class LiveTrackingPlot" in source
+    assert "tracking_plot.sample(raw, step)" in source
+    assert 'self.axis.set_xlabel("x [m]")' in source
+    assert 'self.axis.set_ylabel("y [m]")' in source
+    assert "self.target_line.set_data(self.target_x_m, self.target_y_m)" in source
+    assert "self.actual_line.set_data(self.cutter_x_m, self.cutter_y_m)" in source
+    assert "plt.subplots(3, 1" not in source
+
+
+def test_terrain_teacher_uses_student_action_interface_without_direct_write():
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_compute_teacher_action")
+    )
+    assert "learned_delta_to_usd_delta" in source
+    assert "apply_sole_action" in source
+    assert "_task_action_shield" in source
+    assert "_write_direct_learned_targets" not in source
+
+
+def test_pre_physics_step_commands_the_plant_with_the_policy_action():
+    """_current_action must be assigned from the sole-action chain, not a goal."""
+    source = ast.get_source_segment(_ENV_SOURCE, _method("_pre_physics_step"))
+    assert "apply_sole_action" in source
+    assert "_run_cylinder_id_pipeline" in source
+    # The parent's residual path routes through the DLS to produce action_4d.
+    assert "action_4d" not in source, "DLS inversion leaked into the control path"
+
+
+def test_observation_excludes_the_cascade_goal_unless_hint_is_enabled():
+    """_baseline_cylinder_goal may only be read inside the ik_hint branch."""
+    node = _method("_get_observations")
+    baseline_reads = [
+        child
+        for child in ast.walk(node)
+        if isinstance(child, ast.Attribute) and child.attr == "_baseline_cylinder_goal"
+    ]
+    if not baseline_reads:
+        return
+    # Every read must sit inside a branch whose test consults self._sole_ik_hint.
+    guarded = False
+    for child in ast.walk(node):
+        if isinstance(child, ast.If):
+            test_attrs = _attributes_used(child.test)
+            if "_sole_ik_hint" in test_attrs:
+                if "_baseline_cylinder_goal" in _attributes_used(child):
+                    guarded = True
+    assert guarded, (
+        "_baseline_cylinder_goal is read in the observation outside the "
+        "sole_ik_hint guard; the IK solution must not reach the default policy"
+    )
+
+
+def test_default_config_has_the_hint_disabled():
+    from verge_task.observations import SOLE_OBS_DIM, sole_observation_dim
+
+    cfg_source = (ROOT / "verge_task" / "env_cfg.py").read_text()
+    assert "sole_ik_hint: bool = False" in cfg_source, (
+        "the IK-hint ablation must be off by default"
+    )
+    assert sole_observation_dim(ik_hint=False) == SOLE_OBS_DIM
+
+
+def test_reset_path_may_still_use_the_classical_controller():
+    """Deployment and ROM priming legitimately keep the DLS; assert it survives.
+
+    This is the counterpart to the exclusion tests: if a later refactor rips the
+    cascade out entirely, reset-time deployment silently loses its verified
+    hold, and this test is what says so.
+    """
+    parent = ast.parse((ROOT / "mulag_plant" / "policy" / "env.py").read_text())
+    for node in ast.walk(parent):
+        if (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "_warm_command_rom_at_target"
+        ):
+            warm = ast.dump(node)
+            break
+    else:
+        raise AssertionError("ResidualPolicyEnv._warm_command_rom_at_target not found")
+    assert "_cylinder_dls" in warm, (
+        "reset-time ROM priming no longer uses the verified DLS hold"
+    )
+
+
+def test_sole_path_applies_configured_hydraulic_target_filter_after_rom():
+    source = ast.get_source_segment(_ENV_SOURCE, _method("_pre_physics_step"))
+    snapshot_at = source.index("previous_target =")
+    rom_at = source.index("self._run_cylinder_id_pipeline()")
+    filter_at = source.index("hydraulic_target_filter_beta")
+    assert snapshot_at < rom_at < filter_at
+    assert "target_beta * previous_target" in source
+    assert "self._cylinder_adapter.joint_reference_indices" in source
+    assert "_joint6_coupling_target_ref_index" in source
+
+
+def test_terrain_reset_clears_travel_before_parent_deployment():
+    """Old episode travel must not displace the new episode's scanner.
+
+    The parent deployment calls the terrain override of ``_constrain_truck_xy``.
+    If travel is cleared only after ``super()._reset_idx``, every reset advances
+    the robot and scanner by the preceding rollout distance while the terrain
+    mesh remains fixed.
+    """
+    node = _terrain_method("_reset_idx")
+    parent_reset_lines = [
+        call.lineno
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "_reset_idx"
+        and isinstance(call.func.value, ast.Call)
+        and isinstance(call.func.value.func, ast.Name)
+        and call.func.value.func.id == "super"
+    ]
+    travel_clear_lines = [
+        child.lineno
+        for child in ast.walk(node)
+        if isinstance(child, ast.Assign)
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == "_truck_travel_m"
+            for target in child.targets
+        )
+    ]
+    assert len(parent_reset_lines) == 1, "terrain reset must call exactly one parent reset"
+    assert travel_clear_lines, "terrain reset never clears _truck_travel_m"
+    assert min(travel_clear_lines) < parent_reset_lines[0], (
+        "_truck_travel_m must be cleared before the parent deployment can call "
+        "_constrain_truck_xy"
+    )
+
+
+def test_terrain_first_reset_rechecks_drive_state_after_parent_deployment():
+    """The first parent reset initializes the kinematic drive mid-reset."""
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_reset_idx")
+    )
+    parent_reset_offset = source.index("super()._reset_idx(env_ids)")
+    post_parent = source[parent_reset_offset:]
+    assert 'getattr(self, "_kinematic_drive_ready", False)' in post_parent, (
+        "terrain reset uses only the stale pre-parent drive state and will skip "
+        "first-reset terrain synchronization"
+    )
+
+
+def test_straight_truck_path_constrains_heading_about_base_link():
+    """Holding XY while allowing chassis attitude is not a stable road path."""
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_constrain_truck_xy")
+    )
+    for contract in (
+        "_drive_anchor_base_heading_xy",
+        "_drive_anchor_base_quat",
+        "torch.atan2",
+        "root_relative_to_base",
+        "quat_inv",
+        "quat_mul",
+    ):
+        assert contract in source
+    assert "root_pose[:, :3] = base_state[:, :3] + rotated_relative" in source
+
+    reset_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_reset_idx")
+    )
+    anchor_at = reset_source.index("_drive_anchor_base_heading_xy")
+    relatch_at = reset_source.index("_relatch_terrain_temporal_state(env_ids)")
+    assert anchor_at < relatch_at
+
+
+def test_deployment_synchronization_uses_fixed_capacity_independent_template():
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "synchronized_deployment_template_env: int = 0" in cfg_source
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("_synchronize_deployed_robot_state"),
+    )
+    assert "synchronized_deployment_template_env" in source
+    assert "torch.argmin" not in source
+
+
+def test_terrain_arm_damping_tuning_starts_only_after_deployment():
+    init_source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("__init__"),
+    )
+    assert "_terrain_nominal_arm_damping" in init_source
+    assert "_cylinder_joint_ids" in init_source
+    assert "_tool_joint_id" in init_source
+    assert "_apply_terrain_arm_drive_tuning()" not in init_source
+    tuning = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("_apply_terrain_arm_drive_tuning"),
+    )
+    assert "terrain_arm_damping_scale" in tuning
+    assert "write_joint_damping_to_sim" in tuning
+    assert "write_joint_effort_limit_to_sim" not in tuning
+
+    reset = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("_reset_idx"),
+    )
+    restore_at = reset.index("_restore_terrain_arm_deployment_damping()")
+    parent_at = reset.index("super()._reset_idx(env_ids)")
+    tune_at = reset.index("_apply_terrain_arm_drive_tuning()")
+    relatch_at = reset.index("_relatch_terrain_temporal_state(env_ids)")
+    assert restore_at < parent_at < tune_at < relatch_at
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(dict(globals()).items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
+            print(f"ok  {name}")
+
+
+def test_direct_q5_bypasses_the_four_cylinder_rom():
+    """q5 is split before the ROM and written only as a joint reference."""
+    source = (ROOT / "verge_task" / "env.py").read_text()
+
+    split = source.index("self._head_action_raw = torch.clamp")
+    rom = source.index("self._run_cylinder_id_pipeline()")
+    assert split < rom, "head column must be split off BEFORE the ROM pipeline"
+
+    assert "effective[:, 3] + head_mix" not in source
+    assert "self._joint_ref[:, int(target_ref)] = self._head_joint_target" in source
+    assert "action_dim=4" in source
+
+
+# ----------------------------------------------------------------------
+# Kinematic drive: the chassis fixture must not teleport the truck
+# ----------------------------------------------------------------------
+
+
+def _load_pin_target_travel():
+    """Compile the real ``_pin_target_travel_m`` body for numerical checks.
+
+    Executed from source rather than imported because these tests deliberately
+    run without Isaac Sim. Testing a re-implementation would test the test.
+    """
+    import textwrap
+    import types
+
+    source = textwrap.dedent(
+        ast.get_source_segment(
+            _TERRAIN_ENV_SOURCE, _terrain_method("_pin_target_travel_m")
+        )
+    )
+    namespace: dict = {"torch": torch}
+    exec(compile(source, "<pin_target_travel>", "exec"), namespace)
+    return namespace["_pin_target_travel_m"], types.SimpleNamespace
+
+
+def test_pin_target_travel_interpolates_across_the_decimation_window():
+    """Each pin aims at this substep's travel, not the end of the control step.
+
+    The fixture pins the chassis up to four times per control step while
+    ``_truck_travel_m`` advances once, before any physics. Aiming every pin at
+    the end-of-step target teleported the truck a full step ahead and then
+    dragged it back once per substep -- measured +18.52/-8.10/-8.10 mm at
+    4 km/h, a 60-120 Hz longitudinal square wave that no gate observes because
+    p95_tool_acceleration is a truck-frame difference in which a root teleport
+    cancels exactly.
+    """
+    fn, ns = _load_pin_target_travel()
+    advance = torch.tensor([0.01852])  # 4 km/h x 1/60 s
+    travel = torch.tensor([1.0])
+
+    def target(pending: int, interpolate: bool = True) -> float:
+        env = ns(
+            cfg=ns(
+                decimation=2,
+                terrain_kinematic_drive_substep_interpolation=interpolate,
+            ),
+            _pin_substeps_pending=pending,
+            _truck_step_advance_m=advance,
+            _truck_travel_m=travel,
+        )
+        return float(fn(env))
+
+    start_of_step = float(travel - advance)
+    # Window open (both substeps pending): the truck belongs where it started.
+    assert target(2) == pytest.approx(start_of_step, abs=1e-6)
+    # One substep simulated: half the advance is owed.
+    assert target(1) == pytest.approx(start_of_step + 0.5 * float(advance), abs=1e-6)
+    # Window closed (_get_dones): the full advance has been earned.
+    assert target(0) == pytest.approx(float(travel), abs=1e-6)
+
+    # Monotone and evenly spaced -- never ahead of the physics, never backwards.
+    steps = [target(2), target(1), target(0)]
+    assert steps == sorted(steps)
+    assert steps[1] - steps[0] == pytest.approx(steps[2] - steps[1], abs=1e-6)
+    # The largest single jump is one substep of travel, not one whole step.
+    assert max(steps[1] - steps[0], steps[2] - steps[1]) <= float(advance) / 2 + 1e-9
+
+    # Opting out restores the end-of-step target every stored report used.
+    assert target(2, interpolate=False) == pytest.approx(float(travel), abs=1e-6)
+
+
+def test_pin_target_travel_never_drags_a_prepositioning_env_backwards():
+    """Envs still deploying advance by zero, so their target must not move.
+
+    ``_pre_physics_step`` masks the advance by the preposition/settle counters
+    while the pending-substep counter is global. Interpolating on a per-env
+    advance rather than on a scalar speed is what keeps a held env held.
+    """
+    fn, ns = _load_pin_target_travel()
+    env = ns(
+        cfg=ns(decimation=2, terrain_kinematic_drive_substep_interpolation=True),
+        _pin_substeps_pending=2,
+        # env 0 is driving, env 1 is still prepositioning.
+        _truck_step_advance_m=torch.tensor([0.01852, 0.0]),
+        _truck_travel_m=torch.tensor([1.0, 0.5]),
+    )
+    target = fn(env)
+    assert float(target[1]) == pytest.approx(0.5, abs=1e-6)
+    assert float(target[0]) == pytest.approx(1.0 - 0.01852, abs=1e-6)
+
+
+def test_constrain_truck_xy_pins_to_the_interpolated_target():
+    """The fixture must consume the interpolated target, not raw travel."""
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_constrain_truck_xy")
+    )
+    assert "self._pin_target_travel_m()" in source
+    assert "self._truck_travel_m.reshape" not in source, (
+        "_constrain_truck_xy must aim at the substep-interpolated travel; using "
+        "_truck_travel_m directly reinstates the end-of-step teleport"
+    )
+
+
+def test_substep_window_opens_on_advance_and_closes_once_per_substep():
+    """Open the window where travel advances, close it once per substep.
+
+    The decrement lives outside the per-substep pin flag so the inherited
+    ``_get_dones`` pin sees a closed window in both configurations, and it must
+    follow the pin: the pin serves the substep that has not run yet.
+    """
+    pre_physics = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_pre_physics_step")
+    )
+    assert "_pin_substeps_pending" in pre_physics
+    assert pre_physics.index("_truck_travel_m = self._truck_travel_m + advance") < (
+        pre_physics.index("self._pin_substeps_pending =")
+    ), "the window must be opened after the advance it accounts for"
+
+    apply_action = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_apply_action")
+    )
+    pin_at = apply_action.index("self._constrain_truck_xy()")
+    decrement_at = apply_action.index("self._pin_substeps_pending = max(")
+    assert pin_at < decrement_at, (
+        "the substep counter must be decremented AFTER the pin, which serves "
+        "the substep that has not been simulated yet"
+    )
+    # The decrement must not sit inside the per-substep pin branch.
+    branch = apply_action[
+        apply_action.index('getattr(self.cfg, "terrain_constrain_truck_per_substep"') :
+    ]
+    guarded = branch[: branch.index("self._pin_substeps_pending")]
+    assert guarded.count("if ") == 0, (
+        "the decrement must run regardless of terrain_constrain_truck_per_substep"
+    )
+
+
+# ----------------------------------------------------------------------
+# Compliance in the vertical load path
+# ----------------------------------------------------------------------
+
+
+def test_arm_stiffness_scale_is_applied_to_the_held_joints_and_validated():
+    """Compliance must reach the cylinder drives, bounded, during scored driving.
+
+    The head-tool bounce is ejection off a rigid contact: with the hydraulic
+    lock at ~5e6 N/m, contact force IS commanded position, so no command can
+    ride the verge gently. Softening the drive is the only mechanism in this
+    plant that measurably changes that -- PhysX compliant contacts are written
+    but not honoured here (a 10x stiffness sweep moved force <8%).
+    """
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE, _terrain_method("_apply_terrain_arm_drive_tuning")
+    )
+    assert "terrain_arm_stiffness_scale" in source
+    assert "write_joint_stiffness_to_sim" in source
+    assert "_terrain_held_joint_ids" in source
+    # An unbounded or zero scale is a silently broken plant, not a soft one.
+    assert "0.0 < stiffness_scale <= 1.0" in source, (
+        "terrain_arm_stiffness_scale must be validated in (0, 1]"
+    )
+
+
+def test_deployment_restores_stock_stiffness_not_only_damping():
+    """The reset ramp was validated stiff; unfolding a soft arm is untested.
+
+    Restoring damping alone would leave a compliant arm to run the physical
+    deployment sequence, which is a different problem from mowing with one.
+    """
+    source = ast.get_source_segment(
+        _TERRAIN_ENV_SOURCE,
+        _terrain_method("_restore_terrain_arm_deployment_damping"),
+    )
+    assert "write_joint_stiffness_to_sim" in source, (
+        "deployment restore must put the stock stiffness back, not just damping"
+    )
+    assert "_terrain_nominal_arm_stiffness" in source
+
+
+def test_compliance_and_drive_fixture_default_to_the_measured_baseline():
+    """Both plant knobs must default to what the stored reports were measured on."""
+    cfg_source = (ROOT / "verge_task" / "terrain_env_cfg.py").read_text()
+    assert "terrain_arm_stiffness_scale: float = 0.35" in cfg_source, (
+        "arm stiffness default must be the measured 0.35 operating point; the "
+        "response is non-monotonic, so any other value needs its own A/B"
+    )
+    assert "terrain_head_joint_stiffness_scale: float = 1.0" in cfg_source, (
+        "Messerkopf_joint carries head orientation, not impact load, and must "
+        "stay at full stiffness"
+    )
+    # Compliant contacts are inert here and must stay disabled so nobody reads
+    # a configured-but-ignored parameter as an active one.
+    assert "terrain_compliant_contact_stiffness: float = 0.0" in cfg_source
+    assert "terrain_compliant_contact_damping: float = 0.0" in cfg_source
+
+
+def test_every_package_module_parses():
+    """Every PPO3 source file must be syntactically valid Python.
+
+    This exists because a docstring edit to terrain_env_cfg.py once closed the
+    string early and left prose as bare code, and the whole suite still passed:
+    these tests read sources as TEXT (ast.parse of terrain_env.py, read_text of
+    the config) and none of them import the config module, which needs a running
+    Isaac app. The break surfaced only when a training run spawned the evaluator
+    hours later. Parsing is import-free, so it is safe to do here and catches
+    exactly that class of failure at the same moment the rest of the contracts
+    are checked.
+    """
+    package = ROOT / "verge_task"
+    sources = sorted(
+        list(package.glob("*.py"))
+        + list((package / "scripts").glob("*.py"))
+        + list((package / "tests").glob("*.py"))
+    )
+    assert sources, "no PPO3 sources discovered"
+    broken = []
+    for path in sources:
+        try:
+            ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError as error:
+            broken.append(f"{path.relative_to(ROOT)}:{error.lineno}: {error.msg}")
+    assert not broken, "unparseable PPO3 sources:\n  " + "\n  ".join(broken)
+
+
+def test_actuator_resolver_maps_only_to_terrain_verge_tasks():
+    """Both actuators must resolve to a verge task, never the legacy stored path.
+
+    The old hard-coded ``verge_task.TERRAIN_TASK_ID`` guaranteed this by
+    construction. Now that the task is resolved at runtime, the guarantee moves
+    here.
+    """
+    source = (ROOT / "verge_task" / "actuators.py").read_text()
+    assert "TERRAIN_TASK_ID" in source
+    # Neither branch may reach for the non-terrain task ids.
+    for forbidden in ("package.TASK_ID", "PLAY_TASK_ID"):
+        assert forbidden not in source, (
+            f"actuator resolver may reach a non-terrain task via {forbidden}"
+        )
+    assert '"rom"' in source and '"idfd"' in source

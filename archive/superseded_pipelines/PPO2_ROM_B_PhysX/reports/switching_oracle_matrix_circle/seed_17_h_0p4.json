@@ -1,0 +1,43 @@
+{
+  "diagnostic_only": true,
+  "claim": "switching-plant oracle upper-bound screen; never a ROM-B certification result",
+  "protocol": {
+    "shape": "circle",
+    "initial_h": 1.0,
+    "target_h": 0.4,
+    "switch": "first endpoint reversal (approximately zero reference speed)",
+    "truck": "fixed chassis; arm joints free",
+    "process_isolation": true,
+    "seed": 17,
+    "post_switch_duration_s": "full return leg"
+  },
+  "results": {
+    "romb": {
+      "controller": "romb",
+      "checkpoint": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo2_rom_b_robust/2026-07-24_12-48-14/model_53_ppo2_rom_b_final.pt",
+      "privileged_factors": false,
+      "switch_time_s": 31.48302459716797,
+      "samples_before": 1889,
+      "samples_after": 1889,
+      "pre_switch_rmse_m": 0.02039741062020921,
+      "post_switch_rmse_m": 0.02217490462443984,
+      "post_switch_mean_error_m": 0.01987343453763959,
+      "post_switch_max_error_m": 0.0440770760178566,
+      "post_switch_p95_acceleration_mps2": 8.424041748046875
+    },
+    "oracle": {
+      "controller": "oracle",
+      "checkpoint": "/home/rrlab/rrlab_mulag/logs/rsl_rl/ppo2_rom_b_privileged_oracle/2026-07-25_22-25-49/model_49_ppo2_rom_b_final.pt",
+      "privileged_factors": true,
+      "switch_time_s": 31.48302459716797,
+      "samples_before": 1889,
+      "samples_after": 1889,
+      "pre_switch_rmse_m": 0.02055674893940528,
+      "post_switch_rmse_m": 0.022027556831368214,
+      "post_switch_mean_error_m": 0.019550626000015746,
+      "post_switch_max_error_m": 0.04411909356713295,
+      "post_switch_p95_acceleration_mps2": 4.105793476104736
+    }
+  },
+  "oracle_post_switch_rmse_improvement_percent": 0.6644799405776337
+}
