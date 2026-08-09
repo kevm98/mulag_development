@@ -30,7 +30,6 @@ the reasoning.
 | meshes failing | **0 of 6** | 1 of 6 (mesh 555) | — |
 
 ID→FD is the better *tracker*; ROM-A is the only one that meets the *contract*.
-Deliverable today is `logs/rsl_rl/ppo3_1_sole/student_distilled_v2.pt`.
 
 ---
 
@@ -88,14 +87,16 @@ real; the control FD was rank ~2 and under-fit the valve).
 
 ### Everything else
 
-    archive/superseded_pipelines/  PPO4 (superseded by PPO_ID_FD), PPO2 ROM-B/
-                                   ROM-C, ROM_B_Randomized, Universal_Policy
-    archive/model_training_trees/  PPO1_ID_FD_PhysX, ROM-cylinders_pipeline --
-                                   where rom_model/ and id_fd_model/ came from
+    archive/superseded_pipelines/  historical and superseded policy pipelines
+    archive/model_training_trees/  historical actuator-model training trees
     archive/reference_repos/       teacher_student, DLS_solver, Simscape DR
     archive/handovers/             historical handover and review documents
     logs/rsl_rl/                   checkpoints and TensorBoard runs
     thesis /                       thesis sources
+
+Anything under `archive/`, including the numbered PPO predecessors, is retained
+only for provenance and is **not** a current pipeline. The active pipelines are
+the top-level `PPO_ROM/` and `PPO_ID_FD/` directories listed above.
 
 ---
 
