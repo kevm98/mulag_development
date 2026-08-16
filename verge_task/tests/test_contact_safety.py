@@ -109,6 +109,10 @@ class Machine:
         self.common_step_counter = 0
         self._preposition_counter = torch.full((num_envs,), int(warmup))
         self._settle_counter = torch.zeros(num_envs, dtype=torch.long)
+        # Scoring is suppressed once the truck finishes its path, alongside
+        # preposition and settle. Default False = the run is being scored,
+        # which is the condition every test here exercises.
+        self._truck_path_complete = torch.zeros(num_envs, dtype=torch.bool)
         self._contact_acquired = None
         # Driven by the test, read by the machine.
         self._force = torch.zeros(num_envs)
@@ -846,10 +850,27 @@ def test_contact_termination_synchronizes_like_every_other_termination():
         for node in cls.body
         if isinstance(node, ast.FunctionDef) and node.name == "_get_dones"
     )
-    source = ast.unparse(dones)
-    assert "contact_terminal.any()" in source, (
-        "_get_dones does not synchronize on a contact termination"
+    # Assert the BEHAVIOUR, not the spelling: some `.any()` reduction must
+    # depend on contact_terminal. The production form combines it with the
+    # nonfinite mask -- `(nonfinite | contact_terminal).any()` -- which
+    # synchronizes exactly as required, so a literal "contact_terminal.any()"
+    # substring check would fail on correct code.
+    def _mentions(node, name: str) -> bool:
+        return any(
+            isinstance(n, ast.Name) and n.id == name for n in ast.walk(node)
+        )
+
+    any_reductions = [
+        n for n in ast.walk(dones)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "any"
+    ]
+    assert any(_mentions(call.func.value, "contact_terminal") for call in any_reductions), (
+        "_get_dones does not synchronize on a contact termination: no .any() "
+        "reduction depends on contact_terminal"
     )
+    source = ast.unparse(dones)
     assert "torch.ones_like(terminated)" in source
 
 
