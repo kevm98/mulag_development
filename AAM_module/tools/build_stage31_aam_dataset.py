@@ -27,6 +27,71 @@ from aam_data.rom_stage31 import (  # noqa: E402
 from tools.train_sd_z import FactorEncoder  # noqa: E402
 
 
+def load_factor_track(
+    root: Path, run_id: int, ticks: np.ndarray, metadata: dict
+) -> tuple[np.ndarray, str]:
+    """Per-tick true factors ``e(t)`` for one run, shape ``(len(ticks), 6)``.
+
+    The AAM answers "what plant am I on RIGHT NOW", so the label has to follow
+    the plant through the episode. A run whose factors never change yields a
+    constant track and therefore exactly the previous per-run behaviour --
+    this is a strict generalisation, not a change of meaning for existing data.
+
+    Three sources, in priority order:
+
+    1. ``raw/runs/<id>/factor_track.npz`` with ``tick_control_step`` (n,) and
+       ``factors`` (n, 6) in FACTOR_KEYS order. Fully general; use for
+       continuously varying plants. Values are held piecewise-constant between
+       the supplied ticks (last value carries forward).
+    2. ``metadata["factor_schedule"]``: a list of
+       ``{"from_tick": int, "factors": {name: value, ...}}`` segments, applied
+       in tick order. Compact and readable; use for step changes.
+    3. ``metadata[<factor>]`` scalars -- the constant plant, i.e. legacy runs.
+    """
+    n = len(ticks)
+    track_path = root / "raw" / "runs" / f"{run_id:05d}" / "factor_track.npz"
+    if track_path.is_file():
+        with np.load(track_path, allow_pickle=False) as data:
+            src_ticks = np.asarray(data["tick_control_step"], dtype=np.int64)
+            src_factors = np.asarray(data["factors"], dtype=np.float32)
+        if src_factors.ndim != 2 or src_factors.shape[1] != len(FACTOR_KEYS):
+            raise SystemExit(
+                f"run {run_id:05d}: factor_track factors must be (n, {len(FACTOR_KEYS)}), "
+                f"got {src_factors.shape}"
+            )
+        if src_ticks.shape[0] != src_factors.shape[0]:
+            raise SystemExit(f"run {run_id:05d}: factor_track tick/factor length mismatch")
+        order = np.argsort(src_ticks)
+        src_ticks, src_factors = src_ticks[order], src_factors[order]
+        # hold the most recent value at or before each tick
+        idx = np.searchsorted(src_ticks, ticks, side="right") - 1
+        if (idx < 0).any():
+            raise SystemExit(
+                f"run {run_id:05d}: factor_track starts at tick {int(src_ticks[0])}, "
+                f"after the first row tick {int(ticks[0])}"
+            )
+        return src_factors[idx], "factor_track.npz"
+
+    base = np.asarray([float(metadata[key]) for key in FACTOR_KEYS], dtype=np.float32)
+    schedule = metadata.get("factor_schedule")
+    if schedule:
+        track = np.repeat(base[None, :], n, axis=0)
+        for segment in sorted(schedule, key=lambda s: int(s["from_tick"])):
+            from_tick = int(segment["from_tick"])
+            values = segment.get("factors", {})
+            unknown = set(values) - set(FACTOR_KEYS)
+            if unknown:
+                raise SystemExit(
+                    f"run {run_id:05d}: factor_schedule has unknown factors {sorted(unknown)}"
+                )
+            mask = ticks >= from_tick
+            for name, value in values.items():
+                track[mask, FACTOR_KEYS.index(name)] = float(value)
+        return track, "metadata.factor_schedule"
+
+    return np.repeat(base[None, :], n, axis=0), "metadata.constant"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, help="frozen ROM collection")
@@ -80,9 +145,16 @@ def main() -> None:
         if features.ndim != 2 or features.shape[1] != AAM_FEATURE_DIM:
             raise SystemExit(f"run {run_id:05d}: expected features (*, {AAM_FEATURE_DIM}), got {features.shape}")
         metadata = json.loads((root / "raw" / "runs" / f"{run_id:05d}" / "metadata.json").read_text())
-        e = np.asarray([float(metadata[key]) for key in FACTOR_KEYS], dtype=np.float32)
+        # Per-tick plant, not a per-run constant. z_target(t) = f(e(t)) so the
+        # latent is a "what plant am I on now" estimate that can follow an
+        # in-episode change. A constant-plant run yields a constant track and
+        # therefore the identical labels to the previous per-run behaviour.
+        e_track, factor_source = load_factor_track(root, run_id, ticks, metadata)
         with torch.no_grad():
-            z = encoder(torch.as_tensor(((e - e_mean) / e_std)[None], dtype=torch.float32))[0].numpy()
+            z_track = encoder(
+                torch.as_tensor((e_track - e_mean) / e_std, dtype=torch.float32)
+            ).numpy()
+        factors_vary = bool(np.ptp(e_track, axis=0).max() > 0.0)
         run_out = out / f"{run_id:05d}"
         run_out.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
@@ -99,10 +171,17 @@ def main() -> None:
             window, valid = causal_stack(features, lag)
             valid_idx = np.flatnonzero(valid)
             end_ticks = ticks[valid_idx]
+            # END-OF-WINDOW labelling: valid_idx are window end indices, so the
+            # target is the plant as it stands at the newest row of the window.
+            # A window straddling a change therefore carries the NEW plant,
+            # which teaches the fastest tracking the history allows and leaves
+            # the response lag as an emergent, measurable property rather than
+            # something baked into the label.
             np.savez_compressed(
                 run_out / f"history_L{lag}.npz",
                 window_input=window,
-                z_target=np.repeat(z[None, :], len(valid_idx), axis=0),
+                z_target=z_track[valid_idx],
+                e_target=e_track[valid_idx],
                 valid_mask=valid,
                 window_end_tick=end_ticks,
             )
@@ -110,6 +189,10 @@ def main() -> None:
                 "n_valid": int(len(valid_idx)),
                 "first_window_end_tick": int(end_ticks[0]) if len(end_ticks) else None,
                 "last_window_end_tick": int(end_ticks[-1]) if len(end_ticks) else None,
+                "z_target_varies": bool(
+                    len(valid_idx) > 1
+                    and np.ptp(z_track[valid_idx], axis=0).max() > 0.0
+                ),
             }
         (run_out / "sample_meta.json").write_text(
             json.dumps(
@@ -120,7 +203,10 @@ def main() -> None:
                     "feature_dim": AAM_FEATURE_DIM,
                     "feature_groups": AAM_FEATURE_GROUPS,
                     "latent_dim": latent_dim,
-                    "z_target": "stopped-gradient frozen SD factor encoder",
+                    "z_target": "stopped-gradient frozen SD factor encoder, per-window (end-of-window plant)",
+                    "z_target_semantics": "current_plant_at_window_end",
+                    "factor_source": factor_source,
+                    "factors_vary_within_run": factors_vary,
                     "history_bounds": bounds,
                     "excluded_from_input": ["factors", "z", "desired reference", "future rows", "ROM hidden state"],
                 },
@@ -129,7 +215,18 @@ def main() -> None:
             + "\n"
         )
         per_run.append({"run_id": run_id, "n_ticks": int(len(ticks)), "frozen_split": info[f"{run_id:05d}"]["frozen_split"]})
-        print(f"run {run_id:05d}: latent target {np.round(z, 4).tolist()}", flush=True)
+        if factors_vary:
+            print(
+                f"run {run_id:05d}: TIME-VARYING plant ({factor_source}); "
+                f"z_target range {np.round(np.ptp(z_track, axis=0), 4).tolist()}",
+                flush=True,
+            )
+        else:
+            print(
+                f"run {run_id:05d}: constant plant; latent target "
+                f"{np.round(z_track[0], 4).tolist()}",
+                flush=True,
+            )
 
     (out / "index.json").write_text(
         json.dumps(
