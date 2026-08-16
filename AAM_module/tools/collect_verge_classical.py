@@ -73,7 +73,23 @@ parser.add_argument(
 )
 parser.add_argument(
     "--step-value", type=float, default=None,
-    help="value the stepped factor takes after the change",
+    help=(
+        "ABSOLUTE value the stepped factor takes after the change. Note the "
+        "realised change is (value - baseline), and manifest baselines vary, "
+        "so runs whose baseline is already near the value get little or no "
+        "change. Prefer --step-delta unless a fixed end value is what you want."
+    ),
+)
+parser.add_argument(
+    "--step-delta", type=float, default=None,
+    help=(
+        "MAGNITUDE of the change, applied in whichever direction the factor "
+        "has room for. Guarantees every stepped run experiences the same size "
+        "of plant change regardless of its baseline draw -- which --step-value "
+        "does not: measured correlation between realised delta and how well "
+        "the latent tracks is +0.85, so runs with a small realised delta "
+        "silently teach the latent to track a change that is not there."
+    ),
 )
 parser.add_argument(
     "--step-at-frac", type=float, default=0.5,
@@ -543,8 +559,16 @@ def hidden_sidecar(env, tick: bool) -> np.ndarray | None:
     return hidden[:, 0].detach().cpu().numpy().astype(np.float32)
 
 
+def factor_bounds(rows: list[dict], factor: str) -> tuple[float, float]:
+    """Valid range for a factor, taken from the manifest itself."""
+    vals = [float(r[factor]) for r in rows if factor in r]
+    return (min(vals), max(vals)) if vals else (0.0, 1.0)
+
+
 def plan_factor_steps(rows: list[dict], *, factor: str | None, value: float | None,
-                      at_frac: float, every_n: int, total_steps: int) -> dict:
+                      at_frac: float, every_n: int, total_steps: int,
+                      delta: float | None = None,
+                      bounds: tuple[float, float] | None = None) -> dict:
     """Decide which runs step, when, and to what. Pure; unit-tested.
 
     Returns ``{run_id: {"from_tick": int, "factors": {name: value}}}`` for the
@@ -555,8 +579,12 @@ def plan_factor_steps(rows: list[dict], *, factor: str | None, value: float | No
     """
     if not factor or every_n <= 0:
         return {}
-    if value is None:
-        raise SystemExit("--step-factor requires --step-value")
+    if (value is None) == (delta is None):
+        raise SystemExit(
+            "--step-factor requires exactly one of --step-value or --step-delta"
+        )
+    if delta is not None and delta <= 0:
+        raise SystemExit(f"--step-delta must be positive, got {delta}")
     if not 0.0 < at_frac < 1.0:
         raise SystemExit(f"--step-at-frac must be strictly inside (0, 1), got {at_frac}")
     from_tick = int(round(at_frac * total_steps))
@@ -565,13 +593,29 @@ def plan_factor_steps(rows: list[dict], *, factor: str | None, value: float | No
             f"--step-at-frac {at_frac} gives tick {from_tick} outside "
             f"(0, {total_steps}); the step would never be observed"
         )
+    lo, hi = bounds if bounds is not None else (0.0, 1.0)
     plan = {}
     for index, row in enumerate(rows):
         if index % every_n:
             continue
+        if value is not None:
+            target = float(value)
+        else:
+            # Step in whichever direction has room, so the REALISED magnitude
+            # equals `delta` for every run rather than depending on its draw.
+            base = float(row[factor])
+            up, down = base + delta, base - delta
+            if up <= hi:
+                target = up
+            elif down >= lo:
+                target = down
+            else:
+                target = hi if (hi - base) >= (base - lo) else lo
+        realised = abs(target - float(row.get(factor, target)))
         plan[int(row["run_id"])] = {
             "from_tick": from_tick,
-            "factors": {factor: float(value)},
+            "factors": {factor: float(target)},
+            "realised_delta": realised,
         }
     return plan
 
@@ -742,7 +786,8 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
         step_plan = plan_factor_steps(
             batch, factor=args.step_factor, value=args.step_value,
             at_frac=args.step_at_frac, every_n=args.step_every_n,
-            total_steps=plan["total_steps"],
+            total_steps=plan["total_steps"], delta=args.step_delta,
+            bounds=factor_bounds(rows, args.step_factor) if args.step_factor else None,
         )
         stepped_slots = [
             (slot, int(r["run_id"])) for slot, r in enumerate(batch)
@@ -750,12 +795,26 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
         ]
         step_fired = False
         if stepped_slots:
+            realised = [step_plan[r]["realised_delta"] for _, r in stepped_slots]
             print(
-                f"  factor step: {args.step_factor} -> {args.step_value} at tick "
+                f"  factor step: {args.step_factor} at tick "
                 f"{step_plan[stepped_slots[0][1]]['from_tick']} for "
-                f"{len(stepped_slots)}/{len(batch)} envs",
+                f"{len(stepped_slots)}/{len(batch)} envs; realised delta "
+                f"min {min(realised):.3f} median "
+                f"{sorted(realised)[len(realised)//2]:.3f}",
                 flush=True,
             )
+            if args.step_delta is not None:
+                short = [(r, d) for (_, r), d in zip(stepped_slots, realised)
+                         if d < 0.95 * args.step_delta]
+                for run_id, got in short:
+                    print(
+                        f"    NOTE run {run_id:05d}: realised delta {got:.3f} < "
+                        f"requested {args.step_delta:.3f} (baseline leaves no "
+                        f"room). A short delta predicts weak tracking; filter "
+                        f"on metadata.factor_schedule[0].realised_delta.",
+                        flush=True,
+                    )
         dls.reset()
         state = {name: [value] for name, value in snapshot_state_batch(env).items()}
         commands = {name: [] for name in COMMAND_SIGNALS}
