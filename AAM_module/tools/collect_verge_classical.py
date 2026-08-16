@@ -59,6 +59,35 @@ parser.add_argument("--probe-amplitude", type=float, default=0.02)
 parser.add_argument("--probe-hold-steps", type=int, default=10)
 parser.add_argument("--probe-seed", type=int, default=20260821)
 parser.add_argument(
+    "--step-factor",
+    default=None,
+    choices=("flow", "compliance", "seal", "pressure"),
+    help=(
+        "collect runs whose plant CHANGES mid-episode on this hydraulic "
+        "factor. Required for any in-episode adaptation claim: with a constant "
+        "plant there is nothing for the latent to track. Mechanical factors "
+        "(mass_scale/com_z) are not supported here -- they are rigid-body "
+        "properties, not ROM system_factors, and would need a different "
+        "mechanism."
+    ),
+)
+parser.add_argument(
+    "--step-value", type=float, default=None,
+    help="value the stepped factor takes after the change",
+)
+parser.add_argument(
+    "--step-at-frac", type=float, default=0.5,
+    help="when the step fires, as a fraction of the episode (0-1)",
+)
+parser.add_argument(
+    "--step-every-n", type=int, default=2,
+    help=(
+        "step every Nth run, leaving the rest constant. A mixed dataset keeps "
+        "between-plant separation learnable while adding in-episode tracking; "
+        "1 = every run stepped, 0 = none"
+    ),
+)
+parser.add_argument(
     "--max-steps",
     type=int,
     default=None,
@@ -514,6 +543,39 @@ def hidden_sidecar(env, tick: bool) -> np.ndarray | None:
     return hidden[:, 0].detach().cpu().numpy().astype(np.float32)
 
 
+def plan_factor_steps(rows: list[dict], *, factor: str | None, value: float | None,
+                      at_frac: float, every_n: int, total_steps: int) -> dict:
+    """Decide which runs step, when, and to what. Pure; unit-tested.
+
+    Returns ``{run_id: {"from_tick": int, "factors": {name: value}}}`` for the
+    stepped runs only. The mapping is written verbatim into each run's
+    ``metadata["factor_schedule"]``, which is what
+    ``build_stage31_aam_dataset.load_factor_track`` consumes to produce
+    per-window labels. Runs absent from the mapping stay constant.
+    """
+    if not factor or every_n <= 0:
+        return {}
+    if value is None:
+        raise SystemExit("--step-factor requires --step-value")
+    if not 0.0 < at_frac < 1.0:
+        raise SystemExit(f"--step-at-frac must be strictly inside (0, 1), got {at_frac}")
+    from_tick = int(round(at_frac * total_steps))
+    if from_tick <= 0 or from_tick >= total_steps:
+        raise SystemExit(
+            f"--step-at-frac {at_frac} gives tick {from_tick} outside "
+            f"(0, {total_steps}); the step would never be observed"
+        )
+    plan = {}
+    for index, row in enumerate(rows):
+        if index % every_n:
+            continue
+        plan[int(row["run_id"])] = {
+            "from_tick": from_tick,
+            "factors": {factor: float(value)},
+        }
+    return plan
+
+
 def apply_batch_factors(env, rows: list[dict], baseline_masses, baseline_coms, body_idx: int) -> dict:
     """Apply exact manifest rows to vector slots without factor accumulation."""
     if len(rows) != env.num_envs:
@@ -561,7 +623,7 @@ def apply_batch_factors(env, rows: list[dict], baseline_masses, baseline_coms, b
 def make_metadata(
     *, row: dict, plan: dict, env, factor_meta: dict, started: str,
     ended: str, elapsed: float, dls_parameters: dict, plant_contract: dict,
-    controller_name: str,
+    controller_name: str, factor_schedule: list | None = None,
 ) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -591,6 +653,9 @@ def make_metadata(
             "seed": int(args.probe_seed),
         },
         "factor_profile": "stage22_wide_recollected_final_task",
+        # Consumed by build_stage31_aam_dataset.load_factor_track to produce
+        # per-window labels. Absent/empty means a constant plant.
+        "factor_schedule": factor_schedule or [],
         "hydraulic_draw": {k: row[k] for k in ("flow", "compliance", "seal", "pressure")},
         "mechanical_draw": {"mass_scale": row["mass_scale"], "com_z": row["com_z"]},
         "flow": row["flow"], "compliance": row["compliance"],
@@ -673,6 +738,24 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
         batch = active + [active[-1]] * (args.num_envs - len(active))
         env.reset(seed=args.seed_base)
         factor_meta = apply_batch_factors(env, batch, baseline_masses, baseline_coms, body_idx)
+        # Which of these runs change plant mid-episode, and when.
+        step_plan = plan_factor_steps(
+            batch, factor=args.step_factor, value=args.step_value,
+            at_frac=args.step_at_frac, every_n=args.step_every_n,
+            total_steps=plan["total_steps"],
+        )
+        stepped_slots = [
+            (slot, int(r["run_id"])) for slot, r in enumerate(batch)
+            if int(r["run_id"]) in step_plan
+        ]
+        step_fired = False
+        if stepped_slots:
+            print(
+                f"  factor step: {args.step_factor} -> {args.step_value} at tick "
+                f"{step_plan[stepped_slots[0][1]]['from_tick']} for "
+                f"{len(stepped_slots)}/{len(batch)} envs",
+                flush=True,
+            )
         dls.reset()
         state = {name: [value] for name, value in snapshot_state_batch(env).items()}
         commands = {name: [] for name in COMMAND_SIGNALS}
@@ -700,6 +783,23 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
                 base_action + torch.as_tensor(probe, dtype=torch.float32, device=env.device).reshape(1, 4),
                 -1.0, 1.0,
             )
+            if stepped_slots and not step_fired:
+                from_tick = step_plan[stepped_slots[0][1]]["from_tick"]
+                if step >= from_tick:
+                    # Mutate ONLY the ROM hydraulic channel, only for the slots
+                    # whose run is scheduled to change. The controller is never
+                    # told; it must infer the change from the response.
+                    factors = env._command_rom_system_factors.clone()
+                    for slot, run_id in stepped_slots:
+                        updated = dict(batch[slot])
+                        updated.update(step_plan[run_id]["factors"])
+                        factors[slot] = torch.as_tensor(
+                            e_to_system_factors(updated),
+                            dtype=factors.dtype, device=factors.device,
+                        )
+                    env._command_rom_system_factors = factors
+                    step_fired = True
+                    print(f"  plant stepped at control step {step}", flush=True)
             _obs, _reward, terminated, truncated, _info = env.step(action)
             if bool(torch.as_tensor(terminated).any()) or bool(torch.as_tensor(truncated).any()):
                 raise RuntimeError(f"environment ended during batch at step {step}")
@@ -738,7 +838,9 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
                 if name != "time_s"
             }
             arrays["time_s"] = batched_arrays["time_s"]
+            schedule = step_plan.get(int(row["run_id"]))
             meta = make_metadata(
+                factor_schedule=[schedule] if schedule else [],
                 row=row, plan=plan, env=env,
                 factor_meta={**factor_meta, "slot": env_id},
                 started=started, ended=datetime.now(timezone.utc).isoformat(),
