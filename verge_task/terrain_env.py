@@ -3476,13 +3476,28 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         speed_sampling = str(
             getattr(self.cfg, "vehicle_speed_sampling", "uniform")
         ).strip().lower()
-        unit = torch.rand(env_ids.numel(), device=self.device)
-        self._vehicle_speed_kmh[env_ids] = map_unit_interval_to_speed(
-            unit,
-            float(self.cfg.vehicle_speed_min_kmh),
-            float(self.cfg.vehicle_speed_max_kmh),
-            speed_sampling,
-        )
+        speed_min = float(self.cfg.vehicle_speed_min_kmh)
+        speed_max = float(self.cfg.vehicle_speed_max_kmh)
+        if not bool(getattr(self.cfg, "enable_scripted_vehicle_motion", True)):
+            # A DELIBERATELY parked truck. Dataset collection runs this way to
+            # isolate arm dynamics, and the parked configuration sets the range
+            # to (0, 0), which map_unit_interval_to_speed rejects by design.
+            # That guard is what catches an accidentally parked truck in a
+            # driving run, so it is kept for every driving configuration and
+            # bypassed only when the config declares the truck parked.
+            if speed_min or speed_max:
+                raise ValueError(
+                    "enable_scripted_vehicle_motion is False but the speed "
+                    f"range is ({speed_min}, {speed_max}); a parked truck must "
+                    "declare a zero range so a driving range is never silently "
+                    "ignored"
+                )
+            self._vehicle_speed_kmh[env_ids] = 0.0
+        else:
+            unit = torch.rand(env_ids.numel(), device=self.device)
+            self._vehicle_speed_kmh[env_ids] = map_unit_interval_to_speed(
+                unit, speed_min, speed_max, speed_sampling,
+            )
         # The first parent deployment calls _constrain_truck_xy(), which creates
         # the drive state. Re-check after super rather than returning based on
         # the pre-reset snapshot; otherwise the first explicit reset skips the
