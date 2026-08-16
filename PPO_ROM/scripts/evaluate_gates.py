@@ -203,7 +203,7 @@ p.add_argument(
 p.add_argument(
     "--online_aam_latent_mode",
     dest="online_aam_latent_mode",
-    choices=('estimated', 'privileged', 'zero', 'mean', 'shuffled'),
+    choices=('estimated', 'privileged', 'zero', 'mean', 'shuffled', 'frozen'),
     default=None,
     help=(
         "Degrade only the two PPO latent observation columns to test whether "
@@ -214,15 +214,77 @@ p.add_argument(
         "every environment receives another environment's context."
         " 'privileged' is diagnostic-only: PPO receives frozen true z while "
         "the controller remains on estimated z_hat."
+        " 'frozen' latches the live estimate at "
+        "--online_aam_latent_freeze_tick and holds it: same content and "
+        "magnitude as 'estimated', differing only in that it stops updating, "
+        "so it isolates ONLINE adaptation from static conditioning."
     ),
 )
 p.add_argument(
+    "--online_aam_latent_freeze_tick",
+    type=int,
+    default=None,
+    help="control tick at which latent_mode='frozen' latches the estimate",
+)
+p.add_argument(
     "--online_aam_controller_latent_mode",
-    choices=("estimated", "true"),
+    choices=("estimated", "true", "zero", "shuffled", "frozen"),
     default=None,
     help=(
-        "Diagnostic-only controller latent override. Promotion requires "
-        "estimated; true evaluates the privileged teacher's native plant."
+        "Controller latent override. Promotion requires estimated; true "
+        "evaluates the privileged teacher's native plant. zero/shuffled/frozen "
+        "exist for the routing ablation (baseline / ID-only / PPO-only / full) "
+        "and are NOT valid for promotion evidence -- promote_system.py "
+        "rejects anything but estimated, deliberately."
+    ),
+)
+p.add_argument(
+    "--rom_factor_perturbation",
+    default=None,
+    metavar="FACTOR=LO:HI[,FACTOR=LO:HI...]",
+    help=(
+        "ROM plant perturbation via system_factors, e.g. 'seal=0.0:0.4'. The "
+        "ROM produces the valve rather than consuming it, so valve "
+        "effectiveness does not apply there."
+    ),
+)
+p.add_argument(
+    "--rom_factor_step",
+    default=None,
+    metavar="FACTOR=VALUE",
+    help="mid-episode ROM factor change, e.g. 'seal=0.9'",
+)
+p.add_argument(
+    "--plant_alpha_range",
+    default=None,
+    metavar="LO:HI",
+    help="ID-FD valve effectiveness range, e.g. '0.7:1.0' (applied at the FD boundary)",
+)
+p.add_argument(
+    "--plant_delay_steps_range",
+    default=None,
+    metavar="LO:HI",
+    help="ID-FD transport delay in control steps, e.g. '0:3'",
+)
+p.add_argument(
+    "--plant_step_time_s",
+    type=float,
+    default=None,
+    help="episode time at which the plant perturbation steps (both plants)",
+)
+p.add_argument(
+    "--plant_step_alpha_scale",
+    type=float,
+    default=None,
+    help="ID-FD: alpha is multiplied by this at --plant_step_time_s",
+)
+p.add_argument(
+    "--adaptation_trace_path",
+    default=None,
+    help=(
+        "write a per-timestep npz (z_hat, errors, valve, true theta) for the "
+        "adaptation figures; distance-binned reports cannot resolve the AAM "
+        "warmup or a mid-episode step"
     ),
 )
 p.add_argument(
@@ -1158,6 +1220,48 @@ def main() -> None:
                 "online_aam_latent_mode",
                 str(a.online_aam_controller_latent_mode),
             )
+        if a.online_aam_latent_freeze_tick is not None:
+            override_cfg(
+                env_cfg, "online_aam_latent_freeze_tick",
+                int(a.online_aam_latent_freeze_tick),
+            )
+        if a.rom_factor_perturbation is not None:
+            ranges = {}
+            for part in str(a.rom_factor_perturbation).split(","):
+                name, _, span = part.partition("=")
+                lo, _, hi = span.partition(":")
+                ranges[name.strip()] = (float(lo), float(hi))
+            override_cfg(env_cfg, "rom_factor_perturbation_enabled", True)
+            override_cfg(env_cfg, "rom_factor_perturbation_ranges", ranges)
+        if a.rom_factor_step is not None:
+            name, _, value = str(a.rom_factor_step).partition("=")
+            override_cfg(env_cfg, "rom_factor_perturbation_enabled", True)
+            override_cfg(
+                env_cfg, "rom_factor_perturbation_step_values",
+                {name.strip(): float(value)},
+            )
+        if a.plant_alpha_range is not None:
+            lo, _, hi = str(a.plant_alpha_range).partition(":")
+            override_cfg(env_cfg, "plant_perturbation_enabled", True)
+            override_cfg(env_cfg, "plant_perturbation_alpha_range", (float(lo), float(hi)))
+        if a.plant_delay_steps_range is not None:
+            lo, _, hi = str(a.plant_delay_steps_range).partition(":")
+            override_cfg(env_cfg, "plant_perturbation_enabled", True)
+            override_cfg(
+                env_cfg, "plant_perturbation_delay_steps_range", (int(lo), int(hi))
+            )
+        if a.plant_step_time_s is not None:
+            override_cfg(env_cfg, "plant_perturbation_step_time_s", float(a.plant_step_time_s))
+            override_cfg(
+                env_cfg, "rom_factor_perturbation_step_time_s", float(a.plant_step_time_s)
+            )
+        if a.plant_step_alpha_scale is not None:
+            override_cfg(
+                env_cfg, "plant_perturbation_step_alpha_scale",
+                float(a.plant_step_alpha_scale),
+            )
+        if a.adaptation_trace_path is not None:
+            override_cfg(env_cfg, "adaptation_trace_path", str(a.adaptation_trace_path))
         if a.c3_physical_extension_reserve_m is not None:
             override_cfg(
                 env_cfg,
