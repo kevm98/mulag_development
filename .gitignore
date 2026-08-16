@@ -10,6 +10,14 @@ logs/
 # Ignore output files
 outputs/
 
+# Archived bulk artifacts: retired logs/ and outputs/ keep the same "bytes stay on
+# disk, out of git" rule they had before being moved. Their manifests stay tracked
+# so the record of what was retired lives in history.
+archive/checkpoints_*/*
+!archive/checkpoints_*/MANIFEST.tsv
+archive/outputs_retired_*/*
+!archive/outputs_retired_*/MANIFEST.tsv
+
 # Ignore files beginning with .nfs
 .nfs*
 
