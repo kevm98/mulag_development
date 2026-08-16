@@ -1,0 +1,119 @@
+{
+  "format": "aam_latent_width_ceiling_v1",
+  "created_at": "2026-08-16T16:40:46.609592+00:00",
+  "question": "how wide must z be for the plant factors to be linearly legible in it?",
+  "deployed_baseline": {
+    "latent_dim": 2,
+    "target": "frozen SD latent (extension, velocity)",
+    "r2_per_factor": {
+      "flow": 0.114,
+      "compliance": 0.448,
+      "seal": 0.956,
+      "pressure": 0.081,
+      "mass_scale": -0.008,
+      "com_z": 0.056
+    },
+    "note": "measured 2026-08-16 by linear decode of per-run mean z_hat"
+  },
+  "config": {
+    "root": "/home/rrlab/rrlab_mulag/AAM_module/datasets/rom_deployment_stage31_v1_frozen",
+    "aam_root": null,
+    "lag": 20,
+    "widths": [
+      2,
+      4,
+      6,
+      8,
+      12
+    ],
+    "stride": 5,
+    "epochs": 60,
+    "batch_size": 4096,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "hidden": 64,
+    "depth": 4,
+    "dropout": 0.05,
+    "patience": 12,
+    "seed": 20260820,
+    "device": "cpu",
+    "out": "/home/rrlab/rrlab_mulag/PPO_ID_AAM_FD/experiments/results/latent_width_ceiling.json"
+  },
+  "widths": {
+    "2": {
+      "latent_dim": 2,
+      "val_mse_standardised": 1.0852493047714233,
+      "epochs_run": 60,
+      "seconds": 408.3,
+      "r2_per_factor": {
+        "flow": -0.09496504798695948,
+        "compliance": -0.15367008858125497,
+        "seal": 0.8653889754865194,
+        "pressure": -0.08042633811364586,
+        "mass_scale": 0.0260685722485835,
+        "com_z": -0.012746213633278103
+      },
+      "r2_mean": 0.09160830990332741
+    },
+    "4": {
+      "latent_dim": 4,
+      "val_mse_standardised": 0.998232901096344,
+      "epochs_run": 18,
+      "seconds": 120.1,
+      "r2_per_factor": {
+        "flow": 0.005663935471565518,
+        "compliance": 0.05345118708229146,
+        "seal": 0.837448931613612,
+        "pressure": 0.05958296974861266,
+        "mass_scale": 0.040874351184148616,
+        "com_z": -0.015548385239554596
+      },
+      "r2_mean": 0.16357883164344594
+    },
+    "6": {
+      "latent_dim": 6,
+      "val_mse_standardised": 0.962374210357666,
+      "epochs_run": 18,
+      "seconds": 119.6,
+      "r2_per_factor": {
+        "flow": -0.03278552340001473,
+        "compliance": 0.26024753976513015,
+        "seal": 0.85364188216837,
+        "pressure": 0.027060878433299185,
+        "mass_scale": 0.007001809560428285,
+        "com_z": -0.0041489055530934404
+      },
+      "r2_mean": 0.18516961349568659
+    },
+    "8": {
+      "latent_dim": 8,
+      "val_mse_standardised": 0.9620567560195923,
+      "epochs_run": 20,
+      "seconds": 132.5,
+      "r2_per_factor": {
+        "flow": -0.05110600270334187,
+        "compliance": 0.24404334841482056,
+        "seal": 0.8504025711150964,
+        "pressure": 0.0659215408046635,
+        "mass_scale": 0.09180176488367597,
+        "com_z": -0.027853488898351264
+      },
+      "r2_mean": 0.19553495560276057
+    },
+    "12": {
+      "latent_dim": 12,
+      "val_mse_standardised": 0.9553819298744202,
+      "epochs_run": 17,
+      "seconds": 113.7,
+      "r2_per_factor": {
+        "flow": -0.0044102066956117625,
+        "compliance": 0.1551743525637358,
+        "seal": 0.8360336093723665,
+        "pressure": 0.08080914834929709,
+        "mass_scale": 0.07141814894649368,
+        "com_z": -0.014317922005302686
+      },
+      "r2_mean": 0.18745118842182976
+    }
+  }
+}
