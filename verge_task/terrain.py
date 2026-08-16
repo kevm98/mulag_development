@@ -44,6 +44,264 @@ TRACKING_PATH_FAMILIES = (
 DEFAULT_TERRAIN_HEIGHT_SCALES = (0.50, 0.70, 0.85, 1.00)
 
 
+def apply_natural_verge_vertex_colors(
+    mesh: trimesh.Trimesh,
+    palette: tuple,
+    *,
+    soil_threshold: float = 1.0,
+    asphalt_edge_y: float | None = None,
+    asphalt_color: tuple = (0.03, 0.035, 0.04),
+) -> float:
+    """Color an existing terrain mesh as grass/soil without adding geometry."""
+    colors = np.asarray(palette, dtype=np.float64)
+    if colors.ndim != 2 or colors.shape[0] < 5 or colors.shape[1] != 3:
+        raise ValueError("mow_strip_visual_palette must contain four grass RGB colors and soil")
+    if not np.isfinite(colors).all() or np.any(colors < 0.0) or np.any(colors > 1.0):
+        raise ValueError("mow_strip_visual_palette RGB values must be finite and in [0, 1]")
+
+    xy = np.asarray(mesh.vertices[:, :2], dtype=np.float64)
+    x, y = xy[:, 0], xy[:, 1]
+    # Several incommensurate bands make broken, interlocking patches instead
+    # of the large round tan islands produced by one low-frequency sine.  This
+    # remains deterministic and costs no geometry or texture memory.
+    patch_field = (
+        0.62 * np.sin(0.83 * x + 1.15 * y)
+        + 0.43 * np.sin(2.21 * x - 0.77 * y + 0.8)
+        + 0.29 * np.cos(3.47 * x + 2.37 * y)
+        + 0.18 * np.sin(5.13 * x - 3.11 * y + 0.2)
+    )
+    grass_field = np.sin(0.67 * x - 0.53 * y) + 0.45 * np.cos(1.29 * x + 0.91 * y)
+    dry_field = np.sin(0.39 * x + 1.37 * y + 0.4)
+
+    def smoothstep(low: float, high: float, values):
+        t = np.clip((values - low) / max(high - low, 1.0e-9), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    green_mix = smoothstep(-1.25, 1.25, grass_field)[:, None]
+    rgb = colors[0] * (1.0 - green_mix) + colors[2] * green_mix
+    dry_mix = (0.35 * smoothstep(0.25, 1.0, dry_field))[:, None]
+    rgb = rgb * (1.0 - dry_mix) + colors[3] * dry_mix
+    soil_mix = smoothstep(
+        float(soil_threshold) - 0.25,
+        float(soil_threshold) + 0.25,
+        patch_field,
+    )[:, None]
+    rgb = rgb * (1.0 - soil_mix) + colors[4] * soil_mix
+
+    asphalt = np.zeros(len(x), dtype=bool)
+    if asphalt_edge_y is not None:
+        road_rgb = np.asarray(asphalt_color, dtype=np.float64)
+        if road_rgb.shape != (3,) or not np.isfinite(road_rgb).all():
+            raise ValueError("asphalt_color must be a finite RGB tuple")
+        asphalt = y >= float(asphalt_edge_y)
+        rgb[asphalt] = np.clip(road_rgb, 0.0, 1.0)
+
+    rgba = np.empty((len(rgb), 4), dtype=np.uint8)
+    rgba[:, :3] = np.rint(np.clip(rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    rgba[:, 3] = 255
+    mesh.visual.vertex_colors = rgba
+    visible_soil = (soil_mix[:, 0] >= 0.5) & ~asphalt
+    return float(np.mean(visible_soil)) if len(visible_soil) else 0.0
+
+
+def build_visual_verge_skin(
+    mesh: trimesh.Trimesh,
+    *,
+    road_edge_y: float,
+    shoulder_transition_m: float = 0.30,
+    road_height_m: float = 0.0,
+) -> trimesh.Trimesh:
+    """Return a road-clipped, visually flattened copy of a verge mesh.
+
+    The input is the untouched collision surface.  Only this returned display
+    skin is clipped at the road edge and eased down over the final shoulder, so
+    the road/grass boundary is straight while ray casts and contacts continue
+    to use the original terrain exactly.
+    """
+    if shoulder_transition_m <= 0.0:
+        raise ValueError("shoulder_transition_m must be positive")
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float64).copy()
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("mesh vertices must have shape (N, 3)")
+
+    # Ease the rendered verge to road level before clipping.  The smoothstep
+    # has zero slope at both ends, avoiding a shiny-looking hard crease.
+    blend = np.clip(
+        (vertices[:, 1] - (float(road_edge_y) - shoulder_transition_m))
+        / shoulder_transition_m,
+        0.0,
+        1.0,
+    )
+    blend = blend * blend * (3.0 - 2.0 * blend)
+    vertices[:, 2] = (
+        vertices[:, 2] * (1.0 - blend) + float(road_height_m) * blend
+    )
+
+    inside = vertices[:, 1] <= float(road_edge_y) + 1.0e-10
+    kept_vertices = vertices[inside].tolist()
+    old_to_new = np.full(len(vertices), -1, dtype=np.int64)
+    old_to_new[np.flatnonzero(inside)] = np.arange(np.count_nonzero(inside))
+    kept_faces: list[tuple[int, int, int]] = []
+
+    def intersection_index(a: int, b: int) -> int:
+        va, vb = vertices[a], vertices[b]
+        dy = vb[1] - va[1]
+        if abs(dy) < 1.0e-12:
+            point = va.copy()
+        else:
+            t = (float(road_edge_y) - va[1]) / dy
+            point = va + np.clip(t, 0.0, 1.0) * (vb - va)
+        point[1] = float(road_edge_y)
+        point[2] = float(road_height_m)
+        kept_vertices.append(point.tolist())
+        return len(kept_vertices) - 1
+
+    for face in faces:
+        face_inside = inside[face]
+        if face_inside.all():
+            kept_faces.append(tuple(int(old_to_new[index]) for index in face))
+            continue
+        if not face_inside.any():
+            continue
+
+        # Sutherland-Hodgman clipping against y <= road_edge_y.  A triangle
+        # becomes either one triangle or a four-vertex polygon, triangulated as
+        # a fan. Boundary intersections are intentionally local to this face;
+        # the seam is tiny and avoiding a global edge map keeps this pure helper
+        # simple and deterministic.
+        polygon: list[int] = []
+        previous = int(face[-1])
+        previous_inside = bool(inside[previous])
+        for raw_current in face:
+            current = int(raw_current)
+            current_inside = bool(inside[current])
+            if current_inside:
+                if not previous_inside:
+                    polygon.append(intersection_index(previous, current))
+                polygon.append(int(old_to_new[current]))
+            elif previous_inside:
+                polygon.append(intersection_index(previous, current))
+            previous, previous_inside = current, current_inside
+        for index in range(1, len(polygon) - 1):
+            kept_faces.append((polygon[0], polygon[index], polygon[index + 1]))
+
+    if not kept_faces:
+        raise ValueError("road edge clips away the entire visual verge mesh")
+    return trimesh.Trimesh(
+        vertices=np.asarray(kept_vertices, dtype=np.float64),
+        faces=np.asarray(kept_faces, dtype=np.int64),
+        process=False,
+    )
+
+
+def build_sparse_grass_tuft_mesh(
+    cfg: MowStripCfg,
+    *,
+    count: int,
+    road_edge_y: float,
+    seed: int,
+    tracking_clearance_m: float = 0.20,
+    edge_clearance_m: float = 0.18,
+    height_range_m: tuple[float, float] = (0.10, 0.19),
+    width_range_m: tuple[float, float] = (0.07, 0.14),
+    palette: tuple = (
+        (0.035, 0.13, 0.018),
+        (0.055, 0.18, 0.025),
+        (0.085, 0.22, 0.035),
+    ),
+) -> trimesh.Trimesh:
+    """Build deterministic four-blade grass clumps over the real surface.
+
+    Each clump is only four triangles.  They are presentation geometry and are
+    kept clear of the tracked white line and road seam so those two functional
+    visual references stay legible.
+    """
+    count = int(count)
+    if count < 0:
+        raise ValueError("grass tuft count must be non-negative")
+    if count == 0:
+        return trimesh.Trimesh(
+            vertices=np.empty((0, 3)), faces=np.empty((0, 3), dtype=np.int64)
+        )
+    h0, h1 = (float(value) for value in height_range_m)
+    w0, w1 = (float(value) for value in width_range_m)
+    if not 0.0 < h0 <= h1 or not 0.0 < w0 <= w1:
+        raise ValueError("grass tuft height/width ranges must be positive and ordered")
+    colors = np.asarray(palette, dtype=np.float64)
+    if colors.ndim != 2 or colors.shape[1] != 3 or len(colors) == 0:
+        raise ValueError("grass tuft palette must contain RGB colors")
+
+    rng = np.random.default_rng(int(seed) % (2**32))
+    x_min = float(cfg.start_x_m) + 0.25
+    x_max = float(cfg.start_x_m + cfg.length_m) - 0.25
+    y_min = float(cfg.center_y_m - 0.5 * cfg.width_m) + edge_clearance_m
+    y_max = min(
+        float(cfg.center_y_m + 0.5 * cfg.width_m) - edge_clearance_m,
+        float(road_edge_y) - edge_clearance_m,
+    )
+    if x_max <= x_min or y_max <= y_min:
+        raise ValueError("grass tuft placement region is empty")
+
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    vertex_colors: list[tuple[int, int, int, int]] = []
+    accepted = 0
+    attempts = 0
+    max_attempts = max(200, 30 * count)
+    while accepted < count and attempts < max_attempts:
+        attempts += 1
+        x = float(rng.uniform(x_min, x_max))
+        y = float(rng.uniform(y_min, y_max))
+        line_y = float(tracking_line_center_y_at(cfg, np.asarray([x]))[0])
+        # Reserve enough room for the blade tips as well as the clump centre;
+        # otherwise a nominally clear clump can still cover the white line.
+        blade_envelope = 0.5 * w1 + 0.34 * h1
+        if abs(y - line_y) < float(tracking_clearance_m) + blade_envelope:
+            continue
+        z = float(surface_height_at(cfg, np.asarray([x]), np.asarray([y]))[0])
+        height = float(rng.uniform(h0, h1))
+        width = float(rng.uniform(w0, w1))
+        rotation = float(rng.uniform(0.0, 0.5 * np.pi))
+        lean = float(rng.uniform(0.18, 0.34)) * height
+        color = tuple(
+            int(value)
+            for value in np.rint(
+                np.clip(colors[int(rng.integers(0, len(colors)))], 0.0, 1.0)
+                * 255.0
+            )
+        ) + (255,)
+        for blade in range(4):
+            angle = rotation + blade * 0.5 * np.pi
+            radial = np.asarray((np.cos(angle), np.sin(angle)))
+            tangent = np.asarray((-radial[1], radial[0]))
+            base = len(vertices)
+            left = np.asarray((x, y)) - 0.5 * width * tangent
+            right = np.asarray((x, y)) + 0.5 * width * tangent
+            tip = np.asarray((x, y)) + lean * radial
+            vertices.extend(
+                (
+                    (float(left[0]), float(left[1]), z + 0.004),
+                    (float(right[0]), float(right[1]), z + 0.004),
+                    (float(tip[0]), float(tip[1]), z + height),
+                )
+            )
+            faces.append((base, base + 1, base + 2))
+            vertex_colors.extend((color, color, color))
+        accepted += 1
+
+    if accepted != count:
+        raise RuntimeError(f"placed only {accepted}/{count} grass tufts")
+    result = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+    result.visual.vertex_colors = np.asarray(vertex_colors, dtype=np.uint8)
+    return result
+
+
 def enable_adaptive_trajectory_curriculum(
     cfg,
     *,
@@ -155,7 +413,7 @@ class MowStripCfg:
     start_x_m: float = -32.0
     center_y_m: float = 1.38
     length_m: float = 60.0
-    width_m: float = 1.8
+    width_m: float = 3.0
 
     # Sampling. 0.1 m along the drive direction resolves the undulation the
     # cutter must follow, and the strip is small enough that this stays cheap:
@@ -451,13 +709,30 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
         (1.0 - q) / endpoint_fraction
     )
 
+    # CYCLE COUNTS HALVED ON THE PERIODIC FAMILIES, to pay for the 4.4x
+    # amplitude. Peak lateral demand goes as amplitude x cycles, so widening
+    # alone took lateral_chirp to 0.802 m/s against a 0.240 m/s ceiling --
+    # `error ~ 0.465 * demand` (PATH_FEASIBILITY.md) predicts 0.37 m, over the
+    # 0.300 gate. Halving the cycles restores the demand while KEEPING the width:
+    # a long, broad wave instead of a fast one.
+    #
+    # This is done per family rather than through `frequency_scale` because that
+    # multiplier is not safe below 1.0 for every shape: `offset_return` is
+    # sin(pi*f*q)**2, which stops returning to zero at f<1 and gets slammed shut
+    # by the endpoint window (measured: 0.083 -> 0.948 m/s, an 11x increase).
+    # Only the families that are genuinely periodic in q are re-timed here.
     if family == "lateral_sine":
-        amplitude = rng.uniform(0.10, 0.14)
-        cycles = rng.uniform(1.25, 1.75) * frequency_scale
-        offset = amplitude * np.sin(2.0 * np.pi * cycles * q)
+        # Cycle count must be a MULTIPLE OF 0.5 or sin(2*pi*c*q) does not land
+        # on zero at q=1 and the endpoint window shuts it discontinuously. The
+        # old 1.25-1.75 draw never landed on zero either; it got away with it
+        # because the amplitude was small. At 4.4x it does not, so this is now
+        # one full cycle exactly -- the long, broad wave, randomised in phase
+        # sign rather than in frequency.
+        amplitude = rng.uniform(0.10, 0.14) * rng.choice((-1.0, 1.0))
+        offset = amplitude * np.sin(2.0 * np.pi * frequency_scale * q)
     elif family == "s_curve":
         amplitude = rng.uniform(0.12, 0.18)
-        offset = amplitude * np.sin(2.0 * np.pi * frequency_scale * q)
+        offset = amplitude * np.sin(np.pi * frequency_scale * q)
     elif family == "random_spline":
         knots = np.linspace(0.0, 1.0, 7)
         values = rng.uniform(-0.16, 0.16, size=knots.size)
@@ -476,40 +751,42 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
         amplitude = rng.uniform(0.14, 0.20) * rng.choice((-1.0, 1.0))
         offset = amplitude * np.sin(np.pi * frequency_scale * q) ** 2
     elif family == "boom_sweep":
-        reference_height = surface_height_at(
-            cfg,
-            np.asarray(cfg.tracking_reference_x_m),
-            np.asarray(cfg.center_y_m),
-        )
-        active_x = cfg.tracking_reference_x_m + q * active_length
-        height = surface_height_at(
-            cfg, active_x, np.full_like(active_x, cfg.center_y_m)
-        )
-        raw_offset = cfg.tracking_height_sweep_gain * (height - reference_height)
-        # Full-height terrain previously drove this family into the strip-edge
-        # clip. Keep its natural height correlation but smoothly limit it to an
-        # easy, scanner-visible lateral excursion.
-        boom_limit = 0.24
-        offset = boom_limit * np.tanh(raw_offset / boom_limit)
-        end_height = surface_height_at(
-            cfg,
-            np.asarray(cfg.tracking_reference_x_m + active_length),
-            np.asarray(cfg.center_y_m),
-        )
-        end_offset = boom_limit * np.tanh(
-            cfg.tracking_height_sweep_gain
-            * (end_height - reference_height)
-            / boom_limit
-        )
-        end_blend = smootherstep01((q - 0.85) / 0.15)
-        offset = ((1.0 - end_blend) * offset + end_blend * end_offset) * start_window
+        # PURE XY, as of the widening. This family used to be the ONLY one whose
+        # offset was a function of the ground:
+        #     raw_offset = tracking_height_sweep_gain * (height - reference)
+        # so its lateral demand was set by terrain roughness rather than by the
+        # path, which is why it alone got harder as the mesh got rougher and why
+        # it demanded 2.9-4.6x the cylinder rate ceiling while even the
+        # privileged DLS teacher failed it (PATH_FEASIBILITY.md). A z-driven
+        # trajectory also cannot be widened coherently: scaling its amplitude
+        # scales a height reading, not a path.
+        #
+        # It is now a broad single-lobe sweep out and back in the XY plane --
+        # the boom swinging wide across the verge and returning, which is what
+        # the name describes. Amplitude is drawn like every other family, so the
+        # shared amplitude/frequency scaling applies to it uniformly.
+        amplitude = rng.uniform(0.16, 0.22) * rng.choice((-1.0, 1.0))
+        offset = amplitude * np.sin(np.pi * q) ** 2
     elif family == "lateral_chirp":
         amplitude = rng.uniform(0.10, 0.14)
-        phase = 2.0 * np.pi * frequency_scale * (0.75 * q + 1.25 * q**2)
+        phase = 2.0 * np.pi * frequency_scale * (0.375 * q + 0.625 * q**2)
         offset = amplitude * np.sin(phase)
     elif family == "double_s_curve":
+        # TWO full cycles, which is what "double" means and what makes this
+        # family distinct. It was `sin(2*pi*f*q)` -- byte-identical to
+        # `lateral_sine` after that family was re-authored to one full cycle --
+        # so the library advertised 11 families and generated 10. The signature
+        # test caught it (10 != 11); the worst-family gate had been aggregating
+        # over a redundant pair, and `path_family_counts` was reporting two
+        # populations that were one.
+        #
+        # 2.0 keeps the cycle count a multiple of 0.5, so the path still lands
+        # on zero at q=1 and the endpoint window does not shut it
+        # discontinuously. It doubles the lateral rate demand: measured at the
+        # shipped band this family sits at 0.055 m/s against the 0.240 m/s
+        # cylinder ceiling, so twice that is 0.11 m/s and still inside.
         amplitude = rng.uniform(0.10, 0.14)
-        offset = amplitude * np.sin(4.0 * np.pi * frequency_scale * q)
+        offset = amplitude * np.sin(2.0 * np.pi * 2.0 * frequency_scale * q)
     elif family == "lane_change_hold":
         amplitude = rng.uniform(0.12, 0.18) * rng.choice((-1.0, 1.0))
         rise = smootherstep01((q - 0.12) / 0.18)
@@ -529,13 +806,16 @@ def tracking_line_center_y_at(cfg: MowStripCfg, x_local) -> np.ndarray:
         amplitude = rng.uniform(0.10, 0.15)
         phases = rng.uniform(-0.35, 0.35, size=3)
         offset = amplitude * (
-            0.62 * np.sin(2.0 * np.pi * frequency_scale * q + phases[0])
-            + 0.26 * np.sin(4.0 * np.pi * frequency_scale * q + phases[1])
-            + 0.12 * np.sin(6.0 * np.pi * frequency_scale * q + phases[2])
+            0.62 * np.sin(1.0 * np.pi * frequency_scale * q + phases[0])
+            + 0.26 * np.sin(2.0 * np.pi * frequency_scale * q + phases[1])
+            + 0.12 * np.sin(3.0 * np.pi * frequency_scale * q + phases[2])
         )
 
-    if family != "boom_sweep":
-        offset = offset * endpoint_window
+    # Every family now gets the endpoint window. boom_sweep was excluded only
+    # because its height-coupled form ended at a nonzero offset that had to be
+    # eased separately; the XY form is a sin^2 lobe that is already zero at both
+    # ends, so the window is a no-op there rather than a special case.
+    offset = offset * endpoint_window
 
     # Widen every family uniformly. Applied AFTER the endpoint windows so the
     # zero-derivative joins at the lead-in/out are preserved -- scaling before

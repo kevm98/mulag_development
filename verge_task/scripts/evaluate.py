@@ -201,6 +201,22 @@ p.add_argument(
     help="rom = PPO3 command ROM; idfd = PPO4 ID->FD. Same evaluation either way.",
 )
 p.add_argument(
+    "--factor_domain",
+    default="",
+    choices=("", "nominal", "hydraulic", "mechanical", "combined_train", "combined_test"),
+    help="Enable the latched deployment factor manifest for this domain.",
+)
+p.add_argument(
+    "--factor_key",
+    default="",
+    help="Explicit factor key/run id, e.g. flow_min, flow_max, or combined_test:102.",
+)
+p.add_argument(
+    "--factor_manifest",
+    default="",
+    help="Override the audited deployment factor manifest path.",
+)
+p.add_argument(
     "--head_ff_from_measured",
     default="",
     choices=("", "true", "false"),
@@ -393,6 +409,13 @@ def build_env():
     env_cfg.use_eval_terrain = bool(a.eval_terrain)
     env_cfg.terrain_eval_seed_override = int(a.eval_terrain_seed)
     env_cfg.terrain_base_seed = int(a.seed)
+    if a.factor_domain or a.factor_key:
+        env_cfg.deployment_factor_enabled = True
+        env_cfg.deployment_factor_domain = a.factor_domain or "nominal"
+        env_cfg.deployment_factor_key = str(a.factor_key)
+        if a.factor_manifest:
+            env_cfg.deployment_factor_manifest = str(Path(a.factor_manifest).resolve())
+        env_cfg.deployment_factor_seed = int(a.seed)
     env_cfg.terrain_height_scale_override = float(a.terrain_height_scale)
     env_cfg.enable_contact_tracking_demo = False
     env_cfg.tracking_path_family = str(a.path_family)

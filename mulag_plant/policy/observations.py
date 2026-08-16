@@ -12,13 +12,17 @@ import torch
 RESIDUAL_OBS_FIXED_DIM = 38
 RESIDUAL_OBS_DIM = 41
 FOUR_CYLINDER_RESIDUAL_OBS_DIM = 42
+TRAJECTORY_GEOMETRY_CHANNELS = 3
+TRAJECTORY_GEOMETRY_OBS_DIM = RESIDUAL_OBS_FIXED_DIM + TRAJECTORY_GEOMETRY_CHANNELS + 4
 
 
-def residual_observation_dim(action_dim: int) -> int:
+def residual_observation_dim(action_dim: int, *, trajectory_geometry: bool = False) -> int:
     action_dim = int(action_dim)
     if action_dim not in (3, 4):
         raise ValueError(f"residual action dimension must be 3 or 4, got {action_dim}")
-    return RESIDUAL_OBS_FIXED_DIM + action_dim
+    return RESIDUAL_OBS_FIXED_DIM + action_dim + (
+        TRAJECTORY_GEOMETRY_CHANNELS if trajectory_geometry else 0
+    )
 
 
 def build_residual_observation(
@@ -38,6 +42,8 @@ def build_residual_observation(
     cutter_bottom_world_clearance: torch.Tensor,
     head_down_alignment: torch.Tensor,
     head_down_alignment_rate: torch.Tensor,
+    nearest_point_delta_xy: torch.Tensor | None = None,
+    signed_normal_error_m: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Build the residual observation for a 3- or 4-action policy.
 
@@ -53,8 +59,9 @@ def build_residual_observation(
      Remaining signals retain their order: valve command (4), ROM increment
      (4), XY preview (2), direction, clearance, head alignment, and head rate.
 
-    Total: 38 + A, giving 41 for the accepted policy and 42 for the
-    four-cylinder experiment.
+    If nearest-point geometry is supplied, three channels are appended after
+    the legacy block: nearest-point delta XY and signed normal error.  This is
+    opt-in so historical line checkpoints keep their exact observation width.
     """
     obs = torch.cat(
         [
@@ -77,7 +84,16 @@ def build_residual_observation(
         dim=-1,
     )
     obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
-    expected_dim = residual_observation_dim(previous_filtered_policy_action.shape[-1])
+    if (nearest_point_delta_xy is None) != (signed_normal_error_m is None):
+        raise ValueError("nearest-point delta and signed normal must be supplied together")
+    if nearest_point_delta_xy is not None:
+        if nearest_point_delta_xy.shape[-1] != 2:
+            raise ValueError("nearest_point_delta_xy must have two columns")
+        obs = torch.cat((obs, nearest_point_delta_xy, signed_normal_error_m.reshape(-1, 1)), dim=-1)
+    expected_dim = residual_observation_dim(
+        previous_filtered_policy_action.shape[-1],
+        trajectory_geometry=nearest_point_delta_xy is not None,
+    )
     if obs.shape[-1] != expected_dim:
         raise RuntimeError(
             f"Residual observation dim mismatch: got {obs.shape[-1]}, expected {expected_dim}."

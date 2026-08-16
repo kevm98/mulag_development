@@ -88,11 +88,17 @@ class PPO2ROMPhysXEnv(MulagUpperLevelEnv):
             )
         else:
             summary = pipeline_summary()
+            online_aam = bool(getattr(cfg, "online_aam_enabled", False))
+            pipeline_label = (
+                "online AAM -> latent-conditioned ID adapter -> frozen FD"
+                if online_aam
+                else summary.disabled_models
+            )
             print(
                 f"[ID_FD] {self._task_type} pipeline: "
                 f"policy_obs={obs_dim} policy_action={action_dim} actuator_action=4 | "
                 f"{summary.inverse_dynamics} | {summary.forward_dynamics} | "
-                f"{summary.disabled_models}",
+                f"{pipeline_label}",
                 flush=True,
             )
 

@@ -28,6 +28,39 @@ if str(ROOT) not in sys.path:
 from PPO_ROM.gates import GATES, check_gates  # noqa: E402
 
 
+# These fields determine whether per-mesh results are valid members of one
+# paired promotion campaign.  Keep them in the merged report; dropping them
+# makes a later statistical gate unable to tell an L20 estimate from a legacy
+# run or an 8 mm reserve from a nominal plant.
+CONTRACT_FIELDS = (
+    "actuator",
+    "action_width",
+    "cylinder_target_max_lead_per_axis_m",
+    "cylinder_target_lead_high_speed_per_axis_m",
+    "cylinder_target_lead_schedule_speed_kmh",
+    "cylinder_target_integrates_from_previous_target",
+    "cylinder_target_leak",
+    "cylinder_target_limit_inset_m",
+    "dls_null_space_centering_gain",
+    "c3_physical_extension_reserve_m",
+    "online_aam_latent_mode",
+    "online_aam_controller_latent_mode",
+    "online_aam_residual_scale",
+    "z_hat_is_live",
+    "vehicle_speed_min_kmh",
+    "vehicle_speed_max_kmh",
+    "factor_domain",
+    "factor_key",
+    "deployment_factor_enabled",
+    "deployment_factor_manifest",
+    "online_aam_checkpoint",
+    "online_aam_adapter_checkpoint",
+    "online_aam_history_lag",
+    "online_aam_smoother_window",
+    "evaluation_seed",
+)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("reports", nargs="+", help="per-mesh evaluate_gates.py JSONs")
@@ -36,12 +69,29 @@ def main() -> int:
 
     per_mesh: dict[str, dict] = {}
     checkpoints: set[str] = set()
+    stages: set[int] = set()
+    contract_values: dict[str, set[str]] = {key: set() for key in CONTRACT_FIELDS}
+    contract_payloads: dict[str, object] = {}
+    z_hat_across_env_stds: list[float] = []
+    z_hat_temporal_deltas: list[float] = []
     for name in a.reports:
         path = Path(name)
         if not path.exists():
             raise SystemExit(f"missing per-mesh report: {path}")
         payload = json.loads(path.read_text())
+        z_hat_across_env_stds.append(
+            float(payload.get("z_hat_across_env_std_observed", 0.0))
+        )
+        z_hat_temporal_deltas.append(
+            float(payload.get("z_hat_temporal_delta_observed", 0.0))
+        )
         checkpoints.add(str(payload.get("checkpoint", "")))
+        stages.add(int(payload.get("stage", -1)))
+        for key in CONTRACT_FIELDS:
+            value = payload.get(key)
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            contract_values[key].add(encoded)
+            contract_payloads.setdefault(key, value)
         for mesh, metrics in (payload.get("per_mesh") or {}).items():
             if mesh in per_mesh:
                 raise SystemExit(f"mesh {mesh} appears in more than one report")
@@ -49,12 +99,28 @@ def main() -> int:
 
     if len(checkpoints) != 1:
         raise SystemExit(f"reports are from different checkpoints: {sorted(checkpoints)}")
+    if len(stages) != 1:
+        raise SystemExit(f"reports are from different stages: {sorted(stages)}")
+    mismatches = {
+        key: sorted(values)
+        for key, values in contract_values.items()
+        if len(values) > 1
+    }
+    if mismatches:
+        raise SystemExit(
+            "reports are from different promotion contracts: "
+            f"{mismatches}"
+        )
 
     result = check_gates(per_mesh)
 
     merged = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "checkpoint": checkpoints.pop(),
+        "stage": stages.pop(),
+        **contract_payloads,
+        "z_hat_across_env_std_observed": max(z_hat_across_env_stds, default=0.0),
+        "z_hat_temporal_delta_observed": max(z_hat_temporal_deltas, default=0.0),
         "meshes": sorted(per_mesh),
         "per_mesh": per_mesh,
         "gates": result,

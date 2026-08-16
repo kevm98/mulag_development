@@ -33,6 +33,16 @@ p.add_argument("--save_interval", type=int, default=10)
 p.add_argument("--trajectory_shapes", default="line,arc,sine,circle,square")
 p.add_argument("--path_speed_mps", type=float, default=0.18)
 p.add_argument("--trajectory_library_path", default="")
+p.add_argument(
+    "--trajectory_2d",
+    action="store_true",
+    help="Use the standalone line/sine_chain/circle/rounded_square task.",
+)
+p.add_argument(
+    "--fresh_start",
+    action="store_true",
+    help="Start a new policy when the observation contract is wider than the legacy checkpoint.",
+)
 p.add_argument("--command_rom_checkpoint", default="")
 p.add_argument(
     "--command_rom_direction_guard",
@@ -163,6 +173,7 @@ from mulag_plant.policy_4cyl.checkpoint_transfer import (
 )
 from mulag_plant.policy_4cyl.env_cfg import (
     FourCylinderResidualPolicyPPORunnerCfg,
+    FourCylinderTrajectory2DPPORunnerCfg,
 )
 from mulag_plant.policy_4cyl.promotion_probe import (
     paired_promotion_probe,
@@ -221,6 +232,18 @@ def _zero_action_preflight(raw) -> None:
         or raw_drift > saved[2]
         or retained_drift > saved[1]
     ):
+        worst = torch.topk(max_clearance_error_by_env, k=min(8, raw.num_envs))
+        measured_x, _ = raw._refresh_cylinder_state()
+        print(
+            "[4CYL PREFLIGHT] worst_clearance_envs="
+            f"{worst.indices.detach().cpu().tolist()} values="
+            f"{worst.values.detach().cpu().tolist()} "
+            f"measured_cylinder={measured_x[worst.indices].detach().cpu().tolist()} "
+            f"goal_cylinder={raw._baseline_cylinder_goal[worst.indices].detach().cpu().tolist()} "
+            f"tool={raw._compute_ee_pos_local()[worst.indices].detach().cpu().tolist()} "
+            f"reference={raw._original_reference_tool[worst.indices].detach().cpu().tolist()}",
+            flush=True,
+        )
         raise RuntimeError(
             "four-cylinder zero-action contract failed: "
             f"residual={max_residual:.3e} "
@@ -398,12 +421,23 @@ def _promotion_probe_per_environment(
 
 
 def main() -> None:
-    task = "RRLAB-Mulag-PPO2-A-Policy-V3-v0"
+    task = (
+        "RRLAB-Mulag-PPO2-A-Trajectory2D-v0"
+        if a.trajectory_2d
+        else "RRLAB-Mulag-PPO2-A-Policy-V3-v0"
+    )
     cfg = parse_env_cfg(task, device=a.device, num_envs=int(a.num_envs))
     cfg.seed = int(a.seed)
     apply_residual_curriculum_stage(cfg, 4)
     cfg.action_space = 4
-    cfg.observation_space = 42
+    cfg.observation_space = 45 if a.trajectory_2d else 42
+    cfg.trajectory_geometry_observation = bool(a.trajectory_2d)
+    if a.trajectory_2d:
+        if not a.fresh_start:
+            p.error("--trajectory_2d requires --fresh_start; legacy 42-D weights are not silently migrated")
+        cfg.trajectory_library_path = str(
+            ROOT / "mulag_plant/models/trajectory_2d_library_v2.json"
+        )
     if a.trajectory_library_path:
         cfg.trajectory_library_path = str(
             Path(a.trajectory_library_path).expanduser().resolve()
@@ -419,6 +453,13 @@ def main() -> None:
     cfg.randomize_trajectory_shape = not balanced_mode
     if balanced_mode:
         cfg.trajectory_shape = trajectory_shapes[0]
+    if a.trajectory_2d:
+        # The standalone task follows the deployment station protocol: each
+        # shape starts at a verified endpoint after the truck has parked. The
+        # balanced trainer already covers both travel directions; arbitrary
+        # mid-path resets are not part of the approved route and can exercise
+        # unverified preposition poses during the zero-action gate.
+        cfg.randomize_start_phase = False
     cfg.procedural_trajectory_probability = 0.0
     cfg.path_speed_mps = float(a.path_speed_mps)
     cfg.cylinder4_residual_scale_m = 0.0
@@ -431,8 +472,12 @@ def main() -> None:
     cfg.clearance_relative_to_reference = True
     cfg.defer_safety_terminations = bool(a.defer_safety_resets)
 
-    agent_cfg = FourCylinderResidualPolicyPPORunnerCfg()
-    if a.joint_finetune:
+    agent_cfg = (
+        FourCylinderTrajectory2DPPORunnerCfg()
+        if a.trajectory_2d
+        else FourCylinderResidualPolicyPPORunnerCfg()
+    )
+    if a.joint_finetune and not a.trajectory_2d:
         agent_cfg.experiment_name = "ppo2_a_policy_v3"
     agent_cfg.seed = int(a.seed)
     agent_cfg.device = a.device
@@ -468,7 +513,9 @@ def main() -> None:
         runner = OnPolicyRunner(
             env, agent_cfg.to_dict(), log_dir=str(log_dir), device=agent_cfg.device
         )
-        if a.checkpoint4:
+        if a.trajectory_2d:
+            print("[PPO2-ROM-4CYL] fresh 2-D actor; historical line checkpoint untouched", flush=True)
+        elif a.checkpoint4:
             checkpoint4 = str(Path(a.checkpoint4).expanduser().resolve())
             runner.load(
                 checkpoint4,
@@ -512,7 +559,16 @@ def main() -> None:
             return
         baseline_policy = None
         teacher_snapshot = None
-        if a.joint_finetune:
+        if a.trajectory_2d:
+            # The geometry channels change the policy contract, so there is no
+            # valid 42-D teacher to freeze or transfer. Train the new 45-D
+            # actor jointly from scratch; the old line actor remains available
+            # for the comparison gate.
+            a.joint_finetune = True
+            a.disable_early_stop = True
+            joint = configure_joint_finetune(runner)
+            print(f"[PPO2-ROM-4CYL] trajectory_2d_joint_start={joint}", flush=True)
+        elif a.joint_finetune:
             baseline_policy = copy.deepcopy(runner.alg.get_policy()).to(
                 gym_env.unwrapped.device
             ).eval()

@@ -143,7 +143,16 @@ def apply_terrain_curriculum_stage(cfg, stage: int) -> None:
         # memorising one mesh.
         cfg.cut_tracking_std_m = 0.03
         cfg.lateral_tracking_std_m = 0.30
-        cfg.episode_length_s = 16.0
+        # Episode duration is COUPLED to truck speed and therefore belongs with
+        # the task's tracking band, not here. The arm has to traverse the whole
+        # authored path: 16 m at 4 km/h is 14.4 s, but at 2 km/h it is 28.8 s,
+        # and a task that halves the speed while keeping a 16 s episode simply
+        # never shows the policy the far half of the path. Shortening the PATH
+        # to fit instead is the trap -- substituting active_length = v * T into
+        # the demand gives 2*pi*A*f/T, with the speed cancelled entirely, so a
+        # shorter path at lower speed has exactly the slope it started with.
+        if not bool(getattr(cfg, "terrain_tracking_band_owned_by_task", False)):
+            cfg.episode_length_s = 16.0
         cfg.sole_action_filter = float(
             getattr(cfg, "terrain_action_filter", 0.70)
         )
@@ -151,16 +160,115 @@ def apply_terrain_curriculum_stage(cfg, stage: int) -> None:
         cfg.mow_strip_resolution_m = 0.15
         cfg.uneven_verge_apron = True
         # The whole point of this stage. The families author 0.10-0.24 m of
-        # lateral swing against 0.74 m of available half-strip; 2.2x takes the
-        # mean peak-to-peak from ~0.20 m to ~0.44 m and makes the green line
-        # something the arm has to work to stay on. Still bounded by the same
-        # smooth tanh saturation, so it cannot leave the green.
-        cfg.terrain_tracking_amplitude_scale = 2.2
+        # lateral swing; 4.4x takes the mean peak-to-peak from ~0.20 m to
+        # ~0.88 m against the widened 1.34 m half-strip, so the arm works
+        # across most of the verge instead of a third of it. Still bounded by
+        # the same smooth tanh saturation, so it cannot leave the green.
+        #
+        # The frequency stays at 1.0, and that is deliberate after measuring the
+        # alternative. Widening costs lateral RATE (peak lateral speed goes as
+        # amplitude x frequency), so halving the frequency to pay for the wider
+        # amplitude looks free -- and is not. Families are authored to complete
+        # their cycle over q in [0, 1] and end at zero: `offset_return` is
+        # `sin(pi*f*q)**2`, which at f=0.5 ends at its PEAK instead of zero, and
+        # the endpoint window then slams it shut over the last 10% of the path.
+        # Measured with `probe_path_feasibility.py`: that took offset_return's
+        # peak lateral demand from 0.083 m/s to 0.948 m/s -- an 11x INCREASE
+        # from a change meant to reduce it. Sub-unit frequency scaling is only
+        # safe for families whose shape is periodic in q, which is not all of
+        # them.
+        #
+        # The width was bought out of the `lateral` gate's margin on the
+        # prediction that "roughly doubling the demand still lands near 0.18 m".
+        # THE 8-GATE RUN THAT WAS SUPPOSED TO CONFIRM THAT FALSIFIED IT, and the
+        # amplitude is corrected here as a result. Measured 2026-08-11:
+        #
+        # `probe_path_feasibility.py` (pure geometry, no simulator, 3 meshes x
+        # 11 families = 33 cells) counts the cells whose required lateral cutter
+        # speed exceeds the cylinder rate ceiling at the scripted 4 km/h drive:
+        #
+        #     amplitude   6.6   5.5   4.4   3.3   2.6   2.2   1.8   1.6   1.4
+        #     cells over   26    24    24    20    15     7     3     0     0
+        #     worst step % 55.9  43.6  33.9  22.3  17.9  14.5   7.5   0     0
+        #
+        # EVERY RUNG of the shipped 2.2-6.6 ladder was over the ceiling, the top
+        # one on 56% of steps. Tracking error at those amplitudes is accumulated
+        # by construction: the reference moves laterally faster than the
+        # cylinders can follow, so no policy -- and not the privileged DLS
+        # teacher -- can remove it. Confirmed on the simulator: scored on stage 6
+        # at 32 envs, the teacher FAILS 5 of 8 gates (worst-family lateral
+        # 0.3027 m, worst-family ground contact 0.4021, min cylinder headroom
+        # exactly 0.0000, i.e. the arm sitting on its own travel limits), while
+        # the same teacher on stage 5 -- which runs at the class-default
+        # amplitude 1.0 -- passes all eight. The stage-5/stage-6 gap that was
+        # read as "stage 6 is harder terrain" was almost entirely this ladder.
+        #
+        # The ceiling is OPTIMISTIC (it assumes a lateral Jacobian of 1.0 and the
+        # whole cylinder budget spent on lateral motion rather than on holding
+        # height and head angle), so the honest limit is at or below the 1.4-1.8
+        # crossing, not above it.
+        #
+        # THE FEASIBLE BAND WAS ALREADY DERIVED, AND THIS FUNCTION WAS ERASING
+        # IT. `Ppo31SoleEnvCfg.__post_init__` sets amplitude 0.7 with the ladder
+        # (0.30, 0.45, 0.60, 0.75) and sweep gain 0.5, chosen against a
+        # three-knob sweep so every family sits at or under 75% of the ceiling.
+        # That runs at config construction; this function runs AFTER it, in
+        # train.py, distill_terrain.py and evaluate_gates.py alike, and the two
+        # assignments below put the infeasible ladder back every time. The
+        # precedence was an accident of call order, not a decision -- so the
+        # values here are now the same measured band, and a task that pins its
+        # own is left alone (see `terrain_tracking_band_owned_by_task`).
+        if not bool(getattr(cfg, "terrain_tracking_band_owned_by_task", False)):
+            cfg.terrain_tracking_amplitude_scale = 0.7
+        # AND IT IS NOT PINNED THERE. A policy generalises over the distribution
+        # it was trained on and essentially nothing else -- this repo measured a
+        # student distilled at a PINNED 2.2 delivering 0.303 m of lateral error
+        # on amplitude-0.7 terrain that physically permits 0.058 m, five times
+        # worse than the plant allows, purely from being asked a question it was
+        # never trained on (see `terrain_parameter_for_environment`). Shipping a
+        # single wider amplitude would repeat that mistake at a new number.
+        #
+        # Each environment therefore draws its own width from this ladder, which
+        # spans narrower-than-old (2.2) to wider-than-new (6.6) so the trained
+        # band brackets deployment instead of sitting at its edge. FIVE values
+        # against the FOUR `terrain_height_scales` is deliberate: the lengths are
+        # coprime, so all 20 (amplitude, height) pairs appear every 20
+        # environments at stride 1, decorrelating width from roughness.
+        #
+        # Amplitude is the safe axis to randomise because it is applied AFTER
+        # the endpoint window, so every family still starts and ends at zero
+        # offset no matter how it is scaled. Frequency is NOT safe to jitter the
+        # same way: it moves cycle counts off multiples of 0.5, the family stops
+        # landing on zero at q=1, and the endpoint window closes the gap
+        # discontinuously -- measured at 11x the lateral rate demand. Leave
+        # `terrain_tracking_frequency_jitter` at 0.0 unless every family is
+        # re-authored to be periodic under scaling.
+        #
+        # Same band as the scalar above, and same ownership rule. Four rungs
+        # against the three `terrain_tracking_height_sweep_gains` are coprime, so
+        # all 12 (amplitude, gain) pairs appear every 12 environments at stride 1.
+        if not bool(getattr(cfg, "terrain_tracking_band_owned_by_task", False)):
+            cfg.terrain_tracking_amplitude_scales = (0.30, 0.45, 0.60, 0.75)
 
 
 @configclass
 class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     """Sole-controller arm, constant-speed truck, generated mowing terrain."""
+
+    # --- deployment-domain factor contract -------------------------------
+    # Disabled by default so historical nominal checkpoints remain bitwise
+    # comparable. Phase-1 evaluation enables this explicitly and latches one
+    # audited e=(flow, compliance, seal, pressure, mass_scale, com_z) row per
+    # environment for the entire episode.
+    deployment_factor_enabled: bool = False
+    deployment_factor_domain: str = "nominal"
+    deployment_factor_key: str = ""
+    deployment_factor_seed: int = 17
+    deployment_factor_manifest: str = str(
+        Path(__file__).resolve().parents[1]
+        / "AAM_module/datasets/rom_deployment_stage31_v1_frozen/raw/manifest.csv"
+    )
+    deployment_factor_log: bool = True
 
     # The inherited flag samples a phase of PPO2's stored arm trajectory during
     # reset.  PPO3 has no scored stored path: every episode must deploy to the
@@ -217,6 +325,16 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     enable_scripted_vehicle_motion: bool = True
     vehicle_speed_min_kmh: float = 4.0
     vehicle_speed_max_kmh: float = 4.0
+    vehicle_speed_per_episode: bool = True
+    """Sample one constant scripted speed at reset; never resample mid-episode."""
+    vehicle_speed_sampling: str = "uniform"
+    """Reset distribution: uniform, or active_time_balanced for PPO training."""
+    vehicle_training_segment_duration_s: float = 0.0
+    """Equal active duration for speed-randomized training; zero scores all 26 m."""
+    vehicle_path_completion_margin_s: float = 0.5
+    """Extra global horizon beyond the slowest speed's exact path duration."""
+    vehicle_path_completion_tolerance_m: float = 1.0e-4
+    vehicle_terminate_when_all_paths_complete: bool = True
     vehicle_steering_target_rad: float = 0.0
     drive_direction_xy: tuple = (1.0, 0.0)
     """Unit heading the chassis is advanced along, in env-local XY."""
@@ -253,6 +371,10 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     road_width_m: float = 3.60
     road_color: tuple = (0.11, 0.12, 0.13)
     road_roughness: float = 0.92
+    enable_road_edge_markings: bool = False
+    road_edge_marking_inset_m: float = 0.45
+    road_edge_marking_width_m: float = 0.11
+    road_edge_marking_color: tuple = (0.82, 0.82, 0.76)
     """Dark, rough asphalt-like road, physically separate from the green verge."""
     dark_visual_background: bool = True
     """Hide the bright dome from camera rays while retaining its illumination."""
@@ -282,6 +404,9 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     road_lane_dash_width_m: float = 0.12
     road_lane_dash_length_m: float = 2.0
     road_lane_dash_gap_m: float = 3.0
+    road_scenery_edge_inset_m: float = 0.28
+    road_gravel_shoulder_width_m: float = 0.34
+    road_gravel_shoulder_color: tuple = (0.10, 0.085, 0.060)
     verge_visual_apron_m: float = 3.2
     """Grass width added outboard of the mowed verge and beyond the far kerb."""
     verge_visual_color: tuple = (0.075, 0.27, 0.050)
@@ -298,6 +423,19 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     verge_apron_relief_m: float = 0.09
     verge_apron_resolution_m: float = 0.45
     """Apron mesh step. Visual-only, so this stays coarse relative to the verge."""
+
+    enable_verge_grass_tufts: bool = False
+    verge_grass_tufts_per_env: int = 72
+    verge_grass_tracking_clearance_m: float = 0.20
+    verge_grass_edge_clearance_m: float = 0.18
+    verge_grass_height_range_m: tuple = (0.10, 0.19)
+    verge_grass_width_range_m: tuple = (0.07, 0.14)
+    verge_grass_palette: tuple = (
+        (0.035, 0.13, 0.018),
+        (0.055, 0.18, 0.025),
+        (0.085, 0.22, 0.035),
+    )
+    """Sparse four-triangle grass clumps; visual-only and non-colliding."""
 
     # Relief class of the mowed verge. "gentle" is the stage 1-4 surface every
     # existing score was measured on; "lawn_rough" is stage 5. Set by
@@ -357,6 +495,20 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # the strip is a real collider and the apron is visual-only; they are
     # separate meshes that happen to share a colour.
     mow_strip_color: tuple = (0.075, 0.27, 0.050)
+    mow_strip_use_vertex_palette: bool = False
+    """Enable the zero-geometry-cost grass/soil vertex palette for viewing."""
+    mow_strip_visual_palette: tuple = (
+        (0.010, 0.050, 0.004),
+        (0.020, 0.085, 0.008),
+        (0.040, 0.140, 0.015),
+        (0.075, 0.120, 0.022),
+        (0.090, 0.052, 0.022),
+    )
+    """Four grass tones followed by exposed-soil brown."""
+    mow_strip_soil_field_threshold: float = 1.0
+    """Higher values make the deterministic exposed-soil regions sparser."""
+    mow_strip_visual_shoulder_transition_m: float = 0.30
+    """Visual-only easing into the clean road edge; collision stays unchanged."""
     mow_strip_collision: bool = True
     """The green verge is a real collider; contact cannot be faked geometrically."""
     terrain_tracking_height_sweep_gain: float = 1.5
@@ -392,9 +544,23 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
         "gaussian_slalom",
         "lane_change_hold",
     )
+    terrain_tracking_reference_x_m: float = -25.4
+    """Environment-local x coordinate where the active tracking path begins."""
     terrain_tracking_active_length_m: float = 16.0
     """Along-track distance occupied by the path or composed segments."""
-    mow_strip_width_m: float = 1.8
+    mow_strip_start_x_m: float = -32.0
+    """Environment-local x coordinate where the colliding green strip begins."""
+    mow_strip_width_m: float = 3.0
+    """Width of the green verge strip.
+
+    Widened from 1.8 m alongside the 4.4x path amplitude. The path is bounded
+    by `half_available = 0.5 * width - 0.16`, so 1.8 m allowed only 0.74 m of
+    excursion either side and the scaled path would have spent most of its
+    travel compressed against that tanh saturation -- which flattens the very
+    peaks the widening is meant to produce. 3.0 m gives 1.34 m of half-strip,
+    enough that the ~0.88 m peak-to-peak path stays in the linear region with
+    green either side of the cutter.
+    """
     mow_strip_resolution_m: float = 0.25
     """Collision/ray mesh spacing.
 
@@ -405,13 +571,13 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     mow_strip_length_m: float = 26.0
     """Per-environment strip length.
 
-    A 16 s episode at 4 km/h covers 17.8 m; 26 m includes the lead-in and exit
-    margin while allowing a complete 16 m lateral trajectory.
+    The ROM/ID-FD wide task overrides the path reference so this entire 26 m
+    strip is active rather than retaining the legacy lead-in and exit margins.
     """
     # Keep the projected reference visually part of the verge instead of a red
     # debug stripe.  A slightly lighter green remains readable against the lawn
     # while matching the surrounding scene palette.
-    tracking_line_color: tuple = (0.10, 0.42, 0.075)
+    tracking_line_color: tuple = (0.92, 0.92, 0.88)
     tracking_line_width_m: float = 0.07
     tracking_line_z_offset_m: float = 0.012
     """Visual-only line projected onto the exact terrain centre path."""
@@ -437,6 +603,24 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # 0.35 and 1.15 were added). Training gets the wider distribution from
     # scripts/train.py instead, which is the only place that may change it.
     terrain_height_scales: tuple = (0.50, 0.70, 0.85, 1.00)
+    terrain_tracking_amplitude_scales: tuple = ()
+    """Per-environment ladder of path widths; empty falls back to the scalar.
+
+    Declared here so the field is part of the contract rather than materialised
+    by assignment in a stage function. Stage 6 fills it; see the comment there
+    for why the length is coprime with `terrain_height_scales`.
+    """
+    terrain_tracking_band_owned_by_task: bool = False
+    """The TASK config owns the tracking band; the stage function must not touch it.
+
+    `apply_terrain_curriculum_stage` runs AFTER a task cfg's ``__post_init__``,
+    in every entry point, so a band pinned by the task was silently overwritten
+    by the stage's own values. That is how the feasibility-derived amplitude
+    0.7 / (0.30, 0.45, 0.60, 0.75) in `Ppo31SoleEnvCfg` came to be replaced by
+    the infeasible (2.2, 3.3, 4.4, 5.5, 6.6) on every single run -- a precedence
+    accident, never a decision. Setting this True makes the task's ownership
+    explicit and greppable instead of depending on who assigns last.
+    """
     """Balanced relief levels crossed independently with every path family."""
     terrain_height_scale_override: float = 0.0
     """Positive visualization/probe override; zero uses the balanced curriculum."""

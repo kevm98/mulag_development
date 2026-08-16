@@ -1,0 +1,112 @@
+{
+  "passed": true,
+  "failures": [],
+  "rom": {
+    "task": "RRLAB-Mulag-Verge-ROM-v0",
+    "actuator": "command_rom",
+    "command_rom_checkpoint": "/home/rrlab/rrlab_mulag/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+  },
+  "idfd": {
+    "task": "RRLAB-Mulag-Verge-IDFD-v0",
+    "actuator": "idfd",
+    "id_checkpoint": "/home/rrlab/rrlab_mulag/id_fd_model/best_id_cylinder_control.pt",
+    "fd_checkpoint": "/home/rrlab/rrlab_mulag/id_fd_model/best_fd_cylinder_strict.pt"
+  },
+  "shared": {
+    "robot_usd": "/home/rrlab/rrlab_mulag/extensions/rrlab_assets/data/Robots/unimog_mulag_fme500_cylinder_as_actuator.usd",
+    "arm_joint_names": [
+      "Drehzapfen_joint",
+      "Ausleger_I_joint",
+      "Ausleger_II_joint",
+      "Messerkopf_Schwenk_joint",
+      "Messerkopf_joint"
+    ],
+    "cylinder_joint_names": [
+      "Drehzapfen_joint",
+      "Ausleger_I_joint",
+      "Ausleger_II_joint",
+      "Messerkopf_Schwenk_joint"
+    ],
+    "sim_dt": 0.008333333333333333,
+    "decimation": 2,
+    "control_dt": 0.016666666666666666,
+    "episode_length_s": 46.8,
+    "mow_strip_length_m": 26.0,
+    "tracking_active_length_m": 26.0,
+    "vehicle_speed_kmh": [
+      2.0,
+      2.0
+    ],
+    "observation_width": 66,
+    "action_width": 4,
+    "physx_actuators": {
+      "ausleger_i_cylinder": {
+        "joint_names_expr": [
+          "Ausleger_I_joint"
+        ],
+        "stiffness": 30000000.0,
+        "damping": 1340000.0,
+        "effort_limit_sim": 1600000.0,
+        "velocity_limit_sim": 1.0
+      },
+      "ausleger_ii_cylinder": {
+        "joint_names_expr": [
+          "Ausleger_II_joint"
+        ],
+        "stiffness": 5000000.0,
+        "damping": 1120000.0,
+        "effort_limit_sim": 800000.0,
+        "velocity_limit_sim": 1.0
+      },
+      "drehzapfen_cylinder": {
+        "joint_names_expr": [
+          "Drehzapfen_joint"
+        ],
+        "stiffness": 75000000.0,
+        "damping": 2240000.0,
+        "effort_limit_sim": 800000.0,
+        "velocity_limit_sim": 1.0
+      },
+      "messerkopf_passive_coupled": {
+        "joint_names_expr": [
+          "Messerkopf_joint"
+        ],
+        "stiffness": 5000000.0,
+        "damping": 1120000.0,
+        "effort_limit_sim": 320000.0,
+        "velocity_limit_sim": 1.0
+      },
+      "messerkopf_schwenk_cylinder": {
+        "joint_names_expr": [
+          "Messerkopf_Schwenk_joint"
+        ],
+        "stiffness": 5000000.0,
+        "damping": 1120000.0,
+        "effort_limit_sim": 320000.0,
+        "velocity_limit_sim": 1.0
+      },
+      "mulag_steering": {
+        "joint_names_expr": [
+          "Wheel_Front_Left_Steering_joint",
+          "Wheel_Front_Right_Steering_joint"
+        ],
+        "stiffness": 10.0,
+        "damping": 1000000000.0,
+        "effort_limit_sim": 100000.0,
+        "velocity_limit_sim": null
+      },
+      "mulag_wheels": {
+        "joint_names_expr": [
+          "Wheel_Front_Left_joint",
+          "Wheel_Front_Right_joint",
+          "Wheel_Rear_Left_joint",
+          "Wheel_Rear_Right_joint"
+        ],
+        "stiffness": 0.0,
+        "damping": 1000000.0,
+        "effort_limit_sim": 100000.0,
+        "velocity_limit_sim": null
+      }
+    }
+  }
+}

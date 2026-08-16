@@ -466,6 +466,20 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     ground_color = (0.0, 0.0, 0.0)
     lane_line_color = (1.0, 1.0, 1.0)
     lane_line_width_m = 0.08
+    # Optional visual-only road/verge dressing for the arm-workstation tasks.
+    # The physical ground remains the same collision surface; these layers are
+    # merged meshes placed a few millimetres above it for clear visualization.
+    enable_visual_road_verge: bool = False
+    visual_road_start_x_m = -38.0
+    visual_road_length_m = 36.0
+    visual_road_center_y_m = 4.30
+    visual_road_width_m = 3.60
+    visual_road_color = (0.11, 0.12, 0.13)
+    visual_road_marking_color = (0.90, 0.90, 0.88)
+    visual_verge_start_y_m = -3.20
+    visual_verge_end_y_m = 2.48
+    visual_verge_color = (0.08, 0.28, 0.055)
+    visual_verge_secondary_color = (0.12, 0.36, 0.075)
     disable_heavy_terrain = True
     terrain_static_friction = 1.0
     terrain_dynamic_friction = 1.0
@@ -510,7 +524,10 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     final_causal_rom_export_dir = ""
     rom_output_mode = "velocity_to_position_target"
     rom_use_sd_feedback = False
-    rom_use_id_valve_cmd = True
+    # Command ROM is not valve-commanded. It receives desired cylinder
+    # extension/velocity and predicts the internal valve itself. ID-FD has a
+    # separate valve interface in PPO_ID_FD/env_cfg.py.
+    rom_use_id_valve_cmd = False
     rom_dt = 0.01
     rom_xdot_max = [0.8, 0.8, 0.8, 0.8]
     rom_dx_max = [0.0005, 0.0005, 0.0005, 0.0005]

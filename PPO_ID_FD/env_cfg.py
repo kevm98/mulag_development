@@ -23,7 +23,11 @@ PPO3_1's parent chain sets these to the ROM defaults.
 WHAT IS DELIBERATELY *NOT* CHANGED
 ==================================
 The c4 command authority stays exactly as PPO3_1 sets it -- per-axis lead caps
-(0.018, 0.018, 0.018, 0.30) and action scales derived from the stage. PPO4 uses
+(0.05, 0.05, 0.05, 0.020) and a c4 action-scale gain of 1.0, so all four
+cylinders command 0.004 m per step. Both were re-derived from direct-drive
+measurement (see the comments on ``TerrainC4AuthorityEnvCfg``); inheriting
+rather than restating them is what keeps this package's one-variable claim
+true, so they change here whenever they change there, deliberately. PPO4 uses
 a scalar ``cylinder_target_max_lead_m`` of 0.025; adopting that here would mean
 PPO3_1 and PPO4_1 differed in BOTH the actuator and the command authority, and
 any measured gap could be attributed to either. The per-axis tuple is applied

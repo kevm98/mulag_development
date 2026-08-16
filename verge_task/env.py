@@ -105,6 +105,7 @@ class SolePolicyEnv(ResidualPolicyEnv):
         self._action_to_learned_sign = torch.sign(
             self._usd_per_extension_scale
         )
+        self._apply_c3_extension_reserve(scaling)
 
         # Report the actuator this env ACTUALLY built, not a hard-coded label.
         # PPO4 runs this same class over ID/FD, and a banner that always says
@@ -135,11 +136,17 @@ class SolePolicyEnv(ResidualPolicyEnv):
                 else ""
             )
             + (
-                f" | *** DISTILLATION: teacher_mode={self._teacher_mode}. The DLS "
-                "teacher is active. No result from this run is a sole-controller "
-                "result. ***"
-                if self._teacher_mode != "off"
-                else ""
+                " | *** TRAINING LABELS ONLY: the DLS teacher is queried on "
+                "policy-visited states; it never executes. PPO remains the sole "
+                "plant controller. ***"
+                if self._teacher_mode == "label"
+                else (
+                    f" | *** DISTILLATION: teacher_mode={self._teacher_mode}. The "
+                    "DLS teacher executes in this diagnostic; this is not a "
+                    "sole-controller result. ***"
+                    if self._teacher_mode == "execute"
+                    else ""
+                )
             ),
             flush=True,
         )
@@ -156,6 +163,109 @@ class SolePolicyEnv(ResidualPolicyEnv):
         check has to ask the subclass rather than assume the sole layout.
         """
         return sole_observation_dim(ik_hint=self._sole_ik_hint)
+
+    def _apply_c3_extension_reserve(self, scaling) -> None:
+        """Shorten cylinder 3's SOLVER stroke while the gate keeps the original.
+
+        Every previous attempt at the cylinder_headroom failure asked a
+        controller to keep c3 off its stop -- leaky integration, the anti-windup
+        lead cap, a target limit inset, null-space stroke centering, a stronger
+        headroom penalty. All five were no-ops or regressions, and the reason is
+        in the measurement: at the steps where the plant is against its stop the
+        commanded target already holds ~31 mm of clearance and the drive is at
+        30 % of its effort limit. The controller is asking for retraction and the
+        plant is not following, so there was nothing for those knobs to argue
+        with.
+
+        This instead shortens the travel PhysX will allow, which the solver
+        enforces as a constraint rather than a request. ``_learned_min`` and
+        ``_learned_max`` are cached BEFORE this runs, so ``_cylinder_headroom``
+        keeps scoring against the original stroke and a controller resting on
+        the new stop reports ``delta`` of original-stroke reserve.
+
+        Cylinder 3's coordinate scale is NEGATIVE (q_usd = scale * x_learned +
+        offset), so its maximum learned extension sits at the LOWER USD joint
+        limit. The reserve therefore RAISES the lower limit; reducing the upper
+        one would trim the retracted end and do nothing for this failure.
+
+        This is a mechanical stroke reserve, not learned behaviour, and has to
+        be described as such. It is applied on the shared base config so ROM,
+        ID-FD and ID(AAM)-FD all get the same geometry -- changing it for one
+        arm only would void the matched three-way comparison.
+        """
+        delta = float(getattr(self.cfg, "c3_physical_extension_reserve_m", 0.0))
+        self._c3_original_joint_limits = None
+        self._c3_solver_joint_limits = None
+        if delta <= 0.0:
+            if delta < 0.0:
+                raise ValueError(
+                    f"c3_physical_extension_reserve_m must be >= 0, got {delta}"
+                )
+            return
+
+        c3_axis = 2
+        names = list(getattr(scaling, "cylinder_names", ()) or ())
+        if len(names) > c3_axis and names[c3_axis] != "Ausleger_II_joint":
+            raise RuntimeError(
+                "c3 extension reserve expects cylinder axis 2 to be "
+                f"'Ausleger_II_joint', got {names[c3_axis]!r}"
+            )
+        c3_dof = int(scaling.dof_indices.reshape(-1)[c3_axis])
+        c3_scale = float(scaling.scale.reshape(-1)[c3_axis])
+        if c3_scale >= 0.0:
+            raise RuntimeError(
+                "c3 extension reserve assumes a negative coordinate scale so "
+                f"that learned max maps to the USD lower limit; got {c3_scale}"
+            )
+
+        original = self.robot.data.joint_pos_limits[:, c3_dof : c3_dof + 1, :].clone()
+        usd_delta = abs(c3_scale) * delta
+        solver_limits = original.clone()
+        solver_limits[..., 0] += usd_delta  # negative scale: trim the LOWER end
+
+        if bool((solver_limits[..., 0] >= solver_limits[..., 1]).any()):
+            raise ValueError(
+                f"c3 reserve {delta} m collapses the joint range: "
+                f"{original[0, 0].tolist()} -> {solver_limits[0, 0].tolist()}"
+            )
+        for label, position in (
+            ("current", self.robot.data.joint_pos[:, c3_dof]),
+            ("default", self.robot.data.default_joint_pos[:, c3_dof]),
+        ):
+            outside = (position < solver_limits[:, 0, 0]) | (position > solver_limits[:, 0, 1])
+            if bool(outside.any()):
+                raise ValueError(
+                    f"c3 reserve {delta} m puts the {label} joint position outside "
+                    f"the new range in {int(outside.sum())} environments"
+                )
+
+        self.robot.write_joint_position_limit_to_sim(
+            solver_limits, joint_ids=[c3_dof], warn_limit_violation=False
+        )
+        self._c3_original_joint_limits = original
+        self._c3_solver_joint_limits = solver_limits
+        self._c3_reserve_dof = c3_dof
+
+        written = self.robot.data.joint_pos_limits[:, c3_dof, :]
+        if not torch.allclose(written, solver_limits[:, 0, :], atol=1.0e-7):
+            raise RuntimeError(
+                f"PhysX did not accept the c3 limit: requested "
+                f"{solver_limits[0, 0].tolist()}, reports {written[0].tolist()}"
+            )
+        attainable_max = scaling.usd_q_to_learned_x(
+            solver_limits[:, :, 0].to(self.device)
+            .expand(-1, 4)
+            .contiguous()
+        )[0, c3_axis]
+        print(
+            f"[C3-RESERVE] {delta * 1000:.1f} mm mechanical extension reserve | "
+            f"USD lower {original[0, 0, 0]:.5f} -> {solver_limits[0, 0, 0]:.5f} | "
+            f"gate still scores the original stroke "
+            f"[{float(self._learned_min[0, c3_axis]):.5f}, "
+            f"{float(self._learned_max[0, c3_axis]):.5f}] | "
+            f"attainable learned max now {float(attainable_max):.5f}",
+            flush=True,
+        )
 
     def _cylinder_headroom(
         self, measured: torch.Tensor
@@ -277,6 +387,15 @@ class SolePolicyEnv(ResidualPolicyEnv):
             if bool(getattr(cfg, "force_zero_policy", False))
             else actions
         )
+        completed = getattr(self, "_truck_path_complete", None)
+        if isinstance(completed, torch.Tensor):
+            # Faster replicas have already reached the physical endpoint while
+            # slower replicas are still collecting the same PPO rollout. Fade
+            # their command to the neutral hold instead of letting an unscored
+            # policy continue driving the arm during the tail.
+            effective = torch.where(
+                completed[:, None], torch.zeros_like(effective), effective
+            )
         # Split off the dedicated q5 channel. It is a direct position command
         # for Messerkopf_joint and must never enter the four-cylinder actuator
         # model. c4 remains the sole command for the hydraulic Schwenk linkage.

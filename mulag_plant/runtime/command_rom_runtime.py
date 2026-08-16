@@ -17,6 +17,33 @@ if str(_ROM_ROOT) not in sys.path:
 from ROM_pipeline.models import load_checkpoint  # noqa: E402
 
 
+def pack_desired_cylinder_command(
+    target_delta_extension: torch.Tensor,
+    target_delta_velocity: torch.Tensor,
+) -> torch.Tensor:
+    """Pack the command-ROM input, never a valve command.
+
+    The command ROM is a motion-command actuator.  Its external command is
+    ``[target_delta_extension(4), target_delta_velocity(4)]``; the ROM predicts
+    the valve internally.  Keeping this conversion in one checked function
+    prevents the 4-D ID valve interface from being reused by the ROM path.
+    """
+    if target_delta_extension.ndim != 2 or target_delta_extension.shape[-1] != 4:
+        raise ValueError(
+            "target_delta_extension must have shape [batch, 4], got "
+            f"{tuple(target_delta_extension.shape)}"
+        )
+    if target_delta_velocity.shape != target_delta_extension.shape:
+        raise ValueError(
+            "target_delta_velocity must match target_delta_extension shape, got "
+            f"{tuple(target_delta_velocity.shape)} vs {tuple(target_delta_extension.shape)}"
+        )
+    command = torch.cat((target_delta_extension, target_delta_velocity), dim=-1)
+    if not torch.isfinite(command).all():
+        raise FloatingPointError("Desired cylinder command contains NaN/Inf.")
+    return command
+
+
 @dataclass(frozen=True)
 class CommandROMStepOutput:
     predicted_valve: torch.Tensor
@@ -52,6 +79,10 @@ class CommandCylinderROMRuntime:
         self.delta_extension_per_control_step = torch.zeros(
             self.num_envs, 4, device=self.device
         )
+        # Privileged diagnostic only. The deployment controller never consumes
+        # this state; the collection pipeline records it to audit the recurrent
+        # ROM memory against the learned SD latent.
+        self.last_hidden: torch.Tensor | None = None
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         ids = slice(None) if env_ids is None else env_ids.to(self.device, dtype=torch.long)
@@ -61,15 +92,24 @@ class CommandCylinderROMRuntime:
         self.previous_predicted_valve[ids] = 0.0
         self.last_velocity[ids] = 0.0
         self.delta_extension_per_control_step[ids] = 0.0
+        if self.last_hidden is not None:
+            self.last_hidden[:, ids] = 0.0
 
-    def _row(self, command, extension, velocity, dP) -> torch.Tensor:
+    def _row(self, desired_cylinder_command, extension, velocity, dP) -> torch.Tensor:
         expected4 = (self.num_envs, 4)
         for name, value in (("extension", extension), ("velocity", velocity), ("dP", dP)):
             if value.shape != expected4:
                 raise ValueError(f"{name} must have shape {expected4}, got {tuple(value.shape)}")
-        if command.shape != (self.num_envs, 8):
-            raise ValueError(f"command must have shape {(self.num_envs, 8)}, got {tuple(command.shape)}")
-        row = torch.cat((extension, velocity, dP, self.previous_predicted_valve, command), dim=-1)
+        if desired_cylinder_command.shape != (self.num_envs, 8):
+            raise ValueError(
+                "command-ROM command must have shape "
+                f"{(self.num_envs, 8)} [delta_extension(4), delta_velocity(4)], "
+                f"got {tuple(desired_cylinder_command.shape)}"
+            )
+        row = torch.cat(
+            (extension, velocity, dP, self.previous_predicted_valve, desired_cylinder_command),
+            dim=-1,
+        )
         if not torch.isfinite(row).all():
             raise FloatingPointError("Command ROM input contains NaN/Inf.")
         return row.to(self.device, dtype=torch.float32)
@@ -87,21 +127,21 @@ class CommandCylinderROMRuntime:
 
     @torch.no_grad()
     def predict_delta(
-        self, *, command, extension, extension_velocity, dP,
+        self, *, desired_cylinder_command, extension, extension_velocity, dP,
         system_factors=None, rom_b_factors=None,
     ) -> torch.Tensor:
-        row = self._row(command, extension, extension_velocity, dP)
+        row = self._row(desired_cylinder_command, extension, extension_velocity, dP)
         return self.model(
-            self._prospective_history(row), command,
+            self._prospective_history(row), desired_cylinder_command,
             system_factors=system_factors, rom_b_factors=rom_b_factors,
         ).delta_extension
 
     @torch.no_grad()
     def step(
-        self, *, command, extension, extension_velocity, dP,
+        self, *, desired_cylinder_command, extension, extension_velocity, dP,
         system_factors=None, rom_b_factors=None,
     ) -> CommandROMStepOutput:
-        row = self._row(command, extension, extension_velocity, dP)
+        row = self._row(desired_cylinder_command, extension, extension_velocity, dP)
         update_mask = self.counter == 0
         ids = torch.where(update_mask)[0]
         predicted_valve = self.previous_predicted_valve.clone()
@@ -132,10 +172,16 @@ class CommandCylinderROMRuntime:
                     )
                 selected_rom_b_factors = rom_b_factors[ids]
             output = self.model(
-                self.history[ids], command[ids],
+                self.history[ids], desired_cylinder_command[ids],
                 system_factors=selected_factors,
                 rom_b_factors=selected_rom_b_factors,
             )
+            if self.last_hidden is None:
+                self.last_hidden = torch.zeros(
+                    output.hidden.shape[0], self.num_envs, output.hidden.shape[-1],
+                    device=output.hidden.device, dtype=output.hidden.dtype,
+                )
+            self.last_hidden[:, ids] = output.hidden.detach()
             values = (output.predicted_valve, output.delta_pressure, output.next_velocity, output.delta_extension)
             if not all(torch.isfinite(value).all() for value in values):
                 raise FloatingPointError("Command ROM output contains NaN/Inf.")

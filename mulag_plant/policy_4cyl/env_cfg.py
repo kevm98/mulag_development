@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from mulag_plant.policy.env_cfg import ResidualPolicyEnvCfg
-from mulag_plant.policy.observations import FOUR_CYLINDER_RESIDUAL_OBS_DIM
+from mulag_plant.policy.observations import FOUR_CYLINDER_RESIDUAL_OBS_DIM, residual_observation_dim
 from mulag_plant.runtime.mulag_upper_level_env_cfg import MulagUpperLevelEnvCfg_PLAY
 from mulag_plant.runtime.mulag_upper_level_env_cfg import MulagUpperLevelPPORunnerCfg
 
@@ -58,6 +60,17 @@ class FourCylinderResidualPolicyEnvCfg(ResidualPolicyEnvCfg):
     head_down_termination_alignment: float = 0.98
     cutter_clearance_hard_band_m: float = 0.20
     clearance_relative_to_reference: bool = True
+    clearance_frame_consistent: bool = True
+    # Deployment guard: the learned correction may only operate inside the
+    # measured head-down clearance envelope.  Outside the start band the
+    # frozen DLS/teacher command is used until the plant recovers.
+    residual_safety_guard: bool = True
+    residual_safety_clearance_start_m: float = 0.08
+    residual_safety_head_start: float = 0.990
+    # Moving open paths are the most sensitive to small residual-induced
+    # clearance transients.  Keep their approved frozen DLS baseline online;
+    # the learned residual remains enabled for parked closed-loop stations.
+    residual_fallback_shapes: tuple[str, ...] = ("line", "sine_chain")
 
     def __post_init__(self):
         super().__post_init__()
@@ -112,3 +125,55 @@ class FourCylinderResidualPolicyPPORunnerCfg(MulagUpperLevelPPORunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class FourCylinderTrajectory2DEnvCfg(FourCylinderResidualPolicyEnvCfg):
+    """New standalone 2-D shape task; the historical 42-D task is unchanged."""
+
+    trajectory_library_path: str = str(
+        Path(__file__).resolve().parents[1] / "models/trajectory_2d_library_v2.json"
+    )
+    trajectory_shape: str = "line"
+    trajectory_shapes: tuple[str, ...] = (
+        "line", "sine_chain", "circle", "rounded_square"
+    )
+    procedural_trajectory_shapes: tuple[str, ...] = ()
+    randomize_trajectory_shape: bool = False
+    trajectory_geometry_observation: bool = True
+    trajectory_geometry_normal_reward_weight: float = 2.0
+    trajectory_geometry_normal_std_m: float = 0.03
+    # Shape changes are arm-only station transitions.  Give the direct
+    # deployment controller enough physical time to move from the previous
+    # learned endpoint to the next measured workspace seed before scoring.
+    preposition_steps: int = 600
+    settle_steps: int = 180
+    # Match the original verge-mower presentation: a wide green working strip
+    # beside a marked asphalt road.  Both are visual-only overlays on the
+    # already validated flat collision ground.
+    enable_visual_road_verge: bool = True
+    visual_road_start_x_m: float = -38.0
+    visual_road_length_m: float = 36.0
+    visual_verge_start_y_m: float = -3.20
+    visual_verge_end_y_m: float = 2.48
+    observation_space = residual_observation_dim(4, trajectory_geometry=True)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.trajectory_geometry_observation = True
+        self.observation_space = residual_observation_dim(4, trajectory_geometry=True)
+
+
+@configclass
+class FourCylinderTrajectory2DEnvCfg_PLAY(
+    FourCylinderTrajectory2DEnvCfg, MulagUpperLevelEnvCfg_PLAY
+):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+        self.randomize_start_phase = False
+
+
+@configclass
+class FourCylinderTrajectory2DPPORunnerCfg(FourCylinderResidualPolicyPPORunnerCfg):
+    experiment_name = "ppo2_a_trajectory_2d"

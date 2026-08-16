@@ -23,6 +23,7 @@ from mulag_plant.tasks.cylinder_env import PPO2ROMPhysXEnv
 from mulag_plant.dls_solver.cylinder import CylinderDLSConfig, CylinderDLSController
 from mulag_plant.dls_solver.ee_cascade import EECascadeController
 from mulag_plant.trajectories.time_scaling import cruise_profile
+from verge_task.trajectory_2d import Trajectory2D, from_xy_samples
 from mulag_plant.policy.observations import (
     build_residual_observation,
     residual_observation_dim,
@@ -66,6 +67,13 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self._trajectory_library: dict[str, dict] = {}
         self._trajectory_name = str(getattr(cfg, "trajectory_shape", "legacy_arc"))
         self._trajectory_speed_factor = 1.0
+        self._trajectory_truck_motion_mode = "parked"
+        self._trajectory_truck_speed_mps = 0.0
+        self._trajectory_truck_motion_active = False
+        self._trajectory_geometry: Trajectory2D | None = None
+        self._trajectory_geometry_xy: torch.Tensor | None = None
+        self._trajectory_geometry_tangent: torch.Tensor | None = None
+        self._trajectory_geometry_s: torch.Tensor | None = None
         self._load_trajectory()
 
         # --- Residual action state ---
@@ -152,7 +160,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             f"[Policy] trajectory={self._trajectory_name} "
             f"length={self._arc_length:.3f}m "
             f"one_way={self._one_way_s:.2f}s "
-            f"obs_dim={residual_observation_dim(self._residual_action_dim)} "
+            f"obs_dim={residual_observation_dim(self._residual_action_dim, trajectory_geometry=bool(getattr(cfg, 'trajectory_geometry_observation', False)))} "
             f"action_dim={self._residual_action_dim} "
             f"residual_scales_m={self._residual_scale_vector().detach().cpu().tolist()}",
             flush=True,
@@ -218,6 +226,8 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         if name == "legacy_arc":
             self._trajectory_name = name
             self._trajectory_speed_factor = 1.0
+            self._trajectory_truck_motion_mode = "parked"
+            self._trajectory_truck_speed_mps = 0.0
             payload = json.loads(self._arc_path.read_text())
             teacher = payload["cylinder_teacher"]
             theta = np.asarray([row["theta_deg"] for row in teacher], dtype=np.float64)
@@ -249,6 +259,28 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             self._trajectory_speed_factor = float(
                 self._trajectory_library[name].get("speed_factor", 1.0)
             )
+            execution = dict(self._trajectory_library[name].get("execution", {}))
+            self._trajectory_truck_motion_mode = str(
+                execution.get("truck_motion_mode", "parked")
+            )
+            if self._trajectory_truck_motion_mode not in {"parked", "creep"}:
+                raise ValueError(
+                    f"trajectory {name!r} has unsupported truck_motion_mode="
+                    f"{self._trajectory_truck_motion_mode!r}"
+                )
+            self._trajectory_truck_speed_mps = max(
+                0.0, float(execution.get("truck_speed_mps", 0.0))
+            )
+            self.cfg.enable_scripted_vehicle_motion = (
+                self._trajectory_truck_motion_mode == "creep"
+            )
+            if self.cfg.enable_scripted_vehicle_motion:
+                speed_kmh = 3.6 * self._trajectory_truck_speed_mps
+                self.cfg.vehicle_speed_min_kmh = speed_kmh
+                self.cfg.vehicle_speed_max_kmh = speed_kmh
+            else:
+                self.cfg.vehicle_speed_min_kmh = 0.0
+                self.cfg.vehicle_speed_max_kmh = 0.0
             self._theta = np.arange(len(rows), dtype=np.float64)
             self._goals = np.asarray([row["cutter_truck"] for row in rows], dtype=np.float64)
             self._seeds = np.asarray([row["cylinder_cmd"] for row in rows], dtype=np.float64)
@@ -270,6 +302,22 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self._refresh_path_parameter_derivatives()
         self._arc_length = float(self._teacher_s[-1])
         self._geometry_length = float(self._geometry_s[-1])
+        if bool(getattr(self.cfg, "trajectory_geometry_observation", False)):
+            closed = bool(self._trajectory_library.get(name, {}).get(
+                "closed", name in ("circle", "rounded_square")
+            ))
+            self._trajectory_geometry = from_xy_samples(
+                self._goals[:, :2], name=name, closed=closed
+            )
+            self._trajectory_geometry_xy = torch.as_tensor(
+                self._trajectory_geometry.xy, dtype=torch.float32, device=self.device
+            )
+            self._trajectory_geometry_tangent = torch.as_tensor(
+                self._trajectory_geometry.tangent_xy, dtype=torch.float32, device=self.device
+            )
+            self._trajectory_geometry_s = torch.as_tensor(
+                self._trajectory_geometry.s_m, dtype=torch.float32, device=self.device
+            )
         # Reachability is the authority for plant-backed references.  The old
         # arbitrary 2.5 m excitation floor forced the arc and true square back
         # outside the directly verified workspace.
@@ -295,9 +343,49 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             f"[Policy] selected trajectory={self._trajectory_name} "
             f"height={float(np.median(self._goals[:, 2])):.3f}m "
             f"speed={self._effective_path_speed_mps():.3f}m/s "
-            f"length={self._arc_length:.3f}m cycle={self._complete_cycle_time:.2f}s",
+            f"length={self._arc_length:.3f}m cycle={self._complete_cycle_time:.2f}s "
+            f"truck={self._trajectory_truck_motion_mode} "
+            f"truck_speed={self._trajectory_truck_speed_mps:.3f}m/s",
             flush=True,
         )
+
+    @torch.no_grad()
+    def _nearest_trajectory_geometry(self, tool_pos_truck: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return nearest-point delta and signed normal error in truck XY.
+
+        The query is segment-based rather than nearest sampled vertex, so the
+        result stays well behaved when a rounded corner is sampled coarsely.
+        The old line task does not call this method and therefore keeps its
+        exact observation/reward contract.
+        """
+        if self._trajectory_geometry_xy is None or self._trajectory_geometry_tangent is None:
+            zeros = torch.zeros((self.num_envs, 2), device=self.device)
+            return zeros, torch.zeros(self.num_envs, device=self.device)
+        points = tool_pos_truck[:, :2]
+        start = self._trajectory_geometry_xy
+        if self._trajectory_geometry.closed:
+            end = torch.roll(start, shifts=-1, dims=0)
+            tangent = end - start
+        else:
+            start = start[:-1]
+            end = self._trajectory_geometry_xy[1:]
+            tangent = end - start
+        length_sq = torch.sum(tangent * tangent, dim=-1).clamp_min(1.0e-10)
+        delta = points[:, None, :] - start[None, :, :]
+        alpha = (delta * tangent[None, :, :]).sum(dim=-1) / length_sq[None, :]
+        alpha = alpha.clamp(0.0, 1.0)
+        candidate = start[None, :, :] + alpha[..., None] * tangent[None, :, :]
+        distance_sq = torch.sum((points[:, None, :] - candidate) ** 2, dim=-1)
+        edge_index = torch.argmin(distance_sq, dim=-1)
+        row = torch.arange(points.shape[0], device=self.device)
+        nearest = candidate[row, edge_index]
+        edge_tangent = tangent[edge_index] / torch.linalg.norm(
+            tangent[edge_index], dim=-1, keepdim=True
+        ).clamp_min(1.0e-8)
+        normal = torch.stack((-edge_tangent[:, 1], edge_tangent[:, 0]), dim=-1)
+        delta_to_path = nearest - points
+        signed_normal = ((points - nearest) * normal).sum(dim=-1)
+        return delta_to_path, signed_normal
 
     def _effective_path_speed_mps(self) -> float:
         return float(getattr(self.cfg, "path_speed_mps", 0.13)) * float(
@@ -374,6 +462,21 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             ee_feedback_gain=0.0,
             max_ik_step_m=0.004,
             max_cylinder_lead_m=0.025,
+            # Spend the redundant DOF of the 3x4 deployment solve on stroke
+            # centering instead of leaving it at minimum-norm. Default 0 keeps
+            # every stored result reproducible; see EECascadeController for the
+            # measurement this exists for.
+            null_space_centering_gain=float(
+                getattr(self.cfg, "dls_null_space_centering_gain", 0.0)
+            ),
+            null_space_weights=tuple(
+                getattr(
+                    self.cfg, "dls_null_space_weights", (0.0, 0.0, 1.0, 0.0)
+                )
+            ),
+            null_space_max_step_m=float(
+                getattr(self.cfg, "dls_null_space_max_step_m", 0.004)
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -447,9 +550,14 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self.robot.write_joint_damping_to_sim(1.0e7, joint_ids=ids)
         if self._wheel_init_pos is not None:
             self.robot.set_joint_position_target(self._wheel_init_pos, joint_ids=ids)
-        self.robot.set_joint_velocity_target(
-            torch.zeros((self.num_envs, len(ids)), device=self.device), joint_ids=ids
+        creep_active = (
+            self._trajectory_truck_motion_active
+            and self._trajectory_truck_motion_mode == "creep"
         )
+        if not creep_active:
+            self.robot.set_joint_velocity_target(
+                torch.zeros((self.num_envs, len(ids)), device=self.device), joint_ids=ids
+            )
         steering_ids = self._steering_joint_ids
         self.robot.write_joint_stiffness_to_sim(2.0e8, joint_ids=steering_ids)
         self.robot.write_joint_damping_to_sim(1.0e8, joint_ids=steering_ids)
@@ -502,6 +610,19 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
 
     @torch.no_grad()
     def _constrain_truck_xy(self) -> None:
+        if (
+            self._trajectory_truck_motion_active
+            and self._trajectory_truck_motion_mode == "creep"
+        ):
+            # Chassis travel is intentional for open paths.  It is commanded
+            # by the wheel controller at a fixed, low speed; the parked-truck
+            # drift metric must not interpret that longitudinal travel as a
+            # suspension failure.
+            self._truck_drift_xy.zero_()
+            self._max_truck_drift.zero_()
+            self._truck_post_constraint_drift_xy.zero_()
+            self._max_truck_post_constraint_drift.zero_()
+            return
         base_xy = self.robot.data.body_link_state_w[:, self._truck_base_body_id(), :2]
         correction = self._truck_anchor_xy - base_xy
         drift_norm = torch.linalg.norm(correction, dim=1)
@@ -591,6 +712,48 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             ).reshape(1, 4)
 
         effective_action = torch.zeros_like(actions) if force_zero else actions
+        fallback_shapes = tuple(getattr(cfg, "residual_fallback_shapes", ()))
+        if (
+            not force_zero
+            and bool(getattr(cfg, "trajectory_geometry_observation", False))
+            and self._trajectory_name in fallback_shapes
+        ):
+            # The moving-path deployment contract is safety-first: use the
+            # validated frozen DLS baseline on open creep paths.  PPO remains
+            # active on parked closed-loop stations where its residual has
+            # enough margin and cannot disturb vehicle motion.
+            effective_action = torch.zeros_like(effective_action)
+        if (
+            not force_zero
+            and bool(getattr(cfg, "residual_safety_guard", False))
+            and bool(getattr(cfg, "trajectory_geometry_observation", False))
+        ):
+            # Learned residuals are an optional refinement around the
+            # deterministic DLS/teacher command.  If the measured cutter is
+            # already close to the clearance boundary or the head is losing
+            # its downwards alignment, remove the residual before it can push
+            # the plant into a termination.  The next step then uses the
+            # frozen baseline and can recover without a reset.
+            clearance_start = float(
+                getattr(cfg, "residual_safety_clearance_start_m", 0.08)
+            )
+            clearance_scale = (
+                1.0
+                - torch.abs(self._clearance_signal()) / max(clearance_start, 1.0e-6)
+            ).clamp(0.0, 1.0)
+            head_start = float(getattr(cfg, "residual_safety_head_start", 0.990))
+            head_scale = (
+                (self._measure_head_down_alignment() - float(getattr(
+                    cfg, "head_down_termination_alignment", 0.98
+                )))
+                / max(head_start - float(getattr(
+                    cfg, "head_down_termination_alignment", 0.98
+                )), 1.0e-6)
+            ).clamp(0.0, 1.0)
+            safety_scale = torch.minimum(clearance_scale, head_scale)
+            effective_action = effective_action * safety_scale[:, None]
+            # Do not let a filtered action survive the fallback transition.
+            self._residual_filtered = self._residual_filtered * safety_scale[:, None]
         self._residual_raw, self._residual_filtered, self._corrected_cylinder_goal = (
             apply_residual_action(
                 baseline_goal=self._baseline_cylinder_goal,
@@ -820,6 +983,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         the truck back to the original scene pose.
         """
         env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+        self._trajectory_truck_motion_active = False
         self.park_truck_at_current_pose()
 
         measured_x, _ = self._refresh_cylinder_state()
@@ -896,6 +1060,9 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self.episode_length_buf.zero_()
 
         self._run_reset_preposition(env_ids)
+        self._trajectory_truck_motion_active = (
+            self._trajectory_truck_motion_mode == "creep"
+        )
         current_tool = self._compute_ee_pos_local().detach()
         if self._prev_tool_pos_truck is None:
             self._prev_tool_pos_truck = current_tool.clone()
@@ -927,6 +1094,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
 
         goals = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
         seeds = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        seed_pitch = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         seed_velocities = torch.zeros_like(seeds)
         reference_world_z = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         for env_id in range(self.num_envs):
@@ -966,6 +1134,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             )
 
             goals[env_id] = torch.as_tensor(goal_np, device=self.device)
+            seed_pitch[env_id] = float(_seed_at_goal[3])
             seeds[env_id] = torch.as_tensor(seed_np, device=self.device)
             seed_velocities[env_id] = torch.as_tensor(
                 (next_seed_np - seed_np) / max(dt, 1.0e-9), device=self.device
@@ -978,12 +1147,25 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
 
         self._original_reference_tool[:] = goals
         self._original_reference_world_z[:] = reference_world_z
-        cylinder_goal = self._cascade.cylinder_goal_seeded(
-            goals,
-            seeds,
-            correction_gain=float(getattr(cfg, "ee_correction_gain", 0.0)),
-        )
-        cylinder_goal[:, 3] = seeds[:, 3]
+        if self._trajectory_name == "legacy_arc":
+            # Preserve the accepted legacy map-seeded controller exactly.
+            cylinder_goal = self._cascade.cylinder_goal_seeded(
+                goals,
+                seeds,
+                correction_gain=float(getattr(cfg, "ee_correction_gain", 0.0)),
+            )
+            cylinder_goal[:, 3] = seeds[:, 3]
+        else:
+            # v2 calibration seeds are endpoint/preposition hints only.  The
+            # nearest workspace sample is not an inverse-kinematics solution
+            # for an arbitrary 2-D point, so using it as the live goal creates
+            # the large lateral errors seen on full-shape rollouts.  Use the
+            # batch-stable full DLS solve for the free XYZ reference, then
+            # retain the measured cylinder-4 head-down branch from the
+            # workspace library.  (The optional reduced fixed-channel solve is
+            # kept in EECascadeController for single-station diagnostics.)
+            cylinder_goal = self._cascade.cylinder_goal(goals)
+            cylinder_goal[:, 3] = seed_pitch
         self._baseline_cylinder_goal[:] = cylinder_goal
         velocity_beta = min(
             max(float(getattr(cfg, "dls_velocity_filter_beta", 0.0)), 0.0), 1.0
@@ -1054,6 +1236,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
     # ------------------------------------------------------------------
 
     def _get_observations(self) -> dict:
+        cfg = self.cfg
         dt = max(float(self.step_dt), 1.0e-6)
 
         tool_pos_truck = self._compute_ee_pos_local()
@@ -1132,6 +1315,13 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
 
         clearance_signal = self._clearance_signal()
 
+        nearest_point_delta_xy = None
+        signed_normal_error_m = None
+        if bool(getattr(cfg, "trajectory_geometry_observation", False)):
+            nearest_point_delta_xy, signed_normal_error_m = self._nearest_trajectory_geometry(
+                tool_pos_truck
+            )
+
         obs = build_residual_observation(
             tool_error_truck=tool_error_truck,
             measured_tool_velocity_truck=self._measured_tool_velocity_truck,
@@ -1148,6 +1338,8 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             cutter_bottom_world_clearance=clearance_signal,
             head_down_alignment=head_alignment,
             head_down_alignment_rate=self._head_alignment_rate,
+            nearest_point_delta_xy=nearest_point_delta_xy,
+            signed_normal_error_m=signed_normal_error_m,
         )
         return {"policy": obs}
 
@@ -1160,6 +1352,9 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         tool_pos_truck = self._compute_ee_pos_local()
         head_alignment = self._measure_head_down_alignment()
         clearance_signal = self._clearance_signal()
+        signed_normal_error_m = None
+        if bool(getattr(cfg, "trajectory_geometry_observation", False)):
+            _, signed_normal_error_m = self._nearest_trajectory_geometry(tool_pos_truck)
 
         terms: ResidualRewardTerms = compute_residual_reward(
             original_reference_tool_position=self._original_reference_tool,
@@ -1180,6 +1375,9 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             saturation_penalty_weight=float(getattr(cfg, "residual_saturation_penalty_weight", -1.0)),
             head_threshold=float(getattr(cfg, "residual_head_threshold", 0.995)),
             ground_band_m=float(getattr(cfg, "residual_ground_band_m", 0.10)),
+            signed_normal_error_m=signed_normal_error_m,
+            normal_tracking_std_m=float(getattr(cfg, "trajectory_geometry_normal_std_m", 0.03)),
+            normal_tracking_weight=float(getattr(cfg, "trajectory_geometry_normal_reward_weight", 0.0)),
         )
         active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
         acceleration_norm = torch.linalg.norm(
@@ -1240,6 +1438,11 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         self._last_reward_terms = {
             "tracking/mean_error_m": torch.mean(active_error),
             "tracking/p95_error_m": torch.quantile(active_error, 0.95),
+            "tracking/mean_abs_normal_error_m": (
+                torch.mean(torch.abs(signed_normal_error_m[active]))
+                if signed_normal_error_m is not None and torch.any(active)
+                else torch.zeros((), device=self.device)
+            ),
             "smoothness/p95_tool_acceleration_mps2": torch.quantile(
                 active_acceleration, 0.95
             ),
@@ -1316,6 +1519,9 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
             | head_term
             | clearance_violation
         )
+        path_complete = getattr(self, "_truck_path_complete", None)
+        if isinstance(path_complete, torch.Tensor):
+            safety_violation &= ~path_complete
         # In large vectorized training runs, synchronizing a finite safety
         # violation from one replica used to reset every robot.  Each reset
         # performs physical deployment, settling, and ROM priming, so a single
@@ -1367,6 +1573,7 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
     # ------------------------------------------------------------------
 
     def _reset_idx(self, env_ids: Sequence[int]):
+        self._trajectory_truck_motion_active = False
         super()._reset_idx(env_ids)
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
@@ -1520,6 +1727,9 @@ class ResidualPolicyEnv(PPO2ROMPhysXEnv):
         # Init truck stationarity on first reset
         self._init_truck_stationarity()
         self._run_reset_preposition(env_ids)
+        self._trajectory_truck_motion_active = (
+            self._trajectory_truck_motion_mode == "creep"
+        )
         current_tool = self._compute_ee_pos_local()[env_ids].detach()
         if self._prev_tool_pos_truck is None:
             self._prev_tool_pos_truck = self._compute_ee_pos_local().detach().clone()

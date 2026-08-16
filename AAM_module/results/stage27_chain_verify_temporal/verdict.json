@@ -1,0 +1,209 @@
+{
+  "stage": "27",
+  "gate": "SD_0 vs SD_z(z_true) vs SD_z(z_hat) H20 hold-start; z_hat must retain a useful, statistically supported part of the true-latent advantage without privileged input",
+  "pass": true,
+  "verified_at": "2026-08-09T18:11:02.883069+00:00",
+  "horizon_ticks": 20,
+  "q_rollout": "hold-start",
+  "splits": {
+    "pooled_n_runs": 36,
+    "val_n_runs": 20,
+    "test_n_runs": 16
+  },
+  "checks": {
+    "ztrue_beats_none_pooled": true,
+    "ztrue_beats_none_test": true,
+    "zhat_beats_none_pooled": true,
+    "zhat_not_worse_than_true_pooled": true,
+    "retention_positive_both_channels": true
+  },
+  "test_split_diagnostics": {
+    "zhat_beats_none_test_extension": true,
+    "zhat_beats_none_test_velocity": true,
+    "note": "reserved test split has 16 runs; test per-channel CIs are wider than pooled and are reported as diagnostics only"
+  },
+  "paired": {
+    "ztrue_vs_none": {
+      "pooled": {
+        "extension": {
+          "mean_diff_true_minus_control": -0.00017480720726491532,
+          "bootstrap_95ci": [
+            -0.0002363984038957968,
+            -0.00011966929434969973
+          ],
+          "n_runs": 36
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.000449367980839659,
+          "bootstrap_95ci": [
+            -0.0007112691447038601,
+            -0.00018849388704095165
+          ],
+          "n_runs": 36
+        },
+        "dP": {
+          "mean_diff_true_minus_control": -200635.76816118287,
+          "bootstrap_95ci": [
+            -304957.81677845394,
+            -101532.52446558028
+          ],
+          "n_runs": 36
+        },
+        "all": {
+          "mean_diff_true_minus_control": -115837.11475692612,
+          "bootstrap_95ci": [
+            -176067.47760852068,
+            -58619.83033170517
+          ],
+          "n_runs": 36
+        }
+      },
+      "test": {
+        "extension": {
+          "mean_diff_true_minus_control": -0.00012894919897696685,
+          "bootstrap_95ci": [
+            -0.00022117684614669637,
+            -5.142070072207323e-05
+          ],
+          "n_runs": 16
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.00040063931473606387,
+          "bootstrap_95ci": [
+            -0.0008703011496454555,
+            -4.771054600733962e-06
+          ],
+          "n_runs": 16
+        },
+        "dP": {
+          "mean_diff_true_minus_control": -169496.81833753377,
+          "bootstrap_95ci": [
+            -276022.8624438611,
+            -64900.66357906723
+          ],
+          "n_runs": 16
+        },
+        "all": {
+          "mean_diff_true_minus_control": -97859.03369396004,
+          "bootstrap_95ci": [
+            -159361.8739344541,
+            -37470.41558795949
+          ],
+          "n_runs": 16
+        }
+      }
+    },
+    "zhat_vs_none": {
+      "pooled": {
+        "extension": {
+          "mean_diff_true_minus_control": -0.000144230868539103,
+          "bootstrap_95ci": [
+            -0.0001926519891114876,
+            -9.844331406748368e-05
+          ],
+          "n_runs": 36
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.0004948959291809526,
+          "bootstrap_95ci": [
+            -0.0007173381411203719,
+            -0.00028088715700685913
+          ],
+          "n_runs": 36
+        },
+        "dP": {
+          "mean_diff_true_minus_control": -196515.5193119113,
+          "bootstrap_95ci": [
+            -289448.1445694112,
+            -110349.46465086765
+          ],
+          "n_runs": 36
+        },
+        "all": {
+          "mean_diff_true_minus_control": -113458.287974671,
+          "bootstrap_95ci": [
+            -167112.96418358723,
+            -63710.29312110929
+          ],
+          "n_runs": 36
+        }
+      },
+      "test": {
+        "extension": {
+          "mean_diff_true_minus_control": -9.869844428052011e-05,
+          "bootstrap_95ci": [
+            -0.0001685011083361171,
+            -3.293978025585144e-05
+          ],
+          "n_runs": 16
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.00044537646172342256,
+          "bootstrap_95ci": [
+            -0.0008783251463090542,
+            -3.8782914444422266e-05
+          ],
+          "n_runs": 16
+        },
+        "dP": {
+          "mean_diff_true_minus_control": -133176.40849091933,
+          "bootstrap_95ci": [
+            -223651.36194916372,
+            -42431.74227990021
+          ],
+          "n_runs": 16
+        },
+        "all": {
+          "mean_diff_true_minus_control": -76889.43529193982,
+          "bootstrap_95ci": [
+            -129125.17402597578,
+            -24497.97782748514
+          ],
+          "n_runs": 16
+        }
+      }
+    },
+    "zhat_vs_true_pooled": {
+      "extension": {
+        "mean_diff_true_minus_control": 3.057633872581231e-05,
+        "bootstrap_95ci": [
+          -1.6793594818282073e-06,
+          7.113121066295122e-05
+        ],
+        "n_runs": 36
+      },
+      "velocity": {
+        "mean_diff_true_minus_control": -4.5527948341293725e-05,
+        "bootstrap_95ci": [
+          -0.00023370119786770055,
+          0.00013861358978023016
+        ],
+        "n_runs": 36
+      },
+      "dP": {
+        "mean_diff_true_minus_control": 4120.248849271525,
+        "bootstrap_95ci": [
+          -31410.457525736496,
+          39676.792111489856
+        ],
+        "n_runs": 36
+      },
+      "all": {
+        "mean_diff_true_minus_control": 2378.82678225511,
+        "bootstrap_95ci": [
+          -18134.836107853513,
+          22907.406606149685
+        ],
+        "n_runs": 36
+      }
+    }
+  },
+  "retention_fraction_of_true_advantage": {
+    "extension": 0.8250853657339496,
+    "velocity": 1.1013155148620584
+  },
+  "sources": {
+    "gate_rollout": "/home/rrlab/rrlab_mulag/outputs/aam_stage27_temporal/rollout_gate.json",
+    "none_rollout": "/home/rrlab/rrlab_mulag/outputs/aam_stage26_causal/rollout_none.json"
+  }
+}

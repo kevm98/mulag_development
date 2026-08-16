@@ -37,7 +37,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 import torch
-from pxr import Sdf
+from pxr import Sdf, UsdGeom, UsdShade
 
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg
@@ -73,22 +73,39 @@ from verge_task.terrain import (
     MOW_STRIP_CFG,
     MOW_STRIP_EVAL_CFG,
     TRACKING_PATH_FAMILIES,
+    apply_natural_verge_vertex_colors,
     apply_relief_profile,
     build_mow_strip_mesh,
+    build_sparse_grass_tuft_mesh,
     build_tracking_line_mesh,
+    build_visual_verge_skin,
     decoration_seed,
     terrain_height_scale_for_environment,
     terrain_parameter_for_environment,
     tracking_line_center_y_at,
 )
+from verge_task.deployment_factors import (
+    DIM_ORDER as DEPLOYMENT_FACTOR_DIMS,
+    DEFAULT_MANIFEST as DEFAULT_DEPLOYMENT_FACTOR_MANIFEST,
+    select_factors,
+    validate_factor_isolation,
+)
+from verge_task.vehicle_speed import (
+    advance_path_travel,
+    fixed_duration_path_limits,
+    map_unit_interval_to_speed,
+)
 
 MOW_STRIP_ROOT = "/World/MowStrip"
+MOW_STRIP_VISUAL_ROOT = "/World/MowStripVisual"
+GRASS_TUFT_ROOT = "/World/PPO3GrassTufts"
 ROAD_ROOT = "/World/TruckRoad"
 TRACKING_LINE_ROOT = "/World/MowTrackingLine"
 VISUAL_FLOOR_ROOT = "/World/PPO3VisualFloor"
 VISUAL_GRID_ROOT = "/World/PPO3VisualGrid"
 ROAD_APRON_ROOT = "/World/PPO3RoadApron"
 ROAD_MARKING_ROOT = "/World/PPO3RoadMarkings"
+ROAD_SHOULDER_ROOT = "/World/PPO3RoadShoulder"
 VERGE_APRON_ROOT = "/World/PPO3VergeApron"
 
 
@@ -112,6 +129,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode=render_mode, **kwargs)
+        self._setup_deployment_factor_contract()
         self._cutter_float_joint_id: int | None = None
         if bool(getattr(cfg, "terrain_floating_cutter", False)):
             ids, names = self.robot.find_joints("CutterFloat_joint")
@@ -178,6 +196,186 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             f"{float(getattr(cfg, 'target_cut_height_m', 0.05)):.3f} m",
             flush=True,
         )
+
+    @torch.no_grad()
+    def _setup_deployment_factor_contract(self) -> None:
+        """Initialize privileged factor metadata without widening inputs."""
+        self._deployment_factor_dims = tuple(DEPLOYMENT_FACTOR_DIMS)
+        self._deployment_factor_reset_index = 0
+        self._deployment_factor_keys = ["nominal:0"] * self.num_envs
+        self._deployment_factor_run_ids = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._deployment_factor_values = torch.zeros(
+            (self.num_envs, len(self._deployment_factor_dims)),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._deployment_factor_values[:, 4] = 1.0
+        self._deployment_factor_manifest = str(
+            getattr(self.cfg, "deployment_factor_manifest", DEFAULT_DEPLOYMENT_FACTOR_MANIFEST)
+        )
+        self._deployment_factor_body_id = next(
+            (int(i) for i, name in enumerate(self.robot.body_names) if name == "Messerkopf"),
+            None,
+        )
+        if self._deployment_factor_body_id is None:
+            raise RuntimeError(
+                "deployment factor contract requires cutter body 'Messerkopf'; "
+                f"available bodies: {self.robot.body_names}"
+            )
+        # Always restore from authored properties before applying a new row;
+        # otherwise reset-time mass/COM writes compound across episodes.
+        self._deployment_factor_baseline_masses = (
+            self.robot.root_physx_view.get_masses().detach().clone()
+        )
+        self._deployment_factor_baseline_coms = (
+            self.robot.root_physx_view.get_coms().detach().clone()
+        )
+        expected_width = int(self._expected_observation_dim())
+        aam_dim = (
+            int(getattr(self._online_aam, "FEATURE_DIM", 18))
+            if self._online_aam is not None
+            else None
+        )
+        validate_factor_isolation(
+            policy_observation_width=int(
+                getattr(self.cfg, "observation_space", expected_width)
+            ),
+            expected_width=expected_width,
+            aam_feature_dim=aam_dim,
+        )
+        # These invariants are explicit construction state. Factor values and
+        # true latent labels remain metadata only; the optional z_hat policy
+        # append is a separate ablation and is not the physical factor input.
+        self._deployment_factor_isolation = {
+            "e_to_policy": False,
+            "e_to_aam": False,
+            # The frozen encoder route is enabled only for the RMA-style
+            # privileged PPO warm-start. It occupies the same two observation
+            # slots later filled by z_hat and is never available in the
+            # estimated deployment arm.
+            "true_z_to_policy": bool(
+                self._online_aam is not None
+                and self._online_aam.latent_mode == "true"
+            ),
+            "true_z_to_aam": False,
+            "true_z_to_adapter": bool(
+                self._online_aam is not None
+                and self._online_aam.latent_mode == "true"
+            ),
+            "true_z_to_training_label": bool(
+                self._online_aam is not None
+                and self._online_aam.true_latent_encoder is not None
+            ),
+        }
+
+    @torch.no_grad()
+    def _publish_privileged_latent_if_enabled(self) -> None:
+        if (
+            self._online_aam is None
+            or self._online_aam.true_latent_encoder is None
+        ):
+            return
+        if tuple(self._deployment_factor_dims) != tuple(DEPLOYMENT_FACTOR_DIMS):
+            raise RuntimeError("privileged factor order does not match the frozen SD encoder")
+        encoded, finite = self._online_aam.encode_privileged_factors(
+            self._deployment_factor_values
+        )
+        if not bool(finite.all()):
+            raise RuntimeError("non-finite privileged latent label")
+        self._aam_privileged_z = encoded.detach().clone()
+        if self._online_aam.latent_mode == "true":
+            self._aam_z_hat = self._online_aam.set_privileged_factors(
+                self._deployment_factor_values
+            ).detach().clone()
+
+    @torch.no_grad()
+    def _latch_deployment_factors(self, env_ids: torch.Tensor) -> None:
+        """Latch one audited factor row per reset environment."""
+        if not bool(getattr(self.cfg, "deployment_factor_enabled", False)):
+            self._deployment_factor_values[env_ids] = 0.0
+            self._deployment_factor_values[env_ids, 4] = 1.0
+            self._deployment_factor_run_ids[env_ids] = 0
+            for i in env_ids.detach().cpu().tolist():
+                self._deployment_factor_keys[int(i)] = "nominal:0"
+            self._command_rom_system_factors = None
+            self.robot.root_physx_view.set_masses(
+                self._deployment_factor_baseline_masses,
+                env_ids.detach().cpu(),
+            )
+            self.robot.root_physx_view.set_coms(
+                self._deployment_factor_baseline_coms,
+                env_ids.detach().cpu(),
+            )
+            self._publish_privileged_latent_if_enabled()
+            return
+
+        rows = select_factors(
+            domain=str(getattr(self.cfg, "deployment_factor_domain", "nominal")),
+            key=str(getattr(self.cfg, "deployment_factor_key", "")),
+            num_envs=self.num_envs,
+            seed=int(getattr(self.cfg, "deployment_factor_seed", 17)),
+            manifest=self._deployment_factor_manifest,
+            reset_index=self._deployment_factor_reset_index,
+        )
+        self._deployment_factor_reset_index += 1
+        all_values = torch.as_tensor(
+            [row.values for row in rows], dtype=torch.float32, device=self.device
+        )
+        all_system = torch.as_tensor(
+            [row.hydraulic_system_factors() for row in rows],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._deployment_factor_values[env_ids] = all_values[env_ids]
+        env_numbers = env_ids.detach().cpu().tolist()
+        self._deployment_factor_run_ids[env_ids] = torch.as_tensor(
+            [rows[int(i)].run_id for i in env_numbers],
+            dtype=torch.long,
+            device=self.device,
+        )
+        for i in env_numbers:
+            self._deployment_factor_keys[int(i)] = rows[int(i)].key
+        if not hasattr(self, "_command_rom_system_factors") or self._command_rom_system_factors is None:
+            self._command_rom_system_factors = torch.zeros(
+                (self.num_envs, 7), dtype=torch.float32, device=self.device
+            )
+        self._command_rom_system_factors[env_ids] = all_system[env_ids]
+
+        body = int(self._deployment_factor_body_id)
+        factor_rows = self._deployment_factor_values[env_ids]
+        mass_ids = env_ids.to(self._deployment_factor_baseline_masses.device)
+        masses = self._deployment_factor_baseline_masses.clone()
+        masses[mass_ids, body] = masses[mass_ids, body] * factor_rows[:, 4].to(masses.device)
+        com_ids = env_ids.to(self._deployment_factor_baseline_coms.device)
+        coms = self._deployment_factor_baseline_coms.clone()
+        coms[com_ids, body, 2] = coms[com_ids, body, 2] + factor_rows[:, 5].to(coms.device)
+        # Isaac Lab expects full property tensors plus CPU environment indices;
+        # the setter applies only the listed environments.
+        physx_ids = env_ids.detach().cpu()
+        self.robot.root_physx_view.set_masses(masses, physx_ids)
+        self.robot.root_physx_view.set_coms(coms, physx_ids)
+        self._publish_privileged_latent_if_enabled()
+        if bool(getattr(self.cfg, "deployment_factor_log", True)):
+            print(
+                "[DEPLOYMENT-FACTORS] "
+                f"domain={getattr(self.cfg, 'deployment_factor_domain', 'nominal')} "
+                f"keys={self._deployment_factor_keys} "
+                f"values={self._deployment_factor_values.detach().cpu().tolist()}",
+                flush=True,
+            )
+
+    def deployment_factor_metadata(self) -> dict:
+        """Return privileged factor metadata for paired evaluators and logs."""
+        return {
+            "keys": list(self._deployment_factor_keys),
+            "run_ids": self._deployment_factor_run_ids.detach().cpu().tolist(),
+            "values": self._deployment_factor_values.detach().cpu().tolist(),
+            "dims": list(self._deployment_factor_dims),
+            "enabled": bool(getattr(self.cfg, "deployment_factor_enabled", False)),
+            "isolation": dict(self._deployment_factor_isolation),
+        }
 
     @torch.no_grad()
     def _apply_terrain_arm_drive_tuning(self) -> None:
@@ -327,6 +525,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._truck_step_advance_m = torch.zeros(
             (self.num_envs,), dtype=torch.float32, device=self.device
         )
+        self._truck_path_complete = torch.zeros(
+            (self.num_envs,), dtype=torch.bool, device=self.device
+        )
+        self._truck_path_completion_time_s = torch.zeros(
+            (self.num_envs,), dtype=torch.float32, device=self.device
+        )
         self._pin_substeps_pending = 0
         self._last_advance_step = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device
@@ -422,9 +626,19 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             replace(
                 base,
                 seed=seed,
+                start_x_m=float(
+                    getattr(self.cfg, "mow_strip_start_x_m", base.start_x_m)
+                ),
                 resolution_m=resolution,
                 length_m=length,
                 width_m=width,
+                tracking_reference_x_m=float(
+                    getattr(
+                        self.cfg,
+                        "terrain_tracking_reference_x_m",
+                        base.tracking_reference_x_m,
+                    )
+                ),
                 tracking_path_amplitude_scale=amplitude_scale,
                 tracking_path_frequency_scale=float(
                     getattr(self.cfg, "terrain_tracking_frequency_scale", 1.0)
@@ -479,11 +693,21 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         return replace(
             base,
             seed=seed,
+            start_x_m=float(
+                getattr(self.cfg, "mow_strip_start_x_m", base.start_x_m)
+            ),
             resolution_m=float(
                 getattr(self.cfg, "mow_strip_resolution_m", base.resolution_m)
             ),
             length_m=float(getattr(self.cfg, "mow_strip_length_m", base.length_m)),
             width_m=float(getattr(self.cfg, "mow_strip_width_m", base.width_m)),
+            tracking_reference_x_m=float(
+                getattr(
+                    self.cfg,
+                    "terrain_tracking_reference_x_m",
+                    base.tracking_reference_x_m,
+                )
+            ),
             tracking_path_amplitude_scale=float(
                 getattr(
                     self.cfg,
@@ -536,6 +760,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if bool(getattr(self.cfg, "enable_visual_grid_floor", False)):
             self._spawn_visual_grid_floor()
         self._spawn_flat_road()
+        if bool(getattr(self.cfg, "enable_road_edge_markings", False)):
+            self._spawn_road_edge_markings()
         if bool(getattr(self.cfg, "enable_road_scenery", False)):
             self._spawn_road_scenery()
         self._spawn_mow_strip()
@@ -563,6 +789,41 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "[PPO3-VISUAL] Isaac dark background enabled; dome illumination retained",
             flush=True,
         )
+
+    @staticmethod
+    def _bind_matte_vertex_material(root_path: str) -> None:
+        """Bind displayColor through a fully rough USD Preview Surface.
+
+        Isaac's unbound display-color fallback has a visible specular lobe,
+        which makes a vertex-painted terrain look like glossy plastic.  A
+        primvar reader preserves every grass/soil vertex color while roughness
+        1 and zero metallic remove that glassy response.
+        """
+        mesh_prim = sim_utils.get_prim_at_path(f"{root_path}/mesh")
+        stage = mesh_prim.GetStage()
+        material = UsdShade.Material.Define(stage, f"{root_path}/MatteMaterial")
+        shader = UsdShade.Shader.Define(
+            stage, f"{root_path}/MatteMaterial/PreviewSurface"
+        )
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(1.0)
+
+        reader = UsdShade.Shader.Define(
+            stage, f"{root_path}/MatteMaterial/DisplayColorReader"
+        )
+        reader.CreateIdAttr("UsdPrimvarReader_float3")
+        reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("displayColor")
+        reader.CreateOutput("result", Sdf.ValueTypeNames.Float3)
+        shader.CreateInput(
+            "diffuseColor", Sdf.ValueTypeNames.Color3f
+        ).ConnectToSource(reader.ConnectableAPI(), "result")
+        material.CreateSurfaceOutput().ConnectToSource(
+            shader.ConnectableAPI(), "surface"
+        )
+        UsdShade.MaterialBindingAPI(mesh_prim).Bind(material)
+        UsdGeom.Mesh(mesh_prim).CreateDoubleSidedAttr(True)
 
     def _spawn_visual_grid_floor(self) -> None:
         """Spawn a non-colliding dark-grass floor with subtle grid lines."""
@@ -696,6 +957,52 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             flush=True,
         )
 
+    def _spawn_road_edge_markings(self) -> None:
+        """Add two merged, non-colliding white road-edge lines."""
+        import trimesh
+
+        start_x = float(getattr(self.cfg, "road_start_x_m", -40.0))
+        length = float(getattr(self.cfg, "road_length_m", 40.0))
+        center_y = float(getattr(self.cfg, "road_center_y_m", 4.30))
+        width = float(getattr(self.cfg, "road_width_m", 3.60))
+        inset = float(getattr(self.cfg, "road_edge_marking_inset_m", 0.45))
+        line_width = float(getattr(self.cfg, "road_edge_marking_width_m", 0.11))
+        if line_width <= 0.0 or not 0.0 <= inset < 0.5 * width:
+            raise ValueError("road edge marking width/inset are outside the road")
+        edge_offset = 0.5 * width - inset
+        pieces = []
+        for origin in self.scene.env_origins.detach().cpu().numpy():
+            for y_offset in (-edge_offset, edge_offset):
+                line = trimesh.creation.box(extents=(length, line_width, 0.006))
+                line.apply_translation(
+                    (
+                        float(origin[0] + start_x + 0.5 * length),
+                        float(origin[1] + center_y + y_offset),
+                        float(origin[2] + 0.003),
+                    )
+                )
+                pieces.append(line)
+        create_prim_from_mesh(
+            ROAD_MARKING_ROOT,
+            trimesh.util.concatenate(pieces),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=tuple(
+                    getattr(self.cfg, "road_edge_marking_color", (0.82, 0.82, 0.76))
+                ),
+                roughness=0.85,
+            ),
+        )
+        mesh_prim = sim_utils.get_prim_at_path(f"{ROAD_MARKING_ROOT}/mesh")
+        sim_utils.define_collision_properties(
+            mesh_prim.GetPrimPath(),
+            sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+        )
+        print(
+            f"[PPO3-VISUAL] road edge markings enabled "
+            f"({2 * len(self.scene.env_origins)} lines, 24 triangles/env)",
+            flush=True,
+        )
+
     def _lawn_apron_mesh(
         self, *, x0: float, x1: float, y0: float, y1: float, z: float, seed_offset: int
     ):
@@ -772,9 +1079,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         dash_width = float(getattr(self.cfg, "road_lane_dash_width_m", 0.12))
         dash_length = float(getattr(self.cfg, "road_lane_dash_length_m", 2.0))
         dash_gap = float(getattr(self.cfg, "road_lane_dash_gap_m", 3.0))
+        edge_inset = float(getattr(self.cfg, "road_scenery_edge_inset_m", 0.28))
+        shoulder_width = float(
+            getattr(self.cfg, "road_gravel_shoulder_width_m", 0.34)
+        )
         apron_m = float(getattr(self.cfg, "verge_visual_apron_m", 3.2))
-        if min(edge_width, dash_width, dash_length, dash_gap) <= 0.0:
+        if min(edge_width, dash_width, dash_length, dash_gap, shoulder_width) <= 0.0:
             raise ValueError("road marking dimensions must be positive")
+        if not edge_width * 0.5 <= edge_inset < road_width * 0.5:
+            raise ValueError("road scenery edge-line inset is outside a lane")
 
         # The colliding lane is the one under the tyres; extra lanes are added on
         # the far side of it so nothing is ever placed between the verge and the
@@ -789,7 +1102,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         strip_width = float(strip_cfg.width_m)
         strip_outer_y = strip_center_y - 0.5 * strip_width
 
-        asphalt, markings, grass = [], [], []
+        asphalt, markings, grass, shoulders = [], [], [], []
         # Sit each layer a hair above the one below it: apron under the markings,
         # both just under the colliding road so no z-fight with the tyre surface.
         apron_z, marking_z = -0.012, -0.004
@@ -805,8 +1118,21 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 )
                 asphalt.append(slab)
 
-            for edge_y in (near_edge_y + 0.5 * edge_width,
-                           far_edge_y - 0.5 * edge_width):
+            # A compacted shoulder bridges the separately rendered verge and
+            # asphalt by a few centimetres on each side.  It hides the mesh
+            # seam and gives the road a believable constructed edge.
+            shoulder = trimesh.creation.box(
+                extents=(length, shoulder_width, 0.014)
+            )
+            shoulder.apply_translation(
+                (mid_x, oy + near_edge_y, oz + marking_z - 0.002)
+            )
+            shoulders.append(shoulder)
+
+            for edge_y in (
+                near_edge_y + edge_inset,
+                far_edge_y - edge_inset,
+            ):
                 line = trimesh.creation.box(extents=(length, edge_width, 0.012))
                 line.apply_translation((mid_x, oy + edge_y, oz + marking_z))
                 markings.append(line)
@@ -877,7 +1203,23 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                             self.cfg, "road_marking_color", (0.90, 0.90, 0.88)
                         )
                     ),
-                    roughness=0.6,
+                    roughness=1.0,
+                    metallic=0.0,
+                ),
+            ),
+            (
+                ROAD_SHOULDER_ROOT,
+                shoulders,
+                sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=tuple(
+                        getattr(
+                            self.cfg,
+                            "road_gravel_shoulder_color",
+                            (0.10, 0.085, 0.060),
+                        )
+                    ),
+                    roughness=1.0,
+                    metallic=0.0,
                 ),
             ),
         ):
@@ -956,7 +1298,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             )
         print(
             f"[PPO3-SCENERY] {lanes}-lane marked road with "
-            f"{len(palette)}-tone grass verges "
+            f"dashed centreline, matte shoulder and {len(palette)}-tone grass verges "
             f"(visual-only, y=[{strip_outer_y - apron_m:.2f}, "
             f"{far_edge_y + apron_m:.2f}])",
             flush=True,
@@ -985,6 +1327,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # scan reported exactly 0.25 valid, i.e. one env seeing ground and three
         # seeing nothing. Merging keeps every environment visible to the sensor.
         pieces = []
+        visual_pieces = []
+        grass_tuft_pieces = []
         line_pieces = []
         path_y_samples = []
         path_family_names = []
@@ -992,6 +1336,15 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         terrain_height_scales = []
         env_amplitude_scales = []
         env_sweep_gains = []
+        use_vertex_palette = bool(
+            getattr(self.cfg, "mow_strip_use_vertex_palette", False)
+        )
+        palette = tuple(getattr(self.cfg, "mow_strip_visual_palette", ()))
+        soil_weighted_vertices = 0.0
+        palette_vertex_count = 0
+        road_near_edge_y = float(getattr(self.cfg, "road_center_y_m", 4.30)) - 0.5 * float(
+            getattr(self.cfg, "road_width_m", 3.60)
+        )
         requested_family = str(
             getattr(self.cfg, "tracking_path_family", "mixed")
         )
@@ -1039,12 +1392,16 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # Randomization ranges for the two path parameters. Defaults fall back
         # to the scalar settings, so a config that does not opt in behaves
         # exactly as before -- randomization is requested, never imposed.
+        # An EMPTY tuple means "not opted in" and must fall back to the scalar.
+        # `getattr` alone is not enough now that the field is declared with an
+        # empty default: getattr finds () and returns it, and
+        # `terrain_parameter_for_environment` rejects an empty tuple outright,
+        # which would break every stage that never sets the ladder.
         configured_amplitude_scales = tuple(
             float(value)
-            for value in getattr(
-                self.cfg,
-                "terrain_tracking_amplitude_scales",
-                (float(getattr(self.cfg, "terrain_tracking_amplitude_scale", 1.0)),),
+            for value in (
+                getattr(self.cfg, "terrain_tracking_amplitude_scales", ())
+                or (float(getattr(self.cfg, "terrain_tracking_amplitude_scale", 1.0)),)
             )
         )
         configured_sweep_gains = tuple(
@@ -1152,6 +1509,87 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             )
             terrain_height_scales.append(height_scale)
             piece = build_mow_strip_mesh(env_strip_cfg)
+            if use_vertex_palette:
+                # The original piece remains the exact collision/ray-cast
+                # terrain.  A display-only copy is clipped at the road and
+                # eased to z=0, removing the raised jagged overlap without
+                # changing a single physical vertex used by the policy.
+                visual_piece = build_visual_verge_skin(
+                    piece,
+                    road_edge_y=road_near_edge_y,
+                    shoulder_transition_m=float(
+                        getattr(
+                            self.cfg,
+                            "mow_strip_visual_shoulder_transition_m",
+                            0.30,
+                        )
+                    ),
+                )
+                piece_soil_fraction = apply_natural_verge_vertex_colors(
+                    visual_piece,
+                    palette,
+                    soil_threshold=float(
+                        getattr(self.cfg, "mow_strip_soil_field_threshold", 1.0)
+                    ),
+                )
+                soil_weighted_vertices += piece_soil_fraction * len(
+                    visual_piece.vertices
+                )
+                palette_vertex_count += len(visual_piece.vertices)
+                visual_piece.apply_translation(
+                    (float(origin[0]), float(origin[1]), float(origin[2]))
+                )
+                visual_pieces.append(visual_piece)
+
+                if bool(getattr(self.cfg, "enable_verge_grass_tufts", False)):
+                    tufts = build_sparse_grass_tuft_mesh(
+                        env_strip_cfg,
+                        count=int(
+                            getattr(self.cfg, "verge_grass_tufts_per_env", 72)
+                        ),
+                        road_edge_y=road_near_edge_y,
+                        seed=decoration_seed(
+                            int(getattr(self.cfg, "terrain_base_seed", 42)),
+                            env_index * seed_stride + 17_431,
+                        ),
+                        tracking_clearance_m=float(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_tracking_clearance_m",
+                                0.20,
+                            )
+                        ),
+                        edge_clearance_m=float(
+                            getattr(
+                                self.cfg, "verge_grass_edge_clearance_m", 0.18
+                            )
+                        ),
+                        height_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_height_range_m",
+                                (0.10, 0.19),
+                            )
+                        ),
+                        width_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_width_range_m",
+                                (0.07, 0.14),
+                            )
+                        ),
+                        palette=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_palette",
+                                ((0.04, 0.15, 0.02),),
+                            )
+                        ),
+                    )
+                    tufts.apply_translation(
+                        (float(origin[0]), float(origin[1]), float(origin[2]))
+                    )
+                    grass_tuft_pieces.append(tufts)
             piece.apply_translation(
                 (float(origin[0]), float(origin[1]), float(origin[2]))
             )
@@ -1186,7 +1624,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             )
             path_family_names.append(family)
         mesh = trimesh.util.concatenate(pieces)
+        visual_mesh = (
+            trimesh.util.concatenate(visual_pieces) if visual_pieces else None
+        )
+        grass_tuft_mesh = (
+            trimesh.util.concatenate(grass_tuft_pieces)
+            if grass_tuft_pieces
+            else None
+        )
         line_mesh = trimesh.util.concatenate(line_pieces)
+        soil_fraction = (
+            soil_weighted_vertices / palette_vertex_count
+            if palette_vertex_count
+            else 0.0
+        )
         self._tracking_path_x_min = float(path_x[0])
         self._tracking_path_x_max = float(path_x[-1])
         self._tracking_path_y_samples = torch.as_tensor(
@@ -1249,19 +1700,52 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ),
             flush=True,
         )
-        visual_material = sim_utils.PreviewSurfaceCfg(
-            diffuse_color=tuple(
-                getattr(self.cfg, "mow_strip_color", (0.075, 0.27, 0.050))
-            ),
-            roughness=1.0,
-        )
-
-        create_prim_from_mesh(
-            MOW_STRIP_ROOT,
-            mesh,
-            physics_material=physics_material,
-            visual_material=visual_material,
-        )
+        strip_spawn_args = {"physics_material": physics_material}
+        if not use_vertex_palette:
+            strip_spawn_args["visual_material"] = sim_utils.PreviewSurfaceCfg(
+                diffuse_color=tuple(
+                    getattr(self.cfg, "mow_strip_color", (0.075, 0.27, 0.050))
+                ),
+                roughness=1.0,
+            )
+        create_prim_from_mesh(MOW_STRIP_ROOT, mesh, **strip_spawn_args)
+        if use_vertex_palette:
+            if visual_mesh is None:
+                raise RuntimeError("natural verge requested without a visual mesh")
+            physical_mesh_prim = sim_utils.get_prim_at_path(f"{MOW_STRIP_ROOT}/mesh")
+            UsdGeom.Imageable(physical_mesh_prim).MakeInvisible()
+            create_prim_from_mesh(MOW_STRIP_VISUAL_ROOT, visual_mesh)
+            visual_mesh_prim = sim_utils.get_prim_at_path(
+                f"{MOW_STRIP_VISUAL_ROOT}/mesh"
+            )
+            sim_utils.define_collision_properties(
+                visual_mesh_prim.GetPrimPath(),
+                sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            )
+            self._bind_matte_vertex_material(MOW_STRIP_VISUAL_ROOT)
+            print(
+                f"[PPO3-VISUAL] matte natural verge skin enabled "
+                f"({100.0 * soil_fraction:.1f}% soil vertices; collision mesh unchanged)",
+                flush=True,
+            )
+            if grass_tuft_mesh is not None:
+                create_prim_from_mesh(GRASS_TUFT_ROOT, grass_tuft_mesh)
+                grass_mesh_prim = sim_utils.get_prim_at_path(
+                    f"{GRASS_TUFT_ROOT}/mesh"
+                )
+                sim_utils.define_collision_properties(
+                    grass_mesh_prim.GetPrimPath(),
+                    sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                )
+                self._bind_matte_vertex_material(GRASS_TUFT_ROOT)
+                tuft_count = int(
+                    getattr(self.cfg, "verge_grass_tufts_per_env", 72)
+                )
+                print(
+                    f"[PPO3-VISUAL] sparse grass enabled ({tuft_count} clumps/env, "
+                    f"{4 * tuft_count} triangles/env, non-colliding)",
+                    flush=True,
+                )
         if not bool(getattr(self.cfg, "mow_strip_collision", False)):
             mesh_prim = sim_utils.get_prim_at_path(f"{MOW_STRIP_ROOT}/mesh")
             sim_utils.define_collision_properties(
@@ -1467,15 +1951,69 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         speed_kmh = getattr(self, "_vehicle_speed_kmh", None)
         if speed_kmh is None:
             return
-        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
-        step = (speed_kmh / 3.6) * float(self.step_dt)
-        advance = torch.where(active, step, torch.zeros_like(step))
-        self._truck_travel_m = self._truck_travel_m + advance
+        active = (
+            (self._preposition_counter <= 0)
+            & (self._settle_counter <= 0)
+            & ~self._truck_path_complete
+        )
+        path_length = max(
+            float(getattr(self.cfg, "terrain_tracking_active_length_m", 0.0)),
+            0.0,
+        )
+        segment_duration = float(
+            getattr(self.cfg, "vehicle_training_segment_duration_s", 0.0)
+        )
+        completion_limit = (
+            fixed_duration_path_limits(speed_kmh, path_length, segment_duration)
+            if segment_duration > 0.0
+            else path_length
+        )
+        tolerance = max(
+            float(getattr(self.cfg, "vehicle_path_completion_tolerance_m", 1.0e-4)),
+            0.0,
+        )
+        next_travel, advance, newly_complete = advance_path_travel(
+            self._truck_travel_m,
+            speed_kmh,
+            active,
+            self._truck_path_complete,
+            completion_limit,
+            float(self.step_dt),
+            tolerance,
+        )
+        self._truck_travel_m = next_travel
+        self._truck_path_complete |= newly_complete
+        self._truck_path_completion_time_s = torch.where(
+            newly_complete,
+            self._scored_elapsed,
+            self._truck_path_completion_time_s,
+        )
         # Remember the advance and open the substep window. Envs still in
         # preposition/settle advance by zero, so their interpolated target
         # equals their held target and the fixture cannot drag them backwards.
         self._truck_step_advance_m = advance.detach()
         self._pin_substeps_pending = max(int(getattr(self.cfg, "decimation", 2)), 1)
+
+    @torch.no_grad()
+    def _update_trajectory(self) -> None:
+        """Advance episode clocks without rebuilding PPO2's stored arm path.
+
+        The terrain task replaces the legacy workspace trajectory in all three
+        places that matter: its observation follows the generated tracking
+        line, its reward follows terrain cut height/lateral error, and its
+        privileged teacher computes a live contact target. Rebuilding the old
+        trajectory still looped over every CUDA environment and copied scalar
+        tensors to the CPU each control step, despite none of its goal, seed or
+        DLS outputs being consumed by PPO-ROM, PPO-ID-FD or PPO-ID(AAM)-FD.
+
+        ``_scored_elapsed`` remains authoritative for path-completion timing,
+        so both inherited clocks continue to advance with the same warm-up
+        mask and control timestep as the original method.
+        """
+        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        delta = active.to(dtype=self._traj_elapsed.dtype) * float(self.step_dt)
+        self._traj_elapsed += delta
+        self._scored_elapsed += delta
 
     @torch.no_grad()
     def _initialize_contact_tracking_demo(self, *, apply_compliance: bool = True) -> None:
@@ -1568,11 +2106,19 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             self.num_envs, dtype=torch.float32, device=self.device
         )
         self._contact_demo_ready = True
-        print(
-            "[PPO3-CONTACT-DEMO] non-PPO controller enabled: terrain-height "
-            "feed-forward + cutter/terrain force feedback",
-            flush=True,
-        )
+        if self._teacher_mode == "label":
+            print(
+                "[PPO3-CONTACT-TEACHER] privileged target state initialized for "
+                "training labels only; no direct target writes, PPO remains the "
+                "sole plant controller",
+                flush=True,
+            )
+        else:
+            print(
+                "[PPO3-CONTACT-DEMO] non-PPO controller enabled: terrain-height "
+                "feed-forward + cutter/terrain force feedback",
+                flush=True,
+            )
 
     @torch.no_grad()
     def _apply_contact_tracking_demo_targets(self) -> None:
@@ -1926,6 +2472,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         speed_kmh = getattr(self, "_vehicle_speed_kmh", None)
         if speed_kmh is None:
             return
+        speed_kmh = self._scripted_vehicle_speed_kmh()
         radius = max(float(getattr(self.cfg, "vehicle_wheel_radius_m", 0.575)), 1e-6)
         omega = (speed_kmh / 3.6 / radius).reshape(-1, 1).expand(-1, len(ids))
         self.robot.write_joint_velocity_to_sim(omega, joint_ids=ids)
@@ -2134,7 +2681,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         velocity = torch.zeros((self.num_envs, 6), device=self.device)
         speed_kmh = getattr(self, "_vehicle_speed_kmh", None)
         if speed_kmh is not None:
-            velocity[:, :2] = (speed_kmh / 3.6).reshape(-1, 1) * heading
+            velocity[:, :2] = (
+                self._scripted_vehicle_speed_kmh() / 3.6
+            ).reshape(-1, 1) * heading
         self.robot.write_root_velocity_to_sim(velocity)
 
         # Lateral drift is identically zero by construction; keep the fields the
@@ -2453,7 +3002,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # Deployment, preposition, reset correction and settling are not scored
         # and must never acquire support or raise an event -- the arm is being
         # driven to its pose by the reset ramp, not by the policy.
-        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        active = (
+            (self._preposition_counter <= 0)
+            & (self._settle_counter <= 0)
+            & ~self._truck_path_complete
+        )
 
         acquire_steps = max(int(getattr(cfg, "terrain_contact_acquire_steps", 3)), 1)
         grace = max(int(getattr(cfg, "terrain_contact_loss_grace_steps", 2)), 0)
@@ -2598,7 +3151,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         """
         self._update_contact_safety()
         cfg = self.cfg
-        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        active = (
+            (self._preposition_counter <= 0)
+            & (self._settle_counter <= 0)
+            & ~self._truck_path_complete
+        )
         grace = max(int(getattr(cfg, "terrain_contact_loss_grace_steps", 2)), 0)
         terminal = torch.zeros_like(self._contact_acquired)
         if bool(getattr(cfg, "terrain_terminate_on_contact_loss", False)):
@@ -2647,7 +3204,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             | truck_violation
             | head_violation
             | clearance_violation
-        ) & ~warmup
+        ) & ~warmup & ~self._truck_path_complete
 
     def _terrain_nonfinite_mask(self) -> torch.Tensor:
         """Detect corrupt raw simulation/control state before scrubbed features hide it."""
@@ -2672,6 +3229,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "_previous_abs_cut_error",
             "_previous_abs_lateral_error",
             "_truck_travel_m",
+            "_truck_path_completion_time_s",
             "_drive_anchor_root",
             "_drive_anchor_base_xy",
             "_drive_anchor_base_heading_xy",
@@ -2725,11 +3283,25 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # without needing an episode to end (see
         # terrain_rewards.airborne_task_reward_bound).
         synchronize = bool(getattr(self.cfg, "synchronize_resets", True))
-        if synchronize and (nonfinite.any() or contact_terminal.any()):
-            terminated = torch.ones_like(terminated)
+        if synchronize:
+            synchronized_terminal = (nonfinite | contact_terminal).any()
+            terminated = torch.where(
+                synchronized_terminal, torch.ones_like(terminated), terminated
+            )
+        path_complete = getattr(self, "_truck_path_complete", None)
+        if (
+            bool(getattr(self.cfg, "vehicle_terminate_when_all_paths_complete", True))
+            and isinstance(path_complete, torch.Tensor)
+        ):
+            truncated = torch.where(
+                path_complete.all(), torch.ones_like(truncated), truncated
+            )
         log = self.extras.setdefault("log", {})
         log["termination/terrain_nonfinite"] = nonfinite.float().mean()
         log["termination/contact_safety"] = contact_terminal.float().mean()
+        if isinstance(path_complete, torch.Tensor):
+            log["truck/path_complete_fraction"] = path_complete.float().mean()
+            log["truck/path_completion_time_s"] = self._truck_path_completion_time_s.mean()
         return terminated, truncated
 
     def truck_ride_height(self) -> torch.Tensor:
@@ -2874,6 +3446,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if not isinstance(env_ids, _t.Tensor):
             env_ids = _t.as_tensor(env_ids, dtype=_t.long, device=self.device)
 
+        # Apply factors before the parent deployment/warm-up sequence so the
+        # reset state is prepared on the same frozen plant that will be scored.
+        self._latch_deployment_factors(env_ids)
         self._restore_terrain_arm_deployment_damping()
         self._contact_demo_ready = False
 
@@ -2885,12 +3460,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         drive_was_ready = getattr(self, "_kinematic_drive_ready", False)
         if drive_was_ready:
             self._truck_travel_m[env_ids] = 0.0
+            self._truck_path_complete[env_ids] = False
+            self._truck_path_completion_time_s[env_ids] = 0.0
             # Clear the advance with it. A reset env's travel restarts at zero,
             # so a carried-over advance would make the deployment pins aim
             # behind the anchor for the rest of the step.
             self._truck_step_advance_m[env_ids] = 0.0
 
         super()._reset_idx(env_ids)
+        # Sample exactly once for every new episode, regardless of the
+        # distribution mode.  The parent reset initializes the speed tensor,
+        # but does not own this task's range contract; skipping the uniform
+        # branch would silently leave range runs at the previous/default speed
+        # instead of training on constant per-episode speeds.
+        speed_sampling = str(
+            getattr(self.cfg, "vehicle_speed_sampling", "uniform")
+        ).strip().lower()
+        unit = torch.rand(env_ids.numel(), device=self.device)
+        self._vehicle_speed_kmh[env_ids] = map_unit_interval_to_speed(
+            unit,
+            float(self.cfg.vehicle_speed_min_kmh),
+            float(self.cfg.vehicle_speed_max_kmh),
+            speed_sampling,
+        )
         # The first parent deployment calls _constrain_truck_xy(), which creates
         # the drive state. Re-check after super rather than returning based on
         # the pre-reset snapshot; otherwise the first explicit reset skips the
@@ -2916,6 +3508,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._relatch_terrain_temporal_state(env_ids)
         if hasattr(self, "_terrain_step_nonfinite"):
             self._terrain_step_nonfinite[env_ids] = False
+        if bool(getattr(self.cfg, "deployment_factor_log", True)):
+            self.extras["deployment_factor_key_id"] = self._deployment_factor_run_ids.float().mean()
 
     def _relatch_terrain_temporal_state(self, env_ids: torch.Tensor) -> None:
         """Start derivative observations from the final synchronized reset pose."""
@@ -3424,7 +4018,19 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 device=shielded.device, dtype=shielded.dtype
             )
             action_jacobian = jacobian * self._action_to_learned_sign.reshape(1, 4)
-            direction = torch.linalg.svd(action_jacobian, full_matrices=True).Vh[-1]
+            # This is a fixed 3x4 geometry matrix and is evaluated once per
+            # environment.  Running its SVD on the simulation GPU makes PPO
+            # startup depend on a cuSOLVER handle while PhysX is initializing;
+            # on the 6 GB card that intermittently fails with
+            # CUSOLVER_STATUS_INTERNAL_ERROR before iteration 1.  CPU SVD is
+            # negligible here and keeps the cached direction identical without
+            # consuming another GPU linear-algebra handle.
+            action_jacobian_cpu = action_jacobian.detach().to(
+                device="cpu", dtype=torch.float64
+            )
+            direction = torch.linalg.svd(
+                action_jacobian_cpu, full_matrices=True
+            ).Vh[-1].to(device=shielded.device, dtype=shielded.dtype)
             if direction[3] < 0.0:
                 direction = -direction
             direction = direction / direction[3].clamp(min=1.0e-6)
@@ -3699,6 +4305,23 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ),
             path_preview=self.tracking_line_preview_local(),
         )
+        # Stage 30's causal AAM is updated inside the shared cylinder
+        # pipeline, before this observation is requested.  The generic upper
+        # level environment appends z_hat in ``_flatten_observations``; the
+        # terrain task has its own observation builder, so it must preserve
+        # that same contract explicitly.  Without this append the configured
+        # 68-D PPO_ID_AAM_FD task silently emitted the legacy 66-D terrain
+        # observation and trained an actor that never saw the latent it was
+        # supposed to condition on.
+        if self._online_aam is not None and bool(
+            getattr(self.cfg, "online_aam_policy_observation", False)
+        ):
+            obs = torch.cat((obs, self._policy_latent_observation()), dim=-1)
+            if obs.shape[-1] != int(self._expected_observation_dim()):
+                raise RuntimeError(
+                    "PPO_ID_AAM_FD terrain observation lost its z_hat append: "
+                    f"got {obs.shape[-1]}, expected {self._expected_observation_dim()}"
+                )
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -3805,7 +4428,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ),
         )
 
-        active = (self._preposition_counter <= 0) & (self._settle_counter <= 0)
+        active = (
+            (self._preposition_counter <= 0)
+            & (self._settle_counter <= 0)
+            & ~self._truck_path_complete
+        )
         parallel_reward = torch.zeros_like(terms.reward)
         yaw_reward = torch.zeros_like(terms.reward)
         direct_head_cost = torch.zeros_like(terms.reward)
@@ -4110,7 +4737,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # the `active` mask so a warm-up step cannot receive it, and before the
         # non-finite sanitizer so the two cannot disagree about the same row.
         contact_terminal = getattr(self, "_contact_safety_terminated", None)
-        if contact_terminal is not None and bool(contact_terminal.any()):
+        if contact_terminal is not None:
             shaped_reward = torch.where(
                 contact_terminal & active,
                 torch.full_like(
@@ -4193,6 +4820,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 "truck/mean_speed_kmh": self._vehicle_speed_kmh[
                     valid_active
                 ].mean(),
+                "truck/min_episode_speed_kmh": self._vehicle_speed_kmh[
+                    valid_active
+                ].min(),
+                "truck/max_episode_speed_kmh": self._vehicle_speed_kmh[
+                    valid_active
+                ].max(),
                 "mow/mean_abs_lateral_error_m": torch.mean(
                     lateral_error[valid_active].abs()
                 ),

@@ -24,6 +24,7 @@ class ResidualRewardTerms:
     saturation_penalty: torch.Tensor
     error_norm: torch.Tensor
     valve_saturation_fraction: torch.Tensor
+    normal_tracking: torch.Tensor
 
 
 def compute_residual_reward(
@@ -48,6 +49,9 @@ def compute_residual_reward(
     ground_band_m: float = 0.10,
     valve_limit: float = 1.0,
     valve_epsilon: float = 0.01,
+    signed_normal_error_m: torch.Tensor | None = None,
+    normal_tracking_std_m: float = 0.03,
+    normal_tracking_weight: float = 0.0,
 ) -> ResidualRewardTerms:
     r"""Compute Policy reward against the original tool reference.
 
@@ -94,6 +98,12 @@ def compute_residual_reward(
         dim=-1,
     )
     saturation_penalty = float(saturation_penalty_weight) * valve_saturation_fraction
+    if signed_normal_error_m is None:
+        normal_tracking = torch.zeros_like(tracking)
+    else:
+        normal_tracking = float(normal_tracking_weight) * torch.exp(
+            -(signed_normal_error_m / max(float(normal_tracking_std_m), 1.0e-6)) ** 2
+        )
     reward = (
         tracking
         + progress
@@ -102,6 +112,7 @@ def compute_residual_reward(
         + head_penalty
         + ground_penalty
         + saturation_penalty
+        + normal_tracking
     )
     reward = torch.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
     return ResidualRewardTerms(
@@ -115,4 +126,5 @@ def compute_residual_reward(
         saturation_penalty=saturation_penalty.detach(),
         error_norm=error_norm.detach(),
         valve_saturation_fraction=valve_saturation_fraction.detach(),
+        normal_tracking=normal_tracking.detach(),
     )

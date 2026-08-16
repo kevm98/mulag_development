@@ -1,25 +1,10 @@
 #!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-"""Train the PPO3-1 c4-authority sole controller over ROM-A.
-
-The task, observation, rewards, terrain, path families and gates are inherited
-from PPO3's shared verge task. The plant change is the c4 authority
-(``cylinder_target_max_lead_per_axis_m`` and
-``cylinder_action_scale_per_axis_m``), applied through
-``PPO_ROM.terrain_env_cfg.apply_c4_authority_stage`` after every
-curriculum transition.
-
-The four measured training fixes from the PPO3/PPO4 handover are available as
-flags and recommended for a fresh c4-authority run:
-
-  * ``--reset_critic_head_on_resume``  stale critic after a plant change
-  * ``--resume_c4_std``                cap c4 exploration separately
-  * keep ``lateral_tracking_std_m >= 0.30`` (the config default)
-  * ``terrain_action_magnitude_weight = 0.0`` (the config default)
-"""
+"""Train or continue the final sole-controller PPO-ROM policy."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from datetime import datetime
@@ -30,15 +15,163 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from isaaclab.app import AppLauncher  # noqa: E402
+from PPO_ROM.path_shapes import (  # noqa: E402
+    apply_trajectory_shapes,
+    parse_trajectory_shapes,
+    require_enough_environments,
+)
+from verge_task.vehicle_speed import configure_path_horizon  # noqa: E402
 
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument("--num_envs", type=int, default=64)
+p.add_argument("--num-envs", "--num_envs", dest="num_envs", type=int, default=64)
 p.add_argument("--seed", type=int, default=17)
-p.add_argument("--stages", default="4,5")
-p.add_argument("--stage_iterations", type=int, default=400)
-p.add_argument("--save_interval", type=int, default=50)
+p.add_argument("--stages", default="6")
+p.add_argument(
+    "--trajectory-shape",
+    "--trajectory_shape",
+    "--path-family",
+    dest="trajectory_shape",
+    default="",
+    help="Train every environment on one cutter tracking-line shape.",
+)
+p.add_argument(
+    "--trajectory-shapes",
+    "--trajectory_shapes",
+    "--path-families",
+    dest="trajectory_shapes",
+    default="",
+    help="Comma-separated shapes, or 'all', distributed across environments.",
+)
+p.add_argument(
+    "--stage-iterations",
+    "--stage_iterations",
+    dest="stage_iterations",
+    type=int,
+    default=400,
+)
+p.add_argument(
+    "--save-interval",
+    "--save_interval",
+    dest="save_interval",
+    type=int,
+    default=50,
+)
+p.add_argument(
+    "--num-steps-per-env",
+    "--num_steps_per_env",
+    dest="num_steps_per_env",
+    type=int,
+    default=None,
+    help="PPO rollout length; default uses the runner configuration.",
+)
 p.add_argument("--learning_rate", type=float, default=None)
 p.add_argument("--entropy_coef", type=float, default=None)
+p.add_argument(
+    "--gamma",
+    type=float,
+    default=None,
+    help="GAE discount factor. The recovery probe uses 0.97 for the long 2 km/h episode.",
+)
+p.add_argument(
+    "--lam",
+    type=float,
+    default=None,
+    help="GAE lambda. Leave at the task default unless running a planned ablation.",
+)
+p.add_argument(
+    "--demo_regularized",
+    action="store_true",
+    help=(
+        "Keep the DLS teacher in label-only mode on policy-visited states and "
+        "add filtered demonstration loss plus KL to the frozen prior. The "
+        "teacher never executes; PPO remains the sole plant controller."
+    ),
+)
+p.add_argument(
+    "--trajectory_regularized",
+    action="store_true",
+    help=(
+        "Use one PPO optimizer step containing reward PPO, forward Gaussian "
+        "KL to a frozen copy of the resumed warm actor, and strict future "
+        "disagreement credit. The reference never executes and DLS stays off."
+    ),
+)
+p.add_argument(
+    "--trajectory_local_coef",
+    type=float,
+    default=0.05,
+    help="Forward reference-KL coefficient for --trajectory_regularized.",
+)
+p.add_argument(
+    "--trajectory_future_coef",
+    type=float,
+    default=0.0,
+    help="Optional future-disagreement coefficient; production keeps this off.",
+)
+p.add_argument(
+    "--trajectory_max_update_kl",
+    type=float,
+    default=0.01,
+    help="Maximum old-policy to new-policy KL; larger updates are rolled back atomically.",
+)
+p.add_argument(
+    "--trajectory_max_reference_kl",
+    type=float,
+    default=0.05,
+    help="Maximum frozen-reference to live-policy KL before atomic rollback.",
+)
+p.add_argument(
+    "--trajectory_clip_param",
+    type=float,
+    default=0.10,
+    help="PPO ratio/value clip used by trajectory-regularized PPO.",
+)
+p.add_argument(
+    "--trajectory_learning_epochs",
+    type=int,
+    default=3,
+    help="PPO epochs per rollout for trajectory-regularized PPO.",
+)
+p.add_argument(
+    "--trajectory_actor_learning_rate",
+    type=float,
+    default=1.0e-5,
+    help="Fixed actor learning rate for trajectory-regularized PPO.",
+)
+p.add_argument(
+    "--trajectory_critic_learning_rate",
+    type=float,
+    default=1.0e-4,
+    help="Fixed critic learning rate; warmed Adam moments are preserved.",
+)
+p.add_argument(
+    "--demo_lambda",
+    type=float,
+    default=0.25,
+    help="Filtered demonstration-loss weight for --demo_regularized.",
+)
+p.add_argument(
+    "--demo_kl_beta",
+    type=float,
+    default=0.02,
+    help="Frozen-prior Gaussian KL weight for --demo_regularized.",
+)
+p.add_argument(
+    "--demo_max_kl",
+    type=float,
+    default=0.25,
+    help=(
+        "Hard post-update KL cap to the frozen distilled prior. A positive "
+        "value projects an actor update back toward the prior when the "
+        "penalty alone is insufficient."
+    ),
+)
+p.add_argument(
+    "--demo_lateral_threshold",
+    type=float,
+    default=0.10,
+    help="Only weak/off-contact policy states receive teacher imitation.",
+)
 p.add_argument(
     "--desired_kl",
     type=float,
@@ -54,6 +187,15 @@ p.add_argument(
     "Without it the entropy bonus can inflate std without limit.",
 )
 p.add_argument("--init_std", type=float, default=None)
+p.add_argument(
+    "--fixed_std",
+    type=float,
+    default=None,
+    help=(
+        "Set every Gaussian action std to this value after resume and remove "
+        "the std parameter from gradient updates."
+    ),
+)
 p.add_argument("--resume", default=None, help="66x4 checkpoint to resume from.")
 p.add_argument(
     "--from_scratch",
@@ -64,6 +206,15 @@ p.add_argument(
     "--reset_optimizer_on_resume",
     action="store_true",
     help="Load actor/critic weights but discard stale PPO optimizer moments.",
+)
+p.add_argument(
+    "--reset_actor_optimizer_on_resume",
+    action="store_true",
+    help=(
+        "Discard only actor Adam moments after loading a checkpoint. Use when "
+        "an accepted checkpoint becomes a new frozen-reference block; critic "
+        "weights and optimizer calibration are retained."
+    ),
 )
 p.add_argument(
     "--reset_critic_head_on_resume",
@@ -98,16 +249,15 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--obs_normalizer",
+    choices=("freeze", "adapt"),
+    default="freeze",
+    help="Freeze when continuing the selected policy; adapt is an ablation.",
+)
+p.add_argument(
     "--task",
     default="",
-    help=(
-        "Gym task to train. Empty = PPO3_1 (ROM-A). Set "
-        "RRLAB-Mulag-Verge-IDFD-v0 for the ID/FD pipeline. WITHOUT this "
-        "the script builds PPO3_1's ROM task regardless of which checkpoint is "
-        "resumed -- measured 2026-08-06, an ID/FD-distilled student was "
-        "silently fine-tuned on the ROM plant and the run manifest read "
-        "actuator=rom. The actuator assertion below now refuses that."
-    ),
+    help="Gym task override; empty selects the final PPO-ROM task.",
 )
 p.add_argument("--checkpoint_out", default="")
 p.add_argument("--log_dir", default="")
@@ -130,7 +280,15 @@ p.add_argument(
 )
 p.add_argument("--convergence_check_interval", type=int, default=50)
 p.add_argument("--convergence_steps", type=int, default=300)
-p.add_argument("--vehicle_speed_kmh", type=float, default=4.0)
+p.add_argument(
+    "--vehicle_speed_kmh",
+    type=float,
+    default=None,
+    help=(
+        "Pin one scripted truck speed. If omitted, PPO-ROM keeps the task's "
+        "2--7 km/h per-episode range."
+    ),
+)
 p.add_argument(
     "--vehicle_speed_min_kmh",
     type=float,
@@ -143,15 +301,64 @@ p.add_argument(
     "scripts stay pinned at their own speed and are unaffected.",
 )
 p.add_argument("--vehicle_speed_max_kmh", type=float, default=None)
+p.add_argument(
+    "--vehicle_speed_sampling",
+    choices=("uniform", "active_time_balanced"),
+    default="uniform",
+    help=(
+        "Episode reset distribution. active_time_balanced uses p(v) proportional "
+        "to v to offset the shorter active path duration of faster replicas."
+    ),
+)
+p.add_argument(
+    "--speed_segment_duration_s",
+    type=float,
+    default=0.0,
+    help=(
+        "Training-only equal-duration path segment. Zero keeps the full 26 m "
+        "deployment episode used by evaluation."
+    ),
+)
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
+
+try:
+    selected_shapes = parse_trajectory_shapes(
+        single=a.trajectory_shape, multiple=a.trajectory_shapes
+    )
+    require_enough_environments(selected_shapes, a.num_envs)
+except ValueError as exc:
+    p.error(str(exc))
 
 stages = tuple(int(part) for part in a.stages.split(",") if part.strip())
 if not stages or any(stage not in (1, 2, 3, 4, 5, 6) for stage in stages):
     p.error("--stages must be a comma-separated subset of 1,2,3,4,5,6")
 if a.resume and a.from_scratch:
     p.error("--resume and --from_scratch are mutually exclusive")
+if a.demo_regularized and a.trajectory_regularized:
+    p.error("--demo_regularized and --trajectory_regularized are mutually exclusive")
+if a.reset_actor_optimizer_on_resume and not a.trajectory_regularized:
+    p.error("--reset_actor_optimizer_on_resume requires --trajectory_regularized")
+if a.trajectory_regularized and not a.resume:
+    p.error("--trajectory_regularized requires a resumed warm reference checkpoint")
+if a.trajectory_regularized:
+    if min(a.trajectory_local_coef, a.trajectory_future_coef) < 0.0:
+        p.error("trajectory coefficients must be non-negative")
+    if a.trajectory_local_coef == 0.0 and a.trajectory_future_coef == 0.0:
+        p.error("at least one trajectory coefficient must be positive")
+    if min(a.trajectory_max_update_kl, a.trajectory_max_reference_kl) <= 0.0:
+        p.error("trajectory KL limits must be positive")
+    if not 0.0 < a.trajectory_clip_param < 1.0:
+        p.error("--trajectory_clip_param must be in (0, 1)")
+    if a.trajectory_learning_epochs <= 0:
+        p.error("--trajectory_learning_epochs must be positive")
+    if min(a.trajectory_actor_learning_rate, a.trajectory_critic_learning_rate) <= 0.0:
+        p.error("trajectory actor/critic learning rates must be positive")
+if a.fixed_std is not None and a.fixed_std <= 0.0:
+    p.error("--fixed_std must be positive")
+if a.fixed_std is not None and a.std_clamp is not None:
+    p.error("--fixed_std and --std_clamp are mutually exclusive")
 if (a.vehicle_speed_min_kmh is None) != (a.vehicle_speed_max_kmh is None):
     p.error(
         "--vehicle_speed_min_kmh and --vehicle_speed_max_kmh must be given "
@@ -160,16 +367,9 @@ if (a.vehicle_speed_min_kmh is None) != (a.vehicle_speed_max_kmh is None):
 if a.vehicle_speed_min_kmh is not None:
     if not 0.0 < a.vehicle_speed_min_kmh <= a.vehicle_speed_max_kmh:
         p.error("truck speed range must satisfy 0 < min <= max")
+if a.speed_segment_duration_s < 0.0:
+    p.error("--speed_segment_duration_s must be non-negative")
 if a.until_converged:
-    # `convergence_rollout` scores verge_task.terrain_convergence, the
-    # LEGACY 26-gate contract -- not PPO_ROM.gates. Three of its
-    # thresholds are above anything this plant has ever produced, the
-    # privileged DLS teacher included: ground_contact 0.90 and worst-family
-    # 0.85 against a teacher that measures 0.75-0.81, and hard_impacts as a
-    # raw EVENT COUNT bounded at 0. Re-deriving those three from the
-    # achievable band is exactly what gates.py exists to record. So this stop
-    # condition cannot fire, `model_converged.pt` is never written, and the
-    # run silently becomes "train forever". Refuse rather than burn the GPU.
     raise SystemExit(
         "--until_converged scores the legacy 26-gate contract, whose "
         "ground_contact 0.90 / worst_family_contact 0.85 / "
@@ -205,9 +405,6 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 import PPO_ROM  # noqa: F401,E402  (registers the gym task)
 
-# Resolve the task and its actuator HERE, at module scope: main() validates the
-# resumed checkpoint before it builds the env, so a resolution placed further
-# down is read before it is assigned (UnboundLocalError, caught 2026-08-06).
 if a.task.startswith("RRLAB-Mulag-Verge-IDFD"):
     import importlib
 
@@ -231,6 +428,7 @@ from verge_task.terrain_observations import (  # noqa: E402
     override_cfg,
 )
 from verge_task.terrain_convergence import summarize_convergence  # noqa: E402
+from verge_task.actuators import resolve_actuator  # noqa: E402
 
 
 def apply_plant_overrides(cfg) -> None:
@@ -349,21 +547,28 @@ def main() -> None:
         infos = resume_payload.get("infos") or {}
         resume_source = str(infos.get("source", ""))
         schema = str(infos.get("schema", ""))
+        # "PPO4-1 terrain PPO" is what THIS script writes when --task selects the
+        # ID-FD env (see checkpoint_source below), so leaving it out meant the
+        # ID-FD pipeline could warm-start from the distilled student but never
+        # resume from its own output: the first run succeeded, and every retry
+        # after a failed gate died here in seconds while the supervisor kept
+        # re-scoring the same stale checkpoint in a loop.
+        #
+        # This allowlist is not what keeps a ROM policy out of an ID-FD run.
+        # `assert_checkpoint_actuator` immediately below compares the stored
+        # actuator against the task-derived EXPECTED_ACTUATOR and rejects the
+        # mismatch, and the observation/action widths are checked after that.
         if schema not in {"terrain_teacher_student_v1", "terrain_shared_v2"} or resume_source not in {
             "PPO3 terrain teacher distillation v1",
             "PPO3 terrain PPO",
             "PPO3-1 terrain PPO",
+            "PPO4-1 terrain PPO",
         }:
             raise RuntimeError(
                 "checkpoint is outside the supported ppo3_1 terrain contracts "
                 f"(source={resume_source!r}, schema={schema!r})"
             )
         teacher_handoff = resume_source == "PPO3 terrain teacher distillation v1"
-        # Refuse a checkpoint trained on a different actuator. Without this the
-        # script happily fine-tunes an ID/FD-distilled student on the ROM plant
-        # (measured 2026-08-06: run manifest read actuator=rom for a PPO4_1
-        # checkpoint). The two are structurally interchangeable -- same 66-wide
-        # observation, same 4-wide action -- so nothing else would catch it.
         from verge_task.actuators import assert_checkpoint_actuator
 
         assert_checkpoint_actuator(
@@ -395,39 +600,41 @@ def main() -> None:
                 f"match environment width {env_cfg.action_space}"
             )
     if a.vehicle_speed_min_kmh is not None:
-        # Per-EPISODE speed randomization, ported from the teacher_student
-        # repo's `random_driving_speed` (uniform draw, constant for the
-        # episode). That repo wrote the sample to the wheel joints; this asset
-        # is advanced kinematically (`_truck_travel_m += speed/3.6 * dt`) and
-        # its wheels will not drive it, so the same draw is applied to the
-        # kinematic speed instead. `_reset_idx` already redraws per episode
-        # from [min, max] -- previously a no-op because both bounds were the
-        # same number.
         env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_min_kmh)
         env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_max_kmh)
-        # The PPO2 obstacle task ALSO resamples every 10 steps mid-episode.
-        # That is a different contract: it would make the truck accelerate and
-        # decelerate under the arm within one rollout, which is not what the
-        # teacher_student regime does and would confound the tracking signal.
-        # Push the threshold past any episode so reset is the only resample.
         env_cfg.vehicle_speed_resample_step_threshold = 10**9
-    else:
+    elif a.vehicle_speed_kmh is not None:
         env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
         env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    env_cfg.vehicle_speed_per_episode = True
+    env_cfg.vehicle_speed_sampling = str(a.vehicle_speed_sampling)
+    env_cfg.vehicle_training_segment_duration_s = float(
+        a.speed_segment_duration_s
+    )
+    configure_path_horizon(env_cfg)
     env_cfg.terrain_base_seed = int(a.seed)
     configure_terrain_gpu_physx_memory(env_cfg, int(a.num_envs))
 
-    # Ppo31PPORunnerCfg, NOT TerrainC4AuthorityPPORunnerCfg: the merged config
-    # carries the Isaac Lab standard regime (lr 1e-3 ADAPTIVE, entropy 0.005,
-    # init_std 0.30). Instantiating the parent here silently trained at the old
-    # fine-tuning hyperparameters -- measured from a run manifest: lr 0.0003,
-    # entropy 0.001, i.e. exactly the regime the rebuild exists to replace.
-    from PPO_ROM.env_cfg import Ppo31PPORunnerCfg
-
-    runner_cfg = Ppo31PPORunnerCfg()
+    _, runner_cfg_cls, actuator_label = resolve_actuator(EXPECTED_ACTUATOR)
+    runner_cfg = runner_cfg_cls()
+    checkpoint_source = (
+        "PPO3-1 terrain PPO"
+        if EXPECTED_ACTUATOR == "rom"
+        else "PPO4-1 terrain PPO"
+    )
     runner_cfg.seed = int(a.seed)
     runner_cfg.max_iterations = int(a.stage_iterations)
     runner_cfg.save_interval = int(a.save_interval)
+    if a.num_steps_per_env is not None:
+        runner_cfg.num_steps_per_env = int(a.num_steps_per_env)
+    if a.gamma is not None:
+        if not 0.0 < a.gamma <= 1.0:
+            p.error("--gamma must satisfy 0 < gamma <= 1")
+        runner_cfg.algorithm.gamma = float(a.gamma)
+    if a.lam is not None:
+        if not 0.0 < a.lam <= 1.0:
+            p.error("--lam must satisfy 0 < lam <= 1")
+        runner_cfg.algorithm.lam = float(a.lam)
     if a.learning_rate is not None:
         runner_cfg.algorithm.learning_rate = float(a.learning_rate)
     if a.entropy_coef is not None:
@@ -436,18 +643,60 @@ def main() -> None:
         runner_cfg.algorithm.desired_kl = float(a.desired_kl)
     if a.init_std is not None:
         runner_cfg.actor.distribution_cfg.init_std = float(a.init_std)
+    if a.trajectory_regularized:
+        runner_cfg.algorithm.schedule = "fixed"
+        runner_cfg.algorithm.learning_rate = float(a.trajectory_critic_learning_rate)
+        runner_cfg.algorithm.clip_param = float(a.trajectory_clip_param)
+        runner_cfg.algorithm.num_learning_epochs = int(a.trajectory_learning_epochs)
 
     apply_c4_authority_stage(env_cfg, stages[0])
+    apply_trajectory_shapes(env_cfg, selected_shapes)
+    if a.speed_segment_duration_s > 0.0:
+        phases = (0.0, 0.25, 0.50, 0.75)
+        env_cfg.tracking_path_family_schedule = tuple(
+            family for phase in phases for family in selected_shapes
+        )
+        env_cfg.tracking_path_start_phase_schedule = tuple(
+            phase for phase in phases for _ in selected_shapes
+        )
     apply_plant_overrides(env_cfg)
-    # Deliberately NOT overridden here any more. This line used to re-impose
-    # (0.35 ... 1.15) on top of whatever the task config set, which would
-    # silently undo the feasibility-derived terrain in Ppo31SoleEnvCfg and put
-    # the run back on ground the plant cannot track. The task config owns this.
-    assert_teacher_disabled(env_cfg, context="PPO3-1 PPO training")
+    configure_path_horizon(env_cfg)
+    env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
+    env_cfg.randomize_trajectory_shape = False
+    env_cfg.randomize_start_phase = False
+    requested_speed_kmh = (
+        float(env_cfg.vehicle_speed_min_kmh),
+        float(env_cfg.vehicle_speed_max_kmh),
+    )
+    if a.demo_regularized:
+        env_cfg.sole_teacher_mode = "label"
+    else:
+        assert_teacher_disabled(env_cfg, context="PPO3-1 PPO training")
     env = gym.make(
         TASK_ID, cfg=env_cfg, render_mode=None
     )
     raw = env.unwrapped
+    built_speed_kmh = (
+        float(raw.cfg.vehicle_speed_min_kmh),
+        float(raw.cfg.vehicle_speed_max_kmh),
+    )
+    if any(
+        abs(built - want) > 1.0e-6
+        for built, want in zip(built_speed_kmh, requested_speed_kmh)
+    ):
+        raise RuntimeError(
+            "truck speed changed during env construction: requested "
+            f"{requested_speed_kmh} km/h, built {built_speed_kmh} km/h. The "
+            "deployment trajectory's truck_motion_mode overwrote it. Training "
+            "on a parked truck while distillation and acceptance drive is the "
+            "defect this check exists to stop."
+        )
+    print(
+        f"[PPO3-1-DRIVE] truck speed verified at {built_speed_kmh[0]:.2f}-"
+        f"{built_speed_kmh[1]:.2f} km/h after construction "
+        f"(trajectory={raw.cfg.trajectory_shape})",
+        flush=True,
+    )
     raw.reset(seed=int(a.seed))
     reset_obs = raw._get_observations()["policy"]
     if tuple(reset_obs.shape) != (raw.num_envs, int(raw.cfg.observation_space)):
@@ -472,19 +721,108 @@ def main() -> None:
         wrapped, runner_cfg.to_dict(), log_dir=str(log_dir), device=a.device
     )
 
+    def configure_trajectory_optimizer() -> None:
+        """Split actor/critic rates without discarding loaded Adam moments."""
+
+        old_optimizer = runner.alg.optimizer
+        if len(old_optimizer.param_groups) == 2:
+            old_optimizer.param_groups[0]["lr"] = float(a.trajectory_actor_learning_rate)
+            old_optimizer.param_groups[1]["lr"] = float(a.trajectory_critic_learning_rate)
+            runner.alg.learning_rate = float(a.trajectory_actor_learning_rate)
+            return
+        if len(old_optimizer.param_groups) != 1:
+            raise RuntimeError(
+                f"cannot split optimizer with {len(old_optimizer.param_groups)} parameter groups"
+            )
+
+        template = {
+            key: value
+            for key, value in old_optimizer.param_groups[0].items()
+            if key not in {"params", "lr"}
+        }
+        new_optimizer = type(old_optimizer)(
+            [
+                {
+                    "params": list(runner.alg.actor.parameters()),
+                    "lr": float(a.trajectory_actor_learning_rate),
+                },
+                {
+                    "params": list(runner.alg.critic.parameters()),
+                    "lr": float(a.trajectory_critic_learning_rate),
+                },
+            ]
+        )
+        for group in new_optimizer.param_groups:
+            group.update(template)
+        for parameter, state in old_optimizer.state.items():
+            new_optimizer.state[parameter] = state
+        runner.alg.optimizer = new_optimizer
+        runner.alg.learning_rate = float(a.trajectory_actor_learning_rate)
+
+    resume_infos_for_optimizer = (resume_payload or {}).get("infos") or {}
+    if a.trajectory_regularized and bool(
+        resume_infos_for_optimizer.get("trajectory_regularized", False)
+    ):
+        configure_trajectory_optimizer()
+
     startup_manifest = {
         "schema": "terrain_shared_v2",
         "actuator": EXPECTED_ACTUATOR,
-        "experiment": "ppo3_1_sole_c4_authority",
+        "actuator_label": actuator_label,
+        "task": TASK_ID,
+        "experiment": str(runner_cfg.experiment_name),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "log_dir": str(log_dir),
         "initialization_source": resume_source,
         "resume": str(resume_path) if resume_path is not None else None,
         "teacher_mode": str(raw.cfg.sole_teacher_mode),
+        "teacher_enabled_during_ppo": bool(a.demo_regularized),
+        "teacher_labels_enabled": bool(a.demo_regularized),
+        "teacher_execution_during_ppo": False,
+        "demo_regularized": bool(a.demo_regularized),
+        "demo_lambda": float(a.demo_lambda) if a.demo_regularized else None,
+        "demo_kl_beta": float(a.demo_kl_beta) if a.demo_regularized else None,
+        "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+        "demo_lateral_threshold": (
+            float(a.demo_lateral_threshold) if a.demo_regularized else None
+        ),
+        "trajectory_regularized": bool(a.trajectory_regularized),
+        "trajectory_reference": "frozen_resumed_warm_actor" if a.trajectory_regularized else None,
+        "trajectory_reference_checkpoint": (
+            str(resume_path) if a.trajectory_regularized and resume_path is not None else None
+        ),
+        "reset_actor_optimizer_on_resume": bool(a.reset_actor_optimizer_on_resume),
+        "trajectory_local_coef": (
+            float(a.trajectory_local_coef) if a.trajectory_regularized else None
+        ),
+        "trajectory_future_coef": (
+            float(a.trajectory_future_coef) if a.trajectory_regularized else None
+        ),
+        "trajectory_max_update_kl": (
+            float(a.trajectory_max_update_kl) if a.trajectory_regularized else None
+        ),
+        "trajectory_max_reference_kl": (
+            float(a.trajectory_max_reference_kl) if a.trajectory_regularized else None
+        ),
+        "trajectory_actor_learning_rate": (
+            float(a.trajectory_actor_learning_rate) if a.trajectory_regularized else None
+        ),
+        "trajectory_critic_learning_rate": (
+            float(a.trajectory_critic_learning_rate) if a.trajectory_regularized else None
+        ),
         "num_envs": int(raw.num_envs),
         "observation_width": int(raw.cfg.observation_space),
         "action_width": int(raw.cfg.action_space),
         "c4_authority": raw.c4_authority_report(),
+        "truck_speed_kmh": list(built_speed_kmh),
+        "vehicle_speed_sampling": str(
+            getattr(raw.cfg, "vehicle_speed_sampling", "uniform")
+        ),
+        "speed_segment_duration_s": float(
+            getattr(raw.cfg, "vehicle_training_segment_duration_s", 0.0)
+        ),
+        "trajectory_shape": str(raw.cfg.trajectory_shape),
+        "obs_normalizer": str(a.obs_normalizer),
         "path_families": sorted(set(raw._tracking_path_family_names)),
         "terrain_base_seed": int(raw._mow_strip_cfg().seed),
         "terrain_height_scales": sorted(
@@ -492,8 +830,14 @@ def main() -> None:
         ),
         "learning_rate": float(runner_cfg.algorithm.learning_rate),
         "entropy_coef": float(runner_cfg.algorithm.entropy_coef),
+        "gamma": float(runner_cfg.algorithm.gamma),
+        "lam": float(runner_cfg.algorithm.lam),
         "desired_kl": float(runner_cfg.algorithm.desired_kl),
+        "schedule": str(runner_cfg.algorithm.schedule),
+        "clip_param": float(runner_cfg.algorithm.clip_param),
+        "num_learning_epochs": int(runner_cfg.algorithm.num_learning_epochs),
         "std_clamp": list(std_clamp_bounds) if std_clamp_bounds else None,
+        "fixed_std": float(a.fixed_std) if a.fixed_std is not None else None,
         "freeze_actor_iterations": int(a.freeze_actor_iterations),
         "seed": int(a.seed),
         "stages": list(stages),
@@ -553,11 +897,37 @@ def main() -> None:
             for param_group in runner.alg.optimizer.param_groups:
                 param_group["lr"] = resumed_lr
             runner.alg.learning_rate = resumed_lr
+        else:
+            runner.alg.learning_rate = float(a.learning_rate)
+            for param_group in runner.alg.optimizer.param_groups:
+                param_group["lr"] = float(a.learning_rate)
+        if a.trajectory_regularized:
+            configure_trajectory_optimizer()
+            if a.reset_actor_optimizer_on_resume:
+                for parameter in runner.alg.actor.parameters():
+                    runner.alg.optimizer.state.pop(parameter, None)
+                print(
+                    "[PPO3-1-OPTIMIZER] reset actor moments at new reference block; "
+                    "critic moments retained",
+                    flush=True,
+                )
+            print(
+                "[PPO3-1-OPTIMIZER] fixed split rates: "
+                f"actor={a.trajectory_actor_learning_rate:g} "
+                f"critic={a.trajectory_critic_learning_rate:g}; loaded moments retained",
+                flush=True,
+            )
         print(f"[PPO3-1-SOLE] resumed from {a.resume}", flush=True)
         if teacher_handoff:
             print(
                 "[PPO3-1-TEACHER-HANDOFF] loaded actor+normalizer only; "
                 "teacher is off, critic and PPO optimizer are new",
+                flush=True,
+            )
+        if a.demo_regularized:
+            print(
+                "[PPO3-1-DEMO] label-only DLS teacher enabled for filtered "
+                "training targets; PPO remains the sole plant controller",
                 flush=True,
             )
     else:
@@ -573,37 +943,90 @@ def main() -> None:
             output_layer.bias.copy_(bias)
         print(f"[PPO3-1-VERGE] initialized actor action bias={bias.tolist()}", flush=True)
 
-    # ------------------------------------------------------------------
-    # Critic diagnostics: EXPLAINED VARIANCE, not raw value loss.
-    #
-    # Raw value loss is uninterpretable on its own because it scales with the
-    # square of the return magnitude. This task's per-step reward is ~11.7 and
-    # gamma is 0.99, so returns are ~1170 and a value loss of 16,000 is an RMS
-    # residual of 128 -- 11% of the return. Isaac Lab's locomotion tasks reward
-    # ~1.5/step, so their returns are ~150 and the SAME relative accuracy shows
-    # up as a value loss of ~260. Comparing our 16,000 against their ~10 and
-    # concluding the critic is broken is a units error, and it is the reasoning
-    # the "value loss stays 6k-26k" claim in the handover rests on.
-    #
-    # Explained variance is scale-free and answers the question that actually
-    # matters: 1 - Var(returns - values) / Var(returns).
-    #   ~0  the critic predicts nothing; advantages ARE noise (the claimed bug)
-    #   ~1  the critic explains the returns; residual is irreducible
-    # A high value loss with EV ~0.9 is a healthy critic on a large-reward task,
-    # and calls for no fix at all.
-    # NOTE: this name must stay distinct from the std-clamp wrapper's. Both
-    # wrappers rebind `runner.alg.update`, and a shared variable name would
-    # make the inner closure resolve to the outer wrapper at call time --
-    # infinite recursion on the first update.
+    if a.fixed_std is not None:
+        distribution = runner.alg.actor.distribution
+        if not hasattr(distribution, "std_param"):
+            raise RuntimeError(
+                f"--fixed_std requires scalar Gaussian std_param, got {type(distribution).__name__}"
+            )
+        with torch.no_grad():
+            distribution.std_param.fill_(float(a.fixed_std))
+        distribution.std_param.requires_grad_(False)
+        print(
+            f"[PPO3-1-STD] fixed every action std at {float(a.fixed_std):g}; "
+            "std is not trainable",
+            flush=True,
+        )
+
+    trajectory_reference_actor = None
+    if a.trajectory_regularized:
+        from verge_task.trajectory_regularized import (
+            ReferenceTrajectoryPPOCfg,
+            install_reference_trajectory_ppo,
+        )
+
+        trajectory_reference_actor = copy.deepcopy(runner.alg.actor).to(a.device)
+        trajectory_reference_actor.eval()
+        for parameter in trajectory_reference_actor.parameters():
+            parameter.requires_grad_(False)
+        install_reference_trajectory_ppo(
+            runner.alg,
+            trajectory_reference_actor,
+            ReferenceTrajectoryPPOCfg(
+                local_coef=float(a.trajectory_local_coef),
+                future_coef=float(a.trajectory_future_coef),
+                max_update_kl=float(a.trajectory_max_update_kl),
+                max_reference_kl=float(a.trajectory_max_reference_kl),
+            ),
+        )
+        print(
+            "[PPO3-1-TRAJECTORY] single-step reference PPO installed: "
+            f"local={a.trajectory_local_coef:g} future={a.trajectory_future_coef:g} "
+            f"update_kl<={a.trajectory_max_update_kl:g} "
+            f"reference_kl<={a.trajectory_max_reference_kl:g}; "
+            "DLS off, PPO sole controller",
+            flush=True,
+        )
+
+    demo_prior_actor = None
+    demo_teacher_steps: list[torch.Tensor] = []
+    demo_weight_steps: list[torch.Tensor] = []
+    if a.demo_regularized:
+        from verge_task.demo_regularized import (
+            demo_loss,
+            gaussian_kl,
+            state_filter,
+        )
+
+        demo_prior_actor = copy.deepcopy(runner.alg.actor).to(a.device)
+        demo_prior_actor.eval()
+        for parameter in demo_prior_actor.parameters():
+            parameter.requires_grad_(False)
+
+        original_process_env_step = runner.alg.process_env_step
+
+        def process_env_step_with_demo(obs, rewards, dones, extras):
+            demo_teacher_steps.append(raw.terrain_teacher_raw_action.detach().clone())
+            demo_weight_steps.append(
+                state_filter(
+                    lateral_error_m=raw.verge_lateral_error().detach(),
+                    ground_contact=raw.cutter_ground_contact().detach(),
+                    lateral_threshold_m=float(a.demo_lateral_threshold),
+                    require_contact=True,
+                )
+            )
+            return original_process_env_step(obs, rewards, dones, extras)
+
+        runner.alg.process_env_step = process_env_step_with_demo
+        print(
+            "[PPO3-1-DEMO] collecting policy-visited teacher labels with "
+            "state/contact filtering; teacher execution remains disabled",
+            flush=True,
+        )
+
     undiagnosed_alg_update = runner.alg.update
 
     def update_with_diagnostics(*args, **kwargs):
-        # Read the storage BEFORE update() consumes it. `compute_returns` has
-        # already run by this point in `runner.learn`, so returns are final.
-        #
-        # Every part of this is wrapped: an instrument must never be able to
-        # kill the run it is measuring. A diagnostic that crashes at iteration
-        # 400 of 600 would cost more than the diagnostic is worth.
         stats = None
         try:
             storage = runner.alg.storage
@@ -622,22 +1045,6 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 - never fail the training step
             print(f"[PPO3-1-DIAG] skipped: {exc}", flush=True)
 
-        # ONE-TIME CRITIC BIAS WARM-START.
-        #
-        # `teacher_handoff` zeroes the critic's output head, so the critic
-        # starts predicting 0 while returns average ~121. Adam at lr 3e-4 moves
-        # that output by only ~0.36 per iteration (measured), so reaching the
-        # right magnitude takes ~340 iterations of pure ramp -- the frozen
-        # window would end with the critic still predicting near zero, and the
-        # actor would unfreeze onto exactly the noise-dominated advantages the
-        # warm-up exists to prevent. Measured before this fix: value loss
-        # 19,806 against a return variance of only 5,878, i.e. the error is
-        # dominated by a constant offset, not by unexplained variance.
-        #
-        # Setting the output bias to the observed mean return skips the ramp
-        # entirely and leaves the critic only the part it should be learning:
-        # the variance. This is standard value-function initialization, and the
-        # data needed is already in the storage we just read.
         if stats is not None and not update_with_diagnostics.bias_initialized:
             update_with_diagnostics.bias_initialized = True
             try:
@@ -645,16 +1052,6 @@ def main() -> None:
                 if isinstance(head, torch.nn.Linear) and head.bias is not None:
                     before = float(head.bias.detach().mean())
                     if abs(before) < 1.0e-6:  # only when it really was zeroed
-                        # Target the TRUE value-function fixed point, not the
-                        # return currently in storage. With a zeroed critic,
-                        # GAE bootstraps off V=0, so the stored return is only
-                        # r/(1 - gamma*lam) -- measured 100 here against a true
-                        # V* of ~1160, a 12x underestimate. Seeding the bias
-                        # with it left the critic still ramping (returns had
-                        # only reached 222 after 26 iterations and were still
-                        # climbing), which is the same slow ramp in miniature.
-                        # The reward stream gives the fixed point directly:
-                        #   V* = E[r] / (1 - gamma)
                         gamma = float(runner.alg.gamma)
                         mean_reward = float(runner.alg.storage.rewards.mean())
                         target = mean_reward / max(1.0 - gamma, 1.0e-6)
@@ -673,10 +1070,6 @@ def main() -> None:
 
         result = undiagnosed_alg_update(*args, **kwargs)
 
-        # The writer lives on runner.logger, NOT on runner. A plain
-        # getattr(runner, "writer", None) returns None and drops every stat
-        # with no exception and no log line -- the diagnostic appears to be
-        # running while writing nothing, which is worse than not having it.
         writer = getattr(getattr(runner, "logger", None), "writer", None) or getattr(
             runner, "writer", None
         )
@@ -688,8 +1081,6 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[PPO3-1-DIAG] write skipped: {exc}", flush=True)
         elif stats and not update_with_diagnostics.warned:
-            # Say so once, loudly, rather than producing a run with a silently
-            # missing metric that only shows up as a blank section at 3am.
             update_with_diagnostics.warned = True
             print(
                 "[PPO3-1-DIAG] WARNING: no TensorBoard writer found; "
@@ -730,13 +1121,144 @@ def main() -> None:
             flush=True,
         )
 
+    if a.demo_regularized:
+        original_alg_update_with_demo = runner.alg.update
+
+        def update_with_demo_regularization(*args, **kwargs):
+            storage = runner.alg.storage
+            rollout_observations = storage.observations.clone()
+            teacher_steps = list(demo_teacher_steps)
+            weight_steps = list(demo_weight_steps)
+            demo_teacher_steps.clear()
+            demo_weight_steps.clear()
+
+            result = original_alg_update_with_demo(*args, **kwargs)
+            if (
+                demo_prior_actor is None
+                or not teacher_steps
+                or len(teacher_steps) != int(storage.num_transitions_per_env)
+                or not any(parameter.requires_grad for parameter in runner.alg.actor.parameters())
+            ):
+                return result
+
+            teacher_actions = torch.stack(teacher_steps, dim=0).flatten(0, 1)
+            weights = torch.stack(weight_steps, dim=0).flatten(0, 1)
+            observations = rollout_observations.flatten(0, 1)
+
+            runner.alg.actor(observations, stochastic_output=True)
+            policy_mean = runner.alg.actor.distribution.mean
+            with torch.no_grad():
+                demo_prior_actor(observations, stochastic_output=True)
+                prior_mean = demo_prior_actor.distribution.mean
+                prior_std = demo_prior_actor.distribution.std
+            current_std = runner.alg.actor.distribution.std
+            filtered_demo = demo_loss(
+                policy_mean=policy_mean,
+                teacher_action=teacher_actions,
+                weights=weights,
+            )
+            prior_kl = gaussian_kl(
+                mean_q=policy_mean,
+                std_q=current_std,
+                mean_p=prior_mean,
+                std_p=prior_std,
+            )
+            regularizer = (
+                float(a.demo_lambda) * filtered_demo
+                + float(a.demo_kl_beta) * prior_kl
+            )
+            runner.alg.optimizer.zero_grad()
+            regularizer.backward()
+            torch.nn.utils.clip_grad_norm_(
+                runner.alg.actor.parameters(), runner.alg.max_grad_norm
+            )
+            runner.alg.optimizer.step()
+            if std_clamp_bounds is not None:
+                with torch.no_grad():
+                    runner.alg.actor.distribution.std_param.clamp_(*std_clamp_bounds)
+
+            pre_projection_kl = float(prior_kl.detach())
+            post_projection_kl = prior_kl.detach()
+            projection_alpha = 0.0
+            max_demo_kl = float(a.demo_max_kl)
+            if max_demo_kl > 0.0 and pre_projection_kl > max_demo_kl:
+                current_parameters = {
+                    name: parameter.detach().clone()
+                    for name, parameter in runner.alg.actor.named_parameters()
+                }
+                prior_parameters = dict(demo_prior_actor.named_parameters())
+                if set(current_parameters) != set(prior_parameters):
+                    raise RuntimeError(
+                        "frozen prior and live actor parameters do not match "
+                        "for the demonstration trust-region projection"
+                    )
+
+                def set_blend(alpha: float) -> None:
+                    with torch.no_grad():
+                        for name, parameter in runner.alg.actor.named_parameters():
+                            parameter.copy_(
+                                (1.0 - alpha) * current_parameters[name]
+                                + alpha * prior_parameters[name]
+                            )
+
+                def measure_prior_kl() -> torch.Tensor:
+                    with torch.no_grad():
+                        runner.alg.actor(observations, stochastic_output=True)
+                        current_mean_now = runner.alg.actor.distribution.mean
+                        current_std_now = runner.alg.actor.distribution.std
+                        demo_prior_actor(observations, stochastic_output=True)
+                        prior_mean_now = demo_prior_actor.distribution.mean
+                        prior_std_now = demo_prior_actor.distribution.std
+                        return gaussian_kl(
+                            mean_q=current_mean_now,
+                            std_q=current_std_now,
+                            mean_p=prior_mean_now,
+                            std_p=prior_std_now,
+                        ).detach()
+
+                lo, hi = 0.0, 1.0
+                for _ in range(12):
+                    mid = 0.5 * (lo + hi)
+                    set_blend(mid)
+                    if float(measure_prior_kl()) > max_demo_kl:
+                        lo = mid
+                    else:
+                        hi = mid
+                set_blend(hi)
+                projection_alpha = hi
+                post_projection_kl = measure_prior_kl()
+
+            result = dict(result)
+            result.update(
+                {
+                    "demo": float(filtered_demo.detach()),
+                    "demo_kl": float(post_projection_kl),
+                    "demo_kl_pre_projection": pre_projection_kl,
+                    "demo_projection_alpha": projection_alpha,
+                    "demo_weight_fraction": float(weights.mean().detach()),
+                }
+            )
+            return result
+
+        runner.alg.update = update_with_demo_regularization
+        print(
+            f"[PPO3-1-DEMO] regularizer active: lambda={float(a.demo_lambda):g} "
+            f"beta={float(a.demo_kl_beta):g} "
+            f"max_kl={float(a.demo_max_kl):g} "
+            f"lateral_threshold={float(a.demo_lateral_threshold):g}m",
+            flush=True,
+        )
+
     original_runner_save = runner.save
 
     def save_with_terrain_provenance(path: str, infos=None) -> None:
         checkpoint_infos = {
-            "source": "PPO3-1 terrain PPO",
+            "source": checkpoint_source,
             "schema": "terrain_shared_v2",
             "actuator": EXPECTED_ACTUATOR,
+            "actuator_label": actuator_label,
+            "task": TASK_ID,
+            "experiment": str(runner_cfg.experiment_name),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "iteration": int(runner.current_learning_iteration),
             "num_envs": int(raw.num_envs),
@@ -745,7 +1267,43 @@ def main() -> None:
             "head_joint_action": bool(raw.cfg.sole_head_joint_action),
             "c4_authority": raw.c4_authority_report(),
             "initialization_source": resume_source,
-            "teacher_enabled_during_ppo": False,
+            # Empty on a healthy resume; non-empty records that this run had to
+            # widen a frozen input statistic the resumed policy shipped with.
+            "normalizer_repairs": list(_normalizer_repairs),
+            "teacher_enabled_during_ppo": bool(a.demo_regularized),
+            "teacher_labels_enabled": bool(a.demo_regularized),
+            "teacher_execution_during_ppo": False,
+            "demo_regularized": bool(a.demo_regularized),
+            "demo_lambda": float(a.demo_lambda) if a.demo_regularized else None,
+            "demo_kl_beta": float(a.demo_kl_beta) if a.demo_regularized else None,
+            "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+            "trajectory_regularized": bool(a.trajectory_regularized),
+            "trajectory_reference": (
+                "frozen_resumed_warm_actor" if a.trajectory_regularized else None
+            ),
+            "trajectory_local_coef": (
+                float(a.trajectory_local_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_future_coef": (
+                float(a.trajectory_future_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_update_kl": (
+                float(a.trajectory_max_update_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_reference_kl": (
+                float(a.trajectory_max_reference_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_actor_learning_rate": (
+                float(a.trajectory_actor_learning_rate) if a.trajectory_regularized else None
+            ),
+            "trajectory_critic_learning_rate": (
+                float(a.trajectory_critic_learning_rate) if a.trajectory_regularized else None
+            ),
+            "gamma": float(runner.alg.gamma),
+            "lam": float(runner.alg.lam),
+            "schedule": str(runner.alg.schedule),
+            "clip_param": float(runner.alg.clip_param),
+            "fixed_std": float(a.fixed_std) if a.fixed_std is not None else None,
             "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "terrain_base_seed": int(raw._mow_strip_cfg().seed),
             "path_families": sorted(set(raw._tracking_path_family_names)),
@@ -758,6 +1316,79 @@ def main() -> None:
         original_runner_save(path, infos=checkpoint_infos)
 
     runner.save = save_with_terrain_provenance
+
+    def observation_normalizers() -> list:
+        """Every EmpiricalNormalization the actor and critic own."""
+        return [
+            mod
+            for owner in (runner.alg.actor, runner.alg.critic)
+            for mod in owner.modules()
+            if type(mod).__name__ == "EmpiricalNormalization"
+        ]
+
+    _frozen_normalizers = observation_normalizers() if a.obs_normalizer == "freeze" else []
+    _normalizer_snapshot = None
+    # Only the freeze path can inherit a stale statistic; `adapt` re-estimates.
+    _normalizer_repairs: list[str] = []
+    if _frozen_normalizers:
+        from verge_task.trajectory_regularized import (
+            assert_normalizers_unchanged,
+            freeze_normalizers_across_train_mode,
+            reseed_frozen_speed_normalizer,
+        )
+
+        # Repair BEFORE the snapshot: a normalizer resumed from a fixed-speed
+        # run encodes that speed as a zero-variance constant, and freezing it
+        # over a randomized range multiplies the channel by 100 rather than
+        # normalizing it.  Once snapshotted, the drift guard would preserve the
+        # damage for the whole run.
+        _normalizer_repairs = reseed_frozen_speed_normalizer(
+            runner.alg,
+            float(raw.cfg.vehicle_speed_min_kmh),
+            float(raw.cfg.vehicle_speed_max_kmh),
+        )
+        for _repair in _normalizer_repairs:
+            print(f"[PPO3-1-NORM] reseeded {_repair}", flush=True)
+        if not _normalizer_repairs:
+            print(
+                "[PPO3-1-NORM] resumed normalizer already covers the sampled "
+                "speed range; no reseed needed",
+                flush=True,
+            )
+
+        _normalizer_snapshot = freeze_normalizers_across_train_mode(runner.alg)
+        update_before_normalizer_guard = runner.alg.update
+
+        def update_with_frozen_normalizer_guard(*args, **kwargs):
+            assert_normalizers_unchanged(
+                _normalizer_snapshot, runner.alg.actor, runner.alg.critic
+            )
+            result = update_before_normalizer_guard(*args, **kwargs)
+            assert_normalizers_unchanged(
+                _normalizer_snapshot, runner.alg.actor, runner.alg.critic
+            )
+            counts = [float(module.count) for module in _frozen_normalizers]
+            result = dict(result)
+            result["normalizer_actor_count"] = counts[0] if counts else 0.0
+            result["normalizer_critic_count"] = counts[1] if len(counts) > 1 else 0.0
+            result["normalizer_drift"] = 0.0
+            return result
+
+        runner.alg.update = update_with_frozen_normalizer_guard
+    if _frozen_normalizers:
+        print(
+            f"[PPO3-1-NORM] froze {len(_frozen_normalizers)} observation "
+            "normalizer(s) for the ENTIRE run; the running mean/std are part of "
+            "the resumed policy, not statistics to re-estimate",
+            flush=True,
+        )
+    else:
+        print(
+            "[PPO3-1-NORM] observation normalizer left ADAPTING -- ablation "
+            "only; this is the configuration measured to degrade a distilled "
+            "actor with no meaningful weight change",
+            flush=True,
+        )
 
     def critic_warmup(freeze: int) -> None:
         """Critic warm-up with a frozen actor.
@@ -781,27 +1412,7 @@ def main() -> None:
         base_lr = float(runner.alg.learning_rate)
         runner.alg.schedule = "fixed"
         runner.alg.actor.requires_grad_(False)
-        # FREEZE THE OBSERVATION NORMALIZER TOO. requires_grad_(False) stops the
-        # WEIGHTS moving, but the normalizer keeps adapting, and its statistics
-        # are part of the policy: the actor sees (obs - mean) / std, so a moving
-        # normalizer changes behaviour even with identical weights.
-        #
-        # Measured 2026-08-06, actor frozen throughout, lateral error per
-        # iteration:
-        #   ROM-A   0.034 0.039 0.037 0.030 ... 0.040   (frozen-window mean 0.0402)
-        #   ID/FD   0.093 0.163 0.313 0.469 ... 1.13    (frozen-window mean 0.6996)
-        # The same ID/FD checkpoint scores 0.0628 in evaluation, where the
-        # normalizer is held fixed. So the drift is the normalizer, and a
-        # "frozen" window that lets it move is not a controlled baseline -- the
-        # policy it hands to the fine-tune is not the policy that was measured.
-        # ID/FD is markedly more sensitive to this than ROM-A, which is itself a
-        # result worth keeping.
-        _norm_modules = [
-            mod
-            for owner in (runner.alg.actor, runner.alg.critic)
-            for mod in owner.modules()
-            if type(mod).__name__ == "EmpiricalNormalization"
-        ]
+        _norm_modules = observation_normalizers()
         for _mod in _norm_modules:
             _mod.eval()  # update() is a no-op unless self.training
         print(
@@ -811,9 +1422,74 @@ def main() -> None:
             flush=True,
         )
         runner.learn(num_learning_iterations=freeze, init_at_random_ep_len=False)
+        warmup_checkpoint = log_dir / "warmup_checkpoint.pt"
+        warmup_iteration = int(runner.current_learning_iteration)
+        resume_iteration = warmup_iteration + 1
+        warmup_metadata = {
+            "checkpoint_kind": "critic_warmup_complete",
+            "warmup_iterations": int(freeze),
+            "warmup_actor_frozen": True,
+            "warmup_iteration": int(resume_iteration),
+            "teacher_enabled_during_ppo": bool(a.demo_regularized),
+            "teacher_labels_enabled": bool(a.demo_regularized),
+            "teacher_execution_during_ppo": False,
+            "demo_regularized": bool(a.demo_regularized),
+            "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+            "trajectory_regularized": bool(a.trajectory_regularized),
+            "trajectory_reference": (
+                "frozen_resumed_warm_actor" if a.trajectory_regularized else None
+            ),
+            "trajectory_local_coef": (
+                float(a.trajectory_local_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_future_coef": (
+                float(a.trajectory_future_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_update_kl": (
+                float(a.trajectory_max_update_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_reference_kl": (
+                float(a.trajectory_max_reference_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_actor_learning_rate": (
+                float(a.trajectory_actor_learning_rate) if a.trajectory_regularized else None
+            ),
+            "trajectory_critic_learning_rate": (
+                float(a.trajectory_critic_learning_rate) if a.trajectory_regularized else None
+            ),
+            "schedule": str(runner.alg.schedule),
+            "clip_param": float(runner.alg.clip_param),
+            "fixed_std": float(a.fixed_std) if a.fixed_std is not None else None,
+            "gamma": float(runner.alg.gamma),
+            "lam": float(runner.alg.lam),
+        }
+        runner.current_learning_iteration = resume_iteration
+        try:
+            runner.save(str(warmup_checkpoint), infos=warmup_metadata)
+        finally:
+            runner.current_learning_iteration = warmup_iteration
+        (log_dir / "warmup_checkpoint.json").write_text(
+            json.dumps(
+                {
+                    **warmup_metadata,
+                    "checkpoint": str(warmup_checkpoint),
+                    "iteration": int(resume_iteration),
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        print(
+            f"[PPO3-1-WARMUP] saved resumable checkpoint {warmup_checkpoint} "
+            f"at resume boundary iteration {resume_iteration}",
+            flush=True,
+        )
         runner.alg.actor.requires_grad_(True)
-        for _mod in _norm_modules:
-            _mod.train()  # resume adapting once the actor is allowed to move
+        if a.obs_normalizer == "adapt":
+            for _mod in _norm_modules:
+                _mod.train()
         runner.alg.schedule = schedule
         runner.alg.learning_rate = base_lr
         for param_group in runner.alg.optimizer.param_groups:
@@ -830,12 +1506,22 @@ def main() -> None:
     for stage in stages:
         apply_c4_authority_stage(raw.cfg, stage)
         apply_plant_overrides(raw.cfg)
+        configure_path_horizon(raw.cfg)
         raw.cfg.trajectory_shape = str(raw.cfg.terrain_deployment_trajectory_shape)
         raw.cfg.randomize_trajectory_shape = False
         raw.cfg.randomize_start_phase = False
+        if float(raw.cfg.vehicle_speed_min_kmh) != requested_speed_kmh[0] or float(
+            raw.cfg.vehicle_speed_max_kmh
+        ) != requested_speed_kmh[1]:
+            raise RuntimeError(
+                f"stage {stage} changed the truck speed to "
+                f"({raw.cfg.vehicle_speed_min_kmh}, {raw.cfg.vehicle_speed_max_kmh})"
+                f" km/h; the run requested {requested_speed_kmh} km/h"
+            )
         print(
             f"[PPO3-1-VERGE] === stage {stage} === "
-            f"truck={raw.cfg.vehicle_speed_min_kmh:.2f} km/h "
+            f"truck={raw.cfg.vehicle_speed_min_kmh:.2f}-"
+            f"{raw.cfg.vehicle_speed_max_kmh:.2f} km/h per episode "
             f"c4_lead={raw.cfg.cylinder_target_max_lead_per_axis_m[3]:.3f} m "
             f"c4_scale={raw.cfg.cylinder_action_scale_per_axis_m[3]:.4f} m/unit "
             f"filter={raw.cfg.sole_action_filter:.2f} "
@@ -846,10 +1532,6 @@ def main() -> None:
             ),
             flush=True,
         )
-        # Warm-up runs at the start of the FIRST stage in both branches. The
-        # previous structure skipped it silently when the first stage was also
-        # the --until_converged final stage, which is precisely the production
-        # invocation (--stages 6 --until_converged).
         warmed_up = 0
         if stage == stages[0] and a.freeze_actor_iterations > 0:
             warmed_up = int(a.freeze_actor_iterations)
@@ -906,9 +1588,12 @@ def main() -> None:
         checkpoint_out = Path(a.checkpoint_out).expanduser().resolve()
         checkpoint_out.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_info = {
-            "source": "PPO3-1 terrain PPO",
+            "source": checkpoint_source,
             "schema": "terrain_shared_v2",
             "actuator": EXPECTED_ACTUATOR,
+            "actuator_label": actuator_label,
+            "task": TASK_ID,
+            "experiment": str(runner_cfg.experiment_name),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "iteration": int(runner.current_learning_iteration),
             "num_envs": int(raw.num_envs),
@@ -921,7 +1606,41 @@ def main() -> None:
             "head_joint_action": bool(raw.cfg.sole_head_joint_action),
             "c4_authority": raw.c4_authority_report(),
             "initialization_source": resume_source,
-            "teacher_enabled_during_ppo": False,
+            # Empty on a healthy resume; non-empty records that this run had to
+            # widen a frozen input statistic the resumed policy shipped with.
+            "normalizer_repairs": list(_normalizer_repairs),
+            "teacher_enabled_during_ppo": bool(a.demo_regularized),
+            "teacher_labels_enabled": bool(a.demo_regularized),
+            "teacher_execution_during_ppo": False,
+            "demo_regularized": bool(a.demo_regularized),
+            "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+            "trajectory_regularized": bool(a.trajectory_regularized),
+            "trajectory_reference": (
+                "frozen_resumed_warm_actor" if a.trajectory_regularized else None
+            ),
+            "trajectory_local_coef": (
+                float(a.trajectory_local_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_future_coef": (
+                float(a.trajectory_future_coef) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_update_kl": (
+                float(a.trajectory_max_update_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_max_reference_kl": (
+                float(a.trajectory_max_reference_kl) if a.trajectory_regularized else None
+            ),
+            "trajectory_actor_learning_rate": (
+                float(a.trajectory_actor_learning_rate) if a.trajectory_regularized else None
+            ),
+            "trajectory_critic_learning_rate": (
+                float(a.trajectory_critic_learning_rate) if a.trajectory_regularized else None
+            ),
+            "schedule": str(runner.alg.schedule),
+            "clip_param": float(runner.alg.clip_param),
+            "fixed_std": float(a.fixed_std) if a.fixed_std is not None else None,
+            "gamma": float(runner.alg.gamma),
+            "lam": float(runner.alg.lam),
             "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "terrain_base_seed": int(raw._mow_strip_cfg().seed),
             "path_families": sorted(set(raw._tracking_path_family_names)),

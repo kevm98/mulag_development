@@ -170,21 +170,7 @@ def test_head_penalty_is_the_same_order_as_the_task_not_triple_it():
     w = RewardWeights()
     assert w.task_total() == 22.0
     assert abs(w.head_alignment) < w.task_total()
-    # Tracking must not be outbiddable by planting the tool. NOTE this
-    # weight-level check is necessary but NOT sufficient, and on its own it did
-    # not prevent the trade: it held with room to spare at lateral 10.0 against
-    # contact's 4.0 + 6.0 = 10.0, while the policy still gave up the line.
-    #
-    # Comparing weights compares the wrong quantity. Contact's weight IS its
-    # marginal rate (the term is linear in the contact fraction), but lateral's
-    # weight is split across scales and divided by each, so its marginal rate
-    # was 10 * 0.6/1.50 = 4.0 per metre once the fine term saturated -- 2.5x
-    # weaker than the number this assertion was reading. The gradient-level
-    # check lives in test_lateral_outbids_contact_across_the_operating_band,
-    # which is the one that actually binds.
     assert w.lateral >= w.ground_contact + abs(w.contact_loss)
-    # Head is still the single largest penalty: it is a precondition, not a
-    # competing objective.
     for name in ("contact_loss", "action_rate", "tool_acceleration",
                  "contact_force", "cylinder_headroom"):
         assert abs(w.head_alignment) > abs(getattr(w, name))
@@ -193,7 +179,7 @@ def test_head_penalty_is_the_same_order_as_the_task_not_triple_it():
 def test_ten_terms_not_fifty_three():
     """Isaac Lab's locomotion task uses 11 reward terms. The old PPO3 cfg had 53."""
     terms = compute_reward(**_inputs(1))
-    assert len(terms.as_dict()) == 9  # nine shaped terms + termination handled by the env
+    assert len(terms.as_dict()) == 10  # ten shaped terms + termination handled by the env
 
 
 def test_shapes_are_monotone_so_better_always_scores_better():
@@ -252,3 +238,63 @@ def test_lateral_fine_term_stays_alive_to_twice_the_gate():
 
     w = RewardWeights()
     assert w.lateral_fine_scale_m >= 2.0 * GATES["lateral"].threshold
+
+
+def test_a_hard_impact_is_charged_at_all():
+    """The gate charged for impacts; the reward did not, so PPO doubled them.
+
+    Measured on the first correct stage-6 run: the hard-impact step fraction went
+    0.193 -> 0.536 between the distilled student and PPO iteration 250, while the
+    return ROSE 20.22 -> 20.63. The two terms paying for ground contact at the
+    right height contributed +9.96 over those steps and the only opposing term,
+    `contact_force`, contributed -0.026 -- an exchange rate of roughly 400:1 in
+    favour of slamming the cutter down.
+    """
+    quiet = compute_reward(**_inputs(1, cutter_contact=torch.ones(1, dtype=torch.bool)))
+    impacting = compute_reward(
+        **_inputs(1, cutter_contact=torch.ones(1, dtype=torch.bool)),
+        hard_impact=torch.ones(1, dtype=torch.bool),
+    )
+    assert float(impacting.total) < float(quiet.total)
+    assert float(impacting.hard_impact) == pytest.approx(RewardWeights().hard_impact)
+
+
+def test_the_impact_penalty_does_not_make_leaving_the_ground_attractive():
+    """The over-correction that would break the gate this reward must protect.
+
+    An impact penalty larger than the contact reward it opposes would teach the
+    policy to stay OFF the terrain, and `ground_contact` is an acceptance gate at
+    0.700 that the ROM student already only reaches 0.6208 on. So the penalty is
+    deliberately NOT set above the contact bonus: at the privileged teacher's
+    measured impact rate the in-contact policy must still be paid more than the
+    airborne one, or the fix for one gate is a regression in another.
+    """
+    weights = RewardWeights()
+    teacher_impact_rate = 0.2548
+    in_contact = weights.ground_contact + weights.hard_impact * teacher_impact_rate
+    off_ground = weights.contact_loss  # negative: full contact_loss, no bonus
+    assert in_contact > off_ground, (
+        f"in-contact pays {in_contact:.3f} against {off_ground:.3f} airborne; "
+        "|hard_impact| is high enough to make leaving the ground rational"
+    )
+
+
+def test_omitting_the_impact_signal_leaves_the_term_at_zero():
+    """`verge_task`'s reward path does not supply it, and must not crash."""
+    terms = compute_reward(**_inputs(3))
+    assert torch.equal(terms.hard_impact, torch.zeros(3))
+
+
+def test_impact_penalty_ranks_the_student_above_the_regressed_policy():
+    """The exact ranking the reward got wrong, at the measured impact rates.
+
+    Student 0.193 impacts with return 20.22; PPO@250 0.536 with return 20.63.
+    The penalty has to overturn PPO's +0.41 advantage.
+    """
+    weights = RewardWeights()
+    student = 20.22 + weights.hard_impact * 0.193
+    regressed = 20.63 + weights.hard_impact * 0.536
+    assert student > regressed, (
+        f"student {student:.3f} still ranks below the regressed policy "
+        f"{regressed:.3f}; |hard_impact| must exceed 0.41 / 0.343 = 1.2"
+    )

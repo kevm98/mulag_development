@@ -16,6 +16,10 @@ forward with the predicted state (RMA/PlaNet-style dynamic belief), while
 modes can be requested in one call so the comparisons are PAIRED per run:
 
 - ``true``: z_i = mu_psi(e_tilde_i), the privileged factor latent.
+- ``zhat``: z_i from ``--zhat-json``, an external AAM estimate. Stage-31
+  causal files are keyed by raw 60-Hz control ticks; the SD dataset is indexed
+  by 50-ms ROM rows, so this evaluator maps the rollout row through its
+  ``tick_control_step`` column before lookup. A legacy flat map is accepted.
 - ``zero``: z = 0 for every run (SD_z(s, u, 0)).
 - ``shuffled``: each held-out run receives a factor vector sampled without
   replacement from the TRAINING runs (fixed seed 22). This destroys pairing
@@ -91,6 +95,8 @@ def load_run(sd_root: Path, rid: int) -> dict | None:
     with np.load(path, allow_pickle=False) as z:
         meta = json.loads((sd_root / f"{int(rid):05d}" / "sample_meta.json").read_text())
         return {
+            "tick_control_step": z["tick_control_step"].astype(np.int64)
+            if "tick_control_step" in z.files else np.arange(len(z["s_h"]), dtype=np.int64),
             "s": z["s_h"].astype(np.float64),
             "u": z["u"].astype(np.float64),
             "q": z["q"].astype(np.float64),
@@ -120,7 +126,7 @@ def main() -> None:
     p.add_argument("--model-dir", required=True, help="train_sd_z.py output dir")
     p.add_argument(
         "--latent-mode",
-        choices=("true", "zero", "shuffled", "random", "mean", "nominal"),
+        choices=("true", "zhat", "zero", "shuffled", "random", "mean", "nominal"),
         nargs="+",
         default=["true"],
         help="which latents the SD_z rollout consumes; multiple modes are "
@@ -138,6 +144,21 @@ def main() -> None:
         "'hold-start' uses q at the rollout start for the whole horizon",
     )
     p.add_argument("--device", default="auto")
+    p.add_argument(
+        "--zhat-json",
+        default=None,
+        help="z_hat map required when --latent-mode includes 'zhat'; causal "
+        "AAM files are keyed by window-end tick",
+    )
+    p.add_argument(
+        "--zhat-timebase",
+        choices=("auto", "control_60hz", "rom_index"),
+        default="auto",
+        help=(
+            "interpretation of causal z_hat keys; auto reads the artifact "
+            "metadata and defaults to raw 60-Hz control ticks"
+        ),
+    )
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -146,6 +167,26 @@ def main() -> None:
         if args.device == "auto"
         else torch.device(args.device)
     )
+    zhat_map: dict[int, object] | None = None
+    zhat_history_lag: int | None = None
+    zhat_timebase = args.zhat_timebase
+    if "zhat" in args.latent_mode:
+        if not args.zhat_json:
+            raise SystemExit("--zhat-json is required for --latent-mode zhat")
+        raw = json.loads(Path(args.zhat_json).read_text())
+        if isinstance(raw, dict) and "by_run" in raw:
+            if str(raw.get("format", "")).endswith("zhat_by_window_end_tick_v1"):
+                zhat_history_lag = int(raw["lag_ticks"])
+            if zhat_timebase == "auto":
+                zhat_timebase = str(raw.get("tick_timebase", "control_60hz"))
+            raw = raw["by_run"]
+        if not isinstance(raw, dict):
+            raise SystemExit("--zhat-json must contain a run-id map")
+        zhat_map = {int(rid): value for rid, value in raw.items()}
+        if zhat_timebase == "auto":
+            zhat_timebase = "control_60hz"
+        if zhat_timebase not in ("control_60hz", "rom_index"):
+            raise SystemExit(f"unsupported z_hat timebase: {zhat_timebase!r}")
     model_dir = Path(args.model_dir)
     metrics = json.loads((model_dir / "metrics.json").read_text())
     latent_source = metrics.get("latent_source", "encoder")
@@ -214,6 +255,20 @@ def main() -> None:
     held = sorted(set(val_ids) | set(test_ids))
     split_of = {int(rid): ("val" if int(rid) in val_ids else "test") for rid in held}
 
+    if zhat_map is not None:
+        missing = [rid for rid in held if rid not in zhat_map]
+        if missing:
+            raise SystemExit(f"--zhat-json missing held-out runs: {missing[:8]}")
+        for rid, value in zhat_map.items():
+            values = value.values() if isinstance(value, dict) else (value,)
+            for tick_or_value in values:
+                z_value = np.asarray(tick_or_value, dtype=np.float64)
+                if z_value.shape != (latent_in,) or not np.isfinite(z_value).all():
+                    raise SystemExit(
+                        f"run {rid}: z_hat must contain finite vectors of shape "
+                        f"{(latent_in,)}, got {z_value.shape}"
+                    )
+
     # Precompute the per-run latent for each requested mode.
     @torch.no_grad()
     def encode(e: np.ndarray) -> torch.Tensor:
@@ -252,9 +307,32 @@ def main() -> None:
         )
     nominal_z = encode(NOMINAL_FACTORS) if "nominal" in args.latent_mode else None
 
-    def z_for(mode: str, rid: int, run: dict) -> torch.Tensor:
+    def zhat_key(run: dict, tick: int | None) -> str:
+        if tick is None:
+            raise SystemExit("causal z_hat lookup requires a rollout tick")
+        if zhat_timebase == "rom_index":
+            return str(int(tick))
+        control_ticks = np.asarray(run["tick_control_step"], dtype=np.int64)
+        if tick < 0 or tick >= len(control_ticks):
+            raise SystemExit(
+                f"z_hat lookup row {tick} is outside SD run length {len(control_ticks)}"
+            )
+        return str(int(control_ticks[tick]))
+
+    def z_for(mode: str, rid: int, run: dict, tick: int | None = None) -> torch.Tensor:
         if mode == "zero" or latent_source == "none":
             return torch.zeros(1, latent_in, dtype=torch.float32, device=device)
+        if mode == "zhat":
+            value = zhat_map[int(rid)]
+            if isinstance(value, dict):
+                key = zhat_key(run, tick)
+                if key not in value:
+                    raise SystemExit(
+                        f"run {rid}: causal z_hat missing key {key} for SD row {tick}; "
+                        f"timebase={zhat_timebase}"
+                    )
+                value = value[key]
+            return torch.as_tensor(value, dtype=torch.float32, device=device)[None, :]
         if mode == "mean":
             return mean_z
         if mode == "nominal":
@@ -298,6 +376,8 @@ def main() -> None:
         return belief.init_from_window(bn)
 
     offset = history_lag - 1 if use_belief else 0
+    if zhat_history_lag is not None:
+        offset = max(offset, zhat_history_lag - 1)
 
     # Per-mode per-run metrics, collected in one pass over the held-out runs.
     per_mode_run: dict[str, dict[int, dict]] = {
@@ -322,7 +402,8 @@ def main() -> None:
         split = split_of[int(rid)]
 
         for mode in args.latent_mode:
-            z = z_for(mode, rid, run)
+            causal_zhat = mode == "zhat" and isinstance(zhat_map[int(rid)], dict)
+            z = None if causal_zhat else z_for(mode, rid, run)
             # One-step (open loop) over valid rows, belief per-row windows.
             one_preds = []
             B = n - offset
@@ -344,8 +425,21 @@ def main() -> None:
                 s_keep = s[offset:][b][:, state_keep]
                 ub = u[offset:][b]
                 qb = q[offset:][b] if use_q else u[offset:][b][:, :0]
-                hb = h_all[b] if h_all is not None else None
-                d, _ = step(s_keep, ub, qb, hb, z)
+                if h_all is not None:
+                    belief_first_tick = history_lag - 1
+                    hb = h_all[offset - belief_first_tick:][b]
+                else:
+                    hb = None
+                if causal_zhat:
+                    tick_lo = offset + start
+                    tick_hi = offset + min(start + s_keep.shape[0], B)
+                    z_batch = torch.cat(
+                        [z_for(mode, rid, run, tick)
+                         for tick in range(tick_lo, tick_hi)], dim=0
+                    )
+                else:
+                    z_batch = z.expand(s_keep.shape[0], -1)
+                d, _ = step(s_keep, ub, qb, hb, z_batch)
                 one_preds.append(d.detach().cpu().numpy())
             one_pred = np.concatenate(one_preds, axis=0)
             one_rmse = group_rmse(run["target"][offset:], one_pred)
@@ -355,13 +449,14 @@ def main() -> None:
                 starts = [starts[i] for i in np.linspace(0, len(starts) - 1, args.max_starts, dtype=int)]
             run_h = {h: {c: [] for c in CHANNELS} for h in args.horizons}
             for start in starts:
+                z_rollout = z_for(mode, rid, run, start)
                 s_pred = s[start].clone()
                 h = init_belief(run["s"][:, state_keep], run["u"], start)
                 preds_h: dict[int, list[torch.Tensor]] = {h_lim: [] for h_lim in args.horizons}
                 for t in range(start, start + max(args.horizons)):
                     q_tick = q[t : t + 1] if args.q_rollout == "recorded" else q[start : start + 1]
                     d, h = step(s_pred[None, state_keep], u[t : t + 1],
-                                q_tick if use_q else u[t : t + 1, :0], h, z)
+                                q_tick if use_q else u[t : t + 1, :0], h, z_rollout)
                     for h_lim in args.horizons:
                         if t - start < h_lim:
                             preds_h[h_lim].append(d[0])
@@ -462,6 +557,7 @@ def main() -> None:
         "belief_dim": belief_dim,
         "history_lag": history_lag,
         "obs_drop": metrics.get("obs_drop", []),
+        "zhat_timebase": zhat_timebase if "zhat" in args.latent_mode else None,
         "q_rollout": args.q_rollout,
         "training_q_mode": training_q_mode,
         "control_construction": {

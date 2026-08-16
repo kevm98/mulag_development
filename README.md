@@ -7,29 +7,32 @@ disturbance, not the task.
 
 ---
 
-## The two pipelines
+## The active pipelines
 
-Both solve the **same task** with the same terrain, reward, observation (66),
-action (4) and eight-gate acceptance contract. They differ in **one thing**: what
-converts a cylinder command into motion.
+The first two solve the same task with the same terrain, reward, 66-value
+observation, four-action interface, and eight-gate contract. The AAM pipeline
+adds two causal latent values to the policy observation and keeps historical
+ID/FD as its safety fallback.
 
 | | pipeline | actuator | status |
 |---|---|---|---|
 | **[PPO_ROM](PPO_ROM/)** | ROM-A | policy → command ROM → PhysX | **CERTIFIED — all 8 gates, 6 meshes, no thin margins** |
-| **[PPO_ID_FD](PPO_ID_FD/)** | ID→FD | policy → ID (target→valve) → FD (valve→Δx) → PhysX | tracks 23% better, **fails ground_contact** |
+| **[PPO_ID_FD](PPO_ID_FD/)** | ID→FD | policy → ID (target→valve) → FD (valve→Δx) → PhysX | **PROMOTED — six-mesh selection pipeline** |
+| **[PPO_ID_AAM_FD](PPO_ID_AAM_FD/)** | causal AAM + ID adapter + FD | policy → AAM context → ID adapter → FD → PhysX | interface verified; nonzero adapter in safe shadow mode |
 
 Start with each pipeline's own README — they carry the results, the commands and
 the reasoning.
 
-### Head-to-head (6 held-out meshes, worst-mesh worst-family)
+### Head-to-head (historical comparison)
 
 | metric | ROM-A | ID→FD | gate |
 |---|---|---|---|
 | lateral error | 0.0817 m | **0.0628 m** | ≤ 0.300 |
-| ground contact | **0.7854** | 0.6882 **FAIL** | ≥ 0.700 |
-| meshes failing | **0 of 6** | 1 of 6 (mesh 555) | — |
+| ground contact | **0.7854** | 0.6882 (historical run) | ≥ 0.700 |
+| meshes failing | **0 of 6** | 1 of 6 (historical run) | — |
 
-ID→FD is the better *tracker*; ROM-A is the only one that meets the *contract*.
+The historical comparison predates the final wide-task ID-FD pipeline. Use
+`PPO_ID_FD/README.md` for the current validated commands and artifacts.
 
 ---
 
@@ -55,8 +58,9 @@ distilled student; fine-tune only if contact matters more than tracking.
 
 ### Pipelines (start here)
 
-    PPO_ROM/       ROM-A pipeline. The certified one.
-    PPO_ID_FD/     ID/FD pipeline. Subclasses PPO_ROM; only the actuator differs.
+    PPO_ROM/         ROM-A pipeline. The certified one.
+    PPO_ID_FD/       current ID/FD pipeline.
+    PPO_ID_AAM_FD/   causal online AAM + ID adapter + FD pipeline.
 
 ### Shared libraries (imported by the pipelines — not pipelines themselves)
 
@@ -75,10 +79,12 @@ because they are *shared*, not because they are old.
     rom_model/      ROM-A command ROM   -> PPO_ROM
       ROM_pipeline/                        model DEFINITIONS (put on sys.path)
       plant_reachable_v1_finetune_blend25/best_rom.pt   the deployed ROM
-    id_fd_model/    ID and FD models    -> PPO_ID_FD
+    id_fd_model/    ID and FD models    -> PPO_ID_FD and PPO_ID_AAM_FD
       vendor_models/                       model DEFINITIONS (imported)
       best_id_cylinder_control.pt          ID: target -> valve
       best_fd_cylinder_strict.pt           FD: valve -> delta x  (STRICT, not control)
+
+    outputs/        AAM and latent-adapter checkpoints used by PPO_ID_AAM_FD
 
 Each folder holds **both** the weights and the model definitions, because the
 runtimes import the definitions from beside the weights. Each has its own README
@@ -96,16 +102,15 @@ real; the control FD was rank ~2 and under-fit the valve).
 
 Anything under `archive/`, including the numbered PPO predecessors, is retained
 only for provenance and is **not** a current pipeline. The active pipelines are
-the top-level `PPO_ROM/` and `PPO_ID_FD/` directories listed above.
+the three top-level PPO directories listed above.
 
 ---
 
 ## Common commands
 
-All scripts live under `PPO_ROM/scripts/` and take `--task` / `TASK=`
-to select the pipeline. There is deliberately **no second copy** for PPO_ID_FD — a
-copy would drift, and the moment it did a ROM-vs-ID/FD comparison would be
-measuring the drift instead of the actuator.
+Each pipeline README is the command reference. Shared scripts remain available
+for cross-pipeline scoring, while the AAM pipeline also provides task-pinned
+wrappers in its own folder.
 
 ```bash
 # watch the shipped policy
@@ -114,6 +119,7 @@ PPO_ROM/visualize.sh
 # preflight before committing GPU hours (10 checks)
 PPO_ROM/scripts/preflight.py --num_envs 32 --steps 120
 PPO_ID_FD/scripts/preflight.py --num_envs 32 --steps 120
+PPO_ID_AAM_FD/scripts/preflight.py --num-envs 4 --device cpu
 
 # score on the 8 gates (one process per mesh -- see the Isaac Sim note below)
 PPO_ROM/scripts/score_per_mesh.sh <name> <ckpt.pt> 480 32
@@ -122,6 +128,7 @@ MESHES="1337 17 909 4242 555 2024" \
 
 # training report and charts
 PPO_ROM/scripts/training_status.py --plot
+PPO_ID_AAM_FD/scripts/training_status.py --plot
 ```
 
 ---

@@ -1,27 +1,5 @@
 #!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-"""PPO3_1 preflight + stress. Run this BEFORE committing GPU hours.
-
-Every check here corresponds to a failure that actually happened in this
-project, so a green preflight means those specific ways of wasting an
-afternoon are closed:
-
-  P1  the task builds the MERGED env (c4 authority + rebuilt reward), not a
-      parent class -- `train.py` instantiated the parent runner cfg directly
-      and silently trained at the OLD regime (lr 3e-4, entropy 0.001).
-  P2  the runner cfg really carries the standard regime.
-  P3  c4 per-axis authority is active, not a stale PPO3 default.
-  P4  the curriculum stage is the tracking stage -- the stage fallback used to
-      be dead code (`getattr(cfg, "curriculum_stage", 4)` never fired because
-      the attribute existed as 0) and the guard rejected it.
-  P5  standard Isaac Lab log namespaces are published. Overriding
-      `_get_rewards` silences the parent's logging entirely.
-  S1  every reward term stays inside its published bound under adversarial
-      actions (saturated, alternating, zero).
-  S2  no non-finite reward under any of those.
-  S3  the reward is not constant -- a dead objective trains nothing.
-  S4  the reward RESPONDS to lateral error in the right direction, measured on
-      the real plant rather than in a unit test.
-"""
+"""Build and stress-check the final task before a long training run."""
 
 from __future__ import annotations
 
@@ -41,6 +19,15 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--num_envs", type=int, default=32)
 p.add_argument("--steps", type=int, default=120)
 p.add_argument("--seed", type=int, default=17)
+p.add_argument(
+    "--stage",
+    type=int,
+    default=6,
+    help=(
+        "Curriculum stage to certify. Defaults to the stage both pipelines "
+        "train at; the checks are meaningless for any other one."
+    ),
+)
 p.add_argument("--report", default="")
 AppLauncher.add_app_launcher_args(p)
 a = p.parse_args()
@@ -55,11 +42,6 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 import PPO_ROM  # noqa: E402,F401
 from PPO_ROM import TERRAIN_TASK_ID as _PPO31_TASK  # noqa: E402
 
-# PPO4_1 runs these SAME checks against the ID/FD plant by setting this env var,
-# rather than keeping a second copy of the file that would drift away from this
-# one. P4 (path feasibility) and S5 (shaping gradients) are the checks that
-# encode real failures; they must be identical across both pipelines or a
-# PPO3_1-vs-PPO4_1 comparison measures the divergence instead of the actuator.
 TERRAIN_TASK_ID = os.environ.get("PPO31_PREFLIGHT_TASK", "") or _PPO31_TASK
 if TERRAIN_TASK_ID.startswith("RRLAB-Mulag-Verge-IDFD"):
     import PPO_ID_FD  # noqa: F401,E402
@@ -67,6 +49,7 @@ print(f"[preflight] task={TERRAIN_TASK_ID}", flush=True)
 from PPO_ROM.env import Ppo31SoleEnv  # noqa: E402
 from PPO_ROM.env_cfg import Ppo31PPORunnerCfg  # noqa: E402
 from PPO_ROM.rewards import RewardWeights  # noqa: E402
+from PPO_ROM.terrain_env_cfg import apply_c4_authority_stage  # noqa: E402
 
 failures: list[str] = []
 results: dict[str, object] = {}
@@ -79,7 +62,6 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failures.append(name)
 
 
-# --- P2: runner cfg, checked without booting a scene ------------------------
 runner = Ppo31PPORunnerCfg()
 check(
     "P2 standard regime in runner cfg",
@@ -91,34 +73,77 @@ check(
 )
 
 env_cfg = parse_env_cfg(TERRAIN_TASK_ID, device=a.device, num_envs=a.num_envs)
+apply_c4_authority_stage(env_cfg, int(a.stage))
+env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
+env_cfg.randomize_trajectory_shape = False
+env_cfg.randomize_start_phase = False
 env = gym.make(TERRAIN_TASK_ID, cfg=env_cfg, render_mode=None)
 raw = env.unwrapped
+
+_strip_start = float(raw.cfg.mow_strip_start_x_m)
+_strip_length = float(raw.cfg.mow_strip_length_m)
+_path_start = float(raw.cfg.terrain_tracking_reference_x_m)
+_path_length = float(raw.cfg.terrain_tracking_active_length_m)
+_phase_anchor = float(raw.cfg.tracking_path_phase_anchor_x_m)
+check(
+    "P0b full green strip is active",
+    abs(_strip_start - _path_start) <= 1.0e-6
+    and abs(_strip_length - _path_length) <= 1.0e-6
+    and abs(_phase_anchor - _path_start) <= 1.0e-6,
+    (
+        f"strip=[{_strip_start:.2f}, {_strip_start + _strip_length:.2f}] "
+        f"path=[{_path_start:.2f}, {_path_start + _path_length:.2f}] "
+        f"phase_anchor={_phase_anchor:.2f}"
+    ),
+)
 raw.reset(seed=int(a.seed))
+
+_cutter_start_x = float(
+    (
+        raw._compute_cutter_pos_w()[:, 0]
+        - raw.scene.env_origins[:, 0]
+    ).mean()
+)
+_strip_end = _strip_start + _strip_length
+_cutter_end_x = _cutter_start_x + _path_length
+_coverage_tolerance_m = max(float(raw.cfg.mow_strip_resolution_m), 0.05)
+check(
+    "P0c cutter's full travel is covered by the strip",
+    _cutter_start_x >= _strip_start - _coverage_tolerance_m
+    and _cutter_end_x <= _strip_end + _coverage_tolerance_m,
+    (
+        f"cutter=[{_cutter_start_x:.2f}, {_cutter_end_x:.2f}] "
+        f"strip=[{_strip_start:.2f}, {_strip_end:.2f}] "
+        f"tolerance={_coverage_tolerance_m:.2f}m"
+    ),
+)
+
+check(
+    "P0 the truck is actually driving",
+    float(raw.cfg.vehicle_speed_min_kmh) > 0.1,
+    f"vehicle_speed={raw.cfg.vehicle_speed_min_kmh:.2f}-"
+    f"{raw.cfg.vehicle_speed_max_kmh:.2f} km/h "
+    f"trajectory={raw.cfg.trajectory_shape} "
+    "(0.00 makes P4 vacuous)",
+)
 
 check("P1 merged env is registered", isinstance(raw, Ppo31SoleEnv), type(raw).__name__)
 
 lead = tuple(getattr(raw.cfg, "cylinder_target_max_lead_per_axis_m", ()) or ())
 scale = tuple(getattr(raw.cfg, "cylinder_action_scale_per_axis_m", ()) or ())
+_c4_stroke_m = 0.170
+_c1_steps = (lead[0] / scale[0]) if len(lead) == 4 and len(scale) == 4 and scale[0] else 0.0
+_c4_steps = (lead[3] / scale[3]) if len(lead) == 4 and len(scale) == 4 and scale[3] else 0.0
 check(
-    "P3 c4 authority active",
-    len(lead) == 4 and len(scale) == 4 and lead[3] > lead[0] and scale[3] > scale[0],
-    f"lead={lead} scale={scale}",
+    "P3 c4 anti-windup can bind",
+    len(lead) == 4
+    and len(scale) == 4
+    and lead[3] < _c4_stroke_m
+    and _c4_steps * 4.0 >= _c1_steps,
+    f"lead={lead} scale={scale} c4_steps_to_cap={_c4_steps:.1f} c1={_c1_steps:.1f}",
 )
-# `curriculum_stage` reads 5 on purpose: apply_sole_curriculum_stage remaps
-# stage 6 -> 5 because "stage 6 shares stage 5's arm contract exactly -- same
-# authority, filter, slew and clearance band. Only the GROUND and the tracking
-# path differ." So the ARM contract is stage 5 and asserting 6 there was simply
-# the wrong field. What stage 6 actually changes is the relief profile and the
-# path amplitude, which is what this checks.
-# The amplitude is no longer pinned to a literal. It is now derived from what
-# the cylinders can deliver, so the check that matters is FEASIBILITY, not a
-# magic number: assert every path family's peak demanded lateral speed sits
-# under the actuator ceiling. This is the same computation as
-# scripts/probe_path_feasibility.py, run on the live config, and it is the
-# check that would have caught the shipped 2.2 (9 of 11 families over ceiling,
-# worst 3.7x over) before it cost a training campaign.
 _ceiling_mps = float(raw.cfg.cylinder_action_scale_per_axis_m[0]) / (
-    float(raw.cfg.rom_dt) * int(raw.cfg.decimation)
+    float(raw.sim.get_physics_dt()) * int(raw.cfg.decimation)
 )
 _demands = {}
 try:
@@ -130,19 +155,23 @@ try:
         tracking_line_center_y_at,
     )
 
-    # Use the env's OWN profiled strip. Two earlier attempts got this wrong:
-    # `apply_relief_profile("flat_patches")` REGENERATES hills and hollows from
-    # the seed, so any height scaling applied before it is silently discarded,
-    # and `terrain_height_scales` never reaches the terms boom_sweep reads.
-    # Measuring the config the env actually builds removes both traps.
     _base = raw._mow_strip_cfg()
     _truck_mps = float(raw.cfg.vehicle_speed_min_kmh) / 3.6
+    _ladder = tuple(getattr(raw.cfg, "terrain_tracking_amplitude_scales", ()) or ())
+    _amplitudes = sorted(set(_ladder) | {float(_base.tracking_path_amplitude_scale)})
     for _family in sorted(TRACKING_PATH_FAMILIES):
-        _cfg = _replace(_base, tracking_path_family=_family)
-        _x = np.linspace(_cfg.start_x_m, _cfg.start_x_m + _cfg.length_m, 4000)
-        _y = tracking_line_center_y_at(_cfg, _x)
-        _slope = np.abs(np.gradient(_y, _x))
-        _demands[_family] = float(np.nanmax(_slope) * _truck_mps)
+        _worst = 0.0
+        for _amplitude in _amplitudes:
+            _cfg = _replace(
+                _base,
+                tracking_path_family=_family,
+                tracking_path_amplitude_scale=float(_amplitude),
+            )
+            _x = np.linspace(_cfg.start_x_m, _cfg.start_x_m + _cfg.length_m, 4000)
+            _y = tracking_line_center_y_at(_cfg, _x)
+            _slope = np.abs(np.gradient(_y, _x))
+            _worst = max(_worst, float(np.nanmax(_slope) * _truck_mps))
+        _demands[_family] = _worst
 except Exception as exc:  # noqa: BLE001
     _demands = {"probe_failed": float("inf")}
     print(f"[preflight] feasibility probe error: {exc}")
@@ -153,7 +182,7 @@ check(
     str(getattr(raw.cfg, "terrain_relief_profile", "")) == "flat_patches"
     and not _over,
     f"relief={getattr(raw.cfg, 'terrain_relief_profile', None)} "
-    f"amplitude={getattr(raw.cfg, 'terrain_tracking_amplitude_scale', None)} "
+    f"amplitudes={_amplitudes} "
     f"sweep_gain={getattr(raw.cfg, 'terrain_tracking_height_sweep_gain', None)} "
     f"ceiling={_ceiling_mps:.3f} m/s worst={max(_demands.values()):.3f} "
     f"({max(_demands, key=_demands.get)}) over={sorted(_over)} "
@@ -161,7 +190,7 @@ check(
     f"(arm contract stage={getattr(raw.cfg, 'curriculum_stage', None)}, 5 is correct)",
 )
 
-weights = RewardWeights()
+weights = raw._reward_weights()
 width = int(raw.cfg.action_space)
 
 
@@ -239,11 +268,6 @@ spread = max(
 )
 check("S3 reward is not a dead objective", spread > 1e-6, f"max spread={spread:.4f}")
 
-# S4: on the real plant, worse lateral ERROR must earn less LATERAL REWARD.
-# Deliberately not the total: the total is dominated by contact and head, which
-# vary independently of lateral error (under saturated actions the arm can leave
-# the ground while lateral error is still small), so comparing the total would
-# measure the confound rather than the term.
 pairs = []
 for data in stress.values():
     pairs.extend(zip(data["lateral"], data["lateral_term"]))
@@ -260,18 +284,6 @@ if len(pairs) >= 6:
 else:
     check("S4 lower lateral error earns more lateral reward", False, "insufficient samples")
 
-# S5: the check that would have saved 3.6 GPU-hours.
-#
-# Run 2026-08-05_11-51-48 trained 888 iterations with `Episode_Reward/lateral`
-# pinned at 0.0000. `lateral_scale_m` was 0.30 and the clamp cap was 1.0, so the
-# term saturated at 0.30 m and its derivative was identically zero beyond that.
-# The policy sat at 0.734 m -- 2.4x past the cliff -- receiving no lateral signal
-# at all, and mean lateral error rose 0.217 -> 0.736 over the run.
-#
-# A shaping term whose gradient dies BEFORE its own acceptance threshold can
-# never drive the policy to pass that threshold. So: every shaping term must
-# have a live gradient at 2x its gate, checked against the real thresholds in
-# gates.py rather than against a number written here.
 from PPO_ROM.gates import GATES  # noqa: E402
 from PPO_ROM.rewards import compute_reward  # noqa: E402
 
@@ -291,32 +303,15 @@ def _term_gradient(field: str, kwarg: str, probe: float) -> float:
         cylinder_headroom_low_m=torch.ones((n, 4)),
         cylinder_headroom_high_m=torch.ones((n, 4)),
     )
-    # The headroom terms are (envs, 4) and the term takes a min over cylinders,
-    # so the probe has to fill the row rather than replace the tensor.
     if kwarg == "cylinder_headroom_low_m":
         inputs["cylinder_headroom_low_m"] = error.expand(n, 4)
     else:
         inputs[kwarg] = error
-    getattr(compute_reward(**inputs), field).sum().backward()
+    getattr(compute_reward(**inputs, weights=weights), field).sum().backward()
     return float(error.grad.abs())
 
 
-# EVERY shaping term, not just the ones already known to be broken.
-#
-# The first version of this check probed only `lateral` and `cut_height` -- the
-# two terms I had just fixed -- so it confirmed my own work instead of auditing
-# the class. Running it against all terms found THREE more dead gradients,
-# including `head_alignment`, which was the one actually doing damage: with
-# head_scale 0.02 against threshold 0.98 it saturated at alignment 0.96, so the
-# whole failing range below the 0.900 gate carried zero gradient. Measured on
-# model_850, alignment p01 0.666 and min 0.237 both returned exactly 0.000, and
-# collapsing the head was therefore a FREE way to buy ground contact.
-#
-# For a "max" gate the failing side is a LARGER value, so probe 2x the
-# threshold. For a "min" gate the failing side is SMALLER, so probe a value
-# well below it -- taken from what a real collapsed policy measured.
 PROBES = (
-    # (gate name, reward field, kwarg, probe value, why this probe)
     ("lateral", "lateral", "lateral_error", 2.0 * GATES["lateral"].threshold, "2x gate"),
     ("lateral", "lateral", "lateral_error", 0.734, "failed-run operating point"),
     ("cut_height", "cut_height", "cut_height_error", 2.0 * GATES["cut_height"].threshold, "2x gate"),

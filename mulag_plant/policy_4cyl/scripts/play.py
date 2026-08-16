@@ -17,7 +17,8 @@ from isaaclab.app import AppLauncher
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--checkpoint", required=True)
-p.add_argument("--trajectory_shape", choices=("line", "arc", "sine", "circle", "square"), default="circle")
+p.add_argument("--trajectory_shape", choices=("line", "arc", "sine", "circle", "square", "sine_chain", "rounded_square"), default="circle")
+p.add_argument("--trajectory_2d", action="store_true", help="Load the standalone 45-D trajectory-v2 task and library.")
 p.add_argument("--path_speed_mps", type=float, default=0.18)
 p.add_argument("--cylinder4_residual_scale_m", type=float, default=0.0005)
 p.add_argument("--realtime", action="store_true")
@@ -40,17 +41,25 @@ import mulag_plant.tasks  # noqa: F401,E402
 from mulag_plant.policy.env_cfg import apply_residual_curriculum_stage
 from mulag_plant.policy_4cyl.env_cfg import (
     FourCylinderResidualPolicyPPORunnerCfg,
+    FourCylinderTrajectory2DPPORunnerCfg,
 )
 from isaaclab_tasks.utils import parse_env_cfg
 
 
 def main() -> None:
-    task = "RRLAB-Mulag-PPO2-A-Policy-V3-PLAY-v0"
+    task = (
+        "RRLAB-Mulag-PPO2-A-Trajectory2D-PLAY-v0"
+        if a.trajectory_2d
+        else "RRLAB-Mulag-PPO2-A-Policy-V3-PLAY-v0"
+    )
     cfg = parse_env_cfg(task, device=a.device, num_envs=1)
     cfg.seed = int(a.seed)
     apply_residual_curriculum_stage(cfg, 4)
     cfg.action_space = 4
-    cfg.observation_space = 42
+    cfg.observation_space = 45 if a.trajectory_2d else 42
+    cfg.trajectory_geometry_observation = bool(a.trajectory_2d)
+    if a.trajectory_2d:
+        cfg.trajectory_library_path = str(ROOT / "mulag_plant/models/trajectory_2d_library_v2.json")
     cfg.trajectory_shape = str(a.trajectory_shape)
     cfg.randomize_trajectory_shape = False
     cfg.randomize_start_phase = False
@@ -58,12 +67,14 @@ def main() -> None:
     cfg.cylinder4_residual_scale_m = float(a.cylinder4_residual_scale_m)
     cfg.head_down_termination_alignment = 0.98
     cfg.clearance_relative_to_reference = True
+    if a.trajectory_2d:
+        cfg.clearance_frame_consistent = True
     cfg.cutter_clearance_hard_band_m = 0.20
     cfg.episode_length_s = 200.0
 
     gym_env = gym.make(task, cfg=cfg)
     raw = gym_env.unwrapped
-    agent_cfg = FourCylinderResidualPolicyPPORunnerCfg()
+    agent_cfg = FourCylinderTrajectory2DPPORunnerCfg() if a.trajectory_2d else FourCylinderResidualPolicyPPORunnerCfg()
     agent_cfg.device = a.device
     env = RslRlVecEnvWrapper(gym_env, clip_actions=agent_cfg.clip_actions)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=a.device)

@@ -11,10 +11,49 @@ from verge_task.terrain import (
     MOW_STRIP_CFG,
     MOW_STRIP_EVAL_CFG,
     TRACKING_PATH_FAMILIES,
+    apply_relief_profile,
+    build_mow_strip_mesh,
+    build_sparse_grass_tuft_mesh,
+    build_visual_verge_skin,
     surface_height_at,
     terrain_height_scale_for_environment,
     tracking_line_center_y_at,
 )
+
+
+def test_visual_verge_skin_cleans_road_edge_without_mutating_collision_mesh():
+    cfg = replace(MOW_STRIP_EVAL_CFG, length_m=26.0)
+    collision = build_mow_strip_mesh(cfg)
+    original_vertices = collision.vertices.copy()
+    skin = build_visual_verge_skin(
+        collision, road_edge_y=2.5, shoulder_transition_m=0.30
+    )
+
+    np.testing.assert_array_equal(collision.vertices, original_vertices)
+    assert skin.vertices[:, 1].max() == 2.5
+    seam = np.isclose(skin.vertices[:, 1], 2.5)
+    assert seam.any()
+    np.testing.assert_allclose(skin.vertices[seam, 2], 0.0)
+
+
+def test_sparse_grass_is_deterministic_cheap_and_clear_of_tracking_line():
+    cfg = replace(
+        MOW_STRIP_EVAL_CFG,
+        length_m=26.0,
+        tracking_path_family="s_curve",
+    )
+    first = build_sparse_grass_tuft_mesh(
+        cfg, count=72, road_edge_y=2.5, seed=123
+    )
+    replay = build_sparse_grass_tuft_mesh(
+        cfg, count=72, road_edge_y=2.5, seed=123
+    )
+    np.testing.assert_array_equal(first.vertices, replay.vertices)
+    np.testing.assert_array_equal(first.faces, replay.faces)
+    assert len(first.faces) == 72 * 4
+    line_y = tracking_line_center_y_at(cfg, first.vertices[:, 0])
+    assert np.min(np.abs(first.vertices[:, 1] - line_y)) >= 0.20
+    assert first.vertices[:, 1].max() < 2.5
 
 
 def _scaled(cfg, scale: float):
@@ -91,7 +130,12 @@ def test_frequency_and_composition_are_opt_in_and_seeded():
     other = tracking_line_center_y_at(replace(adaptive, seed=43), x)
     np.testing.assert_array_equal(first, replay)
     assert not np.allclose(first, other)
-    assert np.max(np.abs(first - adaptive.center_y_m)) <= 0.74
+    # Relative to the strip, not the literal 0.74 this used to assert. That
+    # number was half of the OLD 2 m strip minus a margin; the strip is 3 m now,
+    # so the test failed on a widening it was never meant to police. The
+    # property being checked is that the tanh saturation keeps even an absurd
+    # amplitude (8.0 here) on the green, and that is a function of the width.
+    assert np.max(np.abs(first - adaptive.center_y_m)) <= 0.5 * adaptive.width_m - 0.16
 
 
 def test_composite_segment_joins_have_zero_velocity_and_acceleration():
@@ -471,7 +515,24 @@ def test_flat_patches_drops_the_everywhere_undulation_terms():
     assert cfg.amplitude_end_m <= 0.012
 
 
-def test_stage_six_widens_the_tracking_path_and_selects_flat_patches():
+def test_stage_six_path_is_inside_the_cylinder_rate_ceiling():
+    """Stage 6's tracking path must be something the cylinders can follow.
+
+    This test used to pin the literal ``cfg.terrain_tracking_amplitude_scale =
+    2.2`` in the source text. Pinning a number in a comment-shaped assertion
+    protects nothing: the value drifted to 4.4 and then to a
+    (2.2, 3.3, 4.4, 5.5, 6.6) ladder while the test sat red, and EVERY rung of
+    that ladder demanded more lateral cutter speed than the plant can deliver.
+    Measured 2026-08-11, 33 family-mesh cells, 24 were over the ceiling at 4.4
+    and 26 at 6.6, the worst on 56% of steps -- so the tracking error was
+    accumulated by construction and the privileged DLS teacher itself failed 5
+    of 8 acceptance gates on it.
+
+    So the assertion is now the PROPERTY that was actually wanted: whatever
+    amplitudes stage 6 ships, every path family's peak demanded lateral speed
+    stays under what a cylinder can move at the scripted drive speed. That is
+    the check that fails when someone widens the path past the plant again.
+    """
     from pathlib import Path
 
     source = (
@@ -480,13 +541,52 @@ def test_stage_six_widens_the_tracking_path_and_selects_flat_patches():
     stage6 = source[source.index("elif stage == 6:") :]
     stage6 = stage6[: stage6.index("@configclass")]
     assert 'cfg.terrain_relief_profile = "flat_patches"' in stage6
-    assert "cfg.terrain_tracking_amplitude_scale = 2.2" in stage6
     # Stage 6 must not quietly change the arm contract; only ground and path.
     for forbidden in ("sole_max_action_rate", "action_scale", "arm_stiffness"):
         assert forbidden not in stage6, (
             f"stage 6 changes {forbidden}; it must differ from stage 5 only in "
             "the ground and the tracking path"
         )
+
+    # Upper bound on cutter lateral speed: one cylinder's whole per-step budget
+    # spent on lateral motion, at a lateral Jacobian of 1.0. Real capability is
+    # lower, so a family that is over THIS is unambiguously over.
+    truck_mps = 4.0 / 3.6
+    ceiling_mps = 0.004 / (1.0 / 60.0)
+
+    amplitudes = _stage_six_amplitudes(stage6)
+    assert amplitudes, "stage 6 sets no amplitude at all"
+    over = []
+    for amplitude in amplitudes:
+        for family in TRACKING_PATH_FAMILIES:
+            cfg = apply_relief_profile(
+                replace(
+                    MOW_STRIP_EVAL_CFG,
+                    tracking_path_family=family,
+                    tracking_path_amplitude_scale=amplitude,
+                ),
+                "flat_patches",
+            )
+            x = np.linspace(cfg.start_x_m, cfg.start_x_m + cfg.length_m, 4000)
+            y = tracking_line_center_y_at(cfg, x)
+            demand = float(np.nanmax(np.abs(np.gradient(y, x))) * truck_mps)
+            if demand > ceiling_mps:
+                over.append((amplitude, family, round(demand, 4)))
+    assert not over, (
+        f"stage 6 demands more lateral speed than {ceiling_mps:.3f} m/s: {over}"
+    )
+
+
+def _stage_six_amplitudes(stage6_source: str) -> list[float]:
+    """Every amplitude literal stage 6 assigns, scalar and ladder alike."""
+    import re
+
+    found: list[float] = []
+    for match in re.finditer(
+        r"terrain_tracking_amplitude_scales?\s*=\s*([^\n]+)", stage6_source
+    ):
+        found.extend(float(v) for v in re.findall(r"\d+\.\d+", match.group(1)))
+    return sorted(set(found))
 
 
 def test_training_does_not_clobber_stage_sixs_wide_path():

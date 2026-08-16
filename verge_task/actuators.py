@@ -22,12 +22,13 @@ same observation width, same action width -- so nothing else would catch it.
 
 from __future__ import annotations
 
-ACTUATORS = ("rom", "idfd")
+ACTUATORS = ("rom", "idfd", "id_aam_fd")
 
 #: Written into checkpoint ``infos`` and every report.
 ACTUATOR_LABELS = {
     "rom": "command ROM (ROM-A)",
     "idfd": "ID -> FD",
+    "id_aam_fd": "causal AAM -> ID adapter -> FD",
 }
 
 
@@ -53,6 +54,11 @@ def resolve_actuator(name: str):
         from PPO_ID_FD.env_cfg import Ppo41IDFDPPORunnerCfg
 
         return package.TERRAIN_TASK_ID, Ppo41IDFDPPORunnerCfg, ACTUATOR_LABELS[key]
+    if key == "id_aam_fd":
+        import PPO_ID_AAM_FD as package
+        from PPO_ID_AAM_FD.env_cfg import PpoIDAAMFDPPORunnerCfg
+
+        return package.TERRAIN_TASK_ID, PpoIDAAMFDPPORunnerCfg, ACTUATOR_LABELS[key]
     raise ValueError(f"--actuator must be one of {ACTUATORS}, got {name!r}")
 
 

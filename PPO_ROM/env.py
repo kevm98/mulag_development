@@ -1,27 +1,4 @@
-"""PPO3_1 environment: PPO3's physics, PPO3_1's reward.
-
-Inherits `TerrainC4AuthorityEnv`, so a run gets BOTH measured findings at once:
-the c4 command authority (larger lead cap and action scale on the head-pitch
-cylinder) and the rebuilt nine-term reward.
-
-Measured 2026-08-05 with `scripts/probe_c4_authority.py`, zero action, 16x480:
-c4 runs at 21.6 kN mean against a 320 kN effort limit -- 6.8 % utilisation,
-saturating 0.026 % of steps. So c4 is NOT force-limited and raising
-`effort_limit_sim` would achieve nothing; the binding constraint is the lead cap
-and action scale, which is exactly what the inherited class raises. (c1 is the
-loaded axis: 427 kN of 800 kN mean, saturating 1.3 % of steps.)
-
-Deliberately a thin subclass. The plant was never the problem -- the ROM,
-the terrain generator, the contact sensing and the observation contract are all
-sound and heavily validated. What failed was the reward (53 weighted terms,
-three of which fought the task), the acceptance criteria (26 gates on one mesh)
-and the training regime (warm-start fine-tuning at 5e-7).
-
-So this class changes exactly one thing: `_get_rewards`. Everything else --
-observations, terrain, resets, terminations, logging of physical metrics --
-is inherited unchanged, which also means every PPO3 diagnostic script still
-works against it.
-"""
+"""Final PPO-ROM environment with the bounded task reward."""
 
 from __future__ import annotations
 
@@ -30,6 +7,7 @@ import torch
 from PPO_ROM.terrain_env import TerrainC4AuthorityEnv
 
 from PPO_ROM.rewards import RewardWeights, compute_reward
+from verge_task.vehicle_speed import episode_path_active_mask
 
 
 class Ppo31SoleEnv(TerrainC4AuthorityEnv):
@@ -50,9 +28,6 @@ class Ppo31SoleEnv(TerrainC4AuthorityEnv):
         return weights
 
     def _get_rewards(self) -> torch.Tensor:
-        # Reuse the parent's state machine so reward, termination and metrics
-        # all read the SAME transition -- the parent caches these, so this is
-        # not a second physics query.
         self._update_contact_safety()
         extension, _ = self._refresh_cylinder_state()
         headroom_low, headroom_high = self._cylinder_headroom(extension)
@@ -70,17 +45,15 @@ class Ppo31SoleEnv(TerrainC4AuthorityEnv):
             contact_force_n=self.cutter_terrain_contact_force_n(),
             cylinder_headroom_low_m=headroom_low,
             cylinder_headroom_high_m=headroom_high,
+            hard_impact=self._hard_impact_event,
             weights=self._reward_weights(),
         )
 
         reward = terms.total
 
-        # A warm-up step must not be paid, exactly as in the parent.
         active = self._scored_active_mask()
         reward = torch.where(active, reward, torch.zeros_like(reward))
 
-        # Non-finite physics is a failure, not a large negative number that the
-        # critic then has to model. Bounded, like every other term.
         invalid = ~torch.isfinite(reward)
         if bool(invalid.any()):
             reward = torch.where(invalid, torch.full_like(reward, -25.0), reward)
@@ -90,12 +63,31 @@ class Ppo31SoleEnv(TerrainC4AuthorityEnv):
         return reward
 
     def _scored_active_mask(self) -> torch.Tensor:
-        """The parent's notion of 'this step counts', by whatever name it uses."""
+        """Return replicas that are inside the scored part of their path.
+
+        Vectorized episodes reset together because physical deployment is
+        synchronized.  With episode-level speed randomization, faster replicas
+        therefore spend an absorbing tail parked at the endpoint while the
+        slowest replica finishes.  Those tail steps must contribute exactly
+        zero task reward or the speed distribution would change the objective.
+        """
+        active = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         for attribute in ("_scored_active", "_episode_active", "_active_mask"):
             mask = getattr(self, attribute, None)
             if isinstance(mask, torch.Tensor) and mask.dtype == torch.bool:
-                return mask
-        return torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+                active &= mask
+                break
+        preposition = getattr(self, "_preposition_counter", None)
+        settle = getattr(self, "_settle_counter", None)
+        complete = getattr(self, "_truck_path_complete", None)
+        if all(isinstance(value, torch.Tensor) for value in (preposition, settle, complete)):
+            active = episode_path_active_mask(
+                preposition,
+                settle,
+                complete,
+                base_mask=active,
+            )
+        return active
 
     def _publish_log(self, terms, reward: torch.Tensor) -> None:
         """Standard Isaac Lab log namespaces, read by the rsl_rl runner.
@@ -117,11 +109,27 @@ class Ppo31SoleEnv(TerrainC4AuthorityEnv):
             log[f"Episode_Reward/{name}"] = value.mean()
         log["Episode_Reward/total"] = reward.mean()
 
-        # Task metrics, in the units the gates are written in, so a training
-        # curve can be read against acceptance without a separate evaluation.
         log["Metrics/lateral_error_m"] = self.verge_lateral_error().abs().mean()
         log["Metrics/cut_height_error_m"] = self.cut_height_error().abs().mean()
         log["Metrics/ground_contact_fraction"] = (
             self.cutter_ground_contact().float().mean()
         )
         log["Metrics/head_alignment"] = self._measure_head_down_alignment().mean()
+
+        # Keep the contact-safety namespace that the shared terrain evaluator
+        # and smoke gate consume.  PPO-ROM owns this reward override, so the
+        # parent logger cannot populate these fields for us.  The airborne-gap
+        # reward is not a separate ROM term; expose the measured gap as a
+        # diagnostic and use zero for its legacy reward slot.
+        active = self._scored_active_mask()
+        if bool(active.any()):
+            log["contact/acquired_fraction"] = self._contact_acquired[active].float().mean()
+            log["contact/loss_event_fraction"] = self._contact_loss_event[active].float().mean()
+            log["contact/max_airborne_gap_m"] = self._airborne_gap_m[active].max()
+            log["reward/contact_total"] = (
+                terms.ground_contact[active] + terms.contact_loss[active]
+            ).mean()
+            log["reward/contact_loss"] = terms.contact_loss[active].mean()
+            log["reward/contact_airborne_gap"] = torch.zeros(
+                (), device=reward.device, dtype=reward.dtype
+            )

@@ -104,6 +104,11 @@ class ResidualPolicyEnvCfg(PPO2ROMPhysXEnvCfg):
     )
     procedural_trajectory_probability: float = 0.0
     randomize_trajectory_shape: bool = False
+    # Opt-in v2 geometry channels. Historical line-trained checkpoints remain
+    # on the legacy width; the new 2-D experiment owns its wider contract.
+    trajectory_geometry_observation: bool = False
+    trajectory_geometry_normal_reward_weight: float = 0.0
+    trajectory_geometry_normal_std_m: float = 0.03
     path_speed_mps: float = 0.13
     accel_time_s: float = 1.0
     policy_preview_time_s: float = 0.25
@@ -183,6 +188,10 @@ class ResidualPolicyEnvCfg(PPO2ROMPhysXEnvCfg):
     enable_scripted_vehicle_motion: bool = False
     vehicle_speed_min_kmh: float = 0.0
     vehicle_speed_max_kmh: float = 0.0
+    # v2 may opt into a fixed, very slow open-path chassis creep. Closed
+    # shapes remain parked and are repeated by the stop-and-work supervisor.
+    trajectory_truck_motion_mode: str = "parked"
+    trajectory_truck_speed_mps: float = 0.0
 
     # --- Termination thresholds ---
     truck_drift_termination_m: float = 0.02

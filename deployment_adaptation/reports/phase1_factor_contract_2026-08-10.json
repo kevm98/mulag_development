@@ -1,0 +1,31 @@
+{
+  "date": "2026-08-10",
+  "phase": "phase1_factor_contract",
+  "implementation": {
+    "factor_dim": 6,
+    "dims": ["flow", "compliance", "seal", "pressure", "mass_scale", "com_z"],
+    "latched_at_reset": true,
+    "hydraulic_target": "command_rom_coefficients",
+    "mechanical_target": "PhysX Messerkopf mass and COM-z",
+    "domains": ["nominal", "hydraulic", "mechanical", "combined_train", "combined_test"],
+    "manifest": "AAM_module/datasets/master_v3_stage22_wide_frozen/raw/manifest.csv",
+    "manifest_sha256": "a18dd88682f7823f66bbdcd2b427b43ffffd1ffebf1e9b1aaade2e3f5b5f0a0b",
+    "reserved_combined_test_rows": 16,
+    "reserved_rows_modified": false,
+    "policy_or_aam_factor_input": false,
+    "default_enabled": false
+  },
+  "verification": {
+    "unit_tests": {"path": "verge_task/tests/test_deployment_factors.py", "passed": 4},
+    "python_compile": "pass",
+    "diff_check": "pass",
+    "factor_enabled_short_isaac_rollout": "completed_without_factor_exception",
+    "full_gate1_sweep": "not_run",
+    "simulator_blocker": "Isaac ENOSPC during file-watch/GPU-dump setup"
+  },
+  "gate1": {
+    "status": "pending",
+    "required": "PPO-ID-FD degrades monotonically across the same-seed hydraulic sweep while PPO-ROM does not",
+    "stop_before": "phase1b_smoothness_and_stage31"
+  }
+}

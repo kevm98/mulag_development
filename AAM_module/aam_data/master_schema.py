@@ -75,10 +75,13 @@ COMMAND_SIGNALS = {
     "desired_delta_extension_velocity": 4,  # _action_target_delta_xdot_learned
     "command_before_limits": 4,             # _action_target_delta_x_pre_gain_learned
     "command_after_limits": 4,              # post safety clamp
-    "requested_valve_cmd": 4,               # _current_valve_cmd (ROM predicted)
+    # Compatibility fields are retained for the shared schema. In the
+    # command-ROM plant there is no external valve request or applied valve:
+    # requested_valve_cmd is only an alias of the ROM's internal prediction.
+    "requested_valve_cmd": 4,               # compatibility alias, not an input
     "applied_valve_cmd": 4,                 # NaN: no physical valve in command-ROM path
-    "rom_predicted_valve_cmd": 4,           # identical to requested for command ROM
-    "rom_effective_actuation": 4,           # identical to predicted for command ROM
+    "rom_predicted_valve_cmd": 4,           # internal ROM output / ID target
+    "rom_effective_actuation": 4,           # internal ROM actuation
     "delta_extension_per_step": 4,          # ROM delta_extension per control step
     "delta_isaac": 4,                       # _delta_isaac (mapped USD increment)
     "cylinder_pos_target": 4,               # absolute target written to PhysX

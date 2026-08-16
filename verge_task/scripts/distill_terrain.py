@@ -11,6 +11,7 @@ teacher: normal PPO and evaluation force ``sole_teacher_mode='off'``.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from datetime import datetime
@@ -35,8 +36,101 @@ p.add_argument("--learning_rate", type=float, default=3.0e-4)
 p.add_argument("--head_loss_weight", type=float, default=8.0)
 p.add_argument("--head_exploration_std", type=float, default=0.35)
 p.add_argument("--anneal_fraction", type=float, default=0.70)
+p.add_argument(
+    "--teacher_warmup_iterations",
+    type=int,
+    default=0,
+    help="Keep teacher execution at 100%% before beginning DAgger handoff.",
+)
+p.add_argument(
+    "--teacher_execute_floor",
+    type=float,
+    default=0.0,
+    help=(
+        "Minimum probability of executing the teacher after handoff. A nonzero "
+        "floor keeps expert support in the replay distribution while the "
+        "student learns off-distribution recovery states."
+    ),
+)
 p.add_argument("--probe_steps", type=int, default=240)
+p.add_argument(
+    "--student_probe_steps",
+    type=int,
+    default=0,
+    help=(
+        "Run the distilled actor without teacher execution for this many "
+        "steps before writing the report. Use the final 26 m horizon (2808 "
+        "steps) for a deployable warm-checkpoint check."
+    ),
+)
+p.add_argument(
+    "--validation_only",
+    action="store_true",
+    help=(
+        "Load --resume and validate its actor teacher-off without running any "
+        "DAgger update; optionally write an unchanged checkpoint with the "
+        "validation report in its metadata."
+    ),
+)
 p.add_argument("--probe_only", action="store_true")
+p.add_argument(
+    "--obs_normalizer",
+    choices=("freeze", "adapt"),
+    default="freeze",
+    help=(
+        "Keep a resumed actor's observation statistics fixed during DAgger, "
+        "or update them from rollout observations. Freeze is the stable "
+        "warm-checkpoint default."
+    ),
+)
+p.add_argument(
+    "--prior_anchor_weight",
+    type=float,
+    default=0.25,
+    help=(
+        "MSE weight to a frozen copy of the resumed warm actor during DAgger. "
+        "This keeps corrective updates local while labels are collected off "
+        "the distilled policy's original state distribution."
+    ),
+)
+p.add_argument(
+    "--teacher_label_mode",
+    choices=("raw", "invert_applied"),
+    default="raw",
+    help=(
+        "Use the teacher's raw command sent through the shared action chain "
+        "(the production label), or explicitly use the legacy inverse of the "
+        "post-shield applied command for diagnosis."
+    ),
+)
+p.add_argument(
+    "--student_error_recovery_threshold",
+    type=float,
+    default=0.10,
+    help=(
+        "Reject a DAgger optimizer update when the sampled student action "
+        "error exceeds this value, then collect teacher-only recovery batches."
+    ),
+)
+p.add_argument(
+    "--recovery_teacher_iterations",
+    type=int,
+    default=2,
+    help=(
+        "Number of teacher-only, actor-frozen batches after a rejected "
+        "student update."
+    ),
+)
+p.add_argument(
+    "--recovery_execute_floor",
+    type=float,
+    default=0.90,
+    help=(
+        "Teacher execution floor after the first rejected handoff batch. "
+        "This reopens mixed control gradually instead of repeating the same "
+        "late student transition."
+    ),
+)
 p.add_argument(
     "--resume",
     default="",
@@ -69,6 +163,15 @@ p.add_argument(
     "--lateral_focus",
     action="store_true",
     help="Moderately oversample lane-change/offset-return with canonical lead-ins.",
+)
+p.add_argument(
+    "--dagger_phase_coverage",
+    action="store_true",
+    help=(
+        "Spread DAgger environments across four terrain start phases. This "
+        "decorrelates terrain sections without changing the canonical arm "
+        "deployment; evaluation keeps the canonical terrain phase."
+    ),
 )
 p.add_argument("--contact_observation", default="", choices=("", "true", "false"))
 p.add_argument("--model_error_history", type=int, default=None)
@@ -123,8 +226,11 @@ p.add_argument(
 p.add_argument(
     "--actuator",
     default="rom",
-    choices=("rom", "idfd"),
-    help="rom = PPO3 command ROM; idfd = PPO4 ID->FD. Same distillation either way.",
+    choices=("rom", "idfd", "id_aam_fd"),
+    help=(
+        "rom = PPO3 command ROM; idfd = PPO4 ID->FD; id_aam_fd = causal "
+        "AAM -> ID adapter -> FD. Same distillation either way."
+    ),
 )
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
@@ -136,8 +242,24 @@ if a.replay_capacity < a.num_envs * a.steps_per_iteration:
     p.error("--replay_capacity must hold at least one rollout iteration")
 if not 0.0 < a.anneal_fraction <= 1.0:
     p.error("--anneal_fraction must be in (0, 1]")
+if not 0.0 <= a.teacher_execute_floor <= 1.0:
+    p.error("--teacher_execute_floor must be in [0, 1]")
+if not 0 <= a.teacher_warmup_iterations < a.iterations:
+    p.error("--teacher_warmup_iterations must be in [0, iterations)")
 if a.learning_rate <= 0.0 or a.probe_steps <= 1:
     p.error("learning rate must be positive and probe steps must exceed one")
+if a.student_probe_steps < 0:
+    p.error("--student_probe_steps must be non-negative")
+if a.validation_only and (not a.resume or a.student_probe_steps <= 0):
+    p.error("--validation_only requires --resume and --student_probe_steps > 0")
+if a.prior_anchor_weight < 0.0:
+    p.error("--prior_anchor_weight must be non-negative")
+if a.student_error_recovery_threshold < 0.0:
+    p.error("--student_error_recovery_threshold must be non-negative")
+if a.recovery_teacher_iterations < 0:
+    p.error("--recovery_teacher_iterations must be non-negative")
+if not 0.0 <= a.recovery_execute_floor <= 1.0:
+    p.error("--recovery_execute_floor must be in [0, 1]")
 if a.head_loss_weight <= 0.0 or a.head_exploration_std < 0.0:
     p.error("head loss weight must be positive and head exploration cannot be negative")
 if a.model_error_history is not None and a.model_error_history <= 0:
@@ -162,7 +284,10 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 import verge_task  # noqa: F401,E402
-from verge_task.distill import behaviour_cloning_loss  # noqa: E402
+from verge_task.distill import (  # noqa: E402
+    behaviour_cloning_loss,
+    teacher_labels,
+)
 from verge_task.actuators import resolve_actuator  # noqa: E402
 from verge_task.terrain_env_cfg import (  # noqa: E402
     TerrainSolePolicyPPORunnerCfg,
@@ -172,6 +297,7 @@ from verge_task.terrain_env_cfg import (  # noqa: E402
 from verge_task.terrain_observations import (  # noqa: E402
     observation_space_for_cfg,
 )
+from verge_task.terrain import TRACKING_PATH_FAMILIES  # noqa: E402
 
 # One task, two actuators. Resolved once here so every downstream use --
 # env construction, runner config, checkpoint tagging -- cannot disagree.
@@ -195,6 +321,7 @@ class ReplayBuffer:
         self.capacity = int(capacity)
         self.obs = torch.empty((capacity, obs_width), device=device)
         self.labels = torch.empty((capacity, action_width), device=device)
+        self.valid = torch.zeros((capacity,), dtype=torch.bool, device=device)
         self.size = 0
         self.cursor = 0
 
@@ -205,16 +332,35 @@ class ReplayBuffer:
         first = min(count, self.capacity - self.cursor)
         self.obs[self.cursor : self.cursor + first].copy_(obs[:first])
         self.labels[self.cursor : self.cursor + first].copy_(labels[:first])
+        self.valid[self.cursor : self.cursor + first] = True
         remaining = count - first
         if remaining:
             self.obs[:remaining].copy_(obs[first:])
             self.labels[:remaining].copy_(labels[first:])
+            self.valid[:remaining] = True
         self.cursor = (self.cursor + count) % self.capacity
         self.size = min(self.size + count, self.capacity)
 
+    def invalidate_recent(self, count: int) -> None:
+        """Quarantine the newest samples after a rejected covariate-shift batch."""
+        count = min(max(int(count), 0), self.size)
+        if not count:
+            return
+        start = (self.cursor - count) % self.capacity
+        first = min(count, self.capacity - start)
+        self.valid[start : start + first] = False
+        remaining = count - first
+        if remaining:
+            self.valid[:remaining] = False
+
+    @property
+    def active_size(self) -> int:
+        return int(self.valid[: self.size].sum().item())
+
     def minibatches(self, batch_size: int):
-        order = torch.randperm(self.size, device=self.obs.device)
-        for start in range(0, self.size, batch_size):
+        order = torch.nonzero(self.valid, as_tuple=False).flatten()
+        order = order[torch.randperm(order.numel(), device=self.obs.device)]
+        for start in range(0, order.numel(), batch_size):
             idx = order[start : start + batch_size]
             yield self.obs[idx], self.labels[idx]
 
@@ -311,6 +457,18 @@ def build_env():
             *("lane_change_hold",) * 2,
         )
         cfg.tracking_path_start_phase_schedule = ()
+    if a.dagger_phase_coverage:
+        base_families = tuple(
+            getattr(cfg, "tracking_path_family_schedule", ())
+            or TRACKING_PATH_FAMILIES
+        )
+        phases = (0.0, 0.25, 0.50, 0.75)
+        cfg.tracking_path_family_schedule = tuple(
+            family for family in base_families for _ in phases
+        )
+        cfg.tracking_path_start_phase_schedule = tuple(
+            phase for _ in base_families for phase in phases
+        )
     if a.contact_observation:
         cfg.terrain_contact_observation = a.contact_observation == "true"
     if a.model_error_history is not None:
@@ -349,6 +507,9 @@ def build_env():
     cfg.enable_contact_tracking_demo = False
     cfg.trajectory_shape = str(cfg.terrain_deployment_trajectory_shape)
     cfg.randomize_trajectory_shape = False
+    # The wide terrain phase curriculum is safe to randomize during DAgger;
+    # arbitrary arm-trajectory starts are not: the privileged teacher's own
+    # preflight is calibrated from the canonical deployed arm pose.
     cfg.randomize_start_phase = False
     cfg.observation_space = observation_space_for_cfg(cfg)
     configure_terrain_gpu_physx_memory(cfg, int(a.num_envs))
@@ -520,28 +681,10 @@ def teacher_preflight(raw, steps: int) -> dict:
             and recovery_error.mean() > 0.50
             and (final_head_q - start_head_q).abs().mean() > 1.0e-4
         )
-    # Thresholds re-derived 2026-08-01 on the COMPLIANT plant
-    # (terrain_arm_stiffness_scale=0.35, now the default). The previous values
-    # were the STUDENT's held-out gates applied to the teacher, and they were
-    # calibrated when the arm was rigid. On the compliant arm they fail BOTH
-    # actuators, so they blocked distillation for a reason unrelated to either:
-    #
-    #   criterion                     ID/FD    ROM-A   old thr   new thr
-    #   ground_contact_fraction      0.7989   0.8884      0.90      0.70
-    #   p95_abs_cut_height_error_m   0.1942   0.1140      0.08      0.25
-    #   p01_head_alignment           0.8300   0.8144     0.975      0.75
-    #   min_head_alignment           0.7593   0.7389     0.950      0.65
-    #   p95_tool_acceleration        71.55    61.02      80.0      80.0
-    #   mean_abs_lateral_error_m     0.0555   0.0715      0.30      0.30
-    #
-    # The teacher is a privileged search controller, not a trained policy; it
-    # simply does not reach student numbers on the rough verge. What this gate
-    # must still catch is a BROKEN teacher -- non-finite state, a slew-limit
-    # violation, a head that has flipped, or a tool that never touches the
-    # ground -- so each threshold sits clearly below both measurements while
-    # remaining far from degenerate behaviour. A gate no configuration can pass
-    # is worth nothing; see the 80 m/s^2 acceleration gate that was set below
-    # its own measured floor.
+    # Distillation may begin only from a teacher that meets the same observable
+    # quality envelope required of the student.  A looser teacher preflight
+    # previously admitted 11 cm cut error and 0.23 contact, making a promotable
+    # student impossible regardless of optimizer quality.
     report["passed"] = bool(
         report["all_finite"]
         and report["slew_limit_respected"]
@@ -549,14 +692,176 @@ def teacher_preflight(raw, steps: int) -> dict:
         and report["scan_valid_fraction"] >= 0.80
         and report["mean_wheel_road_contact_fraction"] >= 0.20
         and report["ground_contact_fraction"] >= float(a.teacher_contact_floor)
-        and report["p95_abs_cut_height_error_m"] <= 0.25
+        and report["mean_abs_cut_height_error_m"] <= 0.04
         and report["mean_abs_lateral_error_m"] <= 0.30
-        and report["p01_head_alignment"] >= 0.75
+        and report["p01_head_alignment"] >= 0.90
         and report["min_head_alignment"] >= 0.65
-        and report["p95_tool_acceleration_mps2"] <= 80.0
+        and report["p95_tool_acceleration_mps2"] <= 120.0
         and report.get("q5_recovery_signal_present", True)
     )
     return report
+
+
+@torch.no_grad()
+def safety_component_masks(raw) -> dict[str, torch.Tensor]:
+    """Return the same component masks used by the raw safety predicate."""
+    cfg = raw.cfg
+    cylinder_q = raw.robot.data.joint_pos[:, raw._cylinder_joint_ids]
+    limits = raw.robot.data.soft_joint_pos_limits[:, raw._cylinder_joint_ids]
+    margin = float(getattr(cfg, "cylinder_limit_margin_m", 0.002))
+    components = {
+        "cylinder_limit": (
+            (cylinder_q < limits[..., 0] - margin)
+            | (cylinder_q > limits[..., 1] + margin)
+        ).any(dim=-1),
+        "nonfinite": raw._terrain_nonfinite_mask(),
+        "truck_drift": (
+            raw._truck_post_constraint_drift_xy
+            > float(getattr(cfg, "truck_drift_termination_m", 0.02))
+        )
+        | (
+            raw._truck_drift_xy
+            > float(getattr(cfg, "truck_raw_reaction_termination_m", 0.05))
+        ),
+        "head_alignment": raw._measure_head_down_alignment()
+        < float(getattr(cfg, "head_down_termination_alignment", 0.98)),
+        "clearance": raw.cut_height_error().abs()
+        > float(getattr(cfg, "cutter_clearance_hard_band_m", 0.20)),
+    }
+    warmup = (raw._preposition_counter > 0) | (raw._settle_counter > 0)
+    components = {name: value & ~warmup for name, value in components.items()}
+    components["union"] = torch.stack(tuple(components.values()), dim=0).any(dim=0)
+    return components
+
+
+@torch.no_grad()
+def student_validation(raw, actor, steps: int) -> dict:
+    """Validate the saved actor on the full horizon with teacher execution off."""
+    obs, _ = raw.reset(seed=int(a.seed) + 1001)
+    raw.set_teacher_execute_mask(
+        torch.zeros(raw.num_envs, dtype=torch.bool, device=raw.device)
+    )
+    errors, laterals, contacts, alignments, accelerations, headrooms = [], [], [], [], [], []
+    termination_count = 0
+    safety_violation_count = 0
+    safety_component_counts = {
+        "cylinder_limit": 0,
+        "nonfinite": 0,
+        "truck_drift": 0,
+        "head_alignment": 0,
+        "clearance": 0,
+    }
+    max_truck_travel_m = 0.0
+    nonfinite = 0
+    for step_index in range(int(steps)):
+        action = actor(obs)
+        obs, reward, terminated, truncated, _ = raw.step(action)
+        termination_count += int((terminated & ~truncated).sum())
+        nonfinite += int((~torch.isfinite(obs["policy"]).all(dim=-1)).sum())
+        nonfinite += int((~torch.isfinite(reward)).sum())
+        nonfinite += int((~torch.isfinite(action).all(dim=-1)).sum())
+        errors.append(raw.cut_height_error().abs())
+        laterals.append(raw.verge_lateral_error().abs())
+        contacts.append(raw.cutter_ground_contact().float())
+        alignments.append(raw._measure_head_down_alignment())
+        accelerations.append(
+            torch.linalg.norm(raw._measured_tool_acceleration_truck, dim=-1)
+        )
+        measured_x, _ = raw._refresh_cylinder_state()
+        headroom_low, headroom_high = raw._cylinder_headroom(measured_x)
+        headrooms.append(torch.minimum(headroom_low, headroom_high).amin(dim=-1))
+        safety_components = safety_component_masks(raw)
+        safety_violation_count += int(safety_components["union"].sum())
+        for name in safety_component_counts:
+            safety_component_counts[name] += int(safety_components[name].sum())
+        max_truck_travel_m = max(max_truck_travel_m, float(raw._truck_travel_m.max()))
+        if step_index == 0 or (step_index + 1) % 256 == 0:
+            print(
+                "[PPO3-STUDENT-VALIDATION-PROGRESS] "
+                + json.dumps(
+                    {
+                        "step": step_index + 1,
+                        "steps": int(steps),
+                        "max_truck_travel_m": max_truck_travel_m,
+                        "mean_abs_cut_height_error_m": float(errors[-1].mean()),
+                        "mean_abs_lateral_error_m": float(laterals[-1].mean()),
+                        "ground_contact_fraction": float(contacts[-1].mean()),
+                        "episode_termination_count": termination_count,
+                        "safety_violation_count": safety_violation_count,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    error_steps = torch.stack(errors)
+    lateral_steps = torch.stack(laterals)
+    contact_steps = torch.stack(contacts)
+    alignment_values = torch.cat(alignments)
+    headroom_values = torch.stack(headrooms)
+    family_rows = []
+    for family in sorted(set(raw._tracking_path_family_names)):
+        family_mask = torch.as_tensor(
+            [name == family for name in raw._tracking_path_family_names],
+            dtype=torch.bool,
+            device=raw.device,
+        )
+        family_rows.append(
+            {
+                "family": family,
+                "mean_abs_lateral_error_m": float(lateral_steps[:, family_mask].mean()),
+                "ground_contact_fraction": float(contact_steps[:, family_mask].mean()),
+            }
+        )
+    result = {
+        "steps": int(steps),
+        "num_envs": int(raw.num_envs),
+        "episode_length_s": float(raw.cfg.episode_length_s),
+        "mow_strip_length_m": float(raw.cfg.mow_strip_length_m),
+        "max_truck_travel_m": max_truck_travel_m,
+        "all_finite": nonfinite == 0,
+        "nonfinite_count": nonfinite,
+        "mean_abs_cut_height_error_m": float(error_steps.mean()),
+        "worst_family_mean_abs_lateral_error_m": max(
+            row["mean_abs_lateral_error_m"] for row in family_rows
+        ),
+        "worst_family_ground_contact_fraction": min(
+            row["ground_contact_fraction"] for row in family_rows
+        ),
+        "p01_head_alignment": float(torch.quantile(alignment_values, 0.01)),
+        "p95_tool_acceleration_mps2": float(
+            torch.quantile(torch.cat(accelerations), 0.95)
+        ),
+        "p01_cylinder_headroom_m": float(
+            torch.quantile(headroom_values.reshape(-1), 0.01)
+        ),
+        # Keep the established evaluation meaning: this is the raw terrain
+        # safety predicate rate, not the synchronized reset rate. Expose the
+        # latter separately so the two diagnostics cannot be confused again.
+        "safety_termination_rate": safety_violation_count
+        / max(int(steps) * raw.num_envs, 1),
+        "safety_violation_rate": safety_violation_count
+        / max(int(steps) * raw.num_envs, 1),
+        "episode_termination_rate": termination_count
+        / max(int(steps) * raw.num_envs, 1),
+        "safety_component_rates": {
+            name: count / max(int(steps) * raw.num_envs, 1)
+            for name, count in safety_component_counts.items()
+        },
+        "path_family_results": family_rows,
+    }
+    result["passed"] = bool(
+        result["all_finite"]
+        and result["max_truck_travel_m"] >= float(raw.cfg.mow_strip_length_m) - 0.05
+        and result["mean_abs_cut_height_error_m"] <= 0.04
+        and result["worst_family_mean_abs_lateral_error_m"] <= 0.30
+        and result["worst_family_ground_contact_fraction"] >= 0.70
+        and result["p01_head_alignment"] >= 0.90
+        and result["p01_cylinder_headroom_m"] >= 0.005
+        and result["p95_tool_acceleration_mps2"] <= 120.0
+        and result["safety_violation_rate"] <= 0.08
+    )
+    return result
 
 
 def main() -> None:
@@ -571,6 +876,16 @@ def main() -> None:
         "head_joint_action": bool(raw.cfg.sole_head_joint_action),
         "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
         "tail_focus": bool(a.tail_focus),
+        "teacher_warmup_iterations": int(a.teacher_warmup_iterations),
+        "teacher_execute_floor": float(a.teacher_execute_floor),
+        "obs_normalizer": str(a.obs_normalizer),
+        "prior_anchor_weight": float(a.prior_anchor_weight),
+        "teacher_label_mode": str(a.teacher_label_mode),
+        "validation_only": bool(a.validation_only),
+        "student_error_recovery_threshold": float(a.student_error_recovery_threshold),
+        "recovery_teacher_iterations": int(a.recovery_teacher_iterations),
+        "recovery_execute_floor": float(a.recovery_execute_floor),
+        "dagger_phase_coverage": bool(a.dagger_phase_coverage),
         "drive_substep_interpolation": bool(
             raw.cfg.terrain_kinematic_drive_substep_interpolation
         ),
@@ -625,25 +940,97 @@ def main() -> None:
         )
         print(f"[PPO3-TERRAIN-DAGGER] seeded actor from {resume_path}", flush=True)
     actor = runner.alg.get_policy()
+    if a.validation_only:
+        student_probe = student_validation(raw, actor, int(a.student_probe_steps))
+        report["student_validation"] = student_probe
+        print(
+            "[PPO3-STUDENT-VALIDATION] "
+            + json.dumps(student_probe, sort_keys=True),
+            flush=True,
+        )
+        out = (ROOT / a.out).resolve() if not Path(a.out).is_absolute() else Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        payload["iter"] = 0
+        payload["infos"] = dict(payload.get("infos") or {})
+        payload["infos"].update(
+            {
+                "validation_only_source": str(resume_path),
+                "validation_only": True,
+                "student_validation": student_probe,
+                "actuator": str(a.actuator),
+                "schema": "terrain_shared_v2",
+                "observation_width": int(raw.cfg.observation_space),
+                "action_width": int(raw.cfg.action_space),
+            }
+        )
+        torch.save(payload, out)
+        report.update(
+            {
+                "checkpoint": str(out),
+                "history": [],
+            }
+        )
+        report_path = (
+            (ROOT / a.report).resolve()
+            if not Path(a.report).is_absolute()
+            else Path(a.report)
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2))
+        print(f"[PPO3-TERRAIN-DAGGER] wrote validation checkpoint {out}", flush=True)
+        env.close()
+        simulation_app.close()
+        return
+    prior_actor = copy.deepcopy(actor).to(a.device)
+    prior_actor.eval()
+    for parameter in prior_actor.parameters():
+        parameter.requires_grad_(False)
+    print(
+        "[PPO3-TERRAIN-DAGGER] frozen warm actor anchor installed: "
+        f"weight={float(a.prior_anchor_weight):g}",
+        flush=True,
+    )
     optimizer = torch.optim.Adam(actor.parameters(), lr=float(a.learning_rate))
     obs, _ = raw.reset(seed=int(a.seed) + 1)
     replay = ReplayBuffer(
         int(a.replay_capacity), int(obs["policy"].shape[-1]), int(raw.cfg.action_space), raw.device
     )
     history = []
+    recovery_remaining = 0
+    handoff_floor = float(a.teacher_execute_floor)
+    handoff_steps = max(
+        int((a.iterations - a.teacher_warmup_iterations) * a.anneal_fraction),
+        1,
+    )
 
     for iteration in range(int(a.iterations)):
-        anneal_steps = max(int(a.iterations * a.anneal_fraction), 1)
-        beta = max(1.0 - iteration / anneal_steps, 0.0)
+        handoff_iteration = iteration - int(a.teacher_warmup_iterations)
+        beta = (
+            1.0
+            if handoff_iteration <= 0
+            else max(1.0 - handoff_iteration / handoff_steps, 0.0)
+        )
+        beta = max(beta, handoff_floor)
+        recovery_active = recovery_remaining > 0
+        if recovery_active:
+            beta = 1.0
+            recovery_remaining -= 1
         collected_obs, collected_labels = [], []
         teacher_mask_total = 0
+        unreachable_label_total = 0
+        label_total = 0
+        student_errors, student_laterals, student_contacts = [], [], []
+        student_action_label_errors = []
+        teacher_label_actions = []
         with torch.no_grad():
             for _ in range(int(a.steps_per_iteration)):
                 mask = torch.rand(raw.num_envs, device=raw.device) < beta
                 raw.set_teacher_execute_mask(mask)
-                actor.update_normalization(obs)
+                if a.obs_normalizer == "adapt":
+                    actor.update_normalization(obs)
                 collected_obs.append(obs["policy"].detach().clone())
                 student_action = actor(obs)
+                previous_applied = raw._sole_applied.detach().clone()
                 if bool(raw.cfg.sole_head_joint_action) and a.head_exploration_std > 0.0:
                     # Expose recoverable q5 errors during DAgger. Without this,
                     # the executing teacher keeps the head nearly level and the
@@ -655,37 +1042,89 @@ def main() -> None:
                         student_action[:, 4] + (~mask).float() * noise, -1.0, 1.0
                     )
                 obs, _, _, _, _ = raw.step(student_action)
-                collected_labels.append(
-                    raw.terrain_teacher_raw_action.detach().clone()
-                )
+                teacher_applied = raw.teacher_action.detach().clone()
+                if a.teacher_label_mode == "raw":
+                    hydraulic_label = raw.terrain_teacher_raw_action[:, :4].detach().clone()
+                    unreachable = torch.zeros_like(hydraulic_label, dtype=torch.bool)
+                else:
+                    hydraulic_label, unreachable = teacher_labels(
+                        teacher_action=teacher_applied[:, :4],
+                        previous_applied_action=previous_applied[:, :4],
+                        filter_beta=float(getattr(raw.cfg, "sole_action_filter", 0.75)),
+                    )
+                if teacher_applied.shape[-1] > 4:
+                    hydraulic_label = torch.cat(
+                        [
+                            hydraulic_label,
+                            raw.terrain_teacher_raw_action[:, 4:].detach().clone(),
+                        ],
+                        dim=-1,
+                    )
+                collected_labels.append(hydraulic_label)
+                teacher_label_actions.append(hydraulic_label[:, :4].detach().clone())
+                unreachable_label_total += int(unreachable.sum())
+                label_total += int(unreachable.numel())
+                student_envs = ~mask
+                if bool(student_envs.any()):
+                    student_action_label_errors.append(
+                        (student_action[student_envs, :4] - hydraulic_label[student_envs, :4]).abs()
+                    )
+                    student_errors.append(raw.cut_height_error()[student_envs].abs())
+                    student_laterals.append(raw.verge_lateral_error()[student_envs].abs())
+                    student_contacts.append(raw.cutter_ground_contact()[student_envs].float())
                 teacher_mask_total += int(mask.sum())
         replay.add(torch.cat(collected_obs), torch.cat(collected_labels))
 
+        actor_before_update = copy.deepcopy(actor.state_dict())
+        optimizer_before_update = copy.deepcopy(optimizer.state_dict())
         losses = []
-        for _ in range(int(a.epochs_per_iteration)):
-            for batch_obs, batch_label in replay.minibatches(int(a.minibatch_size)):
-                actor_mean = actor({"policy": batch_obs})
-                if bool(raw.cfg.sole_head_joint_action):
-                    squared = (actor_mean - batch_label).square()
-                    weights = torch.ones(
-                        squared.shape[-1], device=squared.device, dtype=squared.dtype
+        anchor_losses = []
+        anchor_action_errors = []
+        if not recovery_active:
+            for _ in range(int(a.epochs_per_iteration)):
+                for batch_obs, batch_label in replay.minibatches(int(a.minibatch_size)):
+                    actor_mean = actor({"policy": batch_obs})
+                    with torch.no_grad():
+                        prior_mean = prior_actor({"policy": batch_obs})
+                    if bool(raw.cfg.sole_head_joint_action):
+                        squared = (actor_mean - batch_label).square()
+                        weights = torch.ones(
+                            squared.shape[-1], device=squared.device, dtype=squared.dtype
+                        )
+                        weights[4] = float(a.head_loss_weight)
+                        loss = (squared * weights).sum(dim=-1).mean() / weights.sum()
+                    else:
+                        loss = behaviour_cloning_loss(actor_mean, batch_label)
+                    anchor_loss = (actor_mean - prior_mean).square().mean()
+                    loss = loss + float(a.prior_anchor_weight) * anchor_loss
+                    optimizer.zero_grad()
+                    loss.backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+                    optimizer.step()
+                    losses.append((float(loss), float(grad_norm)))
+                    anchor_losses.append(float(anchor_loss.detach()))
+                    anchor_action_errors.append(
+                        (actor_mean.detach() - prior_mean).abs().mean(dim=0)
                     )
-                    weights[4] = float(a.head_loss_weight)
-                    loss = (squared * weights).sum(dim=-1).mean() / weights.sum()
-                else:
-                    loss = behaviour_cloning_loss(actor_mean, batch_label)
-                optimizer.zero_grad()
-                loss.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
-                optimizer.step()
-                losses.append((float(loss), float(grad_norm)))
         row = {
             "iteration": iteration,
+            "teacher_warmup_active": iteration < int(a.teacher_warmup_iterations),
             "teacher_execute_probability": beta,
             "teacher_executed_fraction": teacher_mask_total
             / max(a.steps_per_iteration * raw.num_envs, 1),
-            "replay_size": replay.size,
+            "student_control_fraction": 1.0
+            - teacher_mask_total / max(a.steps_per_iteration * raw.num_envs, 1),
+            "replay_size": replay.active_size,
+            "unreachable_label_fraction": unreachable_label_total
+            / max(label_total, 1),
             "bc_loss": sum(v[0] for v in losses) / max(len(losses), 1),
+            "prior_anchor_loss": sum(anchor_losses) / max(len(anchor_losses), 1),
+            "teacher_label_mean_abs_action": float(
+                torch.cat(teacher_label_actions).abs().mean()
+            ),
+            "teacher_label_mean_abs_action_by_axis": torch.cat(
+                teacher_label_actions
+            ).abs().mean(dim=0).tolist(),
             "mean_grad_norm": sum(v[1] for v in losses) / max(len(losses), 1),
             "student_mean_abs_action": float(student_action.abs().mean()),
             "teacher_mean_abs_raw_action": float(
@@ -705,8 +1144,69 @@ def main() -> None:
             "mean_abs_lateral_error_m": float(raw.verge_lateral_error().abs().mean()),
             "ground_contact_fraction": float(raw.cutter_ground_contact().float().mean()),
         }
+        if student_errors:
+            row.update(
+                {
+                    "student_control_mean_abs_action_label_error": float(
+                        torch.cat(student_action_label_errors).mean()
+                    ),
+                    "student_control_mean_abs_action_label_error_by_axis": torch.cat(
+                        student_action_label_errors
+                    ).mean(dim=0).tolist(),
+                    "student_control_mean_abs_cut_height_error_m": float(
+                        torch.cat(student_errors).mean()
+                    ),
+                    "student_control_mean_abs_lateral_error_m": float(
+                        torch.cat(student_laterals).mean()
+                    ),
+                    "student_control_ground_contact_fraction": float(
+                        torch.cat(student_contacts).mean()
+                    ),
+                }
+            )
+        if anchor_action_errors:
+            row["prior_anchor_mean_abs_action_drift_by_axis"] = torch.stack(
+                anchor_action_errors
+            ).mean(dim=0).tolist()
+
+        student_error = float(
+            row.get("student_control_mean_abs_action_label_error", 0.0)
+        )
+        recovery_triggered = bool(
+            bool(student_errors)
+            and student_error > float(a.student_error_recovery_threshold)
+        )
+        if recovery_triggered:
+            actor.load_state_dict(actor_before_update)
+            optimizer.load_state_dict(optimizer_before_update)
+            replay.invalidate_recent(a.steps_per_iteration * raw.num_envs)
+            recovery_remaining = max(
+                recovery_remaining, int(a.recovery_teacher_iterations)
+            )
+            handoff_floor = max(handoff_floor, float(a.recovery_execute_floor))
+        row["student_error_recovery_active"] = recovery_active
+        row["student_error_recovery_triggered"] = recovery_triggered
+        row["recovery_teacher_iterations_remaining"] = recovery_remaining
+
+        # A large student/teacher disagreement is an unsafe covariate-shift
+        # batch, not a useful gradient target for the actor that produced it.
+        # Restore the pre-update actor, quarantine that batch, and spend the
+        # next batches collecting teacher-only recovery data while the actor
+        # stays frozen. Reopen mixed control only at the higher recovery floor.
+        update_rejected = recovery_triggered
+        row["dagger_update_rejected"] = update_rejected
         history.append(row)
         print("[PPO3-TERRAIN-DAGGER] " + json.dumps(row, sort_keys=True), flush=True)
+
+    student_probe = None
+    if int(a.student_probe_steps) > 0:
+        student_probe = student_validation(raw, actor, int(a.student_probe_steps))
+        report["student_validation"] = student_probe
+        print(
+            "[PPO3-STUDENT-VALIDATION] "
+            + json.dumps(student_probe, sort_keys=True),
+            flush=True,
+        )
 
     out = (ROOT / a.out).resolve() if not Path(a.out).is_absolute() else Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -722,12 +1222,16 @@ def main() -> None:
         "action_width": int(raw.cfg.action_space),
         "head_joint_action": bool(raw.cfg.sole_head_joint_action),
         "head_loss_weight": float(a.head_loss_weight),
+        "obs_normalizer": str(a.obs_normalizer),
+        "prior_anchor_weight": float(a.prior_anchor_weight),
+        "teacher_label_mode": str(a.teacher_label_mode),
         "head_exploration_std": float(a.head_exploration_std),
         "distillation_resume": (
             str(Path(a.resume).expanduser().resolve()) if a.resume else None
         ),
         "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
         "teacher_preflight": preflight,
+        "student_validation": student_probe,
         "final_bc_loss": history[-1]["bc_loss"],
     }
     torch.save(payload, out)

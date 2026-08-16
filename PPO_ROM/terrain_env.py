@@ -1,12 +1,4 @@
-"""PPO3-1 environment: the shared verge task with c4 authority asserted.
-
-The runtime behaviour is entirely inherited from PPO3's
-``TerrainSolePolicyEnv`` -- same sensors, observation, rewards, safety logic,
-terrain, path families and ROM-A actuator. This subclass exists to (a) give
-the new gym task a distinct entry point and (b) fail loudly if the per-axis
-c4 authority is not actually active, so a misconfigured run cannot silently
-train the plain PPO3 task under a PPO3-1 label.
-"""
+"""Wide verge environment with validated per-cylinder authority."""
 
 from __future__ import annotations
 
@@ -38,22 +30,26 @@ class TerrainC4AuthorityEnv(TerrainSolePolicyEnv):
                 "PPO3-1 requires both per-axis lead and per-axis action scale "
                 f"(4 values each); got lead={per_axis_lead}, scale={per_axis_scale}"
             )
-        if per_axis_lead[3] <= per_axis_lead[0]:
+        c4_stroke_m = 0.170
+        if per_axis_lead[3] >= c4_stroke_m:
             raise RuntimeError(
-                "PPO3-1 requires c4 lead strictly larger than c1-c3 lead; got "
-                f"{per_axis_lead}"
+                "PPO3-1 requires a c4 lead smaller than c4's own stroke "
+                f"({c4_stroke_m} m), or the anti-windup clamp can never bind; "
+                f"got {per_axis_lead}"
             )
-        if per_axis_scale[3] <= per_axis_scale[0]:
+        c1_steps_to_cap = per_axis_lead[0] / max(per_axis_scale[0], 1.0e-9)
+        c4_steps_to_cap = per_axis_lead[3] / max(per_axis_scale[3], 1.0e-9)
+        if c4_steps_to_cap * 4.0 < c1_steps_to_cap:
             raise RuntimeError(
-                "PPO3-1 requires c4 action scale strictly larger than c1-c3; "
-                f"got {per_axis_scale}"
+                "PPO3-1 requires c4 to reach its anti-windup cap no more than "
+                f"4x faster than c1-c3; c4 takes {c4_steps_to_cap:.1f} steps "
+                f"against {c1_steps_to_cap:.1f} for c1. Lower "
+                "c4_action_scale_gain or raise cylinder_target_lead_c4_m; got "
+                f"lead={per_axis_lead} scale={per_axis_scale}"
             )
         self._per_axis_lead = per_axis_lead
         self._per_axis_scale = per_axis_scale
 
-        # The adapter reads the per-axis scale at construction. Verify the
-        # active adapter actually saw the c4 boost rather than silently falling
-        # back to the scalar.
         adapter_scale = getattr(
             getattr(self, "_action_to_cylinder_target_adapter", None),
             "_action_scale_row",
@@ -72,10 +68,20 @@ class TerrainC4AuthorityEnv(TerrainSolePolicyEnv):
                     f"config {per_axis_scale}"
                 )
 
+        dynamics_model = str(
+            getattr(self.cfg, "cylinder_dynamics_model", "rom")
+        ).lower()
+        if dynamics_model == "fd":
+            actuator_label = "ID -> FD"
+        elif dynamics_model == "rom":
+            actuator_label = "ROM-A"
+        else:
+            actuator_label = dynamics_model or "unknown"
+
         print(
             "[PPO3-1-SOLE] c4 authority active: "
             f"lead={per_axis_lead} m  action_scale={per_axis_scale} m/unit  "
-            f"sole_controller=TRUE  actuator=ROM-A",
+            f"sole_controller=TRUE  actuator={actuator_label}",
             flush=True,
         )
 
@@ -88,4 +94,10 @@ class TerrainC4AuthorityEnv(TerrainSolePolicyEnv):
             "action_space": int(self.cfg.action_space),
             "head_joint_action": bool(self.cfg.sole_head_joint_action),
             "teacher_mode": str(self.cfg.sole_teacher_mode),
+            "actuator": (
+                "idfd"
+                if str(getattr(self.cfg, "cylinder_dynamics_model", "rom")).lower()
+                == "fd"
+                else "rom"
+            ),
         }

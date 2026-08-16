@@ -131,3 +131,14 @@ evaluation, following the same artifact layout (encoder/sd checkpoints,
 
 Stage docs: `AAM_module/stage20_system_factor_encoder.md`,
 `AAM_module/stage21_combined_rollout.md`, `AAM_module/stage22_latent_matters.md`.
+
+## Stage 23 — frozen privileged representation
+
+`stage23_frozen/dz2_nodp_holdq/` is the immutable frozen copy of the
+selected Stage 22 model (encoder + SD + belief, `metrics.json` statistics,
+explicit `protocol.json`, checksums and provenance). Created by
+`AAM_module/tools/freeze_sd_model.py`; the frozen copy reproduces the Stage
+22 rollout metrics exactly (verified by
+`AAM_module/tools/verify_frozen_sd_model.py`, verdict under
+`AAM_module/results/stage23_frozen_verify/`). The AAM stages consume this
+copy as the stopped-gradient `z = mu(e)` source and must not fine-tune it.

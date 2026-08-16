@@ -1,5 +1,17 @@
 """Pure-Python contracts for the AAM master raw Isaac Lab dataset."""
 
+from .aam import (
+    AAM_FEATURE_DIM,
+    APPLIED_ACTION_DIM,
+    CYLINDER_DIM,
+    FEATURE_GROUPS,
+    HISTORY_LAG_CANDIDATES,
+    JOINT_CONTEXT_DIM,
+    aam_feature,
+    aam_window_stack,
+    applied_action,
+    build_aam_features,
+)
 from .arm_motion import (
     ACTION_SCALE,
     CONTROL_DT,
@@ -75,19 +87,32 @@ from .timebase import (
     rom_tick_indices,
     transition_sample,
 )
+from .rom_stage31 import (
+    AAM_FEATURE_DIM as STAGE31_AAM_FEATURE_DIM,
+    AAM_FEATURE_GROUPS,
+    AAM_HISTORY_LAGS,
+    build_transitions as build_stage31_transitions,
+    causal_stack as stage31_causal_stack,
+    rom_ticks as stage31_rom_ticks,
+)
 
 __all__ = [
+    "AAM_FEATURE_DIM",
     "ACTION_SCALE",
+    "APPLIED_ACTION_DIM",
     "CMD_DIM",
     "CONTROL_DT",
     "CRUISE_SPEED_MPS",
-    "DEFAULT_HISTORY_LAGS",
+    "CYLINDER_DIM",
+    "HISTORY_LAG_CANDIDATES",
     "DERIVED_DIRS",
     "FACTOR_DIM",
     "FACTOR_KEYS",
+    "FEATURE_GROUPS",
     "FROZEN_VERSION",
     "HISTORY_CHANNEL_DIM",
     "HYD_STATE_DIM",
+    "JOINT_CONTEXT_DIM",
     "MECH_CONTEXT_DIM",
     "ROM_DT",
     "SCHEMA_VERSION",
@@ -105,7 +130,11 @@ __all__ = [
     "MultisineSchedule",
     "PRBSSchedule",
     "TrapezoidSchedule",
+    "aam_feature",
+    "aam_window_stack",
     "annotate_coverage",
+    "applied_action",
+    "build_aam_features",
     "build_trajectory",
     "build_run_plan",
     "build_sd_samples",
@@ -143,4 +172,10 @@ __all__ = [
     "verify_frozen",
     "windows_within_run",
     "write_run",
+    "STAGE31_AAM_FEATURE_DIM",
+    "AAM_FEATURE_GROUPS",
+    "AAM_HISTORY_LAGS",
+    "build_stage31_transitions",
+    "stage31_causal_stack",
+    "stage31_rom_ticks",
 ]

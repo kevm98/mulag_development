@@ -13,6 +13,7 @@ stages for that.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from datetime import datetime
@@ -25,7 +26,7 @@ if str(ROOT) not in sys.path:
 from isaaclab.app import AppLauncher
 
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument("--num_envs", type=int, default=64)
+p.add_argument("--num_envs", "--num-envs", dest="num_envs", type=int, default=64)
 p.add_argument("--seed", type=int, default=17)
 p.add_argument(
     "--stages",
@@ -52,7 +53,65 @@ p.add_argument(
 )
 p.add_argument("--init_std", type=float, default=None)
 p.add_argument("--entropy_coef", type=float, default=None)
+p.add_argument("--gamma", type=float, default=None)
+p.add_argument("--lam", type=float, default=None)
+p.add_argument(
+    "--demo_regularized",
+    action="store_true",
+    help=(
+        "Query the DLS teacher only for labels on policy-visited weak states, "
+        "then add filtered imitation and frozen-prior KL after each PPO update. "
+        "The policy remains the sole executing controller."
+    ),
+)
+p.add_argument("--demo_lambda", type=float, default=0.25)
+p.add_argument("--demo_kl_beta", type=float, default=0.02)
+p.add_argument("--demo_max_kl", type=float, default=0.25)
+p.add_argument("--demo_lateral_threshold", type=float, default=0.10)
+p.add_argument(
+    "--latent_teacher_regularized",
+    action="store_true",
+    help=(
+        "RMA handoff for ID-AAM-FD only: the executing actor receives live "
+        "estimated z_hat, while a frozen copy of the resumed actor supplies "
+        "action labels from the same observations with privileged true z."
+    ),
+)
+p.add_argument("--latent_teacher_lambda", type=float, default=0.5)
+p.add_argument("--latent_teacher_kl_beta", type=float, default=0.05)
+p.add_argument("--latent_teacher_max_kl", type=float, default=0.05)
 p.add_argument("--vehicle_speed_kmh", type=float, default=4.0)
+p.add_argument(
+    "--vehicle_speed_min_kmh",
+    type=float,
+    default=None,
+    help="Minimum constant truck speed sampled once per episode.",
+)
+p.add_argument(
+    "--vehicle_speed_max_kmh",
+    type=float,
+    default=None,
+    help="Maximum constant truck speed sampled once per episode.",
+)
+p.add_argument(
+    "--vehicle_speed_sampling",
+    choices=("uniform", "active_time_balanced"),
+    default="uniform",
+    help=(
+        "Episode reset distribution. active_time_balanced uses p(v) proportional "
+        "to v so fast replicas contribute as many active path transitions as "
+        "slow replicas before parking at 26 m."
+    ),
+)
+p.add_argument(
+    "--speed_segment_duration_s",
+    type=float,
+    default=0.0,
+    help=(
+        "Use equal-duration training segments at every sampled speed. The "
+        "held-out evaluator keeps the complete 26 m path."
+    ),
+)
 p.add_argument(
     "--head_joint_action",
     action="store_true",
@@ -303,6 +362,21 @@ p.add_argument(
     help="Zero the resumed critic output head after loading changed reward semantics.",
 )
 p.add_argument(
+    "--freeze_actor_iterations",
+    type=int,
+    default=0,
+    help=(
+        "Keep the resumed actor fixed while the critic adapts to a new speed "
+        "distribution. The actor is unfrozen after this many PPO iterations."
+    ),
+)
+p.add_argument(
+    "--obs_normalizer",
+    choices=("freeze", "adapt"),
+    default="freeze",
+    help="Freeze resumed observation statistics; adapt is an explicit ablation.",
+)
+p.add_argument(
     "--resume_c4_std",
     type=float,
     default=None,
@@ -346,13 +420,59 @@ p.add_argument("--probe_only", action="store_true")
 p.add_argument(
     "--actuator",
     default="rom",
-    choices=("rom", "idfd"),
+    choices=("rom", "idfd", "id_aam_fd"),
     help=(
         "Which actuator converts the cylinder command into motion. "
-        "rom = PPO3 command ROM; idfd = PPO4 ID->FD. Everything else about "
-        "training is identical, which is the point."
+        "rom = PPO3 command ROM; idfd = PPO4 ID->FD; id_aam_fd = causal "
+        "AAM -> ID adapter -> FD. Everything else about training is identical, "
+        "which is the point."
     ),
 )
+p.add_argument(
+    "--online_aam_residual_scale",
+    "--online-aam-residual-scale",
+    dest="online_aam_residual_scale",
+    type=float,
+    default=None,
+    help=(
+        "Override the PPO-ID(AAM)-FD latent residual scale for a controlled "
+        "curriculum. The AAM observation remains enabled and its value is "
+        "recorded in the run manifest."
+    ),
+)
+p.add_argument(
+    "--online_aam_latent_mode",
+    choices=("estimated", "true", "zero", "mean", "shuffled"),
+    default=None,
+    help=(
+        "Latent supplied to the policy and ID adapter. 'true' is the "
+        "privileged frozen-SD warm-start phase; production deployment uses "
+        "'estimated'."
+    ),
+)
+p.add_argument(
+    "--factor_domain",
+    default="",
+    choices=("", "nominal", "hydraulic", "mechanical", "combined_train", "combined_test"),
+    help=(
+        "Randomize the plant per EPISODE RESET from the audited deployment "
+        "factor manifest. Without this the plant is nominal for every episode, "
+        "the AAM latent z_hat is therefore constant, and both consumers of it "
+        "learn to ignore it: measured 2026-08-14, a policy trained on nominal "
+        "ended with first-layer weights of 0.023/0.016 on the two z_hat "
+        "channels against a median of 1.36, and the conditioned residual made "
+        "every gate WORSE because it perturbs a command the frozen ID already "
+        "gets right. Under combined_train the sign flips -- residual 0.25 vs "
+        "0.0 at 3 km/h gives headroom 0.00231 vs 0.00018 and lateral 0.3757 "
+        "vs 0.4378. Train ID(AAM)-FD with this set."
+    ),
+)
+p.add_argument(
+    "--factor_key",
+    default="",
+    help="Explicit factor key/run id, e.g. flow_min or combined_test:102.",
+)
+p.add_argument("--factor_manifest", default="")
 AppLauncher.add_app_launcher_args(p)
 a, unknown = p.parse_known_args()
 sys.argv = [sys.argv[0], *unknown]
@@ -362,8 +482,32 @@ if not stages or any(stage not in (1, 2, 3, 4, 5, 6) for stage in stages):
     p.error("--stages must be a comma-separated subset of 1,2,3,4,5,6")
 if a.stage_iterations <= 0 or a.save_interval <= 0:
     p.error("stage iterations and save interval must be positive")
+if a.freeze_actor_iterations < 0:
+    p.error("--freeze_actor_iterations must be non-negative")
 if a.learning_rate is not None and a.learning_rate <= 0.0:
     p.error("--learning_rate must be positive")
+if a.gamma is not None and not 0.0 < a.gamma <= 1.0:
+    p.error("--gamma must be in (0, 1]")
+if a.lam is not None and not 0.0 < a.lam <= 1.0:
+    p.error("--lam must be in (0, 1]")
+if min(a.demo_lambda, a.demo_kl_beta, a.demo_max_kl) < 0.0:
+    p.error("demo regularization weights and KL cap must be non-negative")
+if min(
+    a.latent_teacher_lambda,
+    a.latent_teacher_kl_beta,
+    a.latent_teacher_max_kl,
+) < 0.0:
+    p.error("latent-teacher weights and KL cap must be non-negative")
+if a.demo_regularized and a.latent_teacher_regularized:
+    p.error("DLS demo and latent-teacher regularization are mutually exclusive")
+if a.latent_teacher_regularized and (a.actuator != "id_aam_fd" or not a.resume):
+    p.error("--latent_teacher_regularized requires ID-AAM-FD and --resume")
+if a.latent_teacher_regularized and a.online_aam_latent_mode not in (None, "estimated"):
+    p.error("latent-teacher student must execute with estimated z_hat")
+if a.demo_lateral_threshold < 0.0:
+    p.error("--demo_lateral_threshold must be non-negative")
+if a.speed_segment_duration_s < 0.0:
+    p.error("--speed_segment_duration_s must be non-negative")
 if a.resume_std is not None and a.resume_std <= 0.0:
     p.error("--resume_std must be positive")
 if a.init_std is not None and a.init_std <= 0.0:
@@ -376,6 +520,14 @@ if a.resume_q5_std is not None and a.head_joint_action is False:
     p.error("--resume_q5_std requires --head_joint_action")
 if a.convergence_check_interval <= 0 or a.convergence_steps <= 0:
     p.error("convergence interval and steps must be positive")
+if (a.vehicle_speed_min_kmh is None) != (a.vehicle_speed_max_kmh is None):
+    p.error(
+        "--vehicle_speed_min_kmh and --vehicle_speed_max_kmh must be given together"
+    )
+if a.vehicle_speed_min_kmh is not None and not (
+    0.0 < a.vehicle_speed_min_kmh <= a.vehicle_speed_max_kmh
+):
+    p.error("truck speed range must satisfy 0 < min <= max")
 
 launcher = AppLauncher(a)
 simulation_app = launcher.app
@@ -388,6 +540,7 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 import verge_task  # noqa: F401,E402  (registers the gym task)
 from verge_task.distill import assert_teacher_disabled  # noqa: E402
+from verge_task.vehicle_speed import configure_path_horizon  # noqa: E402
 from verge_task.terrain_env_cfg import (  # noqa: E402
     TerrainSolePolicyPPORunnerCfg,  # noqa: F401  (default actuator)
     apply_terrain_curriculum_stage,
@@ -399,7 +552,10 @@ from verge_task.terrain_observations import (  # noqa: E402
     observation_space_for_cfg,
     override_cfg,
 )
-from verge_task.terrain import enable_adaptive_trajectory_curriculum  # noqa: E402
+from verge_task.terrain import (  # noqa: E402
+    TRACKING_PATH_FAMILIES,
+    enable_adaptive_trajectory_curriculum,
+)
 
 # One task, two actuators. Resolved once here so every downstream use --
 # env construction, runner config, checkpoint tagging -- cannot disagree.
@@ -700,6 +856,17 @@ def main() -> None:
             raise ValueError("--model_error_history must be >= 1")
         override_cfg(env_cfg, "terrain_model_error_history", int(a.model_error_history))
     apply_plant_overrides(env_cfg)
+    if a.online_aam_residual_scale is not None:
+        if a.actuator != "id_aam_fd":
+            p.error("--online_aam_residual_scale requires --actuator id_aam_fd")
+        if not 0.0 <= a.online_aam_residual_scale <= 1.0:
+            p.error("--online_aam_residual_scale must be in [0, 1]")
+        env_cfg.online_aam_residual_scale = float(a.online_aam_residual_scale)
+    if a.online_aam_latent_mode is not None:
+        if a.actuator != "id_aam_fd":
+            p.error("--online_aam_latent_mode requires --actuator id_aam_fd")
+        env_cfg.online_aam_latent_mode = str(a.online_aam_latent_mode)
+        env_cfg.online_aam_policy_latent_mode = str(a.online_aam_latent_mode)
     env_cfg.observation_space = observation_space_for_cfg(env_cfg)
     env_cfg.enable_contact_tracking_demo = False
     resume_load_path = resume_path
@@ -726,8 +893,30 @@ def main() -> None:
                 "migrated shared-policy checkpoints require "
                 "--reset_optimizer_on_resume"
             )
-    env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
-    env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    if a.vehicle_speed_min_kmh is not None:
+        env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_min_kmh)
+        env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_max_kmh)
+    else:
+        env_cfg.vehicle_speed_min_kmh = float(a.vehicle_speed_kmh)
+        env_cfg.vehicle_speed_max_kmh = float(a.vehicle_speed_kmh)
+    env_cfg.vehicle_speed_per_episode = True
+    env_cfg.vehicle_speed_sampling = str(a.vehicle_speed_sampling)
+    # Plant randomization is latched once per episode reset, matching how the
+    # AAM's own dataset was collected (one constant factor row per run) and how
+    # truck speed is already sampled. Switching factors mid-episode would put
+    # the AAM out of its training distribution and make estimator lag
+    # indistinguishable from estimator error; that belongs in a mid-episode
+    # switch TEST, not in the training regime.
+    if a.factor_domain or a.factor_key:
+        env_cfg.deployment_factor_enabled = True
+        env_cfg.deployment_factor_domain = a.factor_domain or "nominal"
+        env_cfg.deployment_factor_key = str(a.factor_key)
+        if a.factor_manifest:
+            env_cfg.deployment_factor_manifest = str(Path(a.factor_manifest).resolve())
+        env_cfg.deployment_factor_seed = int(a.seed)
+    env_cfg.vehicle_training_segment_duration_s = float(
+        a.speed_segment_duration_s
+    )
     if a.drive_substep_interpolation:
         env_cfg.terrain_kinematic_drive_substep_interpolation = (
             a.drive_substep_interpolation == "true"
@@ -755,11 +944,16 @@ def main() -> None:
         runner_cfg.algorithm.schedule = "fixed"
     if a.entropy_coef is not None:
         runner_cfg.algorithm.entropy_coef = float(a.entropy_coef)
+    if a.gamma is not None:
+        runner_cfg.algorithm.gamma = float(a.gamma)
+    if a.lam is not None:
+        runner_cfg.algorithm.lam = float(a.lam)
     if a.init_std is not None:
         runner_cfg.actor.distribution_cfg.init_std = float(a.init_std)
 
     apply_terrain_curriculum_stage(env_cfg, stages[0])
     apply_plant_overrides(env_cfg)
+    configure_path_horizon(env_cfg)
     # Training-only relief spread. The held-out gate terrain deliberately keeps
     # the narrower cfg tuple so scores stay comparable; PPO sees 0.35 (near-flat)
     # and 1.15 (rougher than anything scored) so it generalizes past the gates
@@ -897,6 +1091,16 @@ def main() -> None:
         # Height schedule is supplied by the caller through --height_schedule
         # so the three-block ramp (easy -> full -> balanced) is explicit in the
         # driver script rather than hidden in a flag.
+    if a.speed_segment_duration_s > 0.0 and not (
+        a.tail_focus or a.lateral_focus or a.boom_focus or a.contact_focus
+    ):
+        phases = (0.0, 0.25, 0.50, 0.75)
+        env_cfg.tracking_path_family_schedule = tuple(
+            family for phase in phases for family in TRACKING_PATH_FAMILIES
+        )
+        env_cfg.tracking_path_start_phase_schedule = tuple(
+            phase for phase in phases for _ in TRACKING_PATH_FAMILIES
+        )
     if a.head_tail_risk:
         env_cfg.terrain_head_tail_fraction = 0.02
         env_cfg.terrain_head_tail_multiplier = 2.0
@@ -989,11 +1193,52 @@ def main() -> None:
     env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
     env_cfg.randomize_trajectory_shape = False
     env_cfg.randomize_start_phase = False
-    # PPO always runs teacher-free. Distillation is scripts/distill_terrain.py, and it
-    # hands over a checkpoint, not a teacher.
-    assert_teacher_disabled(env_cfg, context="PPO3 PPO training")
+    # The teacher may provide labels, but never executes during PPO. Distillation
+    # hands over a checkpoint; --demo_regularized keeps a filtered label anchor
+    # on policy-visited recovery states.
+    #
+    # Pin the deployment trajectory BEFORE construction, the same way
+    # distill_terrain.py and evaluate_gates.py do. `apply_terrain_curriculum_stage`
+    # leaves `randomize_trajectory_shape = True`, and a randomized library entry
+    # with `truck_motion_mode = "parked"` sets `vehicle_speed_min_kmh =
+    # vehicle_speed_max_kmh = 0.0` inside the base env's `_select_trajectory`.
+    # That overwrites --vehicle_speed_kmh silently, and pinning the shape after
+    # construction (which is where these lines used to live) never restores it.
+    # See PPO_ROM/scripts/train.py for the measured 600-iteration run this cost.
+    env_cfg.trajectory_shape = str(env_cfg.terrain_deployment_trajectory_shape)
+    env_cfg.randomize_trajectory_shape = False
+    env_cfg.randomize_start_phase = False
+    requested_speed_kmh = (
+        float(env_cfg.vehicle_speed_min_kmh),
+        float(env_cfg.vehicle_speed_max_kmh),
+    )
+    if a.demo_regularized:
+        env_cfg.sole_teacher_mode = "label"
+    else:
+        assert_teacher_disabled(env_cfg, context="PPO3 PPO training")
     env = gym.make(TASK_ID, cfg=env_cfg, render_mode=None)
     raw = env.unwrapped
+    built_speed_kmh = (
+        float(raw.cfg.vehicle_speed_min_kmh),
+        float(raw.cfg.vehicle_speed_max_kmh),
+    )
+    if any(
+        abs(built - want) > 1.0e-6
+        for built, want in zip(built_speed_kmh, requested_speed_kmh)
+    ):
+        raise RuntimeError(
+            "truck speed changed during env construction: requested "
+            f"{requested_speed_kmh} km/h, built {built_speed_kmh} km/h. The "
+            "deployment trajectory's truck_motion_mode overwrote it; training "
+            "on a parked truck while acceptance drives is the defect this "
+            "check exists to stop."
+        )
+    print(
+        f"[PPO-TERRAIN-DRIVE] truck speed verified at {built_speed_kmh[0]:.2f}-"
+        f"{built_speed_kmh[1]:.2f} km/h after construction "
+        f"(trajectory={raw.cfg.trajectory_shape})",
+        flush=True,
+    )
     # DirectRLEnv construction leaves the asset at its spawn pose. Without an
     # explicit reset, PPO's first rollout starts before the production arm
     # deployment/settle/ROM warm-up and sees ~1.1 m cut-height error. Every
@@ -1058,7 +1303,34 @@ def main() -> None:
         "log_dir": str(log_dir),
         "initialization_source": resume_source,
         "resume": str(resume_path) if resume_path is not None else None,
+        "training_start_iteration": int(
+            resume_payload.get("iter", 0) if resume_payload is not None else 0
+        ),
         "teacher_mode": str(raw.cfg.sole_teacher_mode),
+        "teacher_execution_during_ppo": False,
+        "demo_regularized": bool(a.demo_regularized),
+        "demo_lambda": float(a.demo_lambda) if a.demo_regularized else None,
+        "demo_kl_beta": float(a.demo_kl_beta) if a.demo_regularized else None,
+        "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+        "demo_lateral_threshold": (
+            float(a.demo_lateral_threshold) if a.demo_regularized else None
+        ),
+        "latent_teacher_regularized": bool(a.latent_teacher_regularized),
+        "latent_teacher_lambda": (
+            float(a.latent_teacher_lambda)
+            if a.latent_teacher_regularized
+            else None
+        ),
+        "latent_teacher_kl_beta": (
+            float(a.latent_teacher_kl_beta)
+            if a.latent_teacher_regularized
+            else None
+        ),
+        "latent_teacher_max_kl": (
+            float(a.latent_teacher_max_kl)
+            if a.latent_teacher_regularized
+            else None
+        ),
         "direct_target_demo": bool(raw.cfg.enable_contact_tracking_demo),
         "num_envs": int(raw.num_envs),
         "observation_width": int(raw.cfg.observation_space),
@@ -1075,6 +1347,27 @@ def main() -> None:
         "terrain_height_scales": sorted(
             set(float(value) for value in raw._terrain_height_scales)
         ),
+        "vehicle_speed_min_kmh": float(raw.cfg.vehicle_speed_min_kmh),
+        "vehicle_speed_max_kmh": float(raw.cfg.vehicle_speed_max_kmh),
+        "vehicle_speed_per_episode": bool(
+            getattr(raw.cfg, "vehicle_speed_per_episode", False)
+        ),
+        "vehicle_speed_sampling": str(
+            getattr(raw.cfg, "vehicle_speed_sampling", "uniform")
+        ),
+        "speed_segment_duration_s": float(
+            getattr(raw.cfg, "vehicle_training_segment_duration_s", 0.0)
+        ),
+        # A run trained on nominal cannot support any AAM claim; record the
+        # plant randomization so a checkpoint's own manifest says which it was.
+        "deployment_factor_enabled": bool(
+            getattr(raw.cfg, "deployment_factor_enabled", False)
+        ),
+        "deployment_factor_domain": str(
+            getattr(raw.cfg, "deployment_factor_domain", "nominal")
+        ),
+        "path_length_m": float(raw.cfg.terrain_tracking_active_length_m),
+        "episode_length_s": float(raw.cfg.episode_length_s),
         "tail_focus": bool(a.tail_focus),
         "lateral_focus": bool(a.lateral_focus),
         "head_tail_risk": bool(a.head_tail_risk),
@@ -1087,8 +1380,23 @@ def main() -> None:
         "num_steps_per_env": int(runner_cfg.num_steps_per_env),
         "learning_rate": float(runner_cfg.algorithm.learning_rate),
         "entropy_coef": float(runner_cfg.algorithm.entropy_coef),
+        "gamma": float(runner_cfg.algorithm.gamma),
+        "lam": float(runner_cfg.algorithm.lam),
+        "obs_normalizer": str(a.obs_normalizer),
+        "freeze_actor_iterations": int(a.freeze_actor_iterations),
         "seed": int(a.seed),
         "stages": list(stages),
+        "online_aam_residual_scale": (
+            float(a.online_aam_residual_scale)
+            if a.online_aam_residual_scale is not None
+            else None
+        ),
+        "online_aam_latent_mode": str(
+            getattr(raw.cfg, "online_aam_latent_mode", "estimated")
+        ),
+        "online_aam_policy_latent_mode": str(
+            getattr(raw.cfg, "online_aam_policy_latent_mode", "estimated")
+        ),
     }
     (log_dir / "run_manifest.json").write_text(
         json.dumps(startup_manifest, indent=2, sort_keys=True)
@@ -1238,7 +1546,29 @@ def main() -> None:
             "head_joint_action": bool(raw.cfg.sole_head_joint_action),
             "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
             "initialization_source": resume_source,
-            "teacher_enabled_during_ppo": False,
+            "teacher_enabled_during_ppo": bool(a.demo_regularized),
+            "teacher_labels_enabled": bool(a.demo_regularized),
+            "teacher_execution_during_ppo": False,
+            "demo_regularized": bool(a.demo_regularized),
+            "demo_lambda": float(a.demo_lambda) if a.demo_regularized else None,
+            "demo_kl_beta": float(a.demo_kl_beta) if a.demo_regularized else None,
+            "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
+            "latent_teacher_regularized": bool(a.latent_teacher_regularized),
+            "latent_teacher_lambda": (
+                float(a.latent_teacher_lambda)
+                if a.latent_teacher_regularized
+                else None
+            ),
+            "latent_teacher_kl_beta": (
+                float(a.latent_teacher_kl_beta)
+                if a.latent_teacher_regularized
+                else None
+            ),
+            "latent_teacher_max_kl": (
+                float(a.latent_teacher_max_kl)
+                if a.latent_teacher_regularized
+                else None
+            ),
             "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "terrain_base_seed": int(raw._mow_strip_cfg().seed),
             "path_families": sorted(set(raw._tracking_path_family_names)),
@@ -1256,17 +1586,449 @@ def main() -> None:
 
     runner.save = save_with_terrain_provenance
 
+    def observation_normalizers() -> list:
+        """Return empirical input normalizers owned by actor or critic."""
+
+        return [
+            module
+            for owner in (runner.alg.actor, runner.alg.critic)
+            for module in owner.modules()
+            if type(module).__name__ == "EmpiricalNormalization"
+        ]
+
+    _frozen_normalizers = observation_normalizers() if a.obs_normalizer == "freeze" else []
+    if _frozen_normalizers:
+        from verge_task.trajectory_regularized import (
+            assert_normalizers_unchanged,
+            freeze_normalizers_across_train_mode,
+            reseed_frozen_speed_normalizer,
+        )
+
+        # Repair BEFORE the snapshot, or the drift guard preserves the damage
+        # for the whole run. A frozen normalizer resumed from a narrower speed
+        # range does not normalize the speed channel, it amplifies it: the
+        # PPO-ID(AAM)-FD warm start carried mean 0.6283 m/s (2.3 km/h) and std
+        # 0.1874, putting 7 km/h at +6.7 sigma while every other channel is
+        # order 1. The same defect cost PPO-ROM eleven hours of training that
+        # could not have worked. The AAM observation is 68-D (66 plus z_hat(2),
+        # appended), so the speed channel index is unchanged.
+        _normalizer_repairs = reseed_frozen_speed_normalizer(
+            runner.alg,
+            float(raw.cfg.vehicle_speed_min_kmh),
+            float(raw.cfg.vehicle_speed_max_kmh),
+        )
+        for _repair in _normalizer_repairs:
+            print(f"[VERGE-NORM] reseeded {_repair}", flush=True)
+        if not _normalizer_repairs:
+            print(
+                "[VERGE-NORM] resumed normalizer already covers the sampled "
+                "speed range; no reseed needed",
+                flush=True,
+            )
+
+        _normalizer_snapshot = freeze_normalizers_across_train_mode(runner.alg)
+        update_before_normalizer_guard = runner.alg.update
+
+        def update_with_frozen_normalizer_guard(*args, **kwargs):
+            assert_normalizers_unchanged(
+                _normalizer_snapshot, runner.alg.actor, runner.alg.critic
+            )
+            result = update_before_normalizer_guard(*args, **kwargs)
+            assert_normalizers_unchanged(
+                _normalizer_snapshot, runner.alg.actor, runner.alg.critic
+            )
+            return result
+
+        runner.alg.update = update_with_frozen_normalizer_guard
+        print(
+            f"[PPO3-NORM] froze {len(_frozen_normalizers)} observation "
+            "normalizer(s) for the resumed policy",
+            flush=True,
+        )
+
+    demo_prior_actor = None
+    demo_teacher_steps: list[torch.Tensor] = []
+    demo_weight_steps: list[torch.Tensor] = []
+    if a.demo_regularized:
+        from verge_task.demo_regularized import demo_loss, gaussian_kl, state_filter
+
+        demo_prior_actor = copy.deepcopy(runner.alg.actor).to(a.device)
+        demo_prior_actor.eval()
+        for parameter in demo_prior_actor.parameters():
+            parameter.requires_grad_(False)
+
+        process_env_step_without_demo = runner.alg.process_env_step
+
+        def process_env_step_with_demo(obs, rewards, dones, extras):
+            demo_teacher_steps.append(raw.terrain_teacher_raw_action.detach().clone())
+            demo_weight_steps.append(
+                state_filter(
+                    lateral_error_m=raw.verge_lateral_error().detach(),
+                    ground_contact=raw.cutter_ground_contact().detach(),
+                    lateral_threshold_m=float(a.demo_lateral_threshold),
+                    require_contact=True,
+                )
+            )
+            return process_env_step_without_demo(obs, rewards, dones, extras)
+
+        runner.alg.process_env_step = process_env_step_with_demo
+        update_without_demo = runner.alg.update
+
+        def update_with_demo_regularization(*args, **kwargs):
+            storage = runner.alg.storage
+            rollout_observations = storage.observations.clone()
+            teacher_steps = list(demo_teacher_steps)
+            weight_steps = list(demo_weight_steps)
+            demo_teacher_steps.clear()
+            demo_weight_steps.clear()
+
+            result = update_without_demo(*args, **kwargs)
+            if (
+                not teacher_steps
+                or len(teacher_steps) != int(storage.num_transitions_per_env)
+                or not any(
+                    parameter.requires_grad
+                    for parameter in runner.alg.actor.parameters()
+                )
+            ):
+                return result
+
+            observations = rollout_observations.flatten(0, 1)
+            teacher_actions = torch.stack(teacher_steps, dim=0).flatten(0, 1)
+            weights = torch.stack(weight_steps, dim=0).flatten(0, 1)
+            runner.alg.actor(observations, stochastic_output=True)
+            policy_mean = runner.alg.actor.distribution.mean
+            policy_std = runner.alg.actor.distribution.std
+            with torch.no_grad():
+                demo_prior_actor(observations, stochastic_output=True)
+                prior_mean = demo_prior_actor.distribution.mean
+                prior_std = demo_prior_actor.distribution.std
+            filtered_demo = demo_loss(
+                policy_mean=policy_mean,
+                teacher_action=teacher_actions,
+                weights=weights,
+            )
+            prior_kl = gaussian_kl(
+                mean_q=policy_mean,
+                std_q=policy_std,
+                mean_p=prior_mean,
+                std_p=prior_std,
+            )
+            regularizer = (
+                float(a.demo_lambda) * filtered_demo
+                + float(a.demo_kl_beta) * prior_kl
+            )
+            runner.alg.optimizer.zero_grad()
+            regularizer.backward()
+            torch.nn.utils.clip_grad_norm_(
+                runner.alg.actor.parameters(), runner.alg.max_grad_norm
+            )
+            runner.alg.optimizer.step()
+
+            prior_kl_before_projection = float(prior_kl.detach())
+            projection_alpha = 0.0
+            max_kl = float(a.demo_max_kl)
+            if max_kl > 0.0 and prior_kl_before_projection > max_kl:
+                current_parameters = {
+                    name: parameter.detach().clone()
+                    for name, parameter in runner.alg.actor.named_parameters()
+                }
+                prior_parameters = dict(demo_prior_actor.named_parameters())
+
+                def set_prior_blend(alpha: float) -> None:
+                    with torch.no_grad():
+                        for name, parameter in runner.alg.actor.named_parameters():
+                            parameter.copy_(
+                                (1.0 - alpha) * current_parameters[name]
+                                + alpha * prior_parameters[name]
+                            )
+
+                def measure_prior_kl() -> torch.Tensor:
+                    with torch.no_grad():
+                        runner.alg.actor(observations, stochastic_output=True)
+                        current_mean = runner.alg.actor.distribution.mean
+                        current_std = runner.alg.actor.distribution.std
+                        demo_prior_actor(observations, stochastic_output=True)
+                        return gaussian_kl(
+                            mean_q=current_mean,
+                            std_q=current_std,
+                            mean_p=demo_prior_actor.distribution.mean,
+                            std_p=demo_prior_actor.distribution.std,
+                        ).detach()
+
+                low, high = 0.0, 1.0
+                for _ in range(12):
+                    middle = 0.5 * (low + high)
+                    set_prior_blend(middle)
+                    if float(measure_prior_kl()) > max_kl:
+                        low = middle
+                    else:
+                        high = middle
+                set_prior_blend(high)
+                projection_alpha = high
+
+            result = dict(result)
+            result.update(
+                {
+                    "demo": float(filtered_demo.detach()),
+                    "demo_kl": float(measure_prior_kl())
+                    if projection_alpha > 0.0
+                    else prior_kl_before_projection,
+                    "demo_kl_pre_projection": prior_kl_before_projection,
+                    "demo_projection_alpha": projection_alpha,
+                    "demo_weight_fraction": float(weights.mean()),
+                }
+            )
+            return result
+
+        runner.alg.update = update_with_demo_regularization
+        print(
+            "[PPO3-DEMO] filtered policy-state DLS labels active: "
+            f"lambda={a.demo_lambda:g} beta={a.demo_kl_beta:g} "
+            f"max_kl={a.demo_max_kl:g}; teacher execution disabled",
+            flush=True,
+        )
+
+    if a.latent_teacher_regularized:
+        from verge_task.demo_regularized import gaussian_kl
+
+        if int(raw.cfg.observation_space) < 2:
+            raise RuntimeError("latent-teacher training requires two latent columns")
+        if str(getattr(raw.cfg, "online_aam_latent_mode", "")) != "estimated":
+            raise RuntimeError("latent-teacher controller must remain in estimated mode")
+        if str(getattr(raw.cfg, "online_aam_policy_latent_mode", "")) != "estimated":
+            raise RuntimeError("latent-teacher student must observe estimated z_hat")
+        if not hasattr(raw, "_aam_privileged_z"):
+            raise RuntimeError("environment has no privileged latent label buffer")
+
+        # One frozen actor serves both roles: with true z it is the privileged
+        # action teacher; with estimated z it is the trust-region prior.  It is
+        # copied before any student update and never executes in the plant.
+        latent_teacher_actor = copy.deepcopy(runner.alg.actor).to(a.device)
+        latent_teacher_actor.eval().requires_grad_(False)
+        latent_teacher_z_steps: list[torch.Tensor] = []
+
+        act_without_latent_teacher = runner.alg.act
+
+        def act_with_latent_teacher_labels(obs):
+            label = raw._aam_privileged_z.detach().clone()
+            if label.shape != (int(raw.num_envs), 2) or not bool(
+                torch.isfinite(label).all()
+            ):
+                raise RuntimeError(
+                    f"invalid privileged latent label shape/value: {tuple(label.shape)}"
+                )
+            latent_teacher_z_steps.append(label)
+            return act_without_latent_teacher(obs)
+
+        runner.alg.act = act_with_latent_teacher_labels
+        update_without_latent_teacher = runner.alg.update
+
+        def update_with_latent_teacher(*args, **kwargs):
+            storage = runner.alg.storage
+            rollout_observations = storage.observations.clone()
+            true_z_steps = list(latent_teacher_z_steps)
+            latent_teacher_z_steps.clear()
+
+            result = update_without_latent_teacher(*args, **kwargs)
+            if (
+                len(true_z_steps) != int(storage.num_transitions_per_env)
+                or not any(
+                    parameter.requires_grad
+                    for parameter in runner.alg.actor.parameters()
+                )
+            ):
+                return result
+
+            observations = rollout_observations.flatten(0, 1)
+            privileged_z = torch.stack(true_z_steps, dim=0).flatten(0, 1)
+            student_policy_obs = observations["policy"]
+            if student_policy_obs.shape[-1] != int(raw.cfg.observation_space):
+                raise RuntimeError("latent-teacher observation width changed")
+            teacher_observations = observations.clone()
+            teacher_observations["policy"] = torch.cat(
+                (student_policy_obs[..., :-2], privileged_z), dim=-1
+            )
+
+            with torch.no_grad():
+                latent_teacher_actor(
+                    teacher_observations, stochastic_output=True
+                )
+                teacher_mean = latent_teacher_actor.distribution.mean.detach().clone()
+                latent_teacher_actor(observations, stochastic_output=True)
+                prior_mean = latent_teacher_actor.distribution.mean.detach().clone()
+                prior_std = latent_teacher_actor.distribution.std.detach().clone()
+
+            runner.alg.actor(observations, stochastic_output=True)
+            student_mean = runner.alg.actor.distribution.mean
+            student_std = runner.alg.actor.distribution.std
+            imitation = ((student_mean - teacher_mean) ** 2).mean()
+            prior_kl = gaussian_kl(
+                mean_q=student_mean,
+                std_q=student_std,
+                mean_p=prior_mean,
+                std_p=prior_std,
+            )
+            regularizer = (
+                float(a.latent_teacher_lambda) * imitation
+                + float(a.latent_teacher_kl_beta) * prior_kl
+            )
+            runner.alg.optimizer.zero_grad()
+            regularizer.backward()
+            torch.nn.utils.clip_grad_norm_(
+                runner.alg.actor.parameters(), runner.alg.max_grad_norm
+            )
+            runner.alg.optimizer.step()
+
+            pre_projection_kl = float(prior_kl.detach())
+            projection_alpha = 0.0
+            max_kl = float(a.latent_teacher_max_kl)
+            current_parameters = {
+                name: parameter.detach().clone()
+                for name, parameter in runner.alg.actor.named_parameters()
+            }
+            prior_parameters = dict(latent_teacher_actor.named_parameters())
+
+            def set_prior_blend(alpha: float) -> None:
+                with torch.no_grad():
+                    for name, parameter in runner.alg.actor.named_parameters():
+                        parameter.copy_(
+                            (1.0 - alpha) * current_parameters[name]
+                            + alpha * prior_parameters[name]
+                        )
+
+            def measure_prior_kl() -> torch.Tensor:
+                with torch.no_grad():
+                    runner.alg.actor(observations, stochastic_output=True)
+                    current_mean = runner.alg.actor.distribution.mean
+                    current_std = runner.alg.actor.distribution.std
+                    latent_teacher_actor(observations, stochastic_output=True)
+                    return gaussian_kl(
+                        mean_q=current_mean,
+                        std_q=current_std,
+                        mean_p=latent_teacher_actor.distribution.mean,
+                        std_p=latent_teacher_actor.distribution.std,
+                    ).detach()
+
+            post_step_kl = float(measure_prior_kl())
+            if max_kl > 0.0 and post_step_kl > max_kl:
+                low, high = 0.0, 1.0
+                for _ in range(12):
+                    middle = 0.5 * (low + high)
+                    set_prior_blend(middle)
+                    if float(measure_prior_kl()) > max_kl:
+                        low = middle
+                    else:
+                        high = middle
+                set_prior_blend(high)
+                projection_alpha = high
+
+            result = dict(result)
+            result.update(
+                {
+                    "latent_teacher_imitation": float(imitation.detach()),
+                    "latent_teacher_prior_kl": (
+                        float(measure_prior_kl())
+                        if projection_alpha > 0.0
+                        else post_step_kl
+                    ),
+                    "latent_teacher_prior_kl_pre_regularizer": pre_projection_kl,
+                    "latent_teacher_projection_alpha": projection_alpha,
+                    "latent_teacher_z_mae": float(
+                        (student_policy_obs[..., -2:] - privileged_z)
+                        .abs()
+                        .mean()
+                    ),
+                    "latent_teacher_action_delta": float(
+                        (prior_mean - teacher_mean).abs().mean()
+                    ),
+                }
+            )
+            return result
+
+        runner.alg.update = update_with_latent_teacher
+        print(
+            "[PPO-ID-AAM-FD-LATENT-TEACHER] frozen true-z action labels active: "
+            f"lambda={a.latent_teacher_lambda:g} "
+            f"beta={a.latent_teacher_kl_beta:g} "
+            f"max_kl={a.latent_teacher_max_kl:g}; "
+            "student/controller remain estimated, teacher never executes",
+            flush=True,
+        )
+
+    def critic_warmup(freeze: int) -> None:
+        """Adapt the new-speed critic before allowing actor updates."""
+
+        schedule = runner.alg.schedule
+        base_lr = float(runner.alg.learning_rate)
+        runner.alg.schedule = "fixed"
+        runner.alg.actor.requires_grad_(False)
+        for module in observation_normalizers():
+            module.eval()
+        print(
+            f"[PPO3-WARMUP] actor frozen for {freeze} critic-only iterations",
+            flush=True,
+        )
+        runner.learn(num_learning_iterations=freeze, init_at_random_ep_len=False)
+        warmup_iteration = int(runner.current_learning_iteration)
+        warmup_checkpoint = log_dir / "warmup_checkpoint.pt"
+        resume_iteration = warmup_iteration + 1
+        runner.current_learning_iteration = resume_iteration
+        try:
+            runner.save(
+                str(warmup_checkpoint),
+                infos={
+                    "checkpoint_kind": "critic_warmup_complete",
+                    "warmup_iterations": int(freeze),
+                    "warmup_actor_frozen": True,
+                    "warmup_iteration": int(resume_iteration),
+                    "vehicle_speed_min_kmh": float(raw.cfg.vehicle_speed_min_kmh),
+                    "vehicle_speed_max_kmh": float(raw.cfg.vehicle_speed_max_kmh),
+                },
+            )
+        finally:
+            runner.current_learning_iteration = warmup_iteration
+        (log_dir / "warmup_checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "checkpoint": str(warmup_checkpoint),
+                    "checkpoint_kind": "critic_warmup_complete",
+                    "warmup_iterations": int(freeze),
+                    "warmup_actor_frozen": True,
+                    "warmup_iteration": int(resume_iteration),
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        runner.alg.actor.requires_grad_(True)
+        if a.obs_normalizer == "adapt":
+            for module in observation_normalizers():
+                module.train()
+        runner.alg.schedule = schedule
+        runner.alg.learning_rate = base_lr
+        for param_group in runner.alg.optimizer.param_groups:
+            param_group["lr"] = base_lr
+        print(
+            f"[PPO3-WARMUP] saved {warmup_checkpoint}; actor unfrozen and "
+            f"learning rate reset to {base_lr:.6g}",
+            flush=True,
+        )
+
     final_stage = stages[-1]
     last_convergence_result = None
     for stage in stages:
         apply_terrain_curriculum_stage(raw.cfg, stage)
         apply_plant_overrides(raw.cfg)
+        configure_path_horizon(raw.cfg)
         raw.cfg.trajectory_shape = str(raw.cfg.terrain_deployment_trajectory_shape)
         raw.cfg.randomize_trajectory_shape = False
         raw.cfg.randomize_start_phase = False
         print(
             f"[PPO3-VERGE] === stage {stage} === "
-            f"truck={raw.cfg.vehicle_speed_min_kmh:.2f} km/h "
+            f"truck={raw.cfg.vehicle_speed_min_kmh:.2f}-"
+            f"{raw.cfg.vehicle_speed_max_kmh:.2f} km/h per episode "
             f"action_scale={raw.cfg.action_scale:.4f} m "
             f"rate={raw.cfg.sole_max_action_rate:.3f}/step "
             f"filter={raw.cfg.sole_action_filter:.2f} "
@@ -1277,11 +2039,21 @@ def main() -> None:
             ),
             flush=True,
         )
+        warmed_up = 0
+        if stage == stages[0] and a.freeze_actor_iterations > 0:
+            warmed_up = int(a.freeze_actor_iterations)
+            if warmed_up > int(a.stage_iterations):
+                raise RuntimeError(
+                    "--freeze_actor_iterations cannot exceed --stage_iterations"
+                )
+            critic_warmup(warmed_up)
         if not (a.until_converged and stage == final_stage):
-            runner.learn(
-                num_learning_iterations=int(a.stage_iterations),
-                init_at_random_ep_len=False,
-            )
+            remaining = int(a.stage_iterations) - warmed_up
+            if remaining > 0:
+                runner.learn(
+                    num_learning_iterations=remaining,
+                    init_at_random_ep_len=False,
+                )
             continue
 
         while True:
@@ -1369,7 +2141,13 @@ def main() -> None:
             "head_joint_action": bool(raw.cfg.sole_head_joint_action),
             "head_action_to_c4_gain": float(raw.cfg.sole_head_action_to_c4_gain),
             "initialization_source": resume_source,
-            "teacher_enabled_during_ppo": False,
+            "teacher_enabled_during_ppo": bool(a.demo_regularized),
+            "teacher_labels_enabled": bool(a.demo_regularized),
+            "teacher_execution_during_ppo": False,
+            "demo_regularized": bool(a.demo_regularized),
+            "demo_lambda": float(a.demo_lambda) if a.demo_regularized else None,
+            "demo_kl_beta": float(a.demo_kl_beta) if a.demo_regularized else None,
+            "demo_max_kl": float(a.demo_max_kl) if a.demo_regularized else None,
             "terrain_curriculum_version": str(raw.cfg.terrain_curriculum_version),
             "terrain_base_seed": int(raw._mow_strip_cfg().seed),
             "path_families": sorted(set(raw._tracking_path_family_names)),

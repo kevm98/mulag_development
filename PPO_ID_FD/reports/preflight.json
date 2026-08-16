@@ -1,0 +1,54 @@
+{
+  "checks": {
+    "P0 the truck is actually driving": {
+      "detail": "vehicle_speed=2.00-2.00 km/h trajectory=legacy_arc (0.00 makes P4 vacuous)",
+      "passed": true
+    },
+    "P0b full green strip is active": {
+      "detail": "strip=[-27.12, -1.12] path=[-27.12, -1.12]",
+      "passed": true
+    },
+    "P1 merged env is registered": {
+      "detail": "Ppo41IDFDEnv",
+      "passed": true
+    },
+    "P2 standard regime in runner cfg": {
+      "detail": "lr=0.001 schedule=adaptive entropy=0.005",
+      "passed": true
+    },
+    "P3 c4 anti-windup can bind": {
+      "detail": "lead=(0.05, 0.05, 0.05, 0.02) scale=(0.004, 0.004, 0.004, 0.004) c4_steps_to_cap=5.0 c1=12.5",
+      "passed": true
+    },
+    "P4 every path family is inside the cylinder rate ceiling": {
+      "detail": "relief=flat_patches amplitudes=[0.75, 1.2, 1.5, 1.7, 2.2] sweep_gain=0.5 ceiling=0.240 m/s worst=0.121 (random_spline) over=[] all={'random_spline': 0.121, 'double_s_curve': 0.09, 'lateral_chirp': 0.076, 'lane_change_hold': 0.063, 'lateral_sine': 0.053, 'gaussian_slalom': 0.052, 's_curve': 0.033, 'fourier_meander': 0.029, 'boom_sweep': 0.025, 'offset_return': 0.022, 'straight': 0.0} (arm contract stage=5, 5 is correct)",
+      "passed": true
+    },
+    "P5 Isaac Lab log namespaces published": {
+      "detail": "11 Episode_Reward/, 4 Metrics/",
+      "passed": true
+    },
+    "S1 all terms inside published bounds": {
+      "detail": "",
+      "passed": true
+    },
+    "S2 no non-finite reward under stress": {
+      "detail": "count=0",
+      "passed": true
+    },
+    "S3 reward is not a dead objective": {
+      "detail": "max spread=10.1073",
+      "passed": true
+    },
+    "S4 lower lateral error earns more lateral reward": {
+      "detail": "best-third=9.4043 worst-third=2.6739",
+      "passed": true
+    },
+    "S5 shaping gradients alive past 2x their gate": {
+      "detail": "lateral@0.6=1.2 lateral@0.734=1.2 cut_height@0.08=60 head_alignment@0.9=6 head_alignment@0.237=6 tool_acceleration@240=0.003333 cylinder_headroom@-0.01=20 contact_force@123000=6.667e-06",
+      "passed": true
+    }
+  },
+  "failures": [],
+  "passed": true
+}

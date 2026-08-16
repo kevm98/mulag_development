@@ -20,6 +20,13 @@ PATH_PREVIEW_BINS = 3
 
 VERGE_OBS_DIM = HEIGHT_PROFILE_BINS + 44
 
+# Named offsets into the layout documented on `build_verge_observation`. Only
+# the channels something outside this module has to address by index are named.
+# A frozen empirical normalizer is keyed by position, so anything that has to
+# repair or audit one needs the layout, not just the width.
+TRUCK_SPEED_OBS_INDEX = HEIGHT_PROFILE_BINS + 37
+SCAN_VALID_FRACTION_OBS_INDEX = HEIGHT_PROFILE_BINS + 38
+
 
 def nonfinite_row_mask(*tensors: torch.Tensor | None) -> torch.Tensor:
     """Return one flag per environment when any raw state tensor is non-finite.
@@ -133,7 +140,7 @@ def observation_space_for_cfg(cfg) -> int:
     constructing a different-width network than the one training produced, so
     the derivation lives here and every caller asks for it.
     """
-    return (
+    width = (
         verge_observation_dim(
             model_error=bool(getattr(cfg, "terrain_model_error_observation", False)),
             model_error_history=int(
@@ -146,8 +153,11 @@ def observation_space_for_cfg(cfg) -> int:
                 and bool(getattr(cfg, "terrain_parallel_sensor_observation", True))
             ),
         )
-        + 1
     )
+    width += 1
+    if bool(getattr(cfg, "online_aam_policy_observation", False)):
+        width += 2
+    return width
 
 
 def collapse_scan_width(scan: torch.Tensor, *, bins: int = HEIGHT_PROFILE_BINS) -> torch.Tensor:

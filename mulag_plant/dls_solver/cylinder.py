@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
+from mulag_plant.runtime.command_rom_runtime import pack_desired_cylinder_command
+
 
 @dataclass
 class CylinderDLSConfig:
@@ -151,11 +153,15 @@ class CylinderDLSController:
             converted = env._action_to_cylinder_target_adapter.convert(
                 action=action, x_current=x, xdot_current=xdot
             )
-            command = torch.cat(
-                (converted.reference.target_delta_x, converted.reference.target_delta_xdot), dim=-1
+            command = pack_desired_cylinder_command(
+                converted.reference.target_delta_x,
+                converted.reference.target_delta_xdot,
             )
             return env._command_cylinder_rom.predict_delta(
-                command=command, extension=x, extension_velocity=xdot, dP=env._dP
+                desired_cylinder_command=command,
+                extension=x,
+                extension_velocity=xdot,
+                dP=env._dP,
             )
         if dynamics == "base_rom":
             return self.predict_base_rom_delta(action)

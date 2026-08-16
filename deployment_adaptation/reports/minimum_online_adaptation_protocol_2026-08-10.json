@@ -1,0 +1,70 @@
+{
+  "format": "minimum_online_adaptation_protocol_v1",
+  "created": "2026-08-10",
+  "scope": "show causal bounded online AAM adaptation around frozen ID-FD",
+  "required_gates": {
+    "M1_causal_trace_parity": {
+      "status": "PASS",
+      "source": "outputs/stage30_online_aam/minimum_online_adaptation_check_cuda.json",
+      "max_abs_error": 0.0
+    },
+    "M2_no_future_influence": {
+      "status": "PASS",
+      "source": "outputs/stage30_online_aam/minimum_online_adaptation_check_cuda.json",
+      "prefix_max_abs_error": 0.0
+    },
+    "M3_safety_reset_fallback": {
+      "status": "PASS",
+      "source": "outputs/stage30_online_aam/minimum_online_adaptation_check_cuda.json",
+      "bounded_residual": true,
+      "invalid_input_fallback": true,
+      "reset_isolation": true,
+      "max_latency_ms": 1.325286997598596
+    },
+    "M4_online_adaptation_active": {
+      "status": "PASS",
+      "source": "outputs/stage30_online_aam/minimum_online_adaptation_check_cuda.json",
+      "online_aam_updates": 14,
+      "max_abs_residual": 0.11250000447034836
+    },
+    "M5_gpu_physx_smoke": {
+      "status": "PASS_EXECUTION_ONLY",
+      "meshes": [1337],
+      "num_envs": 1,
+      "steps": 8,
+      "quality_gate_evaluated": false
+    },
+    "M6_paired_adaptation_result": {
+      "status": "PASS_RECORDED_NO_UNIVERSAL_CLAIM",
+      "source": "outputs/stage30_pressure_adapter_aligned_gpu/online_evaluation_scale075_separate_histories/summary.json",
+      "runs": 36,
+      "residual_scale": 0.75,
+      "frozen_id": {
+        "cylinder_tracking_rmse_m": 19.828419087361333,
+        "tool_path_proxy_rmse_m": 52.19949886391905,
+        "saturation_fraction": 0.8917252742392073,
+        "first_divergence_s": 30.49305555555555
+      },
+      "online_aam": {
+        "cylinder_tracking_rmse_m": 18.790318229670163,
+        "tool_path_proxy_rmse_m": 47.149051616963824,
+        "saturation_fraction": 0.6798681145317292,
+        "first_divergence_s": 30.75416666666667
+      },
+      "reserved_combined_test_universal_gain": false
+    }
+  },
+  "deferred": [
+    "full hydraulic factor sweep",
+    "factor smoothness/monotonicity gate",
+    "four-arm multi-domain multi-mesh Stage 31 comparison",
+    "bootstrap confidence intervals",
+    "new PPO training run"
+  ],
+  "protocol_discrepancy": {
+    "current_path": "pressure-inclusive AAM dP feature",
+    "attached_brief_alternative": "exclude measured dP from deployable AAM",
+    "final_thesis_contract_resolved": false
+  },
+  "reserved_combined_test_rows_modified": false
+}

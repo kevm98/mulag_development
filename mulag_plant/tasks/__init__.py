@@ -12,6 +12,8 @@ EE_TASK_ID = "RRLAB-Mulag-PPO2-ROM-PhysX-EETracking-v0"
 EE_PLAY_TASK_ID = "RRLAB-Mulag-PPO2-ROM-PhysX-EETracking-PLAY-v0"
 POLICY_V3_TASK_ID = "RRLAB-Mulag-PPO2-A-Policy-V3-v0"
 POLICY_V3_PLAY_TASK_ID = "RRLAB-Mulag-PPO2-A-Policy-V3-PLAY-v0"
+POLICY_TRAJECTORY_2D_TASK_ID = "RRLAB-Mulag-PPO2-A-Trajectory2D-v0"
+POLICY_TRAJECTORY_2D_PLAY_TASK_ID = "RRLAB-Mulag-PPO2-A-Trajectory2D-PLAY-v0"
 
 
 def _register_once(
@@ -81,8 +83,32 @@ _register_once(
     entry_point="mulag_plant.policy.env:ResidualPolicyEnv",
 )
 
+_register_once(
+    POLICY_TRAJECTORY_2D_TASK_ID,
+    env_cfg="mulag_plant.policy_4cyl.env_cfg:FourCylinderTrajectory2DEnvCfg",
+    runner_cfg=(
+        "mulag_plant.policy_4cyl.env_cfg:"
+        "FourCylinderTrajectory2DPPORunnerCfg"
+    ),
+    entry_point="mulag_plant.policy.env:ResidualPolicyEnv",
+)
+
+_register_once(
+    POLICY_TRAJECTORY_2D_PLAY_TASK_ID,
+    env_cfg=(
+        "mulag_plant.policy_4cyl.env_cfg:"
+        "FourCylinderTrajectory2DEnvCfg_PLAY"
+    ),
+    runner_cfg=(
+        "mulag_plant.policy_4cyl.env_cfg:"
+        "FourCylinderTrajectory2DPPORunnerCfg"
+    ),
+    entry_point="mulag_plant.policy.env:ResidualPolicyEnv",
+)
+
 
 __all__ = [
     "TASK_ID", "PLAY_TASK_ID", "EE_TASK_ID", "EE_PLAY_TASK_ID",
     "POLICY_V3_TASK_ID", "POLICY_V3_PLAY_TASK_ID",
+    "POLICY_TRAJECTORY_2D_TASK_ID", "POLICY_TRAJECTORY_2D_PLAY_TASK_ID",
 ]

@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-08-10",
+  "aam_training_finished": true,
+  "ppo_training_finished": true,
+  "formal_stage27_temporal_pass": true,
+  "formal_stage27_runs": 36,
+  "gate2": {
+    "status": "pass",
+    "artifact": "outputs/stage29_latent_adapter_retry/evaluation/summary.json",
+    "validation_runs_frozen_id": 20,
+    "validation_runs_true_latent": 20,
+    "frozen_id": {
+      "teacher_forced_next_extension_rmse_m": 0.0027156527591232706,
+      "teacher_forced_next_velocity_rmse_mps": 0.10364244582737576,
+      "closed_loop_cylinder_tracking_rmse_m": 20.770319800987238,
+      "closed_loop_tool_path_proxy_rmse_m": 56.98644241209697,
+      "closed_loop_saturation_fraction": 0.8898852176220806,
+      "closed_loop_first_divergence_time_s": 30.8475
+    },
+    "true_latent_adapter": {
+      "teacher_forced_next_extension_rmse_m": 0.002322163767709052,
+      "teacher_forced_next_velocity_rmse_mps": 0.10080940078973596,
+      "closed_loop_cylinder_tracking_rmse_m": 19.587750775563975,
+      "closed_loop_tool_path_proxy_rmse_m": 52.91456661219466,
+      "closed_loop_saturation_fraction": 0.5986995753715499,
+      "closed_loop_first_divergence_time_s": 31.464999999999996
+    }
+  },
+  "stage27_verdict_path": "AAM_module/results/stage27_chain_verify_temporal/verdict.json",
+  "pressure_aam_checkpoint": {
+    "path": "outputs/aam_stage30_pressure_temporal/L5/aam.pt",
+    "sha256": "f9d8ee4eb398f24130e17e13fc27999dd2fb89e0469d0189e272e8e480eb2602"
+  },
+  "pressure_adapter_checkpoint": {
+    "path": "outputs/stage30_pressure_adapter_aligned_gpu/zhat_adapter.pt",
+    "sha256": "bbbeca05e26fb2cac57a9659d53c41060868604dbaaf8a6e97386e4041e25b18"
+  },
+  "ppo_checkpoint": {
+    "path": "logs/rsl_rl/ppo_id_aam_fd/train_final/model_599.pt",
+    "sha256": "f878d2168e4a105d1280b41e162785c909fe63fdd0001e1a2502aea37607bee9"
+  },
+  "phase1": {
+    "status": "pending",
+    "gate1": "pending",
+    "factor_plumbing_started": false,
+    "reserved_combined_test_modified": false
+  },
+  "stage31": "not_complete",
+  "protocol_discrepancy": "Current AAM includes measured dP; attached audit brief says deployable AAM must exclude dP. Freeze one protocol before final Stage 31 claim."
+}

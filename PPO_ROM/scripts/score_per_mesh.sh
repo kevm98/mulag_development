@@ -1,46 +1,113 @@
 #!/usr/bin/env bash
-# Score a checkpoint (or --teacher / --null) on the 8-gate contract, running
-# ONE MESH PER PROCESS and merging the results.
-#
-# WHY: evaluate_gates.py loops meshes inside a single process, calling
-# env.close() then gym.make() again. In this Isaac Sim build that deadlocks --
-# measured four times on 2026-08-06 (null eval, teacher eval, student eval,
-# each hanging with exactly two PhysX env constructions logged, process alive at
-# ~109% CPU, no output for 15-40 minutes). A single mesh completes in ~50 s, so
-# the rollout itself is fine; it is the second env build in the same process
-# that wedges.
-#
-# One process per mesh sidesteps it entirely and is also more robust: a hang on
-# one mesh costs that mesh, not the whole evaluation. merge_gates.py then does
-# the worst-mesh aggregation exactly once, which is the only place it is
-# allowed to happen.
-#
-# Usage:
-#   score_per_mesh.sh <name> <ckpt-path|--teacher|--null> [steps] [num_envs]
 set -uo pipefail
 
 ROOT=/home/rrlab/rrlab_mulag
 PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-OUT=$ROOT/PPO_ROM/reports/frontier
+OUT=${REPORT_ROOT:-$ROOT/PPO_ROM/reports/final}
 NAME=${1:?usage: score_per_mesh.sh <name> <ckpt|--teacher|--null> [steps] [envs]}
 SUBJECT=${2:?}
-STEPS=${3:-480}
+STEPS=${3:-2808}
 ENVS=${4:-32}
 MESHES=${MESHES:-"1337 17 909"}
 STALL=${STALL:-240}
-# TASK selects the pipeline: empty = PPO3_1 (ROM-A),
-# RRLAB-Mulag-Verge-IDFD-v0 = PPO4_1 (ID/FD). Same scorer, same gates,
-# same terrain -- which is what makes the two numbers comparable.
+STAGE=${STAGE:-6}
 TASK=${TASK:-}
 TASK_ARG=""
 [ -n "$TASK" ] && TASK_ARG="--task $TASK"
-# AMP overrides the path amplitude, collapsing the randomization band onto it.
-# Used to measure the generalization envelope outside the trained 0.30-0.75.
 AMP=${AMP:-}
 [ -n "$AMP" ] && TASK_ARG="$TASK_ARG --tracking_amplitude $AMP"
+SPEED_ARGS=()
+[ -n "${SPEED_KMH:-}" ] && SPEED_ARGS+=(--vehicle-speed-kmh "$SPEED_KMH")
+[ -n "${SPEED_MIN_KMH:-}" ] && SPEED_ARGS+=(--vehicle-speed-min-kmh "$SPEED_MIN_KMH")
+[ -n "${SPEED_MAX_KMH:-}" ] && SPEED_ARGS+=(--vehicle-speed-max-kmh "$SPEED_MAX_KMH")
+SHAPE_ARGS=()
+[ -n "${TRAJECTORY_SHAPE:-}" ] && SHAPE_ARGS+=(--trajectory-shape "$TRAJECTORY_SHAPE")
+[ -n "${TRAJECTORY_SHAPES:-}" ] && SHAPE_ARGS+=(--trajectory-shapes "$TRAJECTORY_SHAPES")
+[ "${NATURAL_VISUALS:-0}" = "1" ] && SHAPE_ARGS+=(--natural-visuals)
+SEED_ARGS=()
+[ -n "${SEED:-}" ] && SEED_ARGS+=(--seed "$SEED")
+# Per-cylinder anti-windup lead caps, e.g. LEAD_PER_AXIS=0.030,0.030,0.030,0.02.
+# Scoring an authority change has to go through THIS script rather than calling
+# the evaluator directly: the evaluator hangs when handed several meshes in one
+# process, and the one-mesh-per-process loop plus the STALL watchdog below is
+# what contains that.
+LEAD_ARGS=()
+[ -n "${LEAD_PER_AXIS:-}" ] && LEAD_ARGS+=(--cylinder_target_max_lead_per_axis_m "$LEAD_PER_AXIS")
+# PPO-ID(AAM)-FD latent residual actuation scale; 0 isolates residual damage
+# without changing the 68-D policy contract. Empty leaves the task default.
+[ -n "${RESIDUAL_SCALE:-}" ] && LEAD_ARGS+=(--online_aam_residual_scale "$RESIDUAL_SCALE")
+# Deployment factor domain (nominal/hydraulic/mechanical/combined_train/
+# combined_test). Empty leaves the task nominal. The AAM latent is constant
+# under nominal, so any z_hat ablation must set this or it measures nothing.
+# Leaky integration of the cylinder reference target. Only bites on the ID/FD
+# tasks, which integrate from the previous target; ROM integrates from measured
+# and is unaffected. Empty leaves the task default (0.0 = unleaked).
+[ -n "${TARGET_LEAK:-}" ] && LEAD_ARGS+=(--cylinder_target_leak "$TARGET_LEAK")
+# Stroke-limit reference governor: metres of learned extension held back from
+# each stop when clamping the commanded target. Empty leaves the task default.
+# Null-space stroke centering gain for the redundant 3x4 deployment IK solve.
+# ROM integrates the cylinder target from MEASURED; ID-FD/AAM from the PREVIOUS
+# target. Values: true|false. Empty leaves the task default.
+[ -n "${INTEGRATE_PREV:-}" ] && LEAD_ARGS+=(--cylinder_target_integrates_from_previous_target "$INTEGRATE_PREV")
+# Physical extension reserve on cylinder 3, metres of learned extension.
+# AAM latent ablation: estimated|shuffled|mean|zero. Empty = deployed system.
+# Speed-scheduled lead cap: LEAD_PER_AXIS applies at/below LEAD_SPEED, LEAD_HIGH above.
+[ -n "${LEAD_HIGH:-}" ] && LEAD_ARGS+=(--cylinder_target_lead_high_speed_per_axis_m "$LEAD_HIGH")
+[ -n "${LEAD_SPEED:-}" ] && LEAD_ARGS+=(--cylinder_target_lead_schedule_speed_kmh "$LEAD_SPEED")
+[ -n "${LATENT_MODE:-}" ] && LEAD_ARGS+=(--online_aam_latent_mode "$LATENT_MODE")
+[ -n "${CONTROLLER_LATENT_MODE:-}" ] && LEAD_ARGS+=(--online_aam_controller_latent_mode "$CONTROLLER_LATENT_MODE")
+[ -n "${C3_RESERVE:-}" ] && LEAD_ARGS+=(--c3_physical_extension_reserve_m "$C3_RESERVE")
+[ -n "${NULL_GAIN:-}" ] && LEAD_ARGS+=(--dls_null_space_centering_gain "$NULL_GAIN")
+[ -n "${LIMIT_INSET:-}" ] && LEAD_ARGS+=(--cylinder_target_limit_inset_m "$LIMIT_INSET")
+[ -n "${FACTOR_DOMAIN:-}" ] && LEAD_ARGS+=(--factor_domain "$FACTOR_DOMAIN")
+[ -n "${FACTOR_KEY:-}" ] && LEAD_ARGS+=(--factor_key "$FACTOR_KEY")
 
 mkdir -p "$OUT"
 cd "$ROOT"
+
+# Meshes are independent scoring runs, so they can overlap on one GPU. Measured
+# 2026-08-14: one 32-env evaluator holds 1436 MiB, against 6144 MiB total with
+# ~650 MiB of desktop -- three fit with room to spare and the wall clock drops
+# by ~3x. Kept at 1 by default because the STALL watchdog below reads one log
+# at a time; PARALLEL_MESHES>1 uses the per-mesh watchdog loop further down.
+PARALLEL_MESHES=${PARALLEL_MESHES:-1}
+if [ "$PARALLEL_MESHES" -gt 1 ]; then
+  declare -A MESH_PID
+  for MESH in $MESHES; do
+    REPORT="$OUT/${NAME}_m${MESH}.json"
+    LOG="$OUT/${NAME}_m${MESH}.log"
+    rm -f "$REPORT"
+    echo "[SCORE] mesh $MESH -> $REPORT (parallel)"
+    "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
+        --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
+    MESH_PID[$MESH]=$!
+    # Stagger: three simultaneous Isaac startups thrash the GPU and can push
+    # peak allocation above what steady-state measurement predicts.
+    sleep 20
+  done
+  for MESH in $MESHES; do
+    PID=${MESH_PID[$MESH]}
+    LOG="$OUT/${NAME}_m${MESH}.log"
+    REPORT="$OUT/${NAME}_m${MESH}.json"
+    while kill -0 "$PID" 2>/dev/null; do
+      sleep 15
+      LAST=$(stat -c %Y "$LOG" 2>/dev/null || echo 0)
+      AGE=$(( $(date +%s) - LAST ))
+      if [ "$AGE" -gt "$STALL" ]; then
+        echo "[SCORE] mesh $MESH STALLED (${AGE}s silent) -- killing"
+        kill -9 "$PID" 2>/dev/null
+        break
+      fi
+      [ -f "$REPORT" ] && break
+    done
+    [ -f "$REPORT" ] && kill -0 "$PID" 2>/dev/null && { kill -TERM "$PID" 2>/dev/null; sleep 1; kill -9 "$PID" 2>/dev/null; }
+    wait "$PID" 2>/dev/null
+    [ -f "$REPORT" ] && echo "[SCORE] mesh $MESH ok" || echo "[SCORE] mesh $MESH FAILED"
+  done
+  sleep 4
+  MESHES=""
+fi
 
 for MESH in $MESHES; do
   REPORT="$OUT/${NAME}_m${MESH}.json"
@@ -50,17 +117,15 @@ for MESH in $MESHES; do
 
   if [ "$SUBJECT" = "--teacher" ] || [ "$SUBJECT" = "--null" ]; then
     "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
-        --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage 5 \
-        $TASK_ARG --report "$REPORT" --headless > "$LOG" 2>&1 &
+        --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
   else
     "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
-        --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage 5 \
-        $TASK_ARG --report "$REPORT" --headless > "$LOG" 2>&1 &
+        --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
   fi
   PID=$!
 
-  # Stall guard: the rollout prints progress every 10%, so a log that stops
-  # growing while the process lives is the hang signature, not slow work.
   while kill -0 "$PID" 2>/dev/null; do
     sleep 15
     LAST=$(stat -c %Y "$LOG" 2>/dev/null || echo 0)
@@ -72,13 +137,21 @@ for MESH in $MESHES; do
     fi
     [ -f "$REPORT" ] && break
   done
+  if [ -f "$REPORT" ] && kill -0 "$PID" 2>/dev/null; then
+    kill -TERM "$PID" 2>/dev/null
+    sleep 1
+    kill -9 "$PID" 2>/dev/null
+  fi
   wait "$PID" 2>/dev/null
-  # Isaac Sim often refuses to exit after writing; the report is the contract.
-  pkill -9 -f "evaluate_gates.py .*--meshes $MESH " 2>/dev/null
   sleep 4
   [ -f "$REPORT" ] && echo "[SCORE] mesh $MESH ok" || echo "[SCORE] mesh $MESH FAILED"
 done
 
 echo "[SCORE] merging"
-"$PY" PPO_ROM/scripts/merge_gates.py "$OUT/${NAME}_m"*.json \
+REPORTS=("$OUT/${NAME}_m"*.json)
+if [ ! -f "${REPORTS[0]}" ]; then
+  echo "[SCORE] no per-mesh reports were produced" >&2
+  exit 1
+fi
+"$PY" PPO_ROM/scripts/merge_gates.py "${REPORTS[@]}" \
     --report "$OUT/${NAME}_gates.json"

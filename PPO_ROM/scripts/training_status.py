@@ -1,41 +1,5 @@
 #!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
-"""How is the PPO3_1 run going? One command, no simulator, no GPU.
-
-    PPO_ROM/scripts/training_status.py            # latest run
-    PPO_ROM/scripts/training_status.py --plot     # + PNG charts
-    PPO_ROM/scripts/training_status.py --run <dir>
-
-Reads the TensorBoard event file the trainer already writes, so it costs
-nothing and can run while training continues.
-
-WHAT IT IS LOOKING FOR
-======================
-This run exists to answer one question: does a critic warm-up stop PPO from
-descending its own reward? So the report leads with the three signals that
-answer it, each with an explicit verdict rather than a number to interpret:
-
-1. **Value loss falls during the frozen window.** The measured root cause of
-   every previous descent was a cold critic: value loss stuck at 6k-26k leaves
-   the advantage estimate noise-dominated, so the policy random-walks away from
-   the distilled student. If value loss is still at its starting magnitude when
-   the actor unfreezes, the warm-up did not do its job and the fine-tune that
-   follows is running on noise.
-
-2. **Exploration std stays near 0.10.** The entropy probe measured lateral
-   error growing 0.06 -> 0.59 m as std inflated toward 0.31. The run clamps std
-   to [0.03, 0.15]; this check confirms the clamp is holding and that the
-   policy is not drifting to the ceiling.
-
-3. **Tracking does not regress after unfreeze.** `Metrics/lateral_error_m` is
-   the tracking objective. The descent signature is this metric rising steadily
-   after the actor unfreezes. That is the thing to kill a run over.
-
-Gate columns are the acceptance contract in PPO_ROM/gates.py, but
-note the honest caveat: TensorBoard metrics are TRAINING-terrain means, while
-acceptance is a WORST-FAMILY, WORST-MESH number on held-out meshes. A training
-mean that clears a gate is necessary, not sufficient -- confirm with
-scripts/evaluate_gates.py before believing any gate result.
-"""
+"""Summarize a PPO-ROM TensorBoard run without starting Isaac Sim."""
 
 from __future__ import annotations
 
@@ -59,8 +23,6 @@ p.add_argument("--tail", type=int, default=12, help="Rows in the history table."
 a = p.parse_args()
 
 
-# Acceptance thresholds, imported so this tool can never disagree with the
-# contract. gates.py has no simulator dependency.
 sys.path.insert(0, str(ROOT / "PPO_ROM"))
 import importlib.util
 
@@ -112,8 +74,6 @@ def spark(values: list[float], width: int = 40) -> str:
     if not values:
         return ""
     if len(values) > width:
-        # Average within buckets rather than sampling, so a spike cannot be
-        # skipped over by the stride.
         bucket = len(values) / width
         values = [
             sum(values[int(i * bucket) : max(int((i + 1) * bucket), int(i * bucket) + 1)])
@@ -160,11 +120,6 @@ def main() -> None:
     def steps(tag: str) -> list[int]:
         return [s for s, _ in series.get(tag, [])]
 
-    # rsl_rl also writes "<tag>/time" series indexed by WALL-CLOCK SECONDS, not
-    # by iteration. Taking a max over every tag therefore reads the elapsed
-    # second count as an iteration number -- at 83 iterations it reported 1041,
-    # which made the report claim fine-tuning was 891 iterations underway while
-    # the actor was still frozen. Derive the axis from an iteration-indexed tag.
     iteration_axis = next(
         (t for t in ("Loss/value", "Policy/mean_std", "Episode_Reward/total") if series.get(t)),
         None,
@@ -195,30 +150,26 @@ def main() -> None:
     running = "yes" if os.system("pgrep -f 'PPO_ROM/scripts/train.py' >/dev/null 2>&1") == 0 else "no"
     print(f"  iterations       {last_step}   (process still running: {running})")
 
-    # ---------------------------------------------------------------- verdicts
     print("\n" + "-" * 78)
     print("THE THREE SIGNALS THIS RUN EXISTS TO PRODUCE")
     print("-" * 78)
 
-    # A verdict needs enough points to be a trend rather than two samples.
-    # Below this the honest answer is "too early", not PASS or FAIL: an early
-    # false FAIL on tracking would argue for killing a perfectly healthy run.
     MIN_SAMPLES = 20
-    unfrozen = max(0, last_step - freeze)
+    # TensorBoard preserves the checkpoint's global iteration number. A run
+    # resumed at 375 therefore must not be compared with freeze=100 as if it
+    # started at zero. Count samples emitted by this run instead.
+    progress_tag = iteration_axis or next(iter(series), None)
+    logged_iterations = len(series.get(progress_tag, [])) if progress_tag else 0
+    warmup_logged = min(logged_iterations, freeze)
+    unfrozen = max(0, logged_iterations - freeze)
     phase = (
-        f"WARM-UP in progress ({last_step}/{freeze} frozen iterations)"
-        if last_step < freeze
+        f"WARM-UP in progress ({warmup_logged}/{freeze} logged iterations; "
+        f"global step {last_step})"
+        if logged_iterations < freeze
         else f"FINE-TUNING ({unfrozen} iterations since the actor unfroze)"
     )
     print(f"  phase: {phase}\n")
 
-    # Explained variance answers what raw value loss cannot. Value loss scales
-    # with the square of the return magnitude, and this task's returns are ~1170
-    # (reward ~11.7/step, gamma 0.99), so a loss of 16,000 is an 11% residual --
-    # the same relative accuracy that reads as ~260 on an Isaac Lab locomotion
-    # task rewarding ~1.5/step. Only EV separates "predicts the mean, explains
-    # nothing" from "healthy critic on a big-reward task"; both produce the same
-    # value loss. Runs started before this was added will not have the tag.
     ev = vals("Diagnostics/explained_variance")
     if ev:
         first, last = trend(ev)
@@ -238,9 +189,6 @@ def main() -> None:
 
     value = vals("Loss/value")
     if value:
-        # Judge the warm-up on the frozen window ONLY. After unfreeze the actor
-        # is moving the value target around, so later value loss is a different
-        # quantity and mixing them in would hide whether the warm-up worked.
         warm = value[:freeze] if freeze else value
         if len(warm) < MIN_SAMPLES:
             print(
@@ -270,19 +218,25 @@ def main() -> None:
     std = vals("Policy/mean_std")
     if std:
         first, last = trend(std)
-        ok = last <= 0.16
+        std_min = manifest.get("std_min")
+        std_max = manifest.get("std_max")
+        if std_min is not None or std_max is not None:
+            clamp_text = f"configured clamp [{std_min}, {std_max}]"
+            ok = (std_min is None or last >= float(std_min)) and (
+                std_max is None or last <= float(std_max)
+            )
+        else:
+            clamp_text = "no explicit clamp configured"
+            ok = all(value == value and abs(value) < float("inf") for value in std)
         print(
             f"\n2. exploration std  {fmt(first)} -> {fmt(last)} "
-            f"(clamped to [0.03, 0.15]; 0.31 was the runaway that cost tracking)"
+            f"({clamp_text})"
         )
         print(f"   {'PASS' if ok else 'FAIL'}  {spark(std)}")
 
     lateral = vals("Metrics/lateral_error_m")
     if lateral:
-        if last_step < freeze:
-            # The actor is frozen: it CANNOT be descending. Movement here is
-            # terrain draw and episode-boundary noise. Calling it a descent
-            # would be a false alarm on the one signal we would kill a run for.
+        if logged_iterations < freeze:
             recent = sum(lateral[-5:]) / len(lateral[-5:])
             print(
                 f"\n3. tracking         not judged yet -- the actor is still "
@@ -316,7 +270,6 @@ def main() -> None:
                         "that showed this never recovered."
                     )
 
-    # ------------------------------------------------------------- gate table
     print("\n" + "-" * 78)
     print("TRAINING-TERRAIN METRICS vs THE ACCEPTANCE GATES")
     print("(means on TRAINING terrain -- necessary, NOT sufficient. Acceptance is")
@@ -339,7 +292,6 @@ def main() -> None:
         arrow = "<=" if gate.direction == "max" else ">="
         print(f"  {label:24s} {fmt(now):>9s} {arrow}{gate.threshold:<8g} {mark:4s} {spark(v, 28)}")
 
-    # --------------------------------------------------------- reward history
     print("\n" + "-" * 78)
     print("REWARD TERMS  (first quarter -> last quarter)")
     print("-" * 78)
@@ -352,10 +304,13 @@ def main() -> None:
         name = tag.split("/", 1)[1]
         flag = ""
         if name == "total" and delta < -0.5:
-            flag = "  <== DESCENDING"
+            flag = (
+                "  <== DESCENDING"
+                if logged_iterations >= freeze
+                else "  (warm-up; actor frozen)"
+            )
         print(f"  {name:24s} {fmt(first,3):>10s} {fmt(last,3):>10s} {delta:+9.3f}{flag}")
 
-    # ------------------------------------------------------------ checkpoints
     ckpts = sorted(
         glob.glob(str(run_dir / "model_*.pt")),
         key=lambda f: int(Path(f).stem.split("_")[1]),
@@ -365,14 +320,28 @@ def main() -> None:
     print("-" * 78)
     if ckpts:
         print("  " + ", ".join(Path(c).name for c in ckpts[-8:]))
-        print(f"\n  Score the newest on the real contract (3 held-out meshes, ~25 min):")
-        print(
-            f"    PPO_ROM/scripts/evaluate_gates.py {ckpts[-1]} \\\n"
-            f"        --meshes 1337,17,909 --steps 480 --num_envs 32 --stage 5 \\\n"
-            f"        --report PPO_ROM/reports/frontier/$(basename {ckpts[-1]} .pt)_gates.json --headless"
-        )
+        start_step = int(manifest.get("training_start_iteration", min(steps(iteration_axis), default=0)))
+        warmup_boundary = start_step + freeze
+        eligible_ckpts = [
+            checkpoint
+            for checkpoint in ckpts
+            if int(Path(checkpoint).stem.split("_")[1]) >= warmup_boundary
+        ]
+        if eligible_ckpts:
+            newest = eligible_ckpts[-1]
+            print(f"\n  Score the newest post-warm-up checkpoint (3 held-out meshes, ~25 min):")
+            print(
+                f"    PPO_ROM/scripts/evaluate_gates.py {newest} \\\n"
+                f"        --meshes 1337,17,909 --steps 480 --num_envs 32 --stage 5 \\\n"
+                f"        --report PPO_ROM/reports/final/$(basename {newest} .pt)_gates.json --headless"
+            )
+        else:
+            print(
+                f"\n  No post-warm-up checkpoint yet; do not score the listed "
+                f"checkpoint(s) before global iteration {warmup_boundary}."
+            )
         print("\n  Compare against the measured baselines in "
-              "PPO_ROM/reports/frontier/:")
+              "PPO_ROM/reports/final/:")
         print("    student_gates.json (the warm start)  teacher_gates.json (the ceiling)")
 
     if a.plot:
@@ -411,9 +380,6 @@ def write_plot(run_dir: Path, series: dict, freeze: int) -> None:
         if scale == "log" and min(ys) > 0:
             ax.set_yscale("log")
         if freeze and max(xs) > freeze:
-            # The unfreeze boundary is the single most important x on every
-            # panel: everything before it is the critic learning, everything
-            # after is the policy being allowed to move.
             ax.axvline(freeze, color="#c53030", linestyle="--", linewidth=1.2)
             ax.text(
                 freeze, ax.get_ylim()[1], " actor unfrozen",

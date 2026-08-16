@@ -452,7 +452,7 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     # collider and no gate metric moves.
     assert "mow_strip_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
     assert "verge_visual_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
-    assert "tracking_line_color: tuple = (0.10, 0.42, 0.075)" in cfg_source
+    assert "tracking_line_color: tuple = (0.92, 0.92, 0.88)" in cfg_source
     assert "verge_visual_palette: tuple = (" in cfg_source
     assert "visual_grid_length_m: float = 70.0" in cfg_source
     assert "dark_visual_background: bool = True" in cfg_source
@@ -828,9 +828,9 @@ def test_substep_window_opens_on_advance_and_closes_once_per_substep():
         _TERRAIN_ENV_SOURCE, _terrain_method("_pre_physics_step")
     )
     assert "_pin_substeps_pending" in pre_physics
-    assert pre_physics.index("_truck_travel_m = self._truck_travel_m + advance") < (
-        pre_physics.index("self._pin_substeps_pending =")
-    ), "the window must be opened after the advance it accounts for"
+    assert pre_physics.index("advance_path_travel(") < pre_physics.index(
+        "self._pin_substeps_pending ="
+    ), "the window must be opened after the clamped advance it accounts for"
 
     apply_action = ast.get_source_segment(
         _TERRAIN_ENV_SOURCE, _terrain_method("_apply_action")

@@ -28,6 +28,11 @@ from isaaclab.app import AppLauncher
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--checkpoint", type=str, default="")
 p.add_argument(
+    "--trajectory_2d",
+    action="store_true",
+    help="Use the standalone 45-D line/sine_chain/circle/rounded_square task.",
+)
+p.add_argument(
     "--task_id",
     default="RRLAB-Mulag-PPO2-A-Policy-V3-PLAY-v0",
     help="Registered policy task; defaults to the maintained PPO2_A task.",
@@ -217,7 +222,15 @@ station_shapes = tuple(
     for part in str(token).split(",")
     if part.strip()
 )
-valid_shapes = {"line", "arc", "sine", "circle", "square"}
+if a.trajectory_2d and not shape_args_provided:
+    station_shapes = ("line", "sine_chain", "circle", "rounded_square")
+    if not stations_arg_provided:
+        a.stations = len(station_shapes)
+valid_shapes = (
+    {"line", "sine_chain", "circle", "rounded_square"}
+    if a.trajectory_2d
+    else {"line", "arc", "sine", "circle", "square"}
+)
 if not station_shapes or set(station_shapes) - valid_shapes:
     p.error(
         "--station_shapes/--trajectory_shapes must contain only "
@@ -936,11 +949,22 @@ def _park_and_settle(
 
 
 def main() -> None:
-    task = str(a.task_id)
+    task = (
+        "RRLAB-Mulag-PPO2-A-Trajectory2D-PLAY-v0"
+        if a.trajectory_2d
+        else str(a.task_id)
+    )
     cfg = parse_env_cfg(task, device=a.device, num_envs=1)
     cfg.seed = int(a.seed)
     apply_residual_curriculum_stage(cfg, int(a.curriculum_stage))
     cfg.action_space = 4
+    if a.trajectory_2d:
+        cfg.observation_space = 45
+        cfg.trajectory_geometry_observation = True
+        cfg.trajectory_library_path = str(
+            ROOT / "mulag_plant/models/trajectory_2d_library_v2.json"
+        )
+        cfg.trajectory_shapes = station_shapes
     cfg.cylinder4_residual_scale_m = float(a.cylinder4_residual_scale_m)
     if a.aam_checkpoint and hasattr(cfg, "aam_checkpoint"):
         cfg.aam_checkpoint = str(Path(a.aam_checkpoint).expanduser().resolve())
@@ -975,7 +999,12 @@ def main() -> None:
 
     gym_env = gym.make(task, cfg=cfg)
     raw = gym_env.unwrapped
-    runner_module_name, runner_class_name = str(a.runner_cfg).split(":", 1)
+    runner_spec = (
+        "mulag_plant.policy_4cyl.env_cfg:FourCylinderTrajectory2DPPORunnerCfg"
+        if a.trajectory_2d
+        else str(a.runner_cfg)
+    )
+    runner_module_name, runner_class_name = runner_spec.split(":", 1)
     runner_class = getattr(
         importlib.import_module(runner_module_name), runner_class_name
     )
@@ -1091,7 +1120,9 @@ def main() -> None:
                 viewport_lines.begin_station(raw)
             print(
                 f"[ARM] station={station} shape={station_shape} "
-                f"speed={raw._effective_path_speed_mps():.3f}m/s",
+                f"speed={raw._effective_path_speed_mps():.3f}m/s "
+                f"truck={raw._trajectory_truck_motion_mode} "
+                f"truck_speed={raw._trajectory_truck_speed_mps:.3f}m/s",
                 flush=True,
             )
             cycle_target_s = (

@@ -115,6 +115,68 @@ class PPO2ROMPhysXEnvCfg(MulagUpperLevelEnvCfg):
     # creates steady-state tracking error for the DLS setpoint controller.
     cylinder_target_leak = 0.0
 
+    # Stroke-limit reference governor. The commanded target is already clamped to
+    # the articulation's soft joint limits, which is what keeps the arm legal --
+    # but "legal" means the cylinder may sit exactly ON its stop. The
+    # cylinder_headroom gate instead demands a standing 5 mm of remaining travel,
+    # and nothing enforces that. Measured 2026-08-15 on the AAM init at 2 km/h,
+    # mesh 1337, combined_test: cylinder 3 (Ausleger, the second boom) reaches its
+    # MAX stop with p01 headroom 0.00007 m from 9.8 m of path onward while its
+    # mean stroke fraction is only 0.37 -- a tail event, not a drift, and not a
+    # one-sided deployment pose. Cylinders 1 and 2 hold 0.08-0.10 m spare
+    # throughout.
+    #
+    # This inset shrinks the target clamp on BOTH ends by the given number of
+    # metres in learned (Simscape extension) space, so the reference can never
+    # ask for the last few millimetres of stroke. It bounds where the target may
+    # go, not where the plant ends up: the servo can still overshoot the inset
+    # band, so the value has to exceed the overshoot to actually buy headroom.
+    # 0 reproduces the previous behaviour bit-for-bit.
+    cylinder_target_limit_inset_m = 0.0
+
+    # Physical extension reserve on cylinder 3 (Ausleger_II), in metres of
+    # LEARNED extension. Shortens the stroke PhysX will allow while the
+    # cylinder_headroom gate keeps scoring the original stroke, so a controller
+    # resting on the new stop reports this much original-stroke reserve.
+    #
+    # This lives on the shared base so ROM, ID-FD and ID(AAM)-FD all get the
+    # same geometry; applying it to one arm only would void the matched
+    # three-way comparison. c3's coordinate scale is negative, so the reserve is
+    # taken off the USD LOWER limit -- see _apply_c3_extension_reserve.
+    #
+    # It is a mechanical reserve, not learned behaviour, and must be reported as
+    # one. 0 = the original stroke, bit-for-bit.
+    c3_physical_extension_reserve_m = 0.0
+
+    # Speed-scheduled anti-windup lead cap. When the high-speed row is set, any
+    # environment whose truck speed exceeds the threshold uses it instead of
+    # cylinder_target_max_lead_per_axis_m. None = single-value behaviour.
+    #
+    # Measured over the full contract (model_598, 8 mm c3 reserve, meshes
+    # 1337/17/909, combined_test): a 0.030 cap passes every speed except 4 km/h,
+    # which fails lateral at 0.3223; a 0.040 cap fixes that but fails hard
+    # impacts at 5-7 km/h (0.381-0.474 against a 0.350 gate); 0.050 fails
+    # everywhere. The cap trades lateral tracking against impact energy and
+    # which one binds depends on speed, so no single value clears all six.
+    cylinder_target_lead_schedule_speed_kmh = 4.0
+    cylinder_target_lead_high_speed_per_axis_m = None
+
+    # Null-space stroke centering for the REDUNDANT 3x4 deployment IK solve.
+    # The run-time privileged teacher solves a square 3x3 system (c1-c3, with c4
+    # held for head pitch), so it has no null space and these knobs do not touch
+    # it; they only choose which of the infinitely many deployment poses the
+    # reset lands on. Measured 2026-08-15 (AAM init, mesh 1337, combined_test):
+    # cylinder 3 works from a mean stroke fraction of 0.37 out to its MAX stop
+    # in the p01 tail while c1/c2 keep 0.08-0.10 m unused, and every
+    # cylinder_headroom failure in the campaign is c3 against that stop.
+    # Weights default to c3 only. The null space is one-dimensional, so c4
+    # cannot be held out independently -- it moves by whatever that direction
+    # assigns, which is why the step is bounded and head alignment has to be
+    # re-measured whenever the gain changes. 0 = previous minimum-norm behaviour.
+    dls_null_space_centering_gain = 0.0
+    dls_null_space_weights = (0.0, 0.0, 1.0, 0.0)
+    dls_null_space_max_step_m = 0.004
+
     # Anti-windup on the reference integrator: how far the commanded PhysX target may
     # lead the measured cylinder. 0 disables. Tuned on the repaired plant -- see
     # the retained idfd_step_gate.py diagnostics.
