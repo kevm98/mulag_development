@@ -241,7 +241,14 @@ class OnlineAAMIDFDController:
         self.history = torch.zeros((self.num_envs, self.history_lag, self.FEATURE_DIM), device=self.device)
         self.valid_rows = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.control_ticks = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # `z_hat` is the RAW smoothed estimate; `z_published` is what the
+        # controller consumes after the ablation mode is applied. They were one
+        # tensor until the routing ablation needed them apart: with a single
+        # tensor, setting the CONTROLLER arm to `zero` also zeroed what the
+        # POLICY could see, so "PPO adaptation only" was inexpressible and
+        # collapsed silently onto the baseline arm.
         self.z_hat = torch.zeros((self.num_envs, 2), device=self.device)
+        self.z_published = torch.zeros((self.num_envs, 2), device=self.device)
         self.true_z = torch.zeros((self.num_envs, 2), device=self.device)
         # latch buffers for latent_mode='frozen'
         self.z_frozen = torch.zeros((self.num_envs, 2), device=self.device)
@@ -306,6 +313,7 @@ class OnlineAAMIDFDController:
             self.z_hat[ids] = self.true_z[ids]
         else:
             self.z_hat[ids] = 0.0
+        self.z_published[ids] = self.z_hat[ids]
         self.z_prediction_history[ids] = 0.0
         self.z_prediction_count[ids] = 0
         # a reset starts a new episode, so the latch must be re-armed
@@ -349,9 +357,12 @@ class OnlineAAMIDFDController:
         self.true_z = torch.where(finite.reshape(-1, 1), encoded, self.true_z)
         self.true_z_valid = finite
         self.z_hat = torch.where(finite.reshape(-1, 1), self.true_z, torch.zeros_like(self.true_z))
+        # In latent_mode='true' the AAM is not run, so there is no live
+        # estimate to hold apart from what is published.
+        self.z_published = self.z_hat
         self.aam_ready = self.enabled & finite
         self.fallback_active = ~finite
-        return self.z_hat
+        return self.z_published
 
     @torch.no_grad()
     def observe(
@@ -398,12 +409,13 @@ class OnlineAAMIDFDController:
             update_mask = (self.control_ticks % self.update_period_ticks == 0) & (self.valid_rows >= self.history_lag)
         if not self.enabled:
             self.aam_ready.zero_()
-            return self.z_hat
+            return self.z_published
         if self.latent_mode == "true":
             self.z_hat = self.true_z
+            self.z_published = self.true_z
             self.aam_ready = self.true_z_valid
             self.fallback_active = ~self.true_z_valid
-            return self.z_hat
+            return self.z_published
         if self.device.type == "cuda":
             self._consume_cuda_latency()
             record_latency = self._pending_latency_events is None
@@ -456,7 +468,7 @@ class OnlineAAMIDFDController:
         ).reshape(-1, 1)
         next_z_hat = self.z_prediction_history.sum(dim=1) / counts
         self.z_hat = torch.where(good.reshape(-1, 1), next_z_hat, self.z_hat)
-        self.z_hat = self._apply_latent_mode(self.z_hat)
+        self.z_published = self._apply_latent_mode(self.z_hat)
         self.aam_ready = (self.aam_ready | good) & ~bad_mask
         self.fallback_active = (self.fallback_active & ~good) | bad_mask
         self.last_update_tick = torch.where(
@@ -467,6 +479,15 @@ class OnlineAAMIDFDController:
         self._invalid_input_count += (bad_mask & invalid_prediction).sum(
             dtype=torch.long
         )
+        return self.z_published
+
+    @torch.no_grad()
+    def raw_latent(self) -> torch.Tensor:
+        """The live estimate BEFORE any controller ablation mode is applied.
+
+        The policy arm of the routing ablation reads this, so that degrading
+        the controller latent does not also degrade what the policy sees.
+        """
         return self.z_hat
 
     @torch.no_grad()
@@ -484,7 +505,7 @@ class OnlineAAMIDFDController:
         """Return ``(u_final, residual)``; fallback returns base and zero residual."""
         base = torch.nan_to_num(u_base.to(self.device, dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
         active = self.enabled & self.aam_ready & ~self.fallback_active
-        features = torch.cat((extension, velocity, dP, force, target_dx, target_dv, base, self.z_hat), dim=-1)
+        features = torch.cat((extension, velocity, dP, force, target_dx, target_dv, base, self.z_published), dim=-1)
         finite = torch.isfinite(features).all(dim=-1)
         try:
             normalized = (features - self.adapter_feature_mean) / self.adapter_feature_std

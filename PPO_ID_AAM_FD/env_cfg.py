@@ -67,6 +67,12 @@ class PpoIDAAMFDEnvCfg(Ppo41IDFDEnvCfg):
     # zero/shuffled arms change only this field; the AAM-conditioned adapter
     # remains on the identical estimated latent in every PPO arm.
     online_aam_policy_latent_mode: str = "estimated"
+    # Control tick at which latent_mode='frozen' latches the live estimate and
+    # holds it. Only read when a latent mode is 'frozen'; 0 elsewhere. It must
+    # be declared here rather than left to getattr, because override_cfg
+    # refuses to create fields that do not exist -- an invented field would be
+    # silently ignored and the arm would score identically to 'estimated'.
+    online_aam_latent_freeze_tick: int = 0
     online_aam_fail_safe: bool = True
 
     # Keep the validated ID-FD plant contract intact.  AAM changes the ID

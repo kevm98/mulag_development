@@ -62,6 +62,19 @@ LEAD_ARGS=()
 [ -n "${FACTOR_DOMAIN:-}" ] && LEAD_ARGS+=(--factor_domain "$FACTOR_DOMAIN")
 [ -n "${FACTOR_KEY:-}" ] && LEAD_ARGS+=(--factor_key "$FACTOR_KEY")
 
+# Phase 4 (online adaptation). The plant perturbation changes the PLANT and is
+# never observed by the controller; FREEZE_TICK is required by latent_mode
+# 'frozen', which latches a pre-change estimate so the ablation isolates online
+# updating from static conditioning. ROM_FACTOR_* only bite on the command-ROM
+# actuator; the ID-AAM-FD task runs the FD plant and uses PLANT_ALPHA_RANGE.
+[ -n "${FREEZE_TICK:-}" ] && LEAD_ARGS+=(--online_aam_latent_freeze_tick "$FREEZE_TICK")
+[ -n "${PLANT_ALPHA_RANGE:-}" ] && LEAD_ARGS+=(--plant_alpha_range "$PLANT_ALPHA_RANGE")
+[ -n "${PLANT_DELAY_RANGE:-}" ] && LEAD_ARGS+=(--plant_delay_steps_range "$PLANT_DELAY_RANGE")
+[ -n "${PLANT_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--plant_step_time_s "$PLANT_STEP_TIME_S")
+[ -n "${PLANT_STEP_ALPHA_SCALE:-}" ] && LEAD_ARGS+=(--plant_step_alpha_scale "$PLANT_STEP_ALPHA_SCALE")
+[ -n "${ROM_FACTOR_PERTURBATION:-}" ] && LEAD_ARGS+=(--rom_factor_perturbation "$ROM_FACTOR_PERTURBATION")
+[ -n "${ROM_FACTOR_STEP:-}" ] && LEAD_ARGS+=(--rom_factor_step "$ROM_FACTOR_STEP")
+
 mkdir -p "$OUT"
 cd "$ROOT"
 
@@ -77,10 +90,14 @@ if [ "$PARALLEL_MESHES" -gt 1 ]; then
     REPORT="$OUT/${NAME}_m${MESH}.json"
     LOG="$OUT/${NAME}_m${MESH}.log"
     rm -f "$REPORT"
+    # Per-mesh trace file: one shared path would have each mesh overwrite the
+    # last, leaving a trace that silently describes only the final mesh.
+    TRACE_ARGS=()
+    [ -n "${TRACE_DIR:-}" ] && TRACE_ARGS=(--adaptation_trace_path "$TRACE_DIR/${NAME}_m${MESH}.npz")
     echo "[SCORE] mesh $MESH -> $REPORT (parallel)"
     "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
         --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
-        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" "${TRACE_ARGS[@]}" > "$LOG" 2>&1 &
     MESH_PID[$MESH]=$!
     # Stagger: three simultaneous Isaac startups thrash the GPU and can push
     # peak allocation above what steady-state measurement predicts.
@@ -113,16 +130,18 @@ for MESH in $MESHES; do
   REPORT="$OUT/${NAME}_m${MESH}.json"
   LOG="$OUT/${NAME}_m${MESH}.log"
   rm -f "$REPORT"
+  TRACE_ARGS=()
+  [ -n "${TRACE_DIR:-}" ] && TRACE_ARGS=(--adaptation_trace_path "$TRACE_DIR/${NAME}_m${MESH}.npz")
   echo "[SCORE] mesh $MESH -> $REPORT"
 
   if [ "$SUBJECT" = "--teacher" ] || [ "$SUBJECT" = "--null" ]; then
     "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
         --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
-        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" "${TRACE_ARGS[@]}" > "$LOG" 2>&1 &
   else
     "$PY" PPO_ROM/scripts/evaluate_gates.py "$SUBJECT" \
         --meshes "$MESH" --steps "$STEPS" --num_envs "$ENVS" --stage "$STAGE" \
-        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" > "$LOG" 2>&1 &
+        $TASK_ARG --report "$REPORT" --headless "${SEED_ARGS[@]}" "${SPEED_ARGS[@]}" "${SHAPE_ARGS[@]}" "${LEAD_ARGS[@]}" "${TRACE_ARGS[@]}" > "$LOG" 2>&1 &
   fi
   PID=$!
 

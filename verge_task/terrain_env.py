@@ -4366,6 +4366,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
         zeros = torch.zeros(self.num_envs, device=self.device)
         z_hat = getattr(self, "_aam_z_hat", None)
+        # The RAW estimate as well: `_aam_z_hat` is what the CONTROLLER
+        # receives, so in the routing arms that zero it the published trace
+        # would be all zeros and the adaptation figure would show nothing --
+        # not because the AAM failed to track, but because the trace recorded
+        # the ablation instead of the estimate.
+        z_raw = getattr(self, "_aam_z_hat_raw", None)
         valve = getattr(self, "_current_valve_cmd", None)
         applied = getattr(self, "_applied_valve_cmd", None)
         row = {
@@ -4374,6 +4380,9 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "lateral_error": self.verge_lateral_error(),
             "cut_height_error": self.cut_height_error(),
             "z_hat": z_hat if z_hat is not None else zeros,
+            "z_hat_raw": z_raw if z_raw is not None else (
+                z_hat if z_hat is not None else zeros
+            ),
             "valve_cmd": valve if valve is not None else zeros,
             "valve_applied": applied if applied is not None else zeros,
         }
@@ -4402,6 +4411,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         if getattr(self, "_sole_applied", None) is None:
+            # Record here too. Tracing must not depend on which reward path
+            # runs: when it did, the evaluation harness took this branch, the
+            # recorder never armed, and every traced run produced a report and
+            # no npz -- a configured-looking run with no adaptation evidence.
+            self._record_adaptation_trace()
             return super()._get_rewards()
 
         cfg = self.cfg

@@ -413,6 +413,13 @@ except ValueError as exc:
 meshes = tuple(int(part) for part in a.meshes.split(",") if part.strip())
 if not meshes:
     p.error("--meshes must name at least one terrain seed")
+if a.adaptation_trace_path and len(meshes) > 1:
+    # One path, one file: a second mesh would overwrite the first and leave a
+    # trace that silently describes only the last mesh scored.
+    p.error(
+        "--adaptation_trace_path writes a single file; pass one mesh per "
+        "process (score_per_mesh.sh already does this via TRACE_DIR)"
+    )
 if a.trace_out and len(meshes) != 1:
     p.error("--trace-out requires exactly one mesh")
 if a.profile_out and len(meshes) != 1:
@@ -1400,6 +1407,31 @@ def main() -> None:
                 profile_path.parent.mkdir(parents=True, exist_ok=True)
                 profiler.dump_stats(profile_path)
                 print(f"[PPO3-1-GATES] wrote profile {profile_path}", flush=True)
+        # Flush the per-step adaptation trace before the env is torn down.
+        # Setting adaptation_trace_path only ARMS the recorder; without this
+        # call the run looks configured, produces no npz, and the adaptation
+        # figures would silently have nothing to plot.
+        saved = None
+        if getattr(raw, "save_adaptation_trace", None) is not None:
+            saved = raw.save_adaptation_trace(
+                mesh=int(mesh),
+                policy_latent_mode=str(
+                    getattr(env_cfg, "online_aam_policy_latent_mode", "")
+                ),
+                controller_latent_mode=str(
+                    getattr(env_cfg, "online_aam_latent_mode", "")
+                ),
+                latent_freeze_tick=int(
+                    getattr(env_cfg, "online_aam_latent_freeze_tick", 0)
+                ),
+            )
+        if getattr(a, "adaptation_trace_path", None):
+            if saved is None:
+                raise SystemExit(
+                    "--adaptation_trace_path was set but no trace was written; "
+                    "the recorder never armed (is the task one that records?)"
+                )
+            print(f"[PPO3-1-GATES] wrote adaptation trace {saved}", flush=True)
         env.close()
 
     if len(per_mesh) >= 3:

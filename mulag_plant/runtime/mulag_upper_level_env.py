@@ -232,6 +232,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._cylinder_fd: CylinderFDRuntime | None = None
         self._online_aam = None
         self._aam_z_hat = torch.zeros((self.num_envs, 2), device=self.device)
+        # The RAW estimate, before the controller's ablation mode. The policy
+        # arm reads this so that zeroing the controller latent does not also
+        # zero what the policy sees.
+        self._aam_z_hat_raw = torch.zeros((self.num_envs, 2), device=self.device)
+        # Policy-side latch for online_aam_policy_latent_mode='frozen'. Kept
+        # separate from the controller's latch so the two arms are independent.
+        self._aam_policy_z_frozen = torch.zeros((self.num_envs, 2), device=self.device)
+        self._aam_policy_z_frozen_valid = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
         # Training-only privileged label.  It is never appended by either
         # observation builder; latent-teacher training reads it explicitly.
         self._aam_privileged_z = torch.zeros((self.num_envs, 2), device=self.device)
@@ -1914,29 +1924,68 @@ class MulagUpperLevelEnv(DirectRLEnv):
         )
 
     def _policy_latent_observation(self) -> torch.Tensor:
-        """Return the PPO-only latent arm without changing the AAM controller."""
+        """Return the PPO-only latent arm without changing the AAM controller.
+
+        Modes that derive from the live estimate read the RAW estimate, not the
+        controller's published one. When the controller arm is `estimated`
+        (every promotion run) the two are the same tensor, so this is
+        bit-identical there; it differs only in the routing ablation, where the
+        controller latent is degraded and the policy's must not be.
+
+        `true` deliberately keeps reading the published latent: it is used with
+        controller mode `true`, where no live estimate exists at all.
+        """
         mode = str(
             getattr(self.cfg, "online_aam_policy_latent_mode", "estimated")
         ).strip().lower()
-        if mode in {"estimated", "true"}:
+        if mode == "true":
             return self._aam_z_hat
+        z = self._aam_z_hat_raw
+        if mode == "estimated":
+            return z
         if mode == "privileged":
             return self._aam_privileged_z
         if mode == "zero":
-            return torch.zeros_like(self._aam_z_hat)
+            return torch.zeros_like(z)
         if mode == "mean":
-            return self._aam_z_hat.mean(dim=0, keepdim=True).expand_as(
-                self._aam_z_hat
-            )
+            return z.mean(dim=0, keepdim=True).expand_as(z)
         if mode == "shuffled":
             return (
-                torch.roll(self._aam_z_hat, shifts=1, dims=0)
+                torch.roll(z, shifts=1, dims=0)
                 if self.num_envs > 1
-                else self._aam_z_hat
+                else z
+            )
+        if mode == "frozen":
+            # Latch the live estimate once, at the configured control tick, and
+            # hold it. Identical to `estimated` up to the latch, so a later
+            # divergence isolates ONLINE updating from static conditioning.
+            tick = int(getattr(self.cfg, "online_aam_latent_freeze_tick", 0))
+            if tick < 1:
+                raise ValueError(
+                    "online_aam_policy_latent_mode='frozen' requires "
+                    "online_aam_latent_freeze_tick >= 1"
+                )
+            if self._online_aam is None:
+                return z
+            due = (
+                (self._online_aam.control_ticks >= tick)
+                & ~self._aam_policy_z_frozen_valid
+            )
+            if bool(due.any()):
+                self._aam_policy_z_frozen = torch.where(
+                    due.reshape(-1, 1), z, self._aam_policy_z_frozen
+                )
+                self._aam_policy_z_frozen_valid = (
+                    self._aam_policy_z_frozen_valid | due
+                )
+            return torch.where(
+                self._aam_policy_z_frozen_valid.reshape(-1, 1),
+                self._aam_policy_z_frozen,
+                z,
             )
         raise ValueError(
             "online_aam_policy_latent_mode must be one of "
-            "estimated/true/privileged/zero/mean/shuffled, "
+            "estimated/true/privileged/zero/mean/shuffled/frozen, "
             f"got {mode!r}"
         )
 
@@ -2321,6 +2370,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 self._aam_z_hat = self._online_aam.observe(
                     aam_row, sample_mask=aam_sample_mask
                 ).detach().clone()
+                self._aam_z_hat_raw = self._online_aam.raw_latent().detach().clone()
             else:
                 model_dt = float(
                     getattr(self._cylinder_fd, "sample_time_s", 0.05)
@@ -2340,8 +2390,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     self._aam_z_hat = self._online_aam.observe(
                         aam_row, sample_mask=aam_sample_mask
                     ).detach().clone()
+                    self._aam_z_hat_raw = self._online_aam.raw_latent().detach().clone()
         else:
             self._aam_z_hat.zero_()
+            self._aam_z_hat_raw.zero_()
         self._aam_residual.zero_()
         self._aam_base_valve_cmd.zero_()
 
@@ -3558,6 +3610,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._id_prev_valve_cmd_input[env_ids] = 0.0
         self._current_valve_cmd[env_ids] = 0.0
         self._aam_z_hat[env_ids] = 0.0
+        self._aam_z_hat_raw[env_ids] = 0.0
+        # a reset starts a new episode, so the policy latch must be re-armed
+        self._aam_policy_z_frozen[env_ids] = 0.0
+        self._aam_policy_z_frozen_valid[env_ids] = False
         self._aam_residual[env_ids] = 0.0
         self._aam_base_valve_cmd[env_ids] = 0.0
         self._aam_fallback_mask[env_ids] = False

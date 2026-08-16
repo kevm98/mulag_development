@@ -65,7 +65,12 @@ def summarise(name: str, tr: dict, warmup_steps: int, metric: str) -> dict:
     err = series(tr, metric)
     if err is None:
         raise SystemExit(f"{name}: trace has no field {metric!r}")
-    z = series(tr, "z_hat")
+    # Prefer the RAW estimate. `z_hat` is what the controller received, so in
+    # the routing arms that zero it, reading `z_hat` would report "the latent
+    # never moved" -- describing the ablation rather than the estimator.
+    z = series(tr, "z_hat_raw")
+    if z is None:
+        z = series(tr, "z_hat")
     k = step_index(tr)
     n = err.shape[0]
     out = {
