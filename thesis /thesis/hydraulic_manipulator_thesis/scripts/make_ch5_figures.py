@@ -62,7 +62,7 @@ FULLW = 6.3  # \textwidth = 455 pt
 
 # ---------------------------------------------------------------- figure 1
 def fig_excitation() -> None:
-    csv = REPO / "PPO1_ID_FD_PhysX/training_data/Excitation_FD_Strict.csv"
+    csv = REPO / "archive/model_training_trees/PPO1_ID_FD_PhysX/training_data/Excitation_FD_Strict.csv"
     df = pd.read_csv(csv)
     run = df[df.run_id == 1]
     t = run["t"].to_numpy()
@@ -89,14 +89,15 @@ def fig_excitation() -> None:
 
 # ---------------------------------------------------------------- figure 2
 def fig_fd_authority() -> None:
-    rep = json.loads((REPO / "PPO1_ID_FD_PhysX/models/fd/fd_authority_report.json").read_text())
+    rep = json.loads((REPO / "archive/model_training_trees/PPO1_ID_FD_PhysX/models/fd/fd_authority_report.json").read_text())
     horizons = [1, 2, 5, 10, 20]
     tt = [0.05 * h for h in horizons]
 
     def series(model: str, key: str) -> list[float]:
         return [rep[model][str(h)][key] for h in horizons]
 
-    fig, ax = plt.subplots(figsize=(FULLW, 3.4))
+    fig, (ax, ax_ratio) = plt.subplots(1, 2, figsize=(FULLW, 3.15),
+                                       gridspec_kw={"width_ratios": [1.55, 0.85]})
     ax.plot(tt, series("best_fd_cylinder_control", "fd"), color=C_ORANGE,
             marker="o", ms=4, label="Paired-control FD")
     ax.plot(tt, series("best_fd_cylinder_control", "fd_valve0"), color=C_ORANGE,
@@ -112,15 +113,43 @@ def fig_fd_authority() -> None:
     ax.set_ylabel("Extension rollout RMSE [m]")
     ax.set_xticks(tt)
     ax.grid(True, which="both", axis="y")
-    ax.legend(loc="upper left", ncol=1)
-    fig.savefig(OUT / "ch5_fd_rollout_authority.pdf")
+    ax.legend(loc="upper left", ncol=1, fontsize=7.2)
+    ax.set_title("(a) Long-horizon rollout", fontsize=9)
+
+    # A compact second view makes the causal criterion explicit: the
+    # valve-zero penalty should be close to one for the paired model and
+    # materially above one for the promoted strict model.
+    paired = np.asarray(series("best_fd_cylinder_control", "fd_valve0")) / np.asarray(
+        series("best_fd_cylinder_control", "fd"))
+    strict = np.asarray(series("best_fd_cylinder_strict", "fd_valve0")) / np.asarray(
+        series("best_fd_cylinder_strict", "fd"))
+    xpos = np.arange(len(tt))
+    width = 0.34
+    ax_ratio.bar(xpos - width / 2, paired, width, color=C_ORANGE,
+                 label="Paired-control FD")
+    ax_ratio.bar(xpos + width / 2, strict, width, color=C_BLUE,
+                 label="Strict FD")
+    ax_ratio.axhline(1.0, color=C_GRAY, lw=0.8, ls=":")
+    ax_ratio.set_xticks(xpos, [f"{t:.2f}" for t in tt])
+    ax_ratio.set_xlabel("horizon [s]")
+    ax_ratio.set_ylabel("RMSE with valve zeroed / normal RMSE")
+    ax_ratio.set_title("(b) Input authority", fontsize=9)
+    ax_ratio.grid(True, axis="y")
+    ax_ratio.legend(loc="upper left", fontsize=7.2)
+    ax_ratio.annotate("strict FD\nresponds to u", xy=(3.0, strict[3]),
+                      xytext=(2.75, 1.38),
+                      arrowprops=dict(arrowstyle="->", color=C_BLUE, lw=1.0),
+                      color=C_BLUE, fontsize=7.7, ha="center")
+    fig.savefig(OUT / "ch5_fd_rollout_authority_v2.pdf", bbox_inches="tight", pad_inches=0.04)
+    fig.savefig(OUT / "ch5_fd_rollout_authority_v2.png", dpi=600, bbox_inches="tight", pad_inches=0.04)
+    fig.savefig(OUT / "ch5_fd_rollout_authority_v2.svg", bbox_inches="tight", pad_inches=0.04)
     plt.close(fig)
 
 
 # ---------------------------------------------------------------- figure 3
 def fig_rom_training() -> None:
     hist = json.loads(
-        (REPO / "ROM-cylinders_pipeline/checkpoints/command_run_001/training_history.json").read_text()
+        (REPO / "archive/model_training_trees/ROM-cylinders_pipeline/checkpoints/command_run_001/training_history.json").read_text()
     )
     epochs = np.arange(1, len(hist) + 1)
     train = np.array([h["train_loss"] for h in hist])
@@ -156,7 +185,7 @@ def fig_rom_training() -> None:
 # ---------------------------------------------------------------- figure 4
 def fig_rom_validation() -> None:
     rep = json.loads(
-        (REPO / "ROM-cylinders_pipeline/reports/command_offline_validation.json").read_text()
+        (REPO / "archive/model_training_trees/ROM-cylinders_pipeline/reports/command_offline_validation.json").read_text()
     )
     groups = ["Valve", r"$\Delta(\Delta p)$", r"$\Delta \dot{x}$", r"$\Delta x$"]
 

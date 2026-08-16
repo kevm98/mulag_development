@@ -56,10 +56,9 @@ def lhs(n, d, rng):
 
 def main():
     fig = plt.figure(figsize=(FULLW, 4.5))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.15])
-    ax_a = fig.add_subplot(gs[0, :])
-    ax_b = fig.add_subplot(gs[1, 0])
-    ax_c = fig.add_subplot(gs[1, 1])
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.15])
+    ax_a = fig.add_subplot(gs[0, 0])
+    ax_c = fig.add_subplot(gs[1, 0])
 
     # ---------------- (a) curriculum composition ----------------
     blocks = [("Nominal", 1, 1, C_GRAY),
@@ -84,30 +83,6 @@ def main():
     for sp in ("left", "right", "top"):
         ax_a.spines[sp].set_visible(False)
 
-    # ---------------- (b) bulk modulus: the clamp swallows the range ---
-    rng = np.random.default_rng(0)
-    m = lhs(499, 12, rng)                      # fully randomized block size
-    eps_air = 0.001 + 0.079 * m[:, 0]
-    eps_vol = 0.005 + 0.075 * m[:, 1]
-
-    raw = 1.0 / ((1.0 - eps_air) / 0.5e9 + eps_air / (1.4 * 1e7)
-                 + eps_vol / 0.5e9) / 1e9
-    ax_b.hist(raw, bins=30, color=C_BLUE, alpha=0.85, edgecolor="white",
-              linewidth=0.4, label=r"$\beta$ from formula")
-    ax_b.axvline(0.7, color=C_PINK, lw=1.8, label="clamp floor 0.70 GPa")
-    ax_b.annotate("whole range sits\nbelow the floor:\n"
-                  r"model gets 0.70 GPa",
-                  xy=(0.70, ax_b.get_ylim()[1] * 0.60),
-                  xytext=(0.24, ax_b.get_ylim()[1] * 0.60),
-                  fontsize=7.0, color=C_PINK, va="center",
-                  arrowprops=dict(arrowstyle="->", color=C_PINK, lw=1.0))
-    ax_b.set_xlim(0.05, 0.85)
-    ax_b.set_xlabel(r"$\beta_{\mathrm{eff}}$ before clamping [GPa]")
-    ax_b.set_ylabel("runs")
-    ax_b.grid(True, axis="y")
-    ax_b.legend(loc="upper left", fontsize=7.2)
-    ax_b.set_title("(b) Base bulk modulus is clamped flat", fontsize=9)
-
     # ---------------- (c) excitation schedule ----------------
     T_PRE, T_CYL, T_GAP, T_MIMO, T_SHUT = 1.0, 10.0, 0.5, 20.0, 1.0
     ax_c.barh(4, T_PRE, left=0, height=0.6, color=C_GRAY, alpha=0.55)
@@ -128,7 +103,7 @@ def main():
     ax_c.set_yticks([4, 3, 2, 1, 0])
     ax_c.set_yticklabels(["excl.", "C1", "C2", "C3", "C4"])
     ax_c.set_xlabel("time in the open-loop run [s]")
-    ax_c.set_title("(c) 64 s excitation schedule", fontsize=9)
+    ax_c.set_title("(b) 64 s excitation schedule", fontsize=9)
     ax_c.grid(True, axis="x")
 
     fig.savefig(OUT / "ch4_dataset_design.pdf")
@@ -150,12 +125,10 @@ def main():
         kp = beta0 / (vd / 1000.0)             # GPa per litre
         cols = {"cd": np.asarray(d["cd"]), "pset": np.asarray(d["pset"]),
                 "beq": beta_eq, "kp": kp}
-        fig2, axs = plt.subplots(1, 4, figsize=(FULLW, 1.95))
+        fig2, axs = plt.subplots(1, 2, figsize=(FULLW * 0.55, 1.95))
         specs = [
             ("cd", r"discharge coeff. $c_d$", C_BLUE, 0.70),
             ("pset", "relief setting [MPa]", C_ORANGE, 27.6),
-            ("beq", r"$\beta_{\mathrm{eq}}$ [GPa]", C_GREEN, beta0),
-            ("kp", r"$K_p^{d}=\beta_0/V_d$ [GPa/L]", C_PINK, beta0 / (vd0 / 1e3)),
         ]
         for ax, (key, lab, col, nom) in zip(axs, specs):
             ax.hist(cols[key], bins=26, color=col, alpha=0.85,
@@ -166,13 +139,9 @@ def main():
             ax.tick_params(labelsize=7)
             ax.grid(True, axis="y")
         axs[0].set_ylabel("runs", fontsize=8)
-        axs[2].axvspan(0.70, 0.72, color=C_GRAY, alpha=0.12)
         fig2.savefig(OUT / "ch4_delivered_params.pdf")
         print("wrote", OUT / "ch4_delivered_params.pdf")
 
-    print("nominal beta_eff = %.3f GPa" % beta_eff(0.005, 0.02))
-    print("pre-clamp beta: min %.3f  median %.3f  max %.3f GPa"
-          % (raw.min(), np.median(raw), raw.max()))
 
 
 SCRATCH = Path("/tmp/rrlab_scratch"

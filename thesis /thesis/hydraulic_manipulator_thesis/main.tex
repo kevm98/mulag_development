@@ -60,15 +60,23 @@
 TODO: acknowledgements.
 }
 
-% Abstract (~250--400 words: problem, approach, datasets, PPO1/PPO2
-% architecture, principal results, contribution)
+% Abstract (~250--400 words: problem, approach, datasets, the three
+% stacks PPO-ROM / PPO-ID-FD / PPO-ID(AAM)-FD, principal results,
+% contribution. State results according to completed evidence.)
 \RRLABabstract{Abstract}{%
 TODO: abstract. Hydraulic manipulators are hard to control precisely because
 the actuator response is nonlinear, load dependent, and uncertain. This thesis
-investigates whether a hydraulic manipulator can achieve accurate and robust
-task-space tracking by combining a nominal Damped Least-Squares (DLS)
-controller, an upper-level residual PPO policy, learned hydraulic actuator
-dynamics, and online latent adaptation through an Arm Adaptation Module (AAM).
+asks how the learned representation of that actuator affects closed-loop task
+performance, and whether conditioning that representation online on an
+inferred estimate of the currently active plant improves on a fixed learned
+model. Three control stacks are compared under matched task, observation,
+action, terrain, reward, seed and budget conditions, differing only in the
+actuation and adaptation path: \ppoROM, in which the policy's desired cylinder
+motion is realized by a command-conditioned hydraulic reduced-order model;
+\ppoIDFD, in which it is realized by a frozen inverse model followed by a
+frozen strict forward model; and \ppoIDAAMFD, in which an Arm Adaptation
+Module infers a dynamics latent from causal observable history and conditions
+a small bounded adapter around the frozen inverse model.
 }
 
 % Table of contents (plus list of figures/tables)

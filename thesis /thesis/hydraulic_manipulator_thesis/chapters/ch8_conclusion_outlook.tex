@@ -17,8 +17,10 @@
 
 \section{Answers to the Research Questions}
 \label{sec:concl:answers}
-% - One direct evidence-based answer per research question.
-% - State where evidence is positive, mixed, or insufficient.
+% - One direct evidence-based answer per research question, RQ1--RQ5.
+% - State where evidence is positive, mixed, or insufficient. RQ2 is
+%   already answered positively for the PRIVILEGED latent; do not let
+%   that answer leak into RQ3 or RQ4.
 \todo{write}
 
 \section{Main Contributions}
@@ -30,16 +32,30 @@
 
 \section{Limitations}
 \label{sec:concl:limitations}
-% - Model and data limitations; adaptation limitations; simulation and
-%   transfer limitations; control and computational limitations.
+% - Simulation only; the deployment plant is itself a learned model.
+% - Factor coverage: 6 factors, 118 runs, 16 reserved test
+%   configurations -- a sparse design over a large space.
+% - Identifiability limits: which factors are separable and which are
+%   only reachable as a lumped coordinate.
+% - Policy-optimization limits: unconstrained PPO fine-tuning traded
+%   tracking for contact, so fine-tuning is admissible only under the
+%   reference anchor of Section~\ref{sec:ctrl:anchored}. The anchor is a
+%   principled restriction and NOT a certificate -- the Pinsker bound
+%   (eq:ctrl:pinsker) is vacuous at the production horizon, so every
+%   promotion still rests on the empirical gates. The fixed multiplier
+%   is not dual-ascended, so one point of the Pareto front is sampled
+%   rather than the constrained problem being solved.
+% - Adaptation limits: the adapter is bounded and sits only at the ID
+%   layer; the FD, the ROM and the policy remain frozen.
 \todo{write}
 
 \section{Future Work}
 \label{sec:concl:future}
 % - Real-system data collection and sim-to-real validation.
-% - Joint training or end-to-end refinement of ROM and AAM.
+% - Widening the adapter beyond the ID layer, or joint refinement of
+%   the actuator model and the AAM.
 % - Uncertainty-aware or probabilistic latent adaptation.
-% - Safety-constrained residual RL and pressure-aware control.
-% - AAM conditioning of alternative learned dynamics (only when
-%   scientifically justified).
+% - Safety-constrained policy optimization and pressure-aware control.
+% - Direct policy conditioning on z-hat as a first-class design rather
+%   than an ablation (only when scientifically justified).
 \todo{write}

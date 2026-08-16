@@ -1,104 +1,147 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Chapter 7 — Experimental Evaluation and Discussion
 %% (18–28 pages)
-%% Purpose: test the model and control hypotheses using matched
-%% conditions, explain the results rather than only reporting
-%% them, and separate robustness from adaptation claims.
-%% Main output: complete evidence chain from offline model
-%% quality to closed-loop tracking and adaptation performance.
+%% Purpose: test the model and control hypotheses under matched
+%% conditions, EXPLAIN the results rather than only reporting them,
+%% and keep robustness, privileged-latent and adaptation claims apart.
+%% Main output: the complete evidence chain from offline model quality
+%% to closed-loop task performance and adaptation.
+%%
+%% Every experiment in this chapter evaluates exactly three rows:
+%%   PPO-ROM            frozen: command ROM              adaptive: none
+%%   PPO-ID-FD          frozen: control ID + strict FD   adaptive: none
+%%   PPO-ID(AAM)-FD     frozen: control ID + strict FD   adaptive: AAM + bounded ID adapter
+%% There are no other policy variants in the primary comparison.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \chapter{Experimental Evaluation and Discussion}
 \label{chap:evaluation}
 
-\section{Evaluation Questions and Hypotheses}
+\section{Hypotheses and Fairness Controls}
 \label{sec:eval:hypotheses}
-% - Restate each research question as a measurable hypothesis (H1--H6).
-% - Define beforehand what result supports or rejects each claim.
-\todo{write}
-
-\section{Experimental Matrix and Fairness Controls}
-\label{sec:eval:matrix}
-% - PPO1-A, PPO1-B, PPO2-A, PPO2-B, PPO2-C, optional PPO2-D.
-% - Matched reference trajectories, parameter sets, simulation step,
-%   action scale, policy capacity, training budget, seeds, evaluation
-%   horizon.
+% - Restate RQ1--RQ5 as testable hypotheses H1--H5:
+%   H1: SD_z(s,u,z_true) outperforms matched SD_0 and latent controls on
+%       held-out extension and velocity rollouts (already supported).
+%   H2: SD_z(s,u,z_hat) retains a statistically supported fraction of the
+%       true-latent gain on reserved runs.
+%   H3: the true-latent ID adapter improves frozen ID-FD, establishing
+%       adapter capacity before AAM error is introduced.
+%   H4: the AAM-latent adapter improves frozen ID-FD in paired held-out
+%       episodes and approaches the true-latent oracle.
+%   H5: adaptation improves mismatch recovery without materially
+%       degrading the nominal domain or violating any of the eight gates.
+% - Define BEFOREHAND what supports or rejects each hypothesis.
+% - Fairness controls: paired factor configurations, terrain meshes, path
+%   families, seeds, episode lengths and safety stops across all three
+%   stacks; matched policy capacity and training budget.
 \todo{write}
 
 \section{Model-Level Experiments}
 \label{sec:eval:model-level}
-% - ID valve prediction under nominal and randomized conditions.
-% - FD and ROM one-step and rollout prediction.
-% - Valve-input ablations and persistence baselines.
-% - AAM latent estimation under fixed and changing systems.
+% - ID valve prediction and frozen-ID transfer across nominal,
+%   hydraulic, mechanical, combined and held-out domains: report the
+%   transfer gap AND the failure mode.
+% - FD and ROM one-step and rollout prediction; valve-input ablations
+%   and persistence baselines.
+% - SD_0 vs SD_z(z_true) vs SD_z(z_hat); AAM latent estimation error and
+%   temporal stability under fixed and changing factor configurations.
 \todo{write}
 
-\section{PPO Training Behaviour}
-\label{sec:eval:training}
-% - Learning curves, reward decomposition, success rate, stability,
-%   seed variance.
-% - Evidence that improved model quality changes sample efficiency or
-%   final performance.
+\section{System Response}
+\label{sec:eval:system-response}
+% Matched steps, ramps, PRBS and task commands. Per cylinder: rise time,
+% settling time, overshoot, steady-state error and gain; extension,
+% velocity and pressure response; action/valve saturation; cross-axis
+% coupling. This experiment must EXPLAIN why one stack tracks laterally
+% or vertically better, not merely report that it does.
 \todo{write}
 
-\section{Task-Space Trajectory Tracking}
+\section{Delay}
+\label{sec:eval:delay}
+% Estimate command-to-pressure, command-to-velocity, pressure-to-velocity
+% and, where meaningful, cylinder-to-tool response, using controlled
+% transients, cross-correlation and frequency/phase analysis. Report
+% actuator, environment and AAM-update latencies SEPARATELY. Do not label
+% a static kinematic mapping as a temporal delay.
+\todo{write}
+
+\section{Nonlinearity}
+\label{sec:eval:nonlinearity}
+% Sweep command magnitude and sign, pressure, extension, velocity,
+% payload, COM and arm posture. Quantify extension/retraction asymmetry,
+% dead zone, saturation, pressure-dependent gain, load dependence,
+% hysteresis and coupling from repeated PAIRED measurements only.
+\todo{write}
+
+\section{End-Effector and Mowing Performance}
 \label{sec:eval:tracking}
-% - Stationary-arm tracking while the vehicle is fixed.
-% - Vehicle movement to a new station + new tracking task (if in scope).
-% - Reference shapes: straight line, circle, arc, free-form curve.
-% - EE position/orientation error with cylinder and control metrics.
+% Same feasible path families and held-out terrain meshes for all three
+% stacks. Report lateral and cut-height RMSE, MAE and p95; maximum and
+% along-track error; transient settling after path changes; contact
+% fraction; head alignment; impacts; terminations; results per family and
+% per worst mesh. The eight-gate contract is the MINIMUM acceptance
+% criterion, not a substitute for the full distributions.
 \todo{write}
 
-\section{Robustness and Generalization Tests}
+\section{Robustness and Generalization}
 \label{sec:eval:robustness}
-% - Nominal parameters; seen randomized combinations; unseen
-%   combinations within the training envelope; out-of-distribution
-%   variations.
-% - Payload, disturbance, pressure, leakage, valve, latency tests.
+% In-range anchors, held-out combinations and DECLARED out-of-range
+% stress tests. Add observation noise, action delay, sensor dropout,
+% terrain shift, payload and COM changes. Separate interpolation from
+% extrapolation. Report success rate, tracking degradation, saturation,
+% safety terminations and adaptation recovery time relative to nominal.
 \todo{write}
 
-\section{Adaptation Experiments}
-\label{sec:eval:adaptation}
-% - Fixed parameter mismatch from episode start.
-% - Abrupt parameter change during operation; gradual drift.
-% - Adaptation delay, latent error, transient tracking error,
-%   post-adaptation recovery.
-\todo{write}
-
-\section{Ablation Studies}
+\section{Adaptation Ablations}
 \label{sec:eval:ablations}
-% - Nominal vs. randomized ROM (data-driven robustness).
-% - Randomized vs. AAM-conditioned ROM (explicit online adaptation).
-% - AAM-conditioned vs. oracle-latent ROM (estimation quality).
-% - Closed-loop-only vs. combined training (informative excitation).
-% - Optional removal of PPO residual (correction supplied by policy).
+% For PPO-ID(AAM)-FD compare: deployable z-hat; privileged true z; zero,
+% mean, shuffled and random latents; frozen ID without adapter; adapter
+% without AAM history; shorter/longer history; slower latent update; and
+% the optional policy conditioned on z-hat (declare the added input --
+% it is NOT the same policy architecture).
+% The AAM claim requires deployable z-hat to beat frozen PPO-ID-FD AND to
+% approach the true-latent oracle on held-out configurations.
 \todo{write}
 
-\section{Metrics and Statistical Reporting}
+\section{Statistics and Reporting}
 \label{sec:eval:metrics}
-% - EE RMSE, max error, settling/recovery time, path completion.
-% - Cylinder extension/velocity error, pressure error, valve error,
-%   saturation, command variation, residual-action magnitude.
-% - Mean, std, confidence intervals, per-seed/per-parameter
-%   distributions.
-% - Inference time, memory use, simulation throughput.
+% Predeclared primary metrics and seeds. Paired episodes, per-run
+% summaries, paired bootstrap confidence intervals. Validation choices
+% kept strictly separate from the untouched final test set. Report
+% failure cases, worst-case meshes and effect sizes, not only pooled
+% means or binary gate verdicts. Report inference cost and throughput.
 \todo{write}
 
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
-% - Why each method succeeded/failed: dataset information, model
-%   structure, latent estimation, residual authority, actuator
-%   behaviour.
-% - Separate architecture effects from adaptation effects.
-% - Does PPO mask weak model dynamics? Use residual magnitude and
-%   model rollouts to support the interpretation.
-% - Relate findings back to the research gap from Chapter 2.
+% - Explain the MECHANISM behind each positive and negative finding:
+%   dataset information, model structure, latent estimation quality,
+%   action authority, actuator behaviour.
+% - Keep architecture effects, robustness effects and adaptation effects
+%   separate.
+% - Does the policy mask weak actuator dynamics? Use the standing model
+%   error, command magnitude/smoothness and model rollouts as evidence.
+% - Include the negative results explicitly: ID-FD's contact failure, the
+%   tracking cost of UNCONSTRAINED PPO fine-tuning after distillation,
+%   earlier latent redundancy, and the need for wider matched excitation.
+% - Report the anchored fine-tuning evidence as a matched before/after on
+%   the SAME horizon and mesh set: the warm-start reference checkpoint has
+%   never been gate-scored, so the "PPO improved on the student" claim is
+%   currently supported by training metrics only, not by the gates.
+% - Relate the findings back to the research gap of Chapter~\ref{chap:fundamentals}.
 \todo{write}
 
 \section{Threats to Validity}
 \label{sec:eval:validity}
-% - Simscape-to-IsaacLab abstraction mismatch.
-% - Simulation-to-real limitations.
-% - Finite randomized parameter ranges, incomplete operating coverage.
-% - Policy stochasticity, model-identifiability limitations,
-%   measurement assumptions.
+% - The deployment plant is itself a learned model (command ROM + PhysX),
+%   and PPO-ROM's actuator IS that plant model. State plainly that this
+%   makes PPO-ROM the reference condition rather than a third competing
+%   approximator, and that the ROM alone was calibrated against PhysX
+%   (Section~\ref{sec:models:rom-calibration}) while ID-FD was not.
+% - That calibration used the PARKED shapes, not the moving-verge task,
+%   so it is weakest under cutter-ground contact.
+% - Simscape-to-IsaacLab abstraction mismatch; simulation-to-real limits.
+% - Finite factor ranges, sparse design (118 runs, 16 reserved
+%   configurations), incomplete operating coverage.
+% - Policy stochasticity, model-identifiability limits, and the
+%   measurement assumptions behind each gate threshold.
 \todo{write}
