@@ -140,9 +140,19 @@ def main() -> None:
         # cheap to hit by luck (p = 1/3 at 2-vs-2). With real group sizes a
         # rank/permutation test is the correct instrument: overlapping ranges
         # are entirely compatible with a large, unambiguous effect.
+        # Direction matters: stepping seal UP raises control effort, stepping it
+        # DOWN lowers it. --step-delta legitimately produces both, so a
+        # magnitude comparison is direction-blind and scores downward steps as
+        # if nothing happened. Score each run by how far its effort ratio sits
+        # from what an UNSTEPPED run does, in either direction.
+        centre = float(np.median(ca))
+        sa_dev = np.abs(sa - centre)
+        ca_dev = np.abs(ca - centre)
         auc = float(np.mean([[1.0 if a > b else 0.5 if a == b else 0.0
-                              for b in ca] for a in sa]))
-        obs = abs(s_m - c_m)
+                              for b in ca_dev] for a in sa_dev]))
+        s_m_dev, c_m_dev = float(sa_dev.mean()), float(ca_dev.mean())
+        obs = abs(s_m_dev - c_m_dev)
+        sa, ca = sa_dev, ca_dev
         pool = np.concatenate([sa, ca])
         rng = np.random.default_rng(0)
         n_s, N = len(sa), 20000
@@ -154,6 +164,8 @@ def main() -> None:
         pval = (hits + 1) / (N + 1)
         print(f"\ncontrol effort post/pre -- stepped {s_m:.3f} (n={len(sa)})  "
               f"constant {c_m:.3f} (n={len(ca)})")
+        print(f"  |deviation from unstepped median {centre:.3f}| -- "
+              f"stepped {s_m_dev:.3f}  constant {c_m_dev:.3f}")
         print(f"  permutation p = {pval:.5f}   AUC = {auc:.3f}   "
               f"difference {s_m - c_m:+.3f}")
         if len(sa) < 5 or len(ca) < 5:
