@@ -1179,6 +1179,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
             elif dynamics_model == "base_rom":
                 pass
             elif dynamics_model == "command_rom":
+                self._setup_rom_factor_perturbation()
                 pass
             elif dynamics_model in {"direct_valve", "direct"}:
                 pass
@@ -1308,6 +1309,41 @@ class MulagUpperLevelEnv(DirectRLEnv):
             print(
                 "[MulagUpperLevelEnv]   plant perturbation: "
                 f"{self._plant_perturbation.diagnostics()}",
+                flush=True,
+            )
+
+    def _setup_rom_factor_perturbation(self) -> None:
+        """Attach the optional ROM-side hydraulic factor perturbation.
+
+        The command ROM's plant channel is `system_factors` (num_envs, 7) in
+        the order [compliance, flow, pressure, seal, seal, seal, seal]. This is
+        the ROM analogue of the FD valve perturbation and is the surface used
+        for the mid-episode tracking test, since `seal` is the factor the
+        privileged AAM identifies best.
+        """
+        from PPO_ID_AAM_FD.plant_perturbation import (
+            RomFactorPerturbation, RomFactorPerturbationCfg,
+        )
+
+        cfg = RomFactorPerturbationCfg(
+            enabled=bool(getattr(self.cfg, "rom_factor_perturbation_enabled", False)),
+            ranges=dict(getattr(self.cfg, "rom_factor_perturbation_ranges", {}) or {}),
+            step_time_s=getattr(self.cfg, "rom_factor_perturbation_step_time_s", None),
+            step_values=dict(
+                getattr(self.cfg, "rom_factor_perturbation_step_values", {}) or {}
+            ),
+            seed=int(getattr(self.cfg, "plant_perturbation_seed", 20260816)),
+        )
+        self._rom_factor_perturbation = RomFactorPerturbation(
+            cfg,
+            num_envs=self.num_envs,
+            device=self.device,
+            control_dt=self._control_dt,
+        )
+        if cfg.enabled and bool(getattr(self.cfg, "enable_verbose_startup", False)):
+            print(
+                "[MulagUpperLevelEnv]   ROM factor perturbation: "
+                f"{self._rom_factor_perturbation.diagnostics()}",
                 flush=True,
             )
 
@@ -2404,6 +2440,15 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 reference.target_delta_x,
                 reference.target_delta_xdot,
             )
+            # PLANT BOUNDARY (ROM). Unlike ID-FD the ROM does not consume a
+            # valve command -- it produces one -- so valve effectiveness does
+            # not apply here. Its native per-env plant channel is
+            # system_factors (num_envs, 7), which is what gets perturbed.
+            rom_perturbation = getattr(self, "_rom_factor_perturbation", None)
+            if rom_perturbation is not None:
+                advanced = rom_perturbation.advance()
+                if advanced is not None:
+                    self._command_rom_system_factors = advanced
             rom_out = self._command_cylinder_rom.step(
                 desired_cylinder_command=command,
                 extension=reference.x_current,
@@ -3575,6 +3620,9 @@ class MulagUpperLevelEnv(DirectRLEnv):
         if perturbation is not None:
             # re-arms the scheduled step change and clears the delay buffer
             perturbation.reset(env_ids)
+        rom_perturbation = getattr(self, "_rom_factor_perturbation", None)
+        if rom_perturbation is not None:
+            rom_perturbation.reset(env_ids)
         if self._cylinder_rom is not None:
             self._cylinder_rom.reset(env_ids)
         if self._base_cylinder_rom is not None:

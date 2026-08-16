@@ -113,6 +113,15 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     plant_perturbation_step_alpha_scale = 1.0
     plant_perturbation_step_delay_steps = None
     plant_perturbation_seed = 20260816
+    # ROM-side plant perturbation. The command ROM produces the valve rather
+    # than consuming it, so valve effectiveness does not apply; its per-env
+    # plant channel is system_factors (num_envs, 7) ordered
+    # [compliance, flow, pressure, seal, seal, seal, seal].
+    # Ranges/step values are keyed by NAME: compliance | flow | pressure | seal.
+    rom_factor_perturbation_enabled = False
+    rom_factor_perturbation_ranges = None        # e.g. {"seal": (0.0, 0.8)}
+    rom_factor_perturbation_step_time_s = None   # mid-episode step change
+    rom_factor_perturbation_step_values = None   # e.g. {"seal": 0.8}
     # Per-timestep trace for the online-adaptation figures. None disables it.
     # Distance-binned reports cannot resolve the AAM warmup or a mid-episode
     # step change, so those figures are built from this trace instead.

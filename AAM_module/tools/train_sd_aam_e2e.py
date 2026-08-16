@@ -131,6 +131,12 @@ def main() -> None:
     p.add_argument("--temporal-consistency-weight", type=float, default=0.1,
                    help="penalise |z_t - z_{t-1}| so the latent stays a slowly "
                         "varying configuration rather than tracking fast state")
+    p.add_argument("--no-belief", action="store_true",
+                   help="drop the GRU belief h_t. With h_t present the latent "
+                        "can COLLAPSE: h_t already supplies what SD needs, so "
+                        "nothing pressures z to carry plant identity (measured "
+                        "between/within = 0.068 vs 4.74 for the privileged "
+                        "latent). Removing h_t makes z the only channel.")
     p.add_argument("--patience", type=int, default=12)
     p.add_argument("--seed", type=int, default=20260816)
     p.add_argument("--device", default="cpu")
@@ -193,18 +199,22 @@ def main() -> None:
               dropout=a.aam_dropout, architecture="cnn",
               feature_dim=AAM_FEATURE_DIM, lag=a.lag).to(device)
     belief = BeliefEncoder(block_dim, a.belief_dim).to(device)
+    use_belief = not a.no_belief
     sd = SDz(a.latent_dim, state_dim=HYD_STATE_DIM, hidden=a.sd_hidden,
              depth=a.sd_depth, dropout=a.sd_dropout, use_q=True,
-             use_belief=True, belief_dim=a.belief_dim).to(device)
+             use_belief=use_belief, belief_dim=a.belief_dim).to(device)
 
-    params = list(aam.parameters()) + list(belief.parameters()) + list(sd.parameters())
+    params = list(aam.parameters()) + list(sd.parameters())
+    if use_belief:
+        params += list(belief.parameters())
     opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=a.weight_decay)
 
     def forward(d, idx):
         z = aam(d["w"][idx])
-        h = belief.init_from_window(d["b"][idx])
-        x = torch.cat((d["s"][idx], d["u"][idx], d["q"][idx], z, h), dim=-1)
-        return sd(x), z
+        parts = [d["s"][idx], d["u"][idx], d["q"][idx], z]
+        if use_belief:
+            parts.append(belief.init_from_window(d["b"][idx]))
+        return sd(torch.cat(parts, dim=-1)), z
 
     def evaluate(split):
         for m in (aam, belief, sd):
@@ -290,7 +300,8 @@ def main() -> None:
             "computed_on": "train_windows_only",
         },
         # --- SD side ---
-        "belief_dim": a.belief_dim,
+        "use_belief": use_belief,
+        "belief_dim": a.belief_dim if use_belief else 0,
         "belief_lag": a.belief_lag,
         "sd_hidden": a.sd_hidden,
         "sd_depth": a.sd_depth,

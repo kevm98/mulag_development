@@ -172,3 +172,139 @@ class PlantPerturbation:
             "delay_mean": float(self.delay.to(torch.float32).mean()),
             "stepped_envs": int(self.stepped.sum()),
         }
+
+
+# --------------------------------------------------------------------------
+# ROM plant
+# --------------------------------------------------------------------------
+# The command ROM has a DIFFERENT interface from ID-FD. It does not consume a
+# valve command -- it consumes a desired cylinder command and PRODUCES the
+# valve (`rom_out.predicted_valve`). So valve effectiveness is not applicable
+# here. Its native per-env plant channel is `system_factors`, shape
+# (num_envs, 7), in the order documented by
+# `AAM_module/aam_data/master_schema.e_to_system_factors`:
+#
+#     [compliance, flow, pressure, seal, seal, seal, seal]
+#
+# seal occupies four slots (one per cylinder). mass_scale and com_z are NOT in
+# this channel; they are mechanical and are applied to the rigid body instead.
+
+SYSTEM_FACTOR_ORDER = ("compliance", "flow", "pressure", "seal", "seal", "seal", "seal")
+SYSTEM_FACTOR_INDEX = {
+    "compliance": (0,),
+    "flow": (1,),
+    "pressure": (2,),
+    "seal": (3, 4, 5, 6),
+}
+
+
+@dataclass
+class RomFactorPerturbationCfg:
+    """Per-env ROM hydraulic factors, with an optional mid-episode step.
+
+    Ranges are given per NAMED factor and expanded to the 7-D channel, so the
+    caller never has to know that seal occupies four slots.
+    """
+
+    enabled: bool = False
+    # name -> (lo, hi), sampled per environment
+    ranges: dict = field(default_factory=dict)
+    # mid-episode step: name -> value applied from step_time_s onwards
+    step_time_s: float | None = None
+    step_values: dict = field(default_factory=dict)
+    seed: int = 20260816
+
+    def validate(self) -> None:
+        for name, rng in self.ranges.items():
+            if name not in SYSTEM_FACTOR_INDEX:
+                raise ValueError(
+                    f"unknown ROM factor {name!r}; expected one of "
+                    f"{sorted(SYSTEM_FACTOR_INDEX)}"
+                )
+            lo, hi = rng
+            if lo > hi:
+                raise ValueError(f"{name} range must satisfy lo <= hi, got {rng}")
+        for name in self.step_values:
+            if name not in SYSTEM_FACTOR_INDEX:
+                raise ValueError(
+                    f"unknown ROM factor {name!r} in step_values; expected one of "
+                    f"{sorted(SYSTEM_FACTOR_INDEX)}"
+                )
+        if self.step_time_s is not None and self.step_time_s < 0.0:
+            raise ValueError("step_time_s must be non-negative")
+
+
+class RomFactorPerturbation:
+    """Drives `_command_rom_system_factors` for the command-ROM plant."""
+
+    N_FACTORS = 7
+
+    def __init__(self, cfg: RomFactorPerturbationCfg, *, num_envs: int,
+                 device: torch.device | str, control_dt: float) -> None:
+        cfg.validate()
+        self.cfg = cfg
+        self.num_envs = int(num_envs)
+        self.device = torch.device(device)
+        self.control_dt = float(control_dt)
+
+        gen = torch.Generator(device="cpu").manual_seed(int(cfg.seed))
+        base = torch.zeros(self.num_envs, self.N_FACTORS)
+        for name, (lo, hi) in cfg.ranges.items():
+            draw = torch.rand(self.num_envs, generator=gen) * (hi - lo) + lo
+            for idx in SYSTEM_FACTOR_INDEX[name]:
+                base[:, idx] = draw
+        self.base = base.to(self.device)
+
+        self.post = self.base.clone()
+        for name, value in cfg.step_values.items():
+            for idx in SYSTEM_FACTOR_INDEX[name]:
+                self.post[:, idx] = float(value)
+
+        self.factors = self.base.clone()
+        self.elapsed_s = torch.zeros(self.num_envs, device=self.device)
+        self.stepped = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.cfg.enabled)
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        ids = (torch.arange(self.num_envs, device=self.device)
+               if env_ids is None
+               else env_ids.to(self.device, dtype=torch.long).reshape(-1))
+        self.factors[ids] = self.base[ids]
+        self.elapsed_s[ids] = 0.0
+        self.stepped[ids] = False
+
+    @torch.no_grad()
+    def advance(self) -> torch.Tensor | None:
+        """Advance the episode clock and return the (num_envs, 7) channel."""
+        if not self.enabled:
+            return None
+        self.elapsed_s = self.elapsed_s + self.control_dt
+        if self.cfg.step_time_s is not None and self.cfg.step_values:
+            due = (self.elapsed_s >= float(self.cfg.step_time_s)) & ~self.stepped
+            if bool(due.any()):
+                self.factors = torch.where(due.reshape(-1, 1), self.post, self.factors)
+                self.stepped = self.stepped | due
+        return self.factors
+
+    def true_theta(self) -> dict[str, torch.Tensor]:
+        """Ground truth for LOGGING AND ANALYSIS ONLY."""
+        out = {"stepped": self.stepped.detach().clone(),
+               "elapsed_s": self.elapsed_s.detach().clone()}
+        for name, idxs in SYSTEM_FACTOR_INDEX.items():
+            out[f"rom_{name}"] = self.factors[:, idxs[0]].detach().clone()
+        return out
+
+    def diagnostics(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "channel_order": list(SYSTEM_FACTOR_ORDER),
+            "ranges": {k: tuple(v) for k, v in self.cfg.ranges.items()},
+            "step_time_s": self.cfg.step_time_s,
+            "step_values": dict(self.cfg.step_values),
+            "seed": self.cfg.seed,
+            "stepped_envs": int(self.stepped.sum()),
+            "factor_mean": self.factors.mean(dim=0).tolist(),
+        }
