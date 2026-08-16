@@ -102,6 +102,22 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     cylinder_usd_limit_tolerance_m = 1.0e-5
     cylinder_usd_delta_scale_tolerance = 1.0e-4
     max_abs_valve = 1.0
+    # Plant-side perturbation for the AAM online-adaptation experiments.
+    # Applied at the FD boundary, AFTER the controller has produced its
+    # command, so the controller never sees these values and the AAM must
+    # infer their effect from the commanded/response mismatch. Off by default.
+    plant_perturbation_enabled = False
+    plant_perturbation_alpha_range = (1.0, 1.0)      # valve effectiveness
+    plant_perturbation_delay_steps_range = (0, 0)    # transport delay, control steps
+    plant_perturbation_step_time_s = None            # mid-episode step change
+    plant_perturbation_step_alpha_scale = 1.0
+    plant_perturbation_step_delay_steps = None
+    plant_perturbation_seed = 20260816
+    # Per-timestep trace for the online-adaptation figures. None disables it.
+    # Distance-binned reports cannot resolve the AAM warmup or a mid-episode
+    # step change, so those figures are built from this trace instead.
+    adaptation_trace_path = None
+    adaptation_trace_max_steps = 20000
     cylinder_rom_delta_clip_m = 0.02
     command_rom_dp_abs_limit_pa = 1.5e8
     command_rom_direction_guard = False

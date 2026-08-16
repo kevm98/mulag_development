@@ -60,6 +60,7 @@ class OnlineAAMIDFDController:
         smoother_window: int = 5,
         enabled: bool = True,
         latent_mode: str = "estimated",
+        latent_freeze_tick: int = 0,
     ) -> None:
         self.device = torch.device(device)
         if self.device.type == "cuda" and self.device.index is None:
@@ -75,10 +76,26 @@ class OnlineAAMIDFDController:
             raise ValueError("residual_scale must be in [0, 1]")
         self.enabled = bool(enabled)
         self.latent_mode = str(latent_mode).strip().lower()
-        if self.latent_mode not in ('estimated', 'true', 'zero', 'mean', 'shuffled'):
+        _LATENT_MODES = (
+            'estimated', 'true', 'zero', 'mean', 'shuffled', 'frozen'
+        )
+        if self.latent_mode not in _LATENT_MODES:
             raise ValueError(
-                f"latent_mode must be one of {['estimated', 'true', 'zero', 'mean', 'shuffled']}, "
+                f"latent_mode must be one of {list(_LATENT_MODES)}, "
                 f"got {self.latent_mode!r}"
+            )
+        # `frozen` latches the estimate once, at the configured control tick,
+        # and holds it for the rest of the episode.  It is the control for an
+        # ONLINE adaptation claim: it supplies a latent of the same magnitude
+        # and content as `estimated`, differing only in that it stops
+        # updating.  If `estimated` recovers from a mid-episode plant change
+        # and `frozen` does not, the recovery came from online estimation
+        # rather than from merely having the extra input dimensions.
+        self.latent_freeze_tick = int(latent_freeze_tick)
+        if self.latent_mode == "frozen" and self.latent_freeze_tick < 1:
+            raise ValueError(
+                "latent_mode='frozen' requires latent_freeze_tick >= 1 "
+                "(the control tick at which the estimate is latched)"
             )
         # The history length is no longer pinned to 5. It is still validated
         # against the checkpoint below (lag_ticks and in_dim must agree), so a
@@ -226,6 +243,11 @@ class OnlineAAMIDFDController:
         self.control_ticks = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.z_hat = torch.zeros((self.num_envs, 2), device=self.device)
         self.true_z = torch.zeros((self.num_envs, 2), device=self.device)
+        # latch buffers for latent_mode='frozen'
+        self.z_frozen = torch.zeros((self.num_envs, 2), device=self.device)
+        self.z_frozen_valid = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
         self.true_z_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.z_prediction_history = torch.zeros((self.num_envs, self.smoother_window, 2), device=self.device)
         self.z_prediction_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -286,6 +308,9 @@ class OnlineAAMIDFDController:
             self.z_hat[ids] = 0.0
         self.z_prediction_history[ids] = 0.0
         self.z_prediction_count[ids] = 0
+        # a reset starts a new episode, so the latch must be re-armed
+        self.z_frozen[ids] = 0.0
+        self.z_frozen_valid[ids] = False
         if self.latent_mode == "true":
             self.aam_ready[ids] = self.enabled & self.true_z_valid[ids]
         else:
@@ -496,6 +521,16 @@ class OnlineAAMIDFDController:
             # Derangement where possible: a fixed roll guarantees no environment
             # keeps its own latent, which a random permutation does not.
             return torch.roll(z, shifts=1, dims=0).contiguous()
+        if mode == "frozen":
+            # Latch the live estimate the first time an environment reaches the
+            # freeze tick, then republish that latched value forever.  Before
+            # the freeze tick this is identical to `estimated`, so the two arms
+            # are matched up to the latch and diverge only afterwards.
+            due = (self.control_ticks >= self.latent_freeze_tick) & ~self.z_frozen_valid
+            if bool(due.any()):
+                self.z_frozen = torch.where(due.reshape(-1, 1), z, self.z_frozen)
+                self.z_frozen_valid = self.z_frozen_valid | due
+            return torch.where(self.z_frozen_valid.reshape(-1, 1), self.z_frozen, z)
         raise ValueError(f"unhandled latent_mode {mode!r}")
 
     def diagnostics(self) -> dict[str, Any]:
@@ -523,6 +558,8 @@ class OnlineAAMIDFDController:
             "command_limits": self.command_limits.detach().cpu().tolist(),
             "residual_scale": self.residual_scale,
             "latent_mode": self.latent_mode,
+            "latent_freeze_tick": self.latent_freeze_tick,
+            "latent_frozen_envs": int(self.z_frozen_valid.sum().detach().cpu()),
             "aam_checkpoint": str(self.aam_checkpoint_path),
             "adapter_checkpoint": str(self.adapter_checkpoint_path),
             "true_latent_checkpoint": (

@@ -4324,6 +4324,67 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 )
         return {"policy": obs}
 
+    def _record_adaptation_trace(self) -> None:
+        """Capture one per-step row for the online-adaptation figures.
+
+        Off unless ``adaptation_trace_path`` is set on the cfg. The existing
+        reports bin by distance (finest bin 3.25 m) which averages away the
+        AAM warmup (~0.29 m) and any mid-episode transition, so the adaptation
+        evidence has to come from here.
+
+        ``theta_*`` are the TRUE plant parameters, recorded for analysis only.
+        They are never routed into the policy, the ID model or the AAM.
+        """
+        path = getattr(self.cfg, "adaptation_trace_path", None)
+        if not path:
+            return
+        recorder = getattr(self, "_adaptation_trace", None)
+        if recorder is None:
+            from PPO_ID_AAM_FD.trace_recorder import TraceRecorder
+
+            recorder = TraceRecorder(
+                num_envs=self.num_envs,
+                out_path=path,
+                max_steps=int(getattr(self.cfg, "adaptation_trace_max_steps", 20000)),
+            )
+            self._adaptation_trace = recorder
+
+        zeros = torch.zeros(self.num_envs, device=self.device)
+        z_hat = getattr(self, "_aam_z_hat", None)
+        valve = getattr(self, "_current_valve_cmd", None)
+        applied = getattr(self, "_applied_valve_cmd", None)
+        row = {
+            "step": torch.full((self.num_envs,), float(self.common_step_counter),
+                               device=self.device),
+            "lateral_error": self.verge_lateral_error(),
+            "cut_height_error": self.cut_height_error(),
+            "z_hat": z_hat if z_hat is not None else zeros,
+            "valve_cmd": valve if valve is not None else zeros,
+            "valve_applied": applied if applied is not None else zeros,
+        }
+        perturbation = getattr(self, "_plant_perturbation", None)
+        if perturbation is not None:
+            theta = perturbation.true_theta()
+            row["theta_alpha"] = theta["alpha"]
+            row["theta_delay_steps"] = theta["delay_steps"].to(torch.float32)
+            row["theta_stepped"] = theta["stepped"].to(torch.float32)
+            row["theta_elapsed_s"] = theta["elapsed_s"]
+        recorder.record(**row)
+
+    def save_adaptation_trace(self, **metadata):
+        """Flush the per-step trace. Safe to call when tracing is disabled."""
+        recorder = getattr(self, "_adaptation_trace", None)
+        if recorder is None:
+            return None
+        saved = recorder.save(**metadata)
+        if saved is not None and recorder.truncated:
+            print(
+                f"[TerrainSolePolicyEnv] adaptation trace TRUNCATED at "
+                f"{recorder.steps} steps; raise adaptation_trace_max_steps",
+                flush=True,
+            )
+        return saved
+
     def _get_rewards(self) -> torch.Tensor:
         if getattr(self, "_sole_applied", None) is None:
             return super()._get_rewards()
@@ -4337,6 +4398,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # this returns immediately and reward, termination and metrics all read
         # the SAME transition.
         self._update_contact_safety()
+        self._record_adaptation_trace()
         x, _ = self._refresh_cylinder_state()
         low, high = self._cylinder_headroom(x)
         acceleration = torch.linalg.norm(self._measured_tool_acceleration_truck, dim=-1)

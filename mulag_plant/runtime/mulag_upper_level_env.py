@@ -1168,6 +1168,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     device=self.device,
                 )
                 self._load_fd_correction()
+                self._setup_plant_perturbation()
             elif dynamics_model == "rom":
                 self._cylinder_rom = CylinderROMRuntime(
                     models_root=self.cfg.cylinder_models_root,
@@ -1272,6 +1273,44 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     )
             print(f"[MulagUpperLevelEnv]   dynamics model: {dynamics_model}", flush=True)
 
+    def _setup_plant_perturbation(self) -> None:
+        """Attach the optional plant-side valve perturbation (FD boundary).
+
+        This deliberately sits DOWNSTREAM of the controller: the policy, the ID
+        model and the AAM all act on the commanded valve, and only the applied
+        valve is perturbed. The resulting commanded/response mismatch is the
+        signal the AAM has to infer the plant change from.
+        """
+        from PPO_ID_AAM_FD.plant_perturbation import (
+            PlantPerturbation, PlantPerturbationCfg,
+        )
+
+        cfg = PlantPerturbationCfg(
+            enabled=bool(getattr(self.cfg, "plant_perturbation_enabled", False)),
+            alpha_range=tuple(getattr(self.cfg, "plant_perturbation_alpha_range", (1.0, 1.0))),
+            delay_steps_range=tuple(
+                getattr(self.cfg, "plant_perturbation_delay_steps_range", (0, 0))
+            ),
+            step_time_s=getattr(self.cfg, "plant_perturbation_step_time_s", None),
+            step_alpha_scale=float(
+                getattr(self.cfg, "plant_perturbation_step_alpha_scale", 1.0)
+            ),
+            step_delay_steps=getattr(self.cfg, "plant_perturbation_step_delay_steps", None),
+            seed=int(getattr(self.cfg, "plant_perturbation_seed", 20260816)),
+        )
+        self._plant_perturbation = PlantPerturbation(
+            cfg,
+            num_envs=self.num_envs,
+            device=self.device,
+            control_dt=self._control_dt,
+        )
+        if cfg.enabled and bool(getattr(self.cfg, "enable_verbose_startup", False)):
+            print(
+                "[MulagUpperLevelEnv]   plant perturbation: "
+                f"{self._plant_perturbation.diagnostics()}",
+                flush=True,
+            )
+
     def _setup_online_aam(self) -> None:
         """Attach the optional Stage-31 causal AAM/adapter state machine."""
         if str(self.cfg.cylinder_dynamics_model).lower() != "fd":
@@ -1294,6 +1333,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
             smoother_window=int(getattr(self.cfg, "online_aam_smoother_window", 5)),
             enabled=bool(getattr(self.cfg, "online_aam_enabled", True)),
             latent_mode=str(getattr(self.cfg, "online_aam_latent_mode", "estimated")),
+            latent_freeze_tick=int(getattr(self.cfg, "online_aam_latent_freeze_tick", 0)),
         )
         if bool(getattr(self.cfg, "enable_verbose_startup", False)):
             print(f"[MulagUpperLevelEnv]   online AAM: {self._online_aam.diagnostics()}", flush=True)
@@ -2552,8 +2592,21 @@ class MulagUpperLevelEnv(DirectRLEnv):
             else:
                 if self._cylinder_fd is None:
                     raise RuntimeError("cylinder_dynamics_model='fd' but FD runtime is not initialized.")
+                # PLANT BOUNDARY. Everything upstream of this line acts on the
+                # commanded valve; only what the plant receives is perturbed.
+                # `_prev_valve_cmd` (the AAM's previous_valve input) is cloned
+                # from `_current_valve_cmd`, so the AAM continues to see the
+                # COMMAND while the plant responds to the perturbed version --
+                # which is exactly the mismatch it must learn to identify.
+                perturbation = getattr(self, "_plant_perturbation", None)
+                applied_valve_cmd = (
+                    perturbation.apply(self._current_valve_cmd)
+                    if perturbation is not None
+                    else self._current_valve_cmd
+                )
+                self._applied_valve_cmd = applied_valve_cmd
                 fd_out = self._cylinder_fd.step(
-                    valve_cmd=self._current_valve_cmd,
+                    valve_cmd=applied_valve_cmd,
                     extension=reference.x_current,
                     extension_velocity=reference.xdot_current,
                     dP=self._dP,
@@ -3518,6 +3571,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
             self._cylinder_id.reset(env_ids)
         if self._online_aam is not None:
             self._online_aam.reset(env_ids)
+        perturbation = getattr(self, "_plant_perturbation", None)
+        if perturbation is not None:
+            # re-arms the scheduled step change and clears the delay buffer
+            perturbation.reset(env_ids)
         if self._cylinder_rom is not None:
             self._cylinder_rom.reset(env_ids)
         if self._base_cylinder_rom is not None:
