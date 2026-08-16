@@ -134,19 +134,41 @@ def main() -> None:
     c_r = [report[n]["effort_ratio"] for n in constant
            if isinstance(report[n].get("effort_ratio"), float)]
     if s_r and c_r:
-        s_m, c_m = float(np.mean(s_r)), float(np.mean(c_r))
-        separated = max(s_r) < min(c_r) or min(s_r) > max(c_r)
-        print(f"\ncontrol effort post/pre -- stepped {s_m:.3f}  constant {c_m:.3f}"
-              f"  (groups fully separated: {separated})")
-        if len(s_r) < 5 or len(c_r) < 5:
-            print("  NOTE: fewer than 5 runs per group. Direction may be "
-                  "suggestive but is not evidence; collect more before "
-                  "claiming the step is observable.")
-        if not separated:
+        sa, ca = np.asarray(s_r, float), np.asarray(c_r, float)
+        s_m, c_m = float(sa.mean()), float(ca.mean())
+        # Perfect separation is the right bar only at tiny n, where it is also
+        # cheap to hit by luck (p = 1/3 at 2-vs-2). With real group sizes a
+        # rank/permutation test is the correct instrument: overlapping ranges
+        # are entirely compatible with a large, unambiguous effect.
+        auc = float(np.mean([[1.0 if a > b else 0.5 if a == b else 0.0
+                              for b in ca] for a in sa]))
+        obs = abs(s_m - c_m)
+        pool = np.concatenate([sa, ca])
+        rng = np.random.default_rng(0)
+        n_s, N = len(sa), 20000
+        hits = 0
+        for _ in range(N):
+            rng.shuffle(pool)
+            if abs(pool[:n_s].mean() - pool[n_s:].mean()) >= obs:
+                hits += 1
+        pval = (hits + 1) / (N + 1)
+        print(f"\ncontrol effort post/pre -- stepped {s_m:.3f} (n={len(sa)})  "
+              f"constant {c_m:.3f} (n={len(ca)})")
+        print(f"  permutation p = {pval:.5f}   AUC = {auc:.3f}   "
+              f"difference {s_m - c_m:+.3f}")
+        if len(sa) < 5 or len(ca) < 5:
             problems.append(
-                "stepped and constant control-effort ratios overlap: the step "
-                "is not yet demonstrably observable in the recorded response"
+                f"only {min(len(sa), len(ca))} runs in the smaller group: too "
+                "few to establish the step is observable, whatever the "
+                "direction (collect >= 5 per group)"
             )
+        elif not (pval < 0.01 and auc > 0.8):
+            problems.append(
+                f"step not demonstrably observable in control effort "
+                f"(p={pval:.4f}, AUC={auc:.3f}); expected p<0.01 and AUC>0.8"
+            )
+        else:
+            print("  -> the plant step IS observable in the recorded response")
 
     if not stepped:
         problems.append(
