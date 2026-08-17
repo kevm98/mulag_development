@@ -56,6 +56,9 @@ def runtime_mean(runtime: Any, names: list[str]) -> np.ndarray:
     return mean[[names_all.index(name) for name in names]].astype(np.float64)
 
 
+LATENT_DIM = 2  # trailing columns of the 30-wide feature row
+
+
 class ResidualAdapter(nn.Module):
     def __init__(self, in_dim: int, hidden: int, depth: int, out_dim: int = 4) -> None:
         super().__init__()
@@ -369,9 +372,23 @@ def main() -> None:
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--patience", type=int, default=18)
     p.add_argument("--residual-bound", type=float, default=0.15)
-    p.add_argument("--variants", nargs="+", choices=("true", "zhat"),
+    p.add_argument("--feature-ablation", choices=("none", "no_dp_force"),
+                   default="none",
+                   help="`no_dp_force` zeroes the dP(4) and force(4) columns, "
+                        "making the observation less able to reveal the plant "
+                        "on its own. Measured first: masking them moves the "
+                        "held-out recoverability of z from the remaining "
+                        "features only 0.761 -> 0.746, so this is expected to "
+                        "come back null -- the instantaneous state slice is "
+                        "nearly sufficient regardless of which subset is used.")
+    p.add_argument("--variants", nargs="+", choices=("true", "zhat", "none"),
                    default=("true", "zhat"),
-                   help="adapter variants to train; use only zhat for a focused deployment retrain")
+                   help="adapter variants to train; use only zhat for a focused "
+                        "deployment retrain. `none` zeroes the latent columns "
+                        "and is the control that says whether the adapter uses "
+                        "the latent AT ALL -- without it, a `true` and a `zhat` "
+                        "adapter scoring alike is ambiguous between 'the "
+                        "estimate is as good as truth' and 'neither is used'.")
     p.add_argument("--device", default="auto")
     p.add_argument("--seed", type=int, default=20260809)
     args = p.parse_args()
@@ -399,9 +416,10 @@ def main() -> None:
     for rid, row in info.items():
         splits[str(row["frozen_split"])].add(int(rid))
     latent_maps: dict[str, dict[int, dict[int, np.ndarray]]] = {"zhat": zhat, "true": {}}
+    _EMPTY = lambda: {"train_x": [], "train_y": [], "train_u": [],
+                      "val_x": [], "val_y": [], "val_u": []}
     all_data: dict[str, dict[str, list[np.ndarray]]] = {
-        "true": {"train_x": [], "train_y": [], "train_u": [], "val_x": [], "val_y": [], "val_u": []},
-        "zhat": {"train_x": [], "train_y": [], "train_u": [], "val_x": [], "val_y": [], "val_u": []},
+        "true": _EMPTY(), "zhat": _EMPTY(), "none": _EMPTY(),
     }
     raw_runs = []
     for run_id, _ in iter_raw_runs(root):
@@ -412,13 +430,31 @@ def main() -> None:
         loaded = read_raw_run(root, run_id, verify=True)
         raw_runs.append(run_id)
         true_map = load_true_latent(aam_root, run_id, args.lag)
-        for name, latent_map in (("true", true_map), ("zhat", zhat.get(run_id, {}))):
+        for name, latent_map in (("true", true_map), ("zhat", zhat.get(run_id, {})),
+                                 ("none", true_map)):
             fx, y, ub = make_run_samples(
                 loaded["arrays"], id_runtime=id_runtime, dp_mean=dp_mean,
                 force_mean=force_mean, latent_by_tick=latent_map,
                 run_id=run_id, lag=args.lag,
                 smoothing_window=args.smoothing_window,
             )
+            if args.feature_ablation == "no_dp_force":
+                fx = fx.copy()
+                fx[:, 8:16] = 0.0        # dP(4), force(4)
+            if name == "none":
+                # Same rows, same u_base, same targets -- only the latent
+                # columns are blanked, so any difference against `true`/`zhat`
+                # is attributable to the latent and nothing else.
+                # features are [x, v, dP, force, dx, dv, u_base, z] = 28 + 2,
+                # so the latent is the trailing LATENT_DIM columns.
+                if fx.shape[1] != 30:
+                    raise RuntimeError(
+                        f"expected a 30-wide feature row, got {fx.shape[1]}; "
+                        "the `none` control blanks the trailing latent columns "
+                        "and must not guess their position"
+                    )
+                fx = fx.copy()
+                fx[:, -LATENT_DIM:] = 0.0
             prefix = "train" if split == "train" else "val"
             all_data[name][f"{prefix}_x"].append(fx.astype(np.float32))
             all_data[name][f"{prefix}_y"].append(y.astype(np.float32))
