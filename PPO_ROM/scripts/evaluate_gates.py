@@ -228,7 +228,7 @@ p.add_argument(
 )
 p.add_argument(
     "--online_aam_controller_latent_mode",
-    choices=("estimated", "true", "zero", "shuffled", "frozen"),
+    choices=("estimated", "true", "zero", "mean", "shuffled", "frozen"),
     default=None,
     help=(
         "Controller latent override. Promotion requires estimated; true "

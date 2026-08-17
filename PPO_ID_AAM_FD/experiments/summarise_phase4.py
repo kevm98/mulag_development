@@ -43,7 +43,7 @@ METRICS = [
 HIGHER_IS_BETTER = {"worst_family_ground_contact_fraction", "p01_head_alignment"}
 
 ARM_ORDER = ["A1_baseline", "A2_id_only", "A3_ppo_only", "A4_full",
-             "C_shuffled", "C_frozen"]
+             "C_shuffled", "C_frozen", "C_mean", "C_sham_step"]
 
 PAIRING = ("checkpoint", "stage", "actuator")
 
@@ -133,6 +133,10 @@ def main() -> None:
     contrast("A4_full", "A3_ppo_only", "does routing it to the ID add anything")
     contrast("A4_full", "C_shuffled", "is it the latent's CONTENT")
     contrast("A4_full", "C_frozen", "is it the ONLINE UPDATING")
+    contrast("A4_full", "C_mean",
+             "vs an IN-DISTRIBUTION no-information latent (zero is 2-3 sigma out)")
+    contrast("A4_full", "C_sham_step",
+             "how much of A4's outcome is the plant change at all")
 
     print("\nCONTRASTS (negative = the first arm is better)")
     for name, c in contrasts.items():

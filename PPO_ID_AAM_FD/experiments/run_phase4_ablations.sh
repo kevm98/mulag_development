@@ -110,23 +110,37 @@ say "scored window   : ${SCORED_S}s (truck reaches ${PATH_LENGTH_M}m at ${SPEED}
 say "freeze tick     : $FREEZE_TICK model ticks = $(awk "BEGIN{printf \"%.1f\", $FREEZE_TICK/20}")s (plant steps at ${STEP_TIME_S}s)"
 say ""
 
-# name             policy      controller  freeze
+# `zero` is NOT a neutral latent value. Measured on A4's trace: the two
+# channels have mean -1.193/-2.344 and every sample is <= 0, so zero sits 2.0
+# and 3.4 standard deviations out and at the extreme edge of the range. The
+# zero arms are therefore OUT-OF-DISTRIBUTION arms, not "no latent" arms, and
+# A4-vs-A1 cannot be read as "does the latent help". C_mean supplies the
+# in-distribution no-plant-information control that comparison needs.
+#
+# C_sham_step repeats A4 with step_alpha_scale=1.0: the schedule fires and the
+# plant does not change. Without it, "z_hat moved 0.31 across the step" is not
+# evidence of tracking -- the latent drifts as the trajectory evolves anyway,
+# and the sham arm is what separates the two.
+#
+# name             policy      controller  freeze          alpha_scale
 ARMS=(
-  "A1_baseline     zero        zero        0"
-  "A2_id_only      zero        estimated   0"
-  "A3_ppo_only     estimated   zero        0"
-  "A4_full         estimated   estimated   0"
-  "C_shuffled      shuffled    shuffled    0"
-  "C_frozen        frozen      frozen      $FREEZE_TICK"
+  "A1_baseline     zero        zero        0               $STEP_ALPHA_SCALE"
+  "A2_id_only      zero        estimated   0               $STEP_ALPHA_SCALE"
+  "A3_ppo_only     estimated   zero        0               $STEP_ALPHA_SCALE"
+  "A4_full         estimated   estimated   0               $STEP_ALPHA_SCALE"
+  "C_shuffled      shuffled    shuffled    0               $STEP_ALPHA_SCALE"
+  "C_frozen        frozen      frozen      $FREEZE_TICK    $STEP_ALPHA_SCALE"
+  "C_mean          mean        mean        0               $STEP_ALPHA_SCALE"
+  "C_sham_step     estimated   estimated   0               1.0"
 )
 
 for row in "${ARMS[@]}"; do
-    read -r NAME POLICY CONTROLLER FRZ <<<"$row"
+    read -r NAME POLICY CONTROLLER FRZ ASCALE <<<"$row"
     if [ -s "$OUT/${NAME}_gates.json" ]; then
         say "reusing $NAME"
         continue
     fi
-    say "--- $NAME  (policy=$POLICY controller=$CONTROLLER freeze=$FRZ)"
+    say "--- $NAME  (policy=$POLICY controller=$CONTROLLER freeze=$FRZ alpha_scale=$ASCALE)"
     FREEZE_ARG=""
     [ "$FRZ" != "0" ] && FREEZE_ARG="$FRZ"
     TASK=RRLAB-Mulag-Verge-ID-AAM-FD-v0 \
@@ -135,7 +149,7 @@ for row in "${ARMS[@]}"; do
     LATENT_MODE="$POLICY" CONTROLLER_LATENT_MODE="$CONTROLLER" \
     FREEZE_TICK="$FREEZE_ARG" \
     PLANT_ALPHA_RANGE="$ALPHA_RANGE" PLANT_STEP_TIME_S="$STEP_TIME_S" \
-    PLANT_STEP_ALPHA_SCALE="$STEP_ALPHA_SCALE" \
+    PLANT_STEP_ALPHA_SCALE="$ASCALE" \
     RESIDUAL_SCALE="$RESIDUAL_SCALE" C3_RESERVE="$C3_RESERVE" \
     FACTOR_DOMAIN="$FACTOR_DOMAIN" PARALLEL_MESHES="${PARALLEL_MESHES:-1}" \
         PPO_ROM/scripts/score_per_mesh.sh "$NAME" "$CKPT" "$STEPS" "$ENVS" \

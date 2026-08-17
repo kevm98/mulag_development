@@ -37,6 +37,12 @@ from pathlib import Path
 import numpy as np
 
 CONTROL_HZ = 60.0
+# Arms whose latent actually updates during the episode. Only these can carry
+# an online-adaptation claim; the rest are controls.
+UPDATING_ARMS = {"estimated", "true", "A4_full", "full"}
+# Below this relative difference the two arms are called indistinguishable
+# rather than one being declared better.
+NEGLIGIBLE_REL = 0.02
 
 
 def load(path: Path) -> dict:
@@ -194,10 +200,28 @@ def main() -> None:
                 if n == "frozen":
                     continue
                 adv = fz["final_error"] - s["final_error"]
-                print(f"\n  {n} vs frozen, final error: {adv:+.5f}")
-                if adv > 0:
-                    print("    -> the updating arm ends closer to target: recovery is")
-                    print("       attributable to ONLINE estimation, not to conditioning.")
+                rel = adv / max(abs(fz["final_error"]), 1e-9)
+                print(f"\n  {n} vs frozen, final error: {adv:+.5f} ({rel:+.1%})")
+                # Only an arm whose latent actually UPDATES can have its
+                # advantage attributed to online estimation. Comparing a
+                # zero/shuffled/mean arm against frozen says nothing about
+                # updating -- those arms have no live estimate to update --
+                # and reporting it as such was this script's own bug.
+                if n not in UPDATING_ARMS:
+                    print(f"    -> {n!r} is not an updating arm; this difference")
+                    print("       says nothing about online adaptation. It compares a")
+                    print("       degraded latent against a held one, nothing more.")
+                elif abs(rel) < NEGLIGIBLE_REL:
+                    print(f"    -> INDISTINGUISHABLE ({abs(rel):.1%} < "
+                          f"{NEGLIGIBLE_REL:.0%}). Holding a PRE-change estimate")
+                    print("       costs nothing, so nothing here supports an online")
+                    print("       adaptation claim. Either the latent does not encode")
+                    print("       this perturbation, or the controller is insensitive")
+                    print("       to it. Check the sham-step control before concluding.")
+                elif adv > 0:
+                    print("    -> the updating arm ends closer to target. Consistent")
+                    print("       with online estimation -- but confirm the latent")
+                    print("       moves MORE across a real step than a sham one.")
                 else:
                     print("    -> no advantage over a held estimate. The controller was")
                     print("       robust anyway, or the latent is not tracking the change.")
@@ -206,6 +230,22 @@ def main() -> None:
             print("  separated from simply having extra input dimensions.")
 
     # 3. lag vs window
+    print("\n=== 2b. is the z shift caused by the STEP? ===")
+    sham = [n for n in summaries if "sham" in n.lower() or "nostep" in n.lower()]
+    if not sham:
+        print("  UNKNOWN -- no sham-step arm supplied. z_hat drifts as the")
+        print("  trajectory evolves, so a shift measured across the step time is")
+        print("  not by itself evidence that the latent tracked the plant change.")
+        print("  Add an arm with an identical schedule and step_alpha_scale=1.0.")
+    else:
+        ref = summaries[sham[0]].get("z_shift_at_step")
+        for n, s in summaries.items():
+            if n in sham or "z_shift_at_step" not in s:
+                continue
+            if ref:
+                print(f"  {n:12} shift {s['z_shift_at_step']:.4f} vs sham "
+                      f"{ref:.4f}  ratio {s['z_shift_at_step']/ref:.2f}x")
+
     print("\n=== 3. response lag ===")
     lags = {n: s["z_response_lag_s"] for n, s in summaries.items()
             if "z_response_lag_s" in s}

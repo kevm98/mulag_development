@@ -97,3 +97,50 @@ def test_step_time_drives_both_plants():
     window = src[i:i + 500]
     assert "plant_perturbation_step_time_s" in window
     assert "rom_factor_perturbation_step_time_s" in window
+
+
+# --------------------------------------------------------------------------
+# The latent modes are declared in THREE places: the runtime's
+# `_apply_latent_mode`, the env's `_policy_latent_observation`, and the two
+# argparse choice lists. They drifted: the controller list omitted `mean`,
+# which the runtime has always supported, so the in-distribution
+# no-information control could not be run and the arm died at startup after
+# the GPU work had already been scheduled.
+
+import sys as _sys
+
+_sys.path.insert(0, str(REPO))
+
+ENV_SRC = (REPO / "mulag_plant/runtime/mulag_upper_level_env.py").read_text()
+RUNTIME_SRC = (REPO / "PPO_ID_AAM_FD/online_runtime.py").read_text()
+
+
+def _runtime_modes() -> set[str]:
+    """The tuple the runtime validates latent_mode against."""
+    tree = ast.parse(RUNTIME_SRC)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "_LATENT_MODES" for t in node.targets)):
+            return {e.value for e in node.value.elts}
+    raise AssertionError("runtime no longer declares _LATENT_MODES")
+
+
+def test_controller_choices_do_not_exclude_a_supported_mode():
+    """Anything the runtime accepts must be reachable from the harness."""
+    missing = _runtime_modes() - _choices("--online_aam_controller_latent_mode")
+    assert not missing, (
+        f"the runtime supports {sorted(missing)} but the harness cannot ask "
+        "for it; the arm dies at argparse after the run is already scheduled"
+    )
+
+
+def test_policy_choices_cover_the_modes_the_env_implements():
+    """Same drift risk on the policy side."""
+    fn = next(n for n in ast.walk(ast.parse(ENV_SRC))
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "_policy_latent_observation")
+    body = ast.unparse(fn)
+    implemented = {m for m in ("estimated", "zero", "mean", "shuffled", "frozen")
+                   if f"'{m}'" in body or f'"{m}"' in body}
+    missing = implemented - _choices("--online_aam_latent_mode")
+    assert not missing, f"policy modes {sorted(missing)} are unreachable"
