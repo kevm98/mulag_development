@@ -279,6 +279,17 @@ p.add_argument(
     help="ID-FD: alpha is multiplied by this at --plant_step_time_s",
 )
 p.add_argument(
+    "--plant_step_delay_steps",
+    type=int,
+    default=None,
+    help=(
+        "ID-FD: transport delay becomes this many control steps at "
+        "--plant_step_time_s. Measured dose-response: delay 2 -> 8 costs +22% "
+        "lateral error, where a valve-effectiveness step of x0.6 costs 0.2% "
+        "and is therefore useless as an adaptation perturbation."
+    ),
+)
+p.add_argument(
     "--adaptation_trace_path",
     default=None,
     help=(
@@ -1261,6 +1272,12 @@ def main() -> None:
             override_cfg(env_cfg, "plant_perturbation_step_time_s", float(a.plant_step_time_s))
             override_cfg(
                 env_cfg, "rom_factor_perturbation_step_time_s", float(a.plant_step_time_s)
+            )
+        if a.plant_step_delay_steps is not None:
+            override_cfg(env_cfg, "plant_perturbation_enabled", True)
+            override_cfg(
+                env_cfg, "plant_perturbation_step_delay_steps",
+                int(a.plant_step_delay_steps),
             )
         if a.plant_step_alpha_scale is not None:
             override_cfg(

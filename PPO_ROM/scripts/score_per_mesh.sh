@@ -72,6 +72,7 @@ LEAD_ARGS=()
 [ -n "${PLANT_DELAY_RANGE:-}" ] && LEAD_ARGS+=(--plant_delay_steps_range "$PLANT_DELAY_RANGE")
 [ -n "${PLANT_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--plant_step_time_s "$PLANT_STEP_TIME_S")
 [ -n "${PLANT_STEP_ALPHA_SCALE:-}" ] && LEAD_ARGS+=(--plant_step_alpha_scale "$PLANT_STEP_ALPHA_SCALE")
+[ -n "${PLANT_STEP_DELAY_STEPS:-}" ] && LEAD_ARGS+=(--plant_step_delay_steps "$PLANT_STEP_DELAY_STEPS")
 [ -n "${ROM_FACTOR_PERTURBATION:-}" ] && LEAD_ARGS+=(--rom_factor_perturbation "$ROM_FACTOR_PERTURBATION")
 [ -n "${ROM_FACTOR_STEP:-}" ] && LEAD_ARGS+=(--rom_factor_step "$ROM_FACTOR_STEP")
 
