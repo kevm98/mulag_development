@@ -55,17 +55,50 @@ C3_RESERVE=${C3_RESERVE:-0.008}
 
 # Plant change. alpha is valve effectiveness at the FD boundary; the range
 # gives per-environment heterogeneity to identify, and the step is the
-# mid-episode change the latent has to track. 20 s sits inside the 47.3 s
-# episode with room either side to measure pre and post.
+# mid-episode change the latent has to track.
+#
+# The step must land inside the SCORED window, which is NOT the 47.3 s episode
+# length: evaluate_gates' roll_mesh breaks as soon as every replica reaches the
+# 26 m endpoint, so at 5 km/h the rollout ends after 26/(5/3.6) = 18.7 s no
+# matter how many --steps are requested. A step scheduled at 20 s never fires;
+# every arm then runs on an unperturbed plant and the whole grid returns nulls
+# with nothing in the report to say why. Measured: the first attempt recorded
+# 1124 steps with theta_elapsed_s topping out at 18.73 s and theta_stepped
+# identically zero. The guard below refuses that configuration.
 ALPHA_RANGE=${ALPHA_RANGE:-0.7:1.0}
-STEP_TIME_S=${STEP_TIME_S:-20.0}
+STEP_TIME_S=${STEP_TIME_S:-9.0}
 STEP_ALPHA_SCALE=${STEP_ALPHA_SCALE:-0.6}
+PATH_LENGTH_M=${PATH_LENGTH_M:-26.0}
 # Latch two seconds BEFORE the plant changes: the frozen arm must hold a
 # pre-change estimate, and it must be latched after the AAM is valid (the L20
-# window is 1.0 s, so anything past ~60 ticks is warm).
-FREEZE_TICK=${FREEZE_TICK:-1080}
+# window is 1.0 s = 20 ticks, so anything past ~20 ticks is warm).
+#
+# UNITS: this counter advances once per 50 ms MODEL tick, not per 60 Hz control
+# step -- on the ID-FD path `observe` is only entered on the model clock. So
+# 18 s = 360, not 1080. Getting this wrong by 3x would latch AFTER the plant
+# change and the "frozen" arm would quietly hold a POST-change estimate,
+# turning the decisive control into a near-copy of the full arm.
+FREEZE_TICK=${FREEZE_TICK:-140}
 
 test -f "$CKPT" || { echo "missing PPO checkpoint: $CKPT" >&2; exit 2; }
+
+# --- the step and the latch must both land inside the scored window --------
+SCORED_S=$(awk "BEGIN{printf \"%.2f\", $PATH_LENGTH_M/($SPEED/3.6)}")
+FREEZE_S=$(awk "BEGIN{printf \"%.2f\", $FREEZE_TICK/20.0}")
+awk "BEGIN{exit !($STEP_TIME_S < 0.75*$SCORED_S)}" || {
+    echo "plant step at ${STEP_TIME_S}s leaves too little of the ${SCORED_S}s" \
+         "scored window to measure recovery; the rollout ends when the truck" \
+         "reaches ${PATH_LENGTH_M}m at ${SPEED} km/h" >&2; exit 2; }
+awk "BEGIN{exit !($STEP_TIME_S > 0.25*$SCORED_S)}" || {
+    echo "plant step at ${STEP_TIME_S}s leaves too little PRE-step window" >&2
+    exit 2; }
+awk "BEGIN{exit !($FREEZE_S < $STEP_TIME_S)}" || {
+    echo "freeze latch at ${FREEZE_S}s is not BEFORE the plant step at" \
+         "${STEP_TIME_S}s; the frozen arm would hold a POST-change estimate" \
+         "and stop being a control" >&2; exit 2; }
+awk "BEGIN{exit !($FREEZE_S > 1.0)}" || {
+    echo "freeze latch at ${FREEZE_S}s is inside the 1.0s AAM warmup" >&2
+    exit 2; }
 mkdir -p "$OUT" "$TRACES"
 : > "$LOG"
 say() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
@@ -73,7 +106,8 @@ say() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
 say "checkpoint      : $CKPT"
 say "meshes          : $MESHES   speed ${SPEED} km/h   envs $ENVS   steps $STEPS"
 say "plant           : alpha $ALPHA_RANGE, x${STEP_ALPHA_SCALE} at ${STEP_TIME_S}s"
-say "freeze tick     : $FREEZE_TICK ($(awk "BEGIN{printf \"%.1f\", $FREEZE_TICK/60}")s)"
+say "scored window   : ${SCORED_S}s (truck reaches ${PATH_LENGTH_M}m at ${SPEED} km/h; the rollout ends there, NOT at the 47.3s episode length)"
+say "freeze tick     : $FREEZE_TICK model ticks = $(awk "BEGIN{printf \"%.1f\", $FREEZE_TICK/20}")s (plant steps at ${STEP_TIME_S}s)"
 say ""
 
 # name             policy      controller  freeze

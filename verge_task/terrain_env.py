@@ -3302,6 +3302,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if isinstance(path_complete, torch.Tensor):
             log["truck/path_complete_fraction"] = path_complete.float().mean()
             log["truck/path_completion_time_s"] = self._truck_path_completion_time_s.mean()
+        # Recorded here, not in _get_rewards: PPO_ROM's Ppo31SoleEnv replaces
+        # _get_rewards outright without calling super(), so a hook there is
+        # dead for every task in this chain -- the trace silently recorded
+        # nothing while the run reported success. _get_dones is not overridden
+        # below this class and runs exactly once per step.
+        self._record_adaptation_trace()
         return terminated, truncated
 
     def truck_ride_height(self) -> torch.Tensor:
@@ -4411,11 +4417,6 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         if getattr(self, "_sole_applied", None) is None:
-            # Record here too. Tracing must not depend on which reward path
-            # runs: when it did, the evaluation harness took this branch, the
-            # recorder never armed, and every traced run produced a report and
-            # no npz -- a configured-looking run with no adaptation evidence.
-            self._record_adaptation_trace()
             return super()._get_rewards()
 
         cfg = self.cfg
@@ -4427,7 +4428,6 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # this returns immediately and reward, termination and metrics all read
         # the SAME transition.
         self._update_contact_safety()
-        self._record_adaptation_trace()
         x, _ = self._refresh_cylinder_state()
         low, high = self._cylinder_headroom(x)
         acceleration = torch.linalg.norm(self._measured_tool_acceleration_truck, dim=-1)

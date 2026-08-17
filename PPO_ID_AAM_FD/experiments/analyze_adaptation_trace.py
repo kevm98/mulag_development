@@ -54,7 +54,14 @@ def series(tr: dict, key: str) -> np.ndarray | None:
 
 
 def step_index(tr: dict) -> int | None:
-    """First step at which the scheduled plant change fired."""
+    """First step at which the scheduled plant change fired.
+
+    Returning None means the perturbation was configured but never reached.
+    That has a specific cause worth naming: the rollout ends when the truck
+    reaches the end of its 26 m path, which at 5 km/h is 18.7 s -- well short
+    of the 47.3 s episode length -- so a step scheduled after that never fires
+    and every arm silently runs on an unperturbed plant.
+    """
     st = series(tr, "theta_stepped")
     if st is None or not st.any():
         return None
@@ -65,6 +72,10 @@ def summarise(name: str, tr: dict, warmup_steps: int, metric: str) -> dict:
     err = series(tr, metric)
     if err is None:
         raise SystemExit(f"{name}: trace has no field {metric!r}")
+    # Errors are recorded SIGNED. Averaging them signed lets a large
+    # oscillation cancel to near zero and report as excellent tracking, so
+    # every summary below is on the magnitude.
+    err = np.abs(err)
     # Prefer the RAW estimate. `z_hat` is what the controller received, so in
     # the routing arms that zero it, reading `z_hat` would report "the latent
     # never moved" -- describing the ablation rather than the estimator.
@@ -162,8 +173,16 @@ def main() -> None:
     print("\n=== 2. step response ===")
     stepped = {n: s for n, s in summaries.items() if s.get("step_index") is not None}
     if not stepped:
-        print("  no scheduled plant change in these traces "
-              "(set plant_perturbation_step_time_s)")
+        print("  no scheduled plant change fired in these traces.")
+        elapsed = {n: float(np.nanmax(series(t, "theta_elapsed_s")))
+                   for n, t in traces.items() if "theta_elapsed_s" in t}
+        for n, e in elapsed.items():
+            print(f"    {n}: episode reached only {e:.1f}s")
+        print("  If a step time was set, it was scheduled past the end of the")
+        print("  SCORED window: the rollout stops when the truck completes its")
+        print("  26 m path (18.7 s at 5 km/h), not at the 47.3 s episode length.")
+        print("  Every arm then ran on an unperturbed plant -- the contrasts")
+        print("  below are NOT an online-adaptation result.")
     else:
         for n, s in stepped.items():
             rec = s["spike_error"] - s["final_error"]

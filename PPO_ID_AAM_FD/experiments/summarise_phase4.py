@@ -25,9 +25,15 @@ import argparse
 import json
 from pathlib import Path
 
-# lower is better for all of these
+# lower is better for all of these.
+#
+# `lateral (mean)` is the primary: it averages every path family, where
+# `worst_family_...` reports the single worst one. A worst-of-N statistic
+# carries binomial noise that has previously been mistaken for a real
+# difference here, so it is reported alongside rather than relied on.
 METRICS = [
-    ("worst_family_mean_abs_lateral_error_m", "lateral err (m)"),
+    ("mean_family_lateral_error_m", "lateral mean (m)"),
+    ("worst_family_mean_abs_lateral_error_m", "lateral worst (m)"),
     ("mean_abs_cut_height_error_m", "cut-height err (m)"),
     ("hard_impact_step_fraction", "hard impacts"),
     ("p95_tool_acceleration_mps2", "p95 accel"),
@@ -43,7 +49,17 @@ PAIRING = ("checkpoint", "stage", "actuator")
 
 
 def mesh_mean(report: dict, key: str) -> float | None:
-    vals = [row[key] for row in report.get("per_mesh", {}).values() if key in row]
+    rows = list(report.get("per_mesh", {}).values())
+    if key == "mean_family_lateral_error_m":
+        vals = []
+        for row in rows:
+            fams = [f["mean_abs_lateral_error_m"]
+                    for f in row.get("path_family_results", [])
+                    if "mean_abs_lateral_error_m" in f]
+            if fams:
+                vals.append(sum(fams) / len(fams))
+    else:
+        vals = [row[key] for row in rows if key in row]
     return sum(vals) / len(vals) if vals else None
 
 

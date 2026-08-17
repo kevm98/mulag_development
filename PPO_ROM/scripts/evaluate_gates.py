@@ -224,7 +224,7 @@ p.add_argument(
     "--online_aam_latent_freeze_tick",
     type=int,
     default=None,
-    help="control tick at which latent_mode='frozen' latches the estimate",
+    help="tick at which latent_mode='frozen' latches the estimate. UNITS: 50 ms MODEL ticks (20 Hz), not 60 Hz control steps -- the AAM counter only advances when the model clock samples.",
 )
 p.add_argument(
     "--online_aam_controller_latent_mode",

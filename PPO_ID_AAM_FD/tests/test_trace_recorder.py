@@ -92,3 +92,75 @@ def test_detaches_from_autograd(tmp_path):
     p = r.save()
     with np.load(p) as d:
         assert np.allclose(d["x"], 2.0)
+
+
+# --------------------------------------------------------------------------
+# Where the recorder is CALLED FROM is part of its contract.
+#
+# The hook lived in `TerrainSolePolicyEnv._get_rewards`, which PPO_ROM's
+# `Ppo31SoleEnv` replaces outright without calling super(). Every task in the
+# deployment chain inherits from that class, so the hook was dead: traced runs
+# wrote a full gates report and no npz, and nothing in the report said so.
+# These tests pin the hook to a method no subclass overrides.
+
+import ast as _ast
+from pathlib import Path as _Path
+
+_REPO = _Path(__file__).resolve().parents[2]
+_CHAIN = [
+    _REPO / "verge_task/terrain_env.py",
+    _REPO / "PPO_ROM/env.py",
+    _REPO / "PPO_ID_FD/env.py",
+    _REPO / "PPO_ID_AAM_FD/env.py",
+]
+
+
+def _methods_defining(name: str) -> list[_Path]:
+    out = []
+    for f in _CHAIN:
+        tree = _ast.parse(f.read_text())
+        if any(isinstance(n, _ast.FunctionDef) and n.name == name
+               for n in _ast.walk(tree)):
+            out.append(f)
+    return out
+
+
+def _callers_of(call: str) -> set[str]:
+    """Names of the methods that call `call`, across the whole chain."""
+    found = set()
+    for f in _CHAIN:
+        tree = _ast.parse(f.read_text())
+        for fn in _ast.walk(tree):
+            if not isinstance(fn, _ast.FunctionDef):
+                continue
+            for n in _ast.walk(fn):
+                if (isinstance(n, _ast.Call)
+                        and isinstance(n.func, _ast.Attribute)
+                        and n.func.attr == call):
+                    found.add(fn.name)
+    return found
+
+
+def test_the_recorder_is_actually_called():
+    assert _callers_of("_record_adaptation_trace"), (
+        "nothing calls the recorder; setting adaptation_trace_path would arm "
+        "nothing and produce no trace"
+    )
+
+
+def test_the_hook_is_not_on_a_method_a_subclass_replaces():
+    """A hook on an overridden method is dead code for the subclass."""
+    callers = _callers_of("_record_adaptation_trace")
+    for caller in callers:
+        definers = _methods_defining(caller)
+        assert len(definers) == 1, (
+            f"the trace hook sits in {caller!r}, which is defined in "
+            f"{[p.name for p in definers]}; a subclass overriding it silences "
+            "the recorder without any error"
+        )
+
+
+def test_get_rewards_is_the_negative_control_for_that_rule():
+    """Guards the rule above: _get_rewards really is redefined down the chain,
+    so the test would catch a hook placed back there."""
+    assert len(_methods_defining("_get_rewards")) > 1
