@@ -381,7 +381,8 @@ def main() -> None:
                         "features only 0.761 -> 0.746, so this is expected to "
                         "come back null -- the instantaneous state slice is "
                         "nearly sufficient regardless of which subset is used.")
-    p.add_argument("--variants", nargs="+", choices=("true", "zhat", "none"),
+    p.add_argument("--variants", nargs="+",
+                   choices=("true", "zhat", "none", "shuffled", "frozen"),
                    default=("true", "zhat"),
                    help="adapter variants to train; use only zhat for a focused "
                         "deployment retrain. `none` zeroes the latent columns "
@@ -415,11 +416,35 @@ def main() -> None:
     # The split manifest is keyed by zero-padded run id in load_runs_info().
     for rid, row in info.items():
         splits[str(row["frozen_split"])].add(int(rid))
+    # `shuffled`: every run receives ANOTHER run's z_hat trace. It keeps the
+    # time-varying character of the estimate and destroys the correspondence to
+    # this run's plant. It is the control that separates "the latent identifies
+    # the plant" from "a time-varying summary of recent dynamics is a useful
+    # extra feature". Needed because the ESTIMATED latent beats the PRIVILEGED
+    # one in 4/5 seeds, which plant identity alone cannot explain.
+    # `frozen`: z_hat latched at an early tick and held for the run. Identical
+    # CONTENT to `zhat`, differing only in that it stops updating -- so a gap
+    # between them isolates ONLINE adaptation from static plant conditioning.
+    # This is the arm that carries the word "online" in the claim.
+    def latch(m: dict) -> dict:
+        if not m:
+            return {}
+        ticks = sorted(m)
+        # latch a quarter of the way in: after the AAM is warm, before the
+        # mid-episode plant change at 50%
+        held = m[ticks[len(ticks) // 4]]
+        return {t: held for t in ticks}
+
+    donor = {}
+    _ids = sorted(zhat)
+    for _i, _r in enumerate(_ids):
+        donor[_r] = _ids[(_i + 1) % len(_ids)] if len(_ids) > 1 else _r
     latent_maps: dict[str, dict[int, dict[int, np.ndarray]]] = {"zhat": zhat, "true": {}}
     _EMPTY = lambda: {"train_x": [], "train_y": [], "train_u": [],
                       "val_x": [], "val_y": [], "val_u": []}
     all_data: dict[str, dict[str, list[np.ndarray]]] = {
         "true": _EMPTY(), "zhat": _EMPTY(), "none": _EMPTY(),
+        "shuffled": _EMPTY(), "frozen": _EMPTY(),
     }
     raw_runs = []
     for run_id, _ in iter_raw_runs(root):
@@ -430,8 +455,12 @@ def main() -> None:
         loaded = read_raw_run(root, run_id, verify=True)
         raw_runs.append(run_id)
         true_map = load_true_latent(aam_root, run_id, args.lag)
-        for name, latent_map in (("true", true_map), ("zhat", zhat.get(run_id, {})),
-                                 ("none", true_map)):
+        for name, latent_map in (
+            ("true", true_map), ("zhat", zhat.get(run_id, {})),
+            ("none", true_map),
+            ("shuffled", zhat.get(donor.get(run_id, run_id), {})),
+            ("frozen", latch(zhat.get(run_id, {}))),
+        ):
             fx, y, ub = make_run_samples(
                 loaded["arrays"], id_runtime=id_runtime, dp_mean=dp_mean,
                 force_mean=force_mean, latent_by_tick=latent_map,

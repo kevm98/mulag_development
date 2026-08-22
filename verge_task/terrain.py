@@ -51,8 +51,9 @@ def apply_natural_verge_vertex_colors(
     soil_threshold: float = 1.0,
     asphalt_edge_y: float | None = None,
     asphalt_color: tuple = (0.03, 0.035, 0.04),
+    coordinate_offset_xy: tuple[float, float] = (0.0, 0.0),
 ) -> float:
-    """Color an existing terrain mesh as grass/soil without adding geometry."""
+    """Color an existing terrain mesh from one continuous procedural palette."""
     colors = np.asarray(palette, dtype=np.float64)
     if colors.ndim != 2 or colors.shape[0] < 5 or colors.shape[1] != 3:
         raise ValueError("mow_strip_visual_palette must contain four grass RGB colors and soil")
@@ -60,7 +61,8 @@ def apply_natural_verge_vertex_colors(
         raise ValueError("mow_strip_visual_palette RGB values must be finite and in [0, 1]")
 
     xy = np.asarray(mesh.vertices[:, :2], dtype=np.float64)
-    x, y = xy[:, 0], xy[:, 1]
+    offset_x, offset_y = (float(value) for value in coordinate_offset_xy)
+    x, y = xy[:, 0] - offset_x, xy[:, 1] - offset_y
     # Several incommensurate bands make broken, interlocking patches instead
     # of the large round tan islands produced by one low-frequency sine.  This
     # remains deterministic and costs no geometry or texture memory.
@@ -196,6 +198,80 @@ def build_visual_verge_skin(
     )
 
 
+def add_visual_mesh_skirt(
+    mesh: trimesh.Trimesh,
+    *,
+    depth_m: float = 0.35,
+    close_road_edge: bool = False,
+) -> trimesh.Trimesh:
+    """Close every exposed terrain edge with a deep display-only sidewall.
+
+    Height fields are open sheets. From a low camera, a raised sheet therefore
+    reveals the renderer background through the space below its perimeter. This
+    helper finds every boundary edge and drops a colourable wall well beneath
+    the neighbouring display bank. The source mesh is not mutated.
+    """
+    depth = float(depth_m)
+    if depth <= 0.0:
+        raise ValueError("visual skirt depth must be positive")
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(faces) == 0:
+        raise ValueError("visual skirt requires a non-empty triangular mesh")
+
+    directed_edges = np.vstack(
+        (faces[:, (0, 1)], faces[:, (1, 2)], faces[:, (2, 0)])
+    )
+    undirected = np.sort(directed_edges, axis=1)
+    unique_edges, counts = np.unique(undirected, axis=0, return_counts=True)
+    boundary_edges = unique_edges[counts == 1]
+    # The road-clipping helper intentionally duplicates intersection vertices
+    # per triangle. Treating all of those as perimeter would create a forest of
+    # overlapping walls. Close the true outer and end boundaries; the optional
+    # road side is already hidden by the grass/road underlap in the scene.
+    x_min, y_min = np.min(vertices[:, :2], axis=0)
+    x_max, y_max = np.max(vertices[:, :2], axis=0)
+    tolerance = 1.0e-8
+    selected = []
+    for edge in boundary_edges:
+        edge_xy = vertices[edge, :2]
+        on_outer = bool(np.all(edge_xy[:, 1] <= y_min + tolerance))
+        on_start = bool(np.all(edge_xy[:, 0] <= x_min + tolerance))
+        on_end = bool(np.all(edge_xy[:, 0] >= x_max - tolerance))
+        on_road = bool(np.all(edge_xy[:, 1] >= y_max - tolerance))
+        if on_outer or on_start or on_end or (close_road_edge and on_road):
+            selected.append(edge)
+    boundary_edges = np.asarray(selected, dtype=np.int64)
+    if len(boundary_edges) == 0:
+        return mesh.copy()
+
+    skirt_bottom_z = float(np.min(vertices[:, 2]) - depth)
+    skirt_vertices = vertices.tolist()
+    skirt_faces = [tuple(int(index) for index in face) for face in faces]
+    bottom_index: dict[int, int] = {}
+    for top_index in np.unique(boundary_edges):
+        point = vertices[int(top_index)].copy()
+        point[2] = skirt_bottom_z
+        bottom_index[int(top_index)] = len(skirt_vertices)
+        skirt_vertices.append(point.tolist())
+    for first, second in boundary_edges:
+        first = int(first)
+        second = int(second)
+        first_bottom = bottom_index[first]
+        second_bottom = bottom_index[second]
+        skirt_faces.extend(
+            (
+                (first, second, second_bottom),
+                (first, second_bottom, first_bottom),
+            )
+        )
+    return trimesh.Trimesh(
+        vertices=np.asarray(skirt_vertices, dtype=np.float64),
+        faces=np.asarray(skirt_faces, dtype=np.int64),
+        process=False,
+    )
+
+
 def build_sparse_grass_tuft_mesh(
     cfg: MowStripCfg,
     *,
@@ -212,9 +288,9 @@ def build_sparse_grass_tuft_mesh(
         (0.085, 0.22, 0.035),
     ),
 ) -> trimesh.Trimesh:
-    """Build deterministic four-blade grass clumps over the real surface.
+    """Build deterministic varied-blade grass clumps over the real surface.
 
-    Each clump is only four triangles.  They are presentation geometry and are
+    Each clump is only five to eight triangles. They are presentation geometry and are
     kept clear of the tracked white line and road seam so those two functional
     visual references stay legible.
     """
@@ -257,14 +333,13 @@ def build_sparse_grass_tuft_mesh(
         line_y = float(tracking_line_center_y_at(cfg, np.asarray([x]))[0])
         # Reserve enough room for the blade tips as well as the clump centre;
         # otherwise a nominally clear clump can still cover the white line.
-        blade_envelope = 0.5 * w1 + 0.34 * h1
+        blade_envelope = 0.62 * w1 + 0.40 * h1
         if abs(y - line_y) < float(tracking_clearance_m) + blade_envelope:
             continue
         z = float(surface_height_at(cfg, np.asarray([x]), np.asarray([y]))[0])
         height = float(rng.uniform(h0, h1))
         width = float(rng.uniform(w0, w1))
         rotation = float(rng.uniform(0.0, 0.5 * np.pi))
-        lean = float(rng.uniform(0.18, 0.34)) * height
         color = tuple(
             int(value)
             for value in np.rint(
@@ -272,19 +347,26 @@ def build_sparse_grass_tuft_mesh(
                 * 255.0
             )
         ) + (255,)
-        for blade in range(4):
-            angle = rotation + blade * 0.5 * np.pi
+        blade_count = int(rng.integers(5, 9))
+        for blade in range(blade_count):
+            angle = rotation + blade * 2.0 * np.pi / blade_count
             radial = np.asarray((np.cos(angle), np.sin(angle)))
             tangent = np.asarray((-radial[1], radial[0]))
+            blade_height = height * float(rng.uniform(0.72, 1.05))
+            blade_width = width * float(rng.uniform(0.55, 1.0))
+            lean = float(rng.uniform(0.16, 0.38)) * blade_height
+            centre = np.asarray((x, y)) + float(
+                rng.uniform(-0.12, 0.12)
+            ) * width * radial
             base = len(vertices)
-            left = np.asarray((x, y)) - 0.5 * width * tangent
-            right = np.asarray((x, y)) + 0.5 * width * tangent
-            tip = np.asarray((x, y)) + lean * radial
+            left = centre - 0.5 * blade_width * tangent
+            right = centre + 0.5 * blade_width * tangent
+            tip = centre + lean * radial
             vertices.extend(
                 (
                     (float(left[0]), float(left[1]), z + 0.004),
                     (float(right[0]), float(right[1]), z + 0.004),
-                    (float(tip[0]), float(tip[1]), z + height),
+                    (float(tip[0]), float(tip[1]), z + blade_height),
                 )
             )
             faces.append((base, base + 1, base + 2))
@@ -300,6 +382,306 @@ def build_sparse_grass_tuft_mesh(
     )
     result.visual.vertex_colors = np.asarray(vertex_colors, dtype=np.uint8)
     return result
+
+
+def build_visual_bank_vegetation_mesh(
+    surface: trimesh.Trimesh,
+    *,
+    grass_count: int,
+    bush_count: int,
+    seed: int,
+    edge_clearance_m: float = 0.25,
+    grass_height_range_m: tuple[float, float] = (0.22, 0.58),
+    grass_width_range_m: tuple[float, float] = (0.12, 0.30),
+    grass_palette: tuple = (
+        (0.035, 0.13, 0.018),
+        (0.055, 0.18, 0.025),
+        (0.085, 0.22, 0.035),
+    ),
+    bush_height_range_m: tuple[float, float] = (0.45, 0.95),
+    bush_width_range_m: tuple[float, float] = (0.45, 1.10),
+    bush_palette: tuple = (
+        (0.025, 0.10, 0.012),
+        (0.045, 0.15, 0.020),
+        (0.070, 0.19, 0.028),
+    ),
+    placement_bounds_xy: tuple[float, float, float, float] | None = None,
+) -> trimesh.Trimesh:
+    """Build deterministic tall grass and low-poly bushes on a display bank.
+
+    The supplied bank mesh owns the placement bounds and base heights.  The
+    returned vegetation has vertex colours but no collision contract; callers
+    bind its display material and explicitly disable collisions.  Grass uses
+    four crossed blades per clump, while each bush is a varied low-poly ellipsoid.
+    """
+    grass_count = int(grass_count)
+    bush_count = int(bush_count)
+    if grass_count < 0 or bush_count < 0:
+        raise ValueError("vegetation counts must be non-negative")
+    vertices_surface = np.asarray(surface.vertices, dtype=np.float64)
+    if vertices_surface.ndim != 2 or vertices_surface.shape[1] != 3:
+        raise ValueError("surface vertices must have shape (N, 3)")
+    if len(vertices_surface) == 0:
+        raise ValueError("vegetation surface must not be empty")
+
+    def ordered_range(values, label: str) -> tuple[float, float]:
+        low, high = (float(value) for value in values)
+        if not 0.0 < low <= high:
+            raise ValueError(f"{label} must be positive and ordered")
+        return low, high
+
+    grass_h0, grass_h1 = ordered_range(grass_height_range_m, "grass heights")
+    grass_w0, grass_w1 = ordered_range(grass_width_range_m, "grass widths")
+    bush_h0, bush_h1 = ordered_range(bush_height_range_m, "bush heights")
+    bush_w0, bush_w1 = ordered_range(bush_width_range_m, "bush widths")
+    grass_colors = np.asarray(grass_palette, dtype=np.float64)
+    bush_colors = np.asarray(bush_palette, dtype=np.float64)
+    for colors, label in ((grass_colors, "grass"), (bush_colors, "bush")):
+        if (
+            colors.ndim != 2
+            or colors.shape[1] != 3
+            or len(colors) == 0
+            or not np.isfinite(colors).all()
+        ):
+            raise ValueError(f"{label} palette must contain finite RGB colors")
+
+    margin = float(edge_clearance_m)
+    surface_min = np.min(vertices_surface[:, :2], axis=0)
+    surface_max = np.max(vertices_surface[:, :2], axis=0)
+    if placement_bounds_xy is None:
+        x_min, y_min = surface_min + margin
+        x_max, y_max = surface_max - margin
+    else:
+        x_min, x_max, y_min, y_max = (
+            float(value) for value in placement_bounds_xy
+        )
+        x_min = max(x_min, float(surface_min[0]) + margin)
+        x_max = min(x_max, float(surface_max[0]) - margin)
+        y_min = max(y_min, float(surface_min[1]))
+        y_max = min(y_max, float(surface_max[1]))
+    if x_max <= x_min or y_max <= y_min:
+        raise ValueError("vegetation placement region is empty")
+
+    rng = np.random.default_rng(int(seed) % (2**32))
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    vertex_colors: list[tuple[int, int, int, int]] = []
+
+    def color_rgba(colors: np.ndarray) -> tuple[int, int, int, int]:
+        rgb = colors[int(rng.integers(0, len(colors)))]
+        return tuple(
+            int(value) for value in np.rint(np.clip(rgb, 0.0, 1.0) * 255.0)
+        ) + (255,)
+
+    def sampled_base(*, clustered: bool = False) -> tuple[float, float, float]:
+        for _ in range(200):
+            x = float(rng.uniform(x_min, x_max))
+            y = float(rng.uniform(y_min, y_max))
+            if not clustered:
+                break
+            density_field = (
+                np.sin(0.41 * x + 0.63 * y)
+                + 0.55 * np.sin(0.93 * x - 0.37 * y + 0.8)
+            )
+            normalized = np.clip((density_field + 1.55) / 3.10, 0.0, 1.0)
+            if float(rng.random()) <= 0.12 + 0.88 * normalized**2:
+                break
+        # The apron grid is deliberately coarse and the decorations are broad.
+        # Nearest-XY height keeps every base attached without adding an rtree
+        # dependency to this pure geometry helper.
+        index = int(
+            np.argmin(
+                (vertices_surface[:, 0] - x) ** 2
+                + (vertices_surface[:, 1] - y) ** 2
+            )
+        )
+        return x, y, float(vertices_surface[index, 2])
+
+    for _ in range(grass_count):
+        x, y, z = sampled_base(clustered=True)
+        height = float(rng.uniform(grass_h0, grass_h1))
+        width = float(rng.uniform(grass_w0, grass_w1))
+        rotation = float(rng.uniform(0.0, 0.5 * np.pi))
+        color = color_rgba(grass_colors)
+        blade_count = int(rng.integers(5, 9))
+        for blade in range(blade_count):
+            angle = rotation + blade * 2.0 * np.pi / blade_count
+            radial = np.asarray((np.cos(angle), np.sin(angle)))
+            tangent = np.asarray((-radial[1], radial[0]))
+            blade_height = height * float(rng.uniform(0.72, 1.05))
+            blade_width = width * float(rng.uniform(0.55, 1.0))
+            lean = float(rng.uniform(0.16, 0.38)) * blade_height
+            centre = np.asarray((x, y)) + float(
+                rng.uniform(-0.12, 0.12)
+            ) * width * radial
+            base = len(vertices)
+            left = centre - 0.5 * blade_width * tangent
+            right = centre + 0.5 * blade_width * tangent
+            tip = centre + lean * radial
+            vertices.extend(
+                (
+                    (float(left[0]), float(left[1]), z + 0.006),
+                    (float(right[0]), float(right[1]), z + 0.006),
+                    (float(tip[0]), float(tip[1]), z + blade_height),
+                )
+            )
+            faces.append((base, base + 1, base + 2))
+            vertex_colors.extend((color, color, color))
+
+    unit_bush = trimesh.creation.icosphere(subdivisions=1, radius=0.5)
+    for _ in range(bush_count):
+        x, y, z = sampled_base()
+        height = float(rng.uniform(bush_h0, bush_h1))
+        width = float(rng.uniform(bush_w0, bush_w1))
+        depth = width * float(rng.uniform(0.72, 1.15))
+        color = color_rgba(bush_colors)
+        # Three overlapping ellipsoids read as an irregular shrub instead of
+        # the single floating sphere used by the first display pass.
+        for lobe in range(3):
+            scale = 1.0 if lobe == 0 else float(rng.uniform(0.55, 0.82))
+            angle = float(rng.uniform(0.0, 2.0 * np.pi))
+            offset = (0.0 if lobe == 0 else 0.26 * width) * np.asarray(
+                (np.cos(angle), np.sin(angle))
+            )
+            bush_vertices = np.asarray(unit_bush.vertices, dtype=np.float64).copy()
+            bush_vertices *= np.asarray(
+                (width * scale, depth * scale, height * (0.72 + 0.28 * scale))
+            )
+            bush_vertices += np.asarray(
+                (
+                    x + float(offset[0]),
+                    y + float(offset[1]),
+                    z + 0.45 * height * scale,
+                )
+            )
+            base = len(vertices)
+            vertices.extend(tuple(map(tuple, bush_vertices)))
+            faces.extend(
+                tuple(
+                    tuple(int(index + base) for index in face)
+                    for face in unit_bush.faces
+                )
+            )
+            vertex_colors.extend((color,) * len(bush_vertices))
+
+    if not vertices:
+        return trimesh.Trimesh(
+            vertices=np.empty((0, 3)), faces=np.empty((0, 3), dtype=np.int64)
+        )
+    result = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+    result.visual.vertex_colors = np.asarray(vertex_colors, dtype=np.uint8)
+    return result
+
+
+def build_visual_surface_debris_mesh(
+    surface: trimesh.Trimesh,
+    *,
+    twig_count: int,
+    log_count: int,
+    seed: int,
+    edge_clearance_m: float = 0.35,
+    twig_length_range_m: tuple[float, float] = (0.22, 0.65),
+    twig_radius_range_m: tuple[float, float] = (0.008, 0.018),
+    log_length_range_m: tuple[float, float] = (0.70, 1.60),
+    log_radius_range_m: tuple[float, float] = (0.045, 0.090),
+    wood_palette: tuple = (
+        (0.11, 0.055, 0.018),
+        (0.16, 0.080, 0.025),
+        (0.21, 0.115, 0.040),
+    ),
+    tracking_cfg: MowStripCfg | None = None,
+    tracking_clearance_m: float = 0.28,
+) -> trimesh.Trimesh:
+    """Scatter deterministic twigs and occasional logs over a display surface."""
+    twig_count = int(twig_count)
+    log_count = int(log_count)
+    if twig_count < 0 or log_count < 0:
+        raise ValueError("debris counts must be non-negative")
+    surface_vertices = np.asarray(surface.vertices, dtype=np.float64)
+    if surface_vertices.ndim != 2 or surface_vertices.shape[1] != 3:
+        raise ValueError("debris surface vertices must have shape (N, 3)")
+
+    def ordered_range(values, label: str) -> tuple[float, float]:
+        low, high = (float(value) for value in values)
+        if not 0.0 < low <= high:
+            raise ValueError(f"{label} must be positive and ordered")
+        return low, high
+
+    twig_l0, twig_l1 = ordered_range(twig_length_range_m, "twig lengths")
+    twig_r0, twig_r1 = ordered_range(twig_radius_range_m, "twig radii")
+    log_l0, log_l1 = ordered_range(log_length_range_m, "log lengths")
+    log_r0, log_r1 = ordered_range(log_radius_range_m, "log radii")
+    colors = np.asarray(wood_palette, dtype=np.float64)
+    if colors.ndim != 2 or colors.shape[1] != 3 or len(colors) == 0:
+        raise ValueError("wood palette must contain RGB colors")
+
+    margin = float(edge_clearance_m)
+    x_min, y_min = np.min(surface_vertices[:, :2], axis=0) + margin
+    x_max, y_max = np.max(surface_vertices[:, :2], axis=0) - margin
+    if x_max <= x_min or y_max <= y_min:
+        raise ValueError("debris placement region is empty")
+    rng = np.random.default_rng(int(seed) % (2**32))
+    pieces: list[trimesh.Trimesh] = []
+
+    def add_piece(*, length: float, radius: float, sections: int) -> None:
+        for _ in range(200):
+            x = float(rng.uniform(x_min, x_max))
+            y = float(rng.uniform(y_min, y_max))
+            if tracking_cfg is None:
+                break
+            line_y = float(
+                tracking_line_center_y_at(tracking_cfg, np.asarray([x]))[0]
+            )
+            if abs(y - line_y) >= float(tracking_clearance_m) + 0.5 * length:
+                break
+        else:
+            raise RuntimeError("could not place debris clear of the tracking line")
+        index = int(
+            np.argmin(
+                (surface_vertices[:, 0] - x) ** 2
+                + (surface_vertices[:, 1] - y) ** 2
+            )
+        )
+        z = float(surface_vertices[index, 2])
+        angle = float(rng.uniform(0.0, 2.0 * np.pi))
+        direction = np.asarray((np.cos(angle), np.sin(angle), 0.04))
+        piece = trimesh.creation.cylinder(
+            radius=radius,
+            height=length,
+            sections=sections,
+        )
+        piece.apply_transform(
+            trimesh.geometry.align_vectors(np.asarray((0.0, 0.0, 1.0)), direction)
+        )
+        piece.apply_translation((x, y, z + 1.05 * radius))
+        color = np.rint(
+            np.clip(colors[int(rng.integers(0, len(colors)))], 0.0, 1.0) * 255.0
+        ).astype(np.uint8)
+        rgba = np.tile(np.append(color, 255), (len(piece.vertices), 1))
+        piece.visual.vertex_colors = rgba
+        pieces.append(piece)
+
+    for _ in range(twig_count):
+        add_piece(
+            length=float(rng.uniform(twig_l0, twig_l1)),
+            radius=float(rng.uniform(twig_r0, twig_r1)),
+            sections=5,
+        )
+    for _ in range(log_count):
+        add_piece(
+            length=float(rng.uniform(log_l0, log_l1)),
+            radius=float(rng.uniform(log_r0, log_r1)),
+            sections=8,
+        )
+    if not pieces:
+        return trimesh.Trimesh(
+            vertices=np.empty((0, 3)), faces=np.empty((0, 3), dtype=np.int64)
+        )
+    return trimesh.util.concatenate(pieces)
 
 
 def enable_adaptive_trajectory_curriculum(

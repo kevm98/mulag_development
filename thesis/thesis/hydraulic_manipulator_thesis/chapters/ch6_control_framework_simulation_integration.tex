@@ -1,0 +1,1130 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 6 — Control Framework and Simulation Integration
+%% (12–18 pages)
+%% Purpose: specify the complete controller and present the THREE
+%% control stacks as one controlled experiment rather than a
+%% collection of disconnected models.
+%% Main output: reproducible control architecture, policy task
+%% definition, integration details, and the matching rules that make
+%% the three-way comparison fair.
+%%
+%% NOTE ON NOMENCLATURE: the only stack names are PPO-ROM, PPO-ID-FD
+%% and PPO-(AAM)-ID-FD. The earlier PPO1/PPO2 and PPO1-A/B,
+%% PPO2-A/B/C/D labels are superseded and must not reappear.
+%% The policy is NOT a residual policy: it emits the desired cylinder
+%% command directly and no nominal command is added at runtime.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{Control Framework and Simulation Integration}
+\label{chap:control}
+
+Chapter~\ref{chap:models} left three actuator representations sitting on a
+bench, each with its own contract and its own offline evidence. This chapter
+puts a controller in front of them and turns them into three experiments.
+
+Section~\ref{sec:ctrl:dls} describes the classical
+controller, because it is where the competence comes from even though it never
+runs at deployment. Section~\ref{sec:ctrl:ppo} specifies the policy: what it
+sees, what it emits, what stops it from emitting something dangerous, and what
+it is paid for. Section~\ref{sec:ctrl:training} then explains how the first
+becomes the second, and reports a result about that transfer which changed the
+training protocol of this thesis. The individual stacks appear only after those three are fixed, because
+they differ in one place only.
+
+\section{The DLS Teacher and Its Two Roles}
+\label{sec:ctrl:dls}
+
+\subsection{Scope and Role of the Controller}
+
+The classical controller occupies a narrower position in this
+architecture than its prominence suggests. There is no
+damped-least-squares layer underneath the policy at runtime. Nothing is added
+to the policy's output. If the policy emits zero, the arm does not move.
+
+The DLS controller is nevertheless the reason the policies work at all, and it
+appears twice, both times at training or collection time and never at
+deployment (Figure~\ref{fig:ctrl:teacher-student}). It is the
+\emph{privileged teacher} whose behaviour the policies are distilled from
+(Section~\ref{sec:ctrl:training}), and it is the closed-loop controller that
+drove the identification runs of Section~\ref{sec:data:isaaclab}. Calling it a
+nominal layer would misdescribe the deployed system and, worse, would make
+every reported result a property of a controller pair rather than of the
+policy.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=.92\textwidth]{images/ch6_teacher_student}
+  \caption{Where the classical controller lives. At training time the
+  privileged teacher reads quantities the deployed system cannot
+  (the exact terrain height under the cutter and the true contact force)
+  and converts them into a desired cylinder target, which is then
+  pushed through \emph{the student's own} action chain and plant. At
+  deployment the teacher is gone entirely: the policy is the whole
+  controller, and no nominal command is summed with its output. The
+  distilled actor is the only thing that crosses the boundary.}
+  \label{fig:ctrl:teacher-student}
+\end{figure}
+
+\subsection{Privileged Information}
+
+The teacher is \emph{privileged} rather than better tuned: it reads two
+quantities that no deployable controller on
+this machine could obtain. The first is the exact terrain height directly under
+the cutter, queried from the simulator rather than inferred from a forward-
+looking scan. The second is the true cutter--ground contact force. Together
+these turn the hardest part of the task, knowing where the ground actually
+is, right now, underneath a $\unit[1.2]{m}$ flail head that is occluding it,
+into a lookup.
+
+The teacher uses that privilege in a specific way. Rather than commanding a
+height, it runs a contact regulator: it maintains a vertical offset relative to
+the ground and adjusts that offset to hold the measured contact force near
+$\unit[250]{N}$ within a $\unit[100]{N}$ deadband, pressing down below the band,
+backing off proportionally above it, searching downward when contact is lost
+and retreating immediately on a force spike. The accumulated offset is clamped
+to $[-0.30, -0.05]\,\mathrm{m}$ so the regulator can neither drive the head into
+the ground nor lift it clear.
+
+The teacher's advantage is therefore not kinematic. Its inverse is the same DLS
+solution available to anything; what it has is contact sensing. That is the
+quantity the student must infer from a noisy forward scan and its own contact
+history, and it is a large part of why distillation is a nontrivial transfer
+rather than a formality.
+
+\subsection{From Task Error to Cylinder Command}
+
+The rest of the teacher is conventional and is stated for completeness. A goal
+point is maintained in the truck frame: laterally it tracks the verge centre
+line, vertically it follows the measured ground height plus the contact
+regulator's offset. The task error is the difference between that goal and the
+measured cutter position, with the lateral component weighted by a factor of
+three, because on this machine lateral error is what the acceptance gate
+measures and vertical error is largely handled by contact.
+
+That error is mapped to cylinder space through the damped least-squares inverse
+of the measured cutter Jacobian $\bm{J}_c$ of
+Section~\ref{sec:sys:task-jacobian},
+%
+\begin{equation}
+  \label{eq:ctrl:teacher-dls}
+  \Delta\bm{x}^{*}_{1:3}
+    = \operatorname{clip}\Bigl(
+        g\, \bm{J}_c^{+}\, \bm{W}\bm{e},\;
+        \pm\, \Delta x_{\max}\Bigr),
+  \qquad g = 0.30,
+  \qquad \Delta x_{\max} = \unit[3]{mm},
+\end{equation}
+%
+with $\bm{W}$ the lateral weighting and the per-step clamp bounding how far any
+cylinder may be asked to move in one tick. Only cylinders~1--3 are solved.
+Cylinder~4 is held at the reference extension that keeps the head down, for the
+reason given in Section~\ref{sec:sys:platform}. The gain $g$ is small on
+purpose: this is a stiff, heavy mechanism in contact, and a resolved-rate
+controller that closes quickly on the task error simply excites it.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch6_dls_controller}
+  \caption{Feedback realization of the damped least-squares teacher of
+  \eqref{eq:ctrl:teacher-dls}. The weighted task error is scaled by $g$, mapped
+  to the first three cylinder coordinates by the measured damped inverse
+  $\bm{J}_c^{+}$, and clipped to $\pm\Delta x_{\max}$ per tick. Cylinder~4 is
+  held at its head-down reference. Cutter position closes the task-space loop
+  and the measured cylinder state updates $\bm{J}_c$ at every step. The loop is
+  used only for teaching and data collection, never at deployment.}
+  \label{fig:ctrl:dls-loop}
+\end{figure}
+
+
+\subsection{Execution Through the Student Interface}
+
+One implementation detail determines whether distillation converges to
+something usable. The teacher's output $\Delta\bm{x}^{*}$ is a desired cylinder
+target, and it is \emph{not} written to PhysX directly. It is converted into the
+same normalized four-value action the student emits and pushed through the
+student's entire action chain and into the same plant
+(Section~\ref{sec:ctrl:ppo}), so every label the student is asked to imitate is
+by construction an action the student can produce. A teacher writing targets
+directly to the plant would generate labels outside the student's reachable set,
+giving the imitation error a floor no amount of training could remove. That
+failure mode was measured here: when an earlier action-rate limit sat below the
+teacher's own structural bound, $0.43\,\%$ of labels became unreachable by
+construction and acted as exactly such a floor.
+
+\subsection{Teacher Performance}
+
+A teacher is not an oracle, and quoting its performance is necessary because
+distillation cannot exceed it and the gates of
+Section~\ref{sec:sys:evaluation-criteria} were anchored to it.
+Table~\ref{tab:ctrl:teacher} reports the privileged teacher measured on the
+stage-6 verge task through the ROM plant, over 128 environments and 480 control
+steps.
+
+\begin{table}[tb]
+  \centering
+  \caption{The privileged DLS teacher, measured on the stage-6 verge task
+  through the command-ROM plant (128 environments, 480 steps, all eleven path
+  families, seed 17). It is competent, not perfect,
+and several acceptance thresholds sit deliberately just outside what it achieves.}
+  \label{tab:ctrl:teacher}
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    Quantity & Teacher & Gate \\
+    \midrule
+    Mean $|e_{\mathrm{cut}}|$        & $\unit[0.0234]{m}$ & $\leq \unit[0.040]{m}$ \\
+    p95 $|e_{\mathrm{cut}}|$         & $\unit[0.1524]{m}$ & --- \\
+    Mean $|e_{\mathrm{lat}}|$        & $\unit[0.1221]{m}$ & $\leq \unit[0.300]{m}$ \\
+    Ground-contact fraction          & $0.7807$ & $\geq 0.700$ \\
+    p01 head alignment               & $0.9638$ & $\geq 0.900$ \\
+    Minimum head alignment           & $0.8317$ & --- \\
+    p95 tool acceleration            & $\unit[64.9]{m/s^2}$ & $\leq \unit[120]{m/s^2}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two readings follow. First, the teacher is a competent but visibly imperfect
+controller: it loses ground contact about a fifth of the time and its
+cut-height tail is six times its mean. Second, and this is why
+Section~\ref{sec:sys:evaluation-criteria} re-derived several thresholds,
+a gate set above these numbers would be a gate that the ground-truth controller
+itself cannot pass, which carries no information about the policy.
+
+\section{Policy Formulation}
+\label{sec:ctrl:ppo}
+
+\subsection{Policy Definition}
+
+The deployed controller is a memoryless Gaussian multilayer perceptron. It maps
+a $66$-value observation to four normalized actions, one desired motion command
+per hydraulic cylinder, and that is the entire control law. Actor and critic
+are separate networks with hidden widths $256$--$128$--$64$ and ELU
+activations, over empirically normalized observations. \ppoAAMIDFD{} is the one
+exception: its actor reads $68$ values, the same $66$ plus the two channels of
+$\hat{\bm{z}}$, so the latent conditions the policy as well as the inverse
+model. That is an architectural difference between the stacks rather than a
+tuning difference, and Section~\ref{sec:ctrl:constraints} states how the
+comparison accounts for it.
+
+Three things it is \emph{not} must be stated, because each was a design
+option that was considered and rejected. It is not a residual: there is no
+nominal command to correct. It is not recurrent: temporal inference in this
+architecture belongs to the AAM of Chapter~\ref{chap:models}, and giving the
+policy its own memory would confound the two. And it does not command the
+vehicle: the truck's forward motion is scripted, so the policy cannot solve a
+tracking problem by driving differently.
+
+\subsection{The Observation Vector}
+
+Figure~\ref{fig:ctrl:observation} lays out the $66$ channels by group. The
+grouping tells the story of what this controller has to reason about: nine
+terrain-height samples ahead of the cutter, three task-error channels, sixteen
+channels of cylinder state and remaining travel, sixteen describing the
+actuator interface, ten of pose and context, and twelve of model error.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch6_observation}
+  \caption{The $66$-value policy observation, drawn to scale by group. Every
+  channel is available or computable at runtime on the target machine: some are
+  measured, some are derived from measurements, and the model-error group is
+  estimated by the actuator models rather than sensed. No trajectory-family
+  label, no physical factor vector and no true latent enters the actor.
+  \ppoAAMIDFD{} appends the two estimated latent channels to this vector,
+  giving $68$, and is reported as the different architecture that it is.}
+  \label{fig:ctrl:observation}
+\end{figure}
+
+The last group deserves an argument, because twelve of sixty-six channels is a
+substantial fraction of the observation spent on something that is not the task.
+Those channels carry the actuator's standing error: the cylinder tracking
+residual, the actuator prediction residual, and the normalized cylinder effort.
+They exist as a direct consequence of the policy being memoryless. Forming an
+error requires differencing position across two steps and comparing against a
+prediction issued on the previous step, and a feedforward network can construct
+neither from a single observation, so without these channels the model error the
+policy is asked to compensate is not merely hard to see but absent from the
+input. This was measured rather than reasoned about: across ten training blocks
+the p01 head alignment sat at $0.79$--$0.80$ and did not respond to changes in
+the feedforward source or the levelling gain, because the policy had no
+observable evidence of the error it was being asked to correct.
+
+This group is also what makes the three stacks comparable. Under the ROM the
+tracking residual is near zero, because the ROM reaches what it is told. Under
+a learned ID--FD path it is the model's standing error. The same observation
+contract therefore gives each policy an honest view of its own actuator's
+shortcomings, which is what a fair comparison requires.
+
+\subsection{The Action and Its Bounds}
+
+The policy emits $\bm{a} \in \mathbb{R}^4$, sampled from its Gaussian at
+training time and taken at the mean for evaluation. Between that sample and the
+PhysX cylinder target sit five stages, shown in
+Figure~\ref{fig:ctrl:action-chain}. Every one of them can only \emph{reduce}
+authority. None can introduce motion the policy did not request.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch6_action_chain}
+  \caption{The action chain. With no nominal controller to explore around, the
+  contract itself is the safety argument: a rate limit, an exponential filter,
+  a limit shield that fades authority as travel headroom is consumed, a small
+  per-step command scale, and an anti-windup cap on how far the integrated
+  target may lead the measured extension.}
+  \label{fig:ctrl:action-chain}
+\end{figure}
+
+The rate limit bounds $|\Delta \bm{a}|$ at $0.25$ per control step and is held
+\emph{constant} across every curriculum stage. It is not a curriculum knob, and
+the reason is the reachability argument of Section~\ref{sec:ctrl:dls}: the
+teacher's own command stream has a structural per-step bound near $0.20$, so a
+student limit below that makes part of the label set unreachable. The
+exponential filter ($\beta = 0.70$ at the final stage) smooths the command. The
+limit shield scales the command down,
+and only down, and only in the direction that consumes headroom, over the last $\unit[20]{mm}$ of cylinder
+travel, which is the soft replacement for the teacher's hard clamp into the
+learned range. The command scale converts the filtered action into
+$\unit[4]{mm}$ of cylinder travel per unit action. Finally the target
+integrator accumulates the increments in reference space, with the integrated
+target permitted to lead the measured extension by at most $\unit[18]{mm}$.
+
+That last cap is an anti-windup device and it is load-bearing. Relaxing it from
+$\unit[18]{mm}$ to $\unit[50]{mm}$ halved the lateral error on the two families
+demanding a sustained standing offset (\texttt{lane\_change\_hold} from $0.4833$
+to $0.2310$, \texttt{boom\_sweep} from $0.3745$ to $0.1602$), showing that the
+clamp was bounding the standing effort those paths need, while the same
+relaxation on cylinder~4 drove head alignment from $0.9507$ to $0.4636$. The
+final task therefore resolves the trade per axis, and this is the configuration
+every reported \ppoROM{} result was produced under: $\unit[50]{mm}$ on
+cylinders~1 to~3 and $\unit[20]{mm}$ on cylinder~4.
+
+Two properties of this chain follow. It is what replaces the residual band,
+since exploration is bounded by how much motion a single action can command
+rather than by proximity to a baseline. And it fixes the plant's capability
+ceiling: four millimetres of cylinder travel per step is the entire authority
+budget, which produces the $\unit[0.240]{m/s}$ lateral rate limit of
+Section~\ref{sec:sys:capability} from which the reference paths are derived.
+
+\subsection{The Reward Function}
+
+The reward of the final \ppoROM{} task has ten bounded terms, listed in
+Table~\ref{tab:ctrl:reward}. Three are positive and describe the task. Seven
+are penalties and describe how the machine must behave while doing it. All are
+bounded, and all retain a live gradient beyond the acceptance boundary, so that
+a policy already inside a gate still has a direction to improve in.
+
+It replaces an inherited formulation carrying $53$ weighted reward fields.
+Isaac Lab's own locomotion task uses eleven. The reduction was not
+cosmetic. At $53$ terms the optimum is not something a designer can reason
+about, and three separate terms turned out to be working against the task
+without being noticed for thirteen training campaigns. The three rules below
+were each adopted after a measured failure.
+
+\paragraph{No Gaussian Shaping}
+The earlier reward priced tracking as $w\exp[-(e/s)^2]$, which is effectively
+flat beyond about $2s$. Measured on the lateral term, at an error of
+$\unit[0.50]{m}$ the gradient is $-2.07$ at $s=0.30$ but $-0.004$ at $s=0.15$:
+a factor of $520$ weaker where the failing path families live. Every
+shaping term is therefore linear or Huber in the error. Writing $x = |e|/s$,
+the two shapes used are
+%
+\begin{equation}
+  \label{eq:ctrl:shapes}
+  B(e;s,c) = \min(x,\,c),
+  \qquad
+  H(e;s,c) = \min\Bigl(c,\;
+  \begin{cases}
+    \tfrac{1}{2}x^{2}, & x \le 1\\
+    x - \tfrac{1}{2},  & x > 1
+  \end{cases}\Bigr).
+\end{equation}
+%
+$B$ has the same gradient at $\unit[0.5]{m}$ of error as at $\unit[0.05]{m}$,
+so a policy far from the reference is still told which way to move; $H$ buys
+quadratic precision near zero where cut height needs it, without a vanishing
+far field.
+
+\paragraph{Bounded Terms}
+A term that can grow without limit can dominate the sum and destabilize the
+critic. Each contribution is clipped, which gives the reward a published budget:
+$6+12+4 = 22$ for the task terms against $-24$ for the safety terms. A
+non-finite value is replaced by $-25$, just below that worst case, so a
+numerical fault can never outscore legitimate behaviour.
+
+\paragraph{Fixed Sign Convention}
+The three task terms are non-negative and the seven safety terms non-positive.
+This is what makes worst-case (CVaR) weighting safe to add later: scaling a
+non-positive term by a factor $\ge 1$ can only lower the return, whereas
+up-weighting a \emph{positive} reward for the worst environments pays the
+policy to be bad. Measured in the earlier stack, weighting the positive contact
+reward four-fold for the worst quarter of environments made a contact quality
+of $0.49$ pay $7.84$ against $2.00$ for a quality of $0.50$, and collapsed
+worst-family contact within a single training block.
+
+\begin{table}[tb]
+  \centering
+  \caption{The ten reward terms of the final \ppoROM{} task, with weights and
+  shaping scales. $B$ and $H$ are the bounded shapes of
+  Equation~\eqref{eq:ctrl:shapes}. The lateral and head terms each combine a
+  coarse and a fine scale, so far-field correction and near-field precision are
+  priced separately.}
+  \label{tab:ctrl:reward}
+  \small
+  \begin{tabular}{llp{6.0cm}}
+    \toprule
+    Term & Weight & Shape and purpose \\
+    \midrule
+    Cut-height tracking & $+6$   & $H$, scale $\unit[0.04]{m}$, cap $2.5$; the
+      primary mowing-quality term \\
+    Lateral tracking    & $+12$  & $B$, coarse $\unit[1.50]{m}$ and fine
+      $\unit[0.60]{m}$ mixed $0.6/0.4$; the primary line-following term \\
+    Ground contact      & $+4$   & pays for the cutter being in contact \\
+    Head alignment      & $-12$  & $B$ on the deficit below $0.98$, fine scale
+      $0.02$ and coarse scale $1.00$ mixed evenly \\
+    Contact loss        & $-3$   & charges directly for loss of contact \\
+    Action rate         & $-1$   & $B$ on the mean absolute command change,
+      scale $0.25$; penalizes chatter \\
+    Tool acceleration   & $-1$   & $B$, scale $\unit[300]{m/s^2}$;
+      mechanical-wear proxy on the cutter \\
+    Contact force       & $-1$   & $B$ on force above $\unit[30]{kN}$, scale
+      $\unit[150]{kN}$ \\
+    Cylinder headroom   & $-2$   & $B$ on encroachment inside a
+      $\unit[0.02]{m}$ margin, scale $\unit[0.10]{m}$ \\
+    Hard impact         & $-4$   & indicator on the impact event \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three terms of the earlier formulation are absent, and the reasons are results
+rather than preferences. The \emph{action-magnitude} penalty on
+$\operatorname{mean}(a^2)$ was removed outright: a terrain action is a desired
+cylinder motion rather than a pose offset, so what the term actually charged for
+was the sustained offset that \texttt{lane\_change\_hold},
+\texttt{offset\_return} and \texttt{boom\_sweep} structurally require. The
+policy correctly learned to return to neutral, which is the one thing ``hold an
+offset'' forbids. Removing it produced the first training block in a full
+session that did not degrade, improving the held-out score from $1.2058$ to
+$0.3678$. The \emph{head barrier} was replaced, because in its earlier form the
+head group dwarfed lateral tracking and line following could never compete for
+the optimizer's attention. And the \emph{clearance barrier} was disabled, since
+measured contact, cylinder headroom and cut-height error proved more reliable
+signals of the same condition.
+
+One apparent inconsistency is deliberate. The tool-acceleration term saturates
+at $\unit[300]{m/s^2}$ while the corresponding gate sits at
+$\unit[120]{m/s^2}$, anchored to the measured physical floor of the stage-6
+environment near $\unit[100]{m/s^2}$. The reward scale is a saturation scale for
+a bounded penalty rather than a target, so the gate remains the binding
+criterion and the reward's role is only to keep a gradient against gross
+excursions. The action-rate term is held mild for a related reason:
+cylinder~4 owns head pitch, so a rate tax falls hardest on the fast corrections
+that keep the head down as boom attitude shifts, and under a heavier tax the
+optimizer chose head drift over paying it.
+
+Every term is logged individually and by name during training. The earlier stack
+logged an aggregate and a partial subset, with the two largest lateral terms not
+logged at all, which is part of why a reward term opposing the task survived
+thirteen campaigns. Reward weights on this system are measured trades rather
+than preferences, and several natural-looking choices are actively harmful. That
+is also why the reward is \emph{not} the result criterion: promotion uses the
+eight physical gates of Section~\ref{sec:sys:evaluation-criteria}, and a policy
+may raise total reward while failing the thing the reward was written to
+encourage.
+
+\subsection{Optimization}
+\label{sec:ctrl:optimization}
+
+Policies are optimized with clipped-surrogate PPO over generalized advantage
+estimation, in the form of Section~\ref{sec:fund:rl-residual}. The maintained
+configuration uses clip parameter $\epsilon = 0.2$, discount $\gamma = 0.99$,
+GAE parameter $\lambda = 0.95$, five learning epochs over four minibatches per
+update, an adaptive learning-rate schedule targeting a KL divergence of $0.02$
+from a base rate of $3\times10^{-4}$, gradient-norm clipping at $1.0$, and a
+clipped value loss with coefficient $1.0$. The terrain task collects $32$ steps
+per environment per update. At $512$ environments that is $16\,384$ transitions
+per update, chosen because the inherited $128$-step horizon exceeded two
+minutes per update on the available GPU without adding useful batch diversity.
+
+The final fine-tuning blocks depart from that configuration because they run
+under the reference anchor of Section~\ref{sec:ctrl:anchored} rather than an
+adaptive learning-rate schedule: clip $\epsilon = 0.1$, discount
+$\gamma = 0.97$, three learning epochs, fixed learning rates of $10^{-5}$ for
+the actor and $10^{-4}$ for the critic, entropy coefficient $0.001$, an
+exploration standard deviation fixed at $0.15$ and excluded from the gradient,
+and frozen observation normalizers.
+
+Three of those departures are structural rather than tuning. The discount is
+reduced because the episode is long in simulation steps but locally controlled,
+so an action should be credited for correcting the terrain state it faces rather
+than for a return hundreds of steps later that the critic cannot resolve. The
+actor learning rate sits an order of magnitude below the critic's so that the
+actor is deliberately the slow variable and trust-region budget is not spent on
+steps driven by a value function that has not yet converged. And the adaptive
+schedule is dropped because the anchored formulation already constrains the
+update through an explicit divergence bound; two competing step-size controllers
+would make neither attributable.
+
+The exploration settings changed for a reason specific to this architecture. A
+residual policy explores around a controller that already tracks, whereas here a
+zero action means the arm does not move at all, so the initial standard
+deviation was raised from $0.05$ to $0.30$ and the entropy coefficient with it,
+to let the policy discover the command directions before refining them. On the
+terrain task, where distillation supplies a competent starting point, both are
+reduced again and the standard deviation is \emph{held fixed} rather than
+initialized, for a further reason taken up in Section~\ref{sec:ctrl:anchored}.
+Exact values for any reported run must be read from that run's frozen manifest,
+because they changed during development.
+
+\section{Training Protocol and the Distillation Finding}
+\label{sec:ctrl:training}
+
+\subsection{Distillation by DAgger}
+
+Policies are initialized by imitation, not by reward. The privileged teacher of
+Section~\ref{sec:ctrl:dls} is rolled out in the student's own environment, and
+the student is fitted to the teacher's raw action by regression, in the DAgger
+scheme of Ross et al.~\cite{ross2011reduction}: the teacher's probability of
+\emph{executing} the action, as opposed to merely labelling it, is annealed
+from one to zero over the first $70\,\%$ of iterations, so the later part of
+training collects states the student itself visits rather than states the
+teacher would have visited. Labels are accumulated in a replay buffer of
+$262\,144$ transitions and refitted over three epochs per iteration in
+minibatches of $8\,192$.
+
+Figure~\ref{fig:ctrl:distillation} shows a complete distillation run for the
+ROM stack, taken from the stored record. Panel~(a) is the handover schedule.
+Panel~(b) is the imitation error: the behaviour-cloning loss falls by more than an order of magnitude while the
+teacher is still driving, reaches its minimum around the handover, and then
+\emph{rises} once the student is alone. That rise is not a failure. It is the
+distribution shift DAgger exists to expose: the student is now visiting states
+the teacher never chose, and the teacher's advice on those states is new
+information rather than a repetition of what has already been fitted.
+Panel~(c) confirms that the closed-loop task metrics stay in the neighbourhood
+of the teacher's own, without matching them.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch6_distillation}
+  \caption{A measured distillation run for the \ppoROM{} stack, from the stored
+  record. (a)~The teacher's execution probability is annealed to zero over the
+  first $70\,\%$ of iterations. (b)~Behaviour-cloning loss falls by over an
+  order of magnitude under teacher execution, then rises once the student is alone,
+  the distribution shift that DAgger is designed to surface, not a
+  regression. (c)~Closed-loop task metrics during distillation. Dotted lines
+  are the teacher's own measured values from
+  Table~\ref{tab:ctrl:teacher}.}
+  \label{fig:ctrl:distillation}
+\end{figure}
+
+\subsection{Objective Mismatch in Unconstrained Fine-Tuning}
+\label{sec:ctrl:finding}
+
+The natural next step is to treat the distilled actor as an initialization and
+improve it with PPO. That is what the residual literature does, it is what the
+plan for this thesis originally assumed, and in unconstrained form, on this
+task, it does not work. The finding is reported here in full because it is what
+motivates the anchored formulation of Section~\ref{sec:ctrl:anchored}, which is how the final policies are trained.
+
+PPO fine-tuning was run repeatedly from distilled checkpoints, and the outcome
+was consistent enough to be treated as a property of the problem rather than as
+bad luck. The critic was healthy throughout, with explained variance in the
+$0.85$--$0.95$ band, so the failure is not a value-estimation failure. Total
+reward rose. And the primary tracking objective degraded, in the worst case by
+a factor of $12.9$.
+
+The mechanism follows from placing the reward and the gates side by side. The reward pays for ground contact and cut height as well as lateral
+tracking, and the optimizer discovers that it can buy the first two by spending
+the third. That trade increases total reward and moves the policy away from the gate that decides acceptance. The reward's optimum is simply not where
+the tracking gate is. Four earlier fine-tuning campaigns on a related
+configuration failed the same way in a different currency: every block degraded
+head alignment, with p01 falling from $0.9854$ to the $0.48$--$0.78$ range while
+safety terminations rose from $1.3\,\%$ to $3.6$--$7.7\,\%$.
+
+This is a claim about two functionals over the same policy space rather
+than about the optimizer. Training maximizes the expected return
+$J(\vartheta)$, while acceptance is decided by the vector of physical gates
+$\bm{G}(\vartheta) \preceq \bm{g}^{\star}$ of
+Section~\ref{sec:sys:evaluation-criteria}. Writing
+$\mathcal{F} = \{\vartheta : \bm{G}(\vartheta) \preceq \bm{g}^{\star}\}$ for the
+feasible set, the measured content of the finding is
+%
+\begin{equation}
+  \label{eq:ctrl:mismatch}
+  \arg\max_{\vartheta} J(\vartheta) \notin \mathcal{F},
+  \qquad\text{while}\qquad
+  \vartheta_{\mathrm{distilled}} \in \mathcal{F}.
+\end{equation}
+%
+Distillation lands inside $\mathcal{F}$ because the teacher was constructed to
+satisfy the gates, not to maximize $J$. Unconstrained ascent on $J$ from that
+point therefore leaves $\mathcal{F}$ by construction. This is the optimizer
+working correctly on the wrong functional, and it is why the remedy is a
+constraint on the ascent rather than a repair of the reward.
+
+Two consequences follow, and both are protocol rather than interpretation.
+Unconstrained fine-tuning is inadmissible, and both the pre- and post-fine-tune
+checkpoints are reported in every case; the matching rules that this imposes on
+the three-stack comparison are stated in Section~\ref{sec:ctrl:constraints}.
+And reward decomposition, critic explained variance, policy entropy and the
+gate metrics themselves are logged \emph{during} training rather than only at
+the end, because the whole point is that total reward went up while the system
+got worse. A training curve reporting only the scalar reward would have shown a
+success.
+
+The general form of the result applies beyond this machine. When a competent
+teacher exists and the acceptance criterion is not the reward, reward-based
+fine-tuning is not automatically an improvement step: PPO optimizes the written
+objective, that objective is a proxy, and the teacher was constructed to do the
+task. Distillation transfers the intent; PPO then optimizes the proxy, and here
+the two point in measurably different directions. Since that divergence grows
+with distance travelled from a policy where proxy and intent were measured to
+agree, the remedy is not to abandon reward optimization but to bound the
+distance explicitly, which is the subject of the next section.
+
+\section{Reference-Anchored PPO}
+\label{sec:ctrl:anchored}
+
+Equation~\eqref{eq:ctrl:mismatch} says that reward ascent leaves the feasible
+set. It does not say that reward ascent is useless, only that it is unbounded.
+The construction of this section keeps PPO and constrains how far it may travel
+from a policy already known to satisfy the gates. Writing $\pi_{\mathrm{ref}}$
+for a frozen reference policy and $J$ for the expected return, each training
+block solves
+%
+\begin{equation}
+  \label{eq:ctrl:constrained}
+  \max_{\vartheta} J(\vartheta)
+  \quad \text{s.t.} \quad
+  \mathbb{E}_{\bm{o}\sim d_{\pi_\vartheta}}
+  \bigl[ \mathrm{KL}\bigl( \pi_{\mathrm{ref}}(\cdot\,|\,\bm{o})
+  \,\|\, \pi_\vartheta(\cdot\,|\,\bm{o}) \bigr) \bigr]
+  \le \delta_{\mathrm{ref}},
+\end{equation}
+%
+with the expectation taken over the states the policy itself visits.
+
+\subsection{Critic Warm-Up}
+
+A resumed checkpoint carries an actor $\vartheta$ and a critic $\psi$. After
+distillation the actor already behaves sensibly, but the critic has never been
+fitted to the long terrain return, so the first PPO updates would move a useful
+actor using a value estimate that is not yet meaningful. The actor is therefore
+frozen for $150$ iterations while only the value loss is optimized, under the
+asserted invariant $\vartheta_{\text{after}} = \vartheta_{\text{before}}$. The
+observation normalizers are frozen at the same point: without that, the same
+raw observation is normalized differently from one iteration to the next, and
+the actor's behaviour changes while its weights do not.
+
+\subsection{The Reference Anchor}
+
+Let $\pi_{\mathrm{ref}}$ be a frozen copy of the accepted warm actor. It is
+queried only on states the live policy visits and never supplies an executed
+action, so PPO remains the sole controller of the plant. The penalty is the
+\emph{forward} divergence, which for diagonal Gaussians is available in closed
+form,
+%
+\begin{equation}
+  \label{eq:ctrl:kl}
+  D_{\mathrm{ref}}
+  = \mathrm{KL}\bigl(\pi_{\mathrm{ref}} \,\|\, \pi_\vartheta\bigr)
+  = \sum_i \left[
+    \log\frac{\sigma_{\vartheta,i}}{\sigma_{\mathrm{ref},i}}
+    + \frac{\sigma_{\mathrm{ref},i}^{2}
+      + (\mu_{\mathrm{ref},i}-\mu_{\vartheta,i})^{2}}
+      {2\sigma_{\vartheta,i}^{2}}
+    - \frac{1}{2}\right],
+\end{equation}
+%
+at the cost of one additional forward pass and no sampling. Because both scales
+are fixed at $\sigma = 0.15$, this collapses to a pure quadratic on the drift of
+the commanded action,
+%
+\begin{equation}
+  \label{eq:ctrl:kl-fixed}
+  D_{\mathrm{ref}}
+  = \sum_i \frac{(\mu_{\mathrm{ref},i}-\mu_{\vartheta,i})^{2}}{2(0.15)^{2}},
+\end{equation}
+%
+which is the second reason for fixing $\sigma$: with a free standard deviation,
+entropy collapse shrinks $D_{\mathrm{ref}}$ while the commanded action moves, so
+the constraint would report compliance during the drift it exists to prevent.
+
+The direction is load-bearing. Forward KL is mass-covering: it charges
+$\pi_\vartheta$ wherever $\pi_{\mathrm{ref}}$ has density and $\pi_\vartheta$
+does not, and therefore penalizes the \emph{abandonment} of reference
+behaviour. The reverse direction is mode-seeking and would permit the policy to
+collapse onto a subset of reference behaviour at no cost, which is the observed failure, in which one competence was dropped to buy another. It
+follows that the term is a behaviour-cloning anchor evaluated on the policy's
+own state distribution, rather than the reverse-KL regularizer of soft
+reinforcement learning. Its lineage is demonstration-regularized policy
+gradient~\cite{rajeswaran2018dapg}, not the Boltzmann-optimum family.
+
+The actor objective is
+%
+\begin{equation}
+  \label{eq:ctrl:anchored-loss}
+  \mathcal{L}(\vartheta)
+  = \mathcal{L}_{\mathrm{PPO}}
+  + \mathcal{L}_{V}
+  - \beta\,\mathcal{H}(\pi_\vartheta)
+  + \lambda_{\mathrm{ref}}\,
+    \mathbb{E}_k\bigl[\mathrm{KL}(\pi_{\mathrm{ref}} \| \pi_\vartheta)\bigr],
+  \qquad
+  \lambda_{\mathrm{ref}} = 0.10 .
+\end{equation}
+
+\subsection{Trust Regions and Rollback}
+
+A penalty is not a constraint: at a fixed coefficient, a sufficiently large
+advantage always buys its way past. Feasibility is therefore also verified on the update taken. Two bounds are imposed,
+%
+\begin{equation}
+  \label{eq:ctrl:bounds}
+  D_{\mathrm{update}} = \mathrm{KL}(\pi_{\mathrm{old}} \| \pi_\vartheta)
+  \le 0.01,
+  \qquad
+  D_{\mathrm{ref}} \le 0.05,
+\end{equation}
+%
+and they do different work. $D_{\mathrm{update}}$ is the classical step-size
+control that keeps the surrogate a valid local model of $J$.
+$D_{\mathrm{ref}}$ is the new object: because the anchor is \emph{fixed} within
+a block rather than moving with the policy, it bounds cumulative drift. A
+sequence of updates each individually satisfying $D_{\mathrm{update}}$ can
+still walk arbitrarily far from feasibility, and that is the trajectory the earlier campaigns took, monotonically, with the reward rising the whole
+way. Only a constraint referred to a fixed feasible point can observe it.
+
+Enforcement is in two stages. During minibatch optimization the epoch is
+early-stopped as soon as $D_{\mathrm{update}}$ exceeds its bound. After the
+update both divergences are recomputed over the full rollout. If either bound
+fails, or any quantity is non-finite, the actor and its optimizer state are
+restored \emph{atomically}. On a divergence rejection the critic fit is
+retained when finite, since the bounds constrain the policy and not the value
+function, and rewinding valid critic fits computed on the same on-policy
+rollout was wasting most batches near the boundary. On a non-finite update both
+networks are restored. In the final block, five of one hundred logged updates
+were rejected, all of them on the reference bound and none on the update
+bound. That is, the drift caught was of the kind that ordinary PPO
+clipping does not see.
+
+\subsection{The Block Ratchet}
+
+The reference is not fixed forever. Within a block it is frozen. When a
+checkpoint is scored and passes the gates, it is promoted to reference,
+%
+\begin{equation}
+  \label{eq:ctrl:ratchet}
+  \vartheta_{\mathrm{ref}}^{(m+1)} = \vartheta^{\star},
+  \qquad
+  \vartheta^{\star} \in \mathcal{F},
+  \quad
+  \vartheta^{\star} \in
+  B_{\delta_{\mathrm{ref}}}\bigl(\vartheta_{\mathrm{ref}}^{(m)}\bigr),
+\end{equation}
+%
+and the actor's optimizer moments are reset, because momentum accumulated
+relative to the old anchor is not meaningful relative to the new one. The
+critic's are retained: it is fitting the same return, and its calibration is
+expensive to rebuild.
+
+This is the structural point of the construction. The policy is at all times
+within a bounded divergence of a checkpoint that has been verified against
+$\bm{G}$, and the anchor advances only through verified checkpoints. The
+acceptance criterion therefore enters the training loop instead of appearing
+only at the end. The optimizer still ascends the proxy. It simply can never
+travel far from the last point at which proxy and intent were measured to
+agree. In this construction distillation is no longer the endpoint: it is
+$\vartheta_{\mathrm{ref}}^{(0)}$.
+
+Algorithm~\ref{alg:ctrl:anchored} states the construction in full.
+
+\begin{algorithm}[!ht]
+  \small
+  \DontPrintSemicolon
+  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+  \Input{privileged teacher $\pi_{T}$; gates $\bm{G}$ with thresholds
+    $\bm{g}^{\star}$; bounds $\delta_{\mathrm{upd}}=0.01$,
+    $\delta_{\mathrm{ref}}=0.05$; anchor weight
+    $\lambda_{\mathrm{ref}}=0.10$; fixed $\sigma=0.15$;
+    $\epsilon=0.1$, $\gamma=0.97$, $\lambda_{\mathrm{GAE}}=0.95$;
+    $\eta_{\mathrm{actor}}=10^{-5}$, $\eta_{\mathrm{critic}}=10^{-4}$}
+  \Output{accepted policy $\vartheta^{\star}$ with
+    $\bm{G}(\vartheta^{\star})\preceq\bm{g}^{\star}$}
+  \BlankLine
+  \tcp{Layer 1: a physically feasible student}
+  $\vartheta \leftarrow \arg\min_{\vartheta}
+    \mathbb{E}\bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$
+    on DAgger states
+    \tcp*{on the mean, not a sample}
+  discard $\pi_{T}$
+    \tcp*{never in the loop again}
+  \BlankLine
+  \tcp{Layer 2: critic warm-up, actor frozen}
+  freeze $\vartheta$ and the observation normalizers\;
+  \For{$150$ iterations}{
+    $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
+      \nabla_{\psi}\mathcal{L}_{V}(\psi)$\;
+  }
+  assert $\vartheta_{\text{after}}=\vartheta_{\text{before}}$\;
+  $\vartheta_{\mathrm{ref}} \leftarrow \vartheta$
+    \tcp*{block-0 anchor}
+  \BlankLine
+  \tcp{Layer 3: anchored PPO in blocks}
+  \For{block $m\leftarrow 0,1,2,\dots$}{
+    \For{each iteration of block $m$}{
+      collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
+      compute GAE advantages from $\gamma,\lambda_{\mathrm{GAE}}$; normalize\;
+      snapshot $(\vartheta,\psi,\text{optimizer})$\;
+      \For{$3$ epochs, each over the minibatches}{
+        \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
+          > \delta_{\mathrm{upd}}$}{\textbf{break}
+          \label{alg:line:earlystop}}
+        $\mathcal{L} \leftarrow \mathcal{L}_{\mathrm{PPO}}
+          + \mathcal{L}_{V} - \beta\mathcal{H}
+          + \lambda_{\mathrm{ref}}\,
+            \mathrm{KL}(\pi_{\mathrm{ref}}\|\pi_{\vartheta})$\;
+        step Adam on $\mathcal{L}$ with
+          $\eta_{\mathrm{actor}},\eta_{\mathrm{critic}}$\;
+      }
+      $D_{\mathrm{upd}}\leftarrow
+        \mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})$,\quad
+      $D_{\mathrm{ref}}\leftarrow
+        \mathrm{KL}(\pi_{\mathrm{ref}}\|\pi_{\vartheta})$
+        \tcp*{over the whole rollout}
+      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ non-finite}{
+        restore $\vartheta$, $\psi$ and the optimizer\;
+      }
+      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{\emph{or}}
+        $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
+        restore $\vartheta$ and the actor optimizer group; \textbf{retain}
+          the critic fit \label{alg:line:reject}
+          \tcp*{the bounds constrain the policy, not $V$}
+      }
+    }
+    score the block's checkpoints on $\ge 3$ held-out terrain meshes;
+      aggregate $\bm{G}$ to the worst mesh, and to the worst path family for
+      the tracking gates\;
+    \eIf{some candidate $\vartheta^{\star}$ has
+      $\bm{G}(\vartheta^{\star})\preceq\bm{g}^{\star}$}{
+      $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$; reset the
+        \emph{actor} optimizer moments, retain the critic's
+        \label{alg:line:promote}\;
+    }{
+      keep $\vartheta_{\mathrm{ref}}$; the block is not promoted\;
+    }
+  }
+  \caption{Reference-anchored PPO for the \ppoROM{} verge policy. The teacher
+  appears only in layer~1 and the reference only as a divergence target: at
+  every step of layer~3 the plant is driven by $\pi_{\vartheta}$ alone.}
+  \label{alg:ctrl:anchored}
+\end{algorithm}
+
+\subsection{Theoretical Status}
+
+The components are standard and citable. The bound on $D_{\mathrm{update}}$ is
+conservative policy iteration and its trust-region
+descendants~\cite{kakade2002approximately,schulman2015trust}; the atomic
+rollback is that literature's backtracking line search reduced to a single
+trial point; the penalty in
+Equation~\eqref{eq:ctrl:anchored-loss} is a Lagrangian relaxation of the
+constrained problem~\eqref{eq:ctrl:constrained} evaluated at a fixed multiplier,
+with the rollback supplying the feasibility enforcement a fixed multiplier
+cannot.
+
+What does not follow is a certificate. Bounding the divergence from a verified
+policy does bound gate degradation in form: the chain rule of KL over
+trajectories, Pinsker's inequality and the boundedness of every gate metric give
+$|\mathbb{E}_{\pi_\vartheta}[g] - \mathbb{E}_{\pi_{\mathrm{ref}}}[g]|
+\le 2 G_{\max}\sqrt{H \delta_{\mathrm{ref}}/2}$ for a metric $g$ with
+$\|g\|_\infty \le G_{\max}$ over a horizon $H$, a bound available only because
+the reward of Table~\ref{tab:ctrl:reward} is bounded term by term and one that
+an exponential term would destroy. At the production horizon of $2808$ steps
+and $\delta_{\mathrm{ref}} = 0.05$, however, the right-hand side exceeds eight,
+which for a metric bounded in $[0,1]$ is vacuous. There is also a measure
+mismatch, since the constraint is taken under the live policy's state
+distribution while the chain rule requires the reference's.
+
+The honest claim is therefore narrower. The construction is a principled
+restriction of reward ascent to a neighbourhood of a policy where proxy and
+acceptance criterion were measured to agree, assembled from standard
+trust-region and demonstration-regularized results, with feasibility
+re-established empirically at every block boundary. The gates, not the theory,
+certify each promotion.
+
+\section{PPO--ROM: Reference Actuator Baseline}
+\label{sec:ctrl:ppo-rom}
+
+\ppoROM{} is the reference condition of this thesis. The policy emits desired
+cylinder motion, the frozen command ROM converts it to a cylinder position
+target, and PhysX closes the loop. There is no online adaptation anywhere in
+the stack. The truck is scripted over a $\unit[26]{m}$ strip at one constant
+speed drawn per episode from $2$ to $\unit[7]{km/h}$, the eleven path families
+of Section~\ref{sec:sys:task} are distributed across environments within a
+single run, and the terrain mesh is drawn per environment so that no policy can
+memorize one ground surface.
+
+Its status is that of a reference condition rather than a competitor, as
+developed in Chapter~\ref{chap:evaluation}: the command ROM is not a pure
+Simscape artefact but a Simscape-trained model with a bounded closed-loop
+calibration against IsaacLab and PhysX, and ROM-plus-PhysX \emph{is} the
+deployment plant. \ppoROM{}'s actuator therefore coincides with the plant. Its
+tracking advantage over \ppoIDFD{} is consequently not evidence that a reduced
+order model approximates the actuator better than an identified ID/FD pair: one of the two
+defines the target.
+
+The policy is produced by the three-layer construction of this chapter:
+distillation from the privileged DLS teacher to a feasible student, critic
+warm-up with the actor frozen, and reference-anchored PPO in blocks under
+Equations~\eqref{eq:ctrl:anchored-loss} and~\eqref{eq:ctrl:bounds}. The final
+block produced checkpoints $280$ to $329$. The last iterate was not taken,
+because PPO can raise mean return while damaging a single path family.
+Candidates were scored instead on held-out meshes against the eight gates,
+aggregated to the worst mesh and, for the tracking-critical gates, the worst
+path family.
+
+The gate table for that selected checkpoint is deliberately not printed here,
+and the reason is a limitation rather than an omission. The numbers on record
+were measured on the superseded $\unit[16]{m}$ rollout, and the checkpoint's own
+selection record marks them provisional for exactly that reason; that
+checkpoint's own full-length six-mesh revalidation was never run. Quoting a
+certified gate result for \ppoROM{} on the strength of a shorter rollout would
+be the kind of claim this thesis is written to avoid, so \ppoROM{} is described
+here as a reference \emph{condition} whose acceptance evidence is pending, and
+Chapter~\ref{chap:evaluation} reports the revalidated figures for all three
+stacks under one protocol.
+
+Three separate records of \ppoROM{} acceptance exist in the project, and because
+they disagree it is worth stating plainly which one this thesis relies on. The
+pipeline's own documentation reports all eight gates passing across the $2$ to
+$\unit[7]{km/h}$ range on three meshes, which is a selection-time record for a
+different checkpoint than the one described above. An earlier six-mesh
+evaluation of the rebuilt pipeline reports seven gates passing and
+\emph{ground contact failing}, at $0.6486$ against the $0.700$ threshold and a
+margin of $-0.0514$, which was at the time the one genuine performance gap in
+the stack. Neither record certifies the checkpoint this chapter selects, and
+neither is the evidence used in Chapter~\ref{chap:evaluation}: the closed-loop
+comparison there re-scores a single checkpoint per stack under one protocol, at
+one speed, over the full path, on the same meshes and the same eleven families.
+The earlier ground-contact failure is still the right expectation to carry into
+that chapter. It is measured on a worst-mesh, worst-family aggregation,
+which is the statistic that the pooled per-cell means of
+Table~\ref{tab:eval:tracking} do not report, and it identifies ground contact on
+the ROM plant as the gate most likely to bind, a prediction
+Chapter~\ref{chap:evaluation} is able to check rather than assume.
+
+\section{PPO--ID--FD: Non-Adaptive Learned Baseline}
+\label{sec:ctrl:ppo-idfd}
+
+\ppoIDFD{} subclasses the \ppoROM{} task and changes exactly one thing. The
+policy still emits desired cylinder motion, but that command is now realised by
+the frozen inverse model of Section~\ref{sec:models:id}, which converts it to a
+valve command, followed by the frozen strict forward model of
+Section~\ref{sec:models:fd}, which converts the valve command to a predicted
+extension increment. PhysX receives the same bounded cylinder target as before.
+Task, terrain families, meshes, observation contract, action chain, reward,
+gates and the PPO update are inherited unchanged, so the actuator
+representation is the only free variable between the two stacks.
+
+The stack matters to the argument twice over. It is the non-adaptive learned
+baseline against which \ppoAAMIDFD{} must be measured, since the two differ only
+by the AAM and the adapter, and it is the honest control for \ppoROM, whose
+actuator coincides with the deployment plant.
+
+Two properties of the composed path shape its behaviour, and both were
+established offline. The valve command is accumulated rather than issued
+absolutely and is clipped to the per-axis limits $[0.95, 0.95, 0.80, 0.80]$, so
+the actuator path carries its own saturation boundary independently of the
+action chain. And only the predicted extension increment is integrated, since
+the forward model's velocity output failed validation on two axes
+(Section~\ref{sec:models:fd}) and is carried as a diagnostic. This stack's
+standing model error is therefore visible to the policy through the twelve
+model-error channels of Section~\ref{sec:ctrl:ppo}, which is what makes the
+shared observation contract fair across actuators rather than merely
+identical.
+
+The promoted policy's run manifest records all eight gates passing across the
+$2$ to $\unit[7]{km/h}$ speed range on three held-out meshes. That is the
+selection-time evidence on which the checkpoint was promoted, not a certified
+result: it was measured on three meshes rather than the six the final claim
+uses, and it is superseded by the single-protocol revalidation of
+Chapter~\ref{chap:evaluation}, where the per-stack tracking numbers belong. One protocol point belongs here: the reported
+policy was obtained under the reference-anchored construction of
+Section~\ref{sec:ctrl:anchored} with a lower actor learning rate than
+\ppoROM{} and a fixed exploration standard deviation of $0.05$, which is read
+from the run manifest rather than assumed to match.
+
+\section{PPO--(AAM)--ID--FD: The Adaptive Stack}
+\label{sec:ctrl:ppo-idaamfd}
+
+\ppoAAMIDFD{} adds online adaptation to the \ppoIDFD{} path and changes nothing
+else about the plant. At every model tick the AAM of
+Section~\ref{sec:models:aam} reads the observable history window and produces
+$\hat{\bm{z}}$, which enters the stack in two places, shown in
+Figure~\ref{fig:ctrl:aam-stack}: it is appended to the policy observation, and
+it conditions the bounded adapter that corrects the frozen inverse model's
+valve command. The forward model, the base inverse model and the command ROM
+are untouched.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=.92\textwidth]{images/ch6_aam_stack}
+  \caption{The \ppoAAMIDFD{} stack. The causal AAM reads only the observable
+  history window and estimates $\hat{\bm{z}}$, which conditions both the policy
+  observation and the bounded adapter around the frozen inverse model. The
+  forward model and the plant are unchanged from \ppoIDFD, and during warm-up or
+  on an invalid estimate the correction is exactly zero, so the actuator path
+  reverts to \ppoIDFD{} while the latent-conditioned actor stays in place.}
+  \label{fig:ctrl:aam-stack}
+\end{figure}
+
+Conditioning the policy as well as the adapter is a deliberate design choice
+and it is the one place where this stack is not a drop-in substitution. The
+research question is whether an inferred description of the current plant
+improves closed-loop behaviour, and a latent that reached only the inverse model
+could change the realised valve command but never the intent behind it. The
+cost is that the actor is a $68$-input network rather than a $66$-input one,
+which is an architectural difference and is treated as one in
+Section~\ref{sec:ctrl:constraints}.
+
+The adapter itself is deliberately weak. It adds a residual to the base valve
+command, the residual is bounded by construction and further scaled by a
+declared factor of $0.25$, and the result is clipped to the same per-axis valve
+limits as \ppoIDFD. Three fallbacks make the degradation path exact rather than
+approximate. Until twenty complete history rows have accumulated the adapter is
+bypassed and the frozen inverse model's command is returned unchanged; a
+non-finite latent triggers the same bypass; and the residual scale can be set
+to zero at evaluation time without touching any other part of the stack. In all
+three cases the \emph{actuator path} is \ppoIDFD{} exactly, which is what makes
+the residual ablation a single-variable comparison. The actor is not restored by
+any of the three: it remains the $68$-input latent-conditioned network. This
+stack therefore never reduces to \ppoIDFD{} as a whole, and the across-stack
+contrast in Chapter~\ref{chap:evaluation} is read with that in mind.
+
+The estimate is not instantaneous, and the latency is part of the contract
+rather than an implementation detail. The AAM updates on the $\unit[20]{Hz}$
+model-tick grid and its output passes through a past-only rolling mean over five
+predictions, so a plant change reaches $\hat{\bm{z}}$ no earlier than
+$\unit[250]{ms}$ after it becomes visible in the history window, on top of the
+$\unit[1.0]{s}$ window itself. Section~\ref{sec:models:aam-content} showed the
+deployed estimate to be a near-static seal-condition fingerprint, so this
+latency bounds a quantity that does not, on the evidence available, move much
+within an episode.
+
+What this section does \emph{not} claim is that the added machinery improves the
+task. The stack is complete, its interfaces are verified, and its manifest records the
+eight gates passing on six held-out meshes at selection time; whether the
+adaptation path contributes anything measurable is a separate question, settled
+in Chapter~\ref{chap:evaluation}, and
+Section~\ref{sec:models:adapter} has already reported that the closed-loop
+contrasts are null and why.
+
+\section{IsaacLab Integration and Timing}
+\label{sec:ctrl:integration}
+
+Four rates run concurrently and Table~\ref{tab:sys:rates} lists them: PhysX
+integrates at $\unit[120]{Hz}$, the policy acts at $\unit[60]{Hz}$ under a
+decimation of two, the learned actuator models advance on a $\unit[20]{Hz}$
+grid of $\unit[0.05]{s}$ model ticks, and the AAM updates on that same grid. No
+single one of these is ``the control frequency'', and reporting a scalar rate
+for this system would misdescribe every one of the three stacks.
+
+The relationship between the $\unit[60]{Hz}$ and $\unit[20]{Hz}$ layers is
+where integration errors hide, so it is fixed by construction rather than by
+interpolation. A learned actuator model is evaluated on every third control
+step and its predicted increment is held across the two intervening steps. The
+action presented to the model is the action of the tick on which it fires, not
+an average, and the target integrator accumulates in reference space so that a
+held prediction cannot re-anchor to a sagging measured position. Chapter~3
+records why that reference-space integration is mandatory: integrating against
+the measured extension turns a static hold into a slow ratchet.
+
+Order within a tick is fixed and asserted at run time. The AAM consumes the
+history window ending at the previous tick and produces $\hat{\bm{z}}$ before
+the inverse model runs, so no quantity computed at the current tick can
+influence its own estimate. History buffers are per-environment and cleared on
+episode boundaries, which matters because the vectorised environments reset
+asynchronously and a shared buffer would leak one episode into the next. Both
+properties are checked rather than assumed: a runtime check replays a trace and
+asserts bit-exact agreement between the online estimate and an offline causal
+recomputation, and truncating the future of the input leaves the prefix of the
+output unchanged. Checkpoint loading then compares the stored normalisation
+statistics, feature contract and history length of every learned component
+against what the environment expects, and aborts on a mismatch rather than
+degrading silently.
+
+\section{Constraints and Fair-Comparison Rules}
+\label{sec:ctrl:constraints}
+
+\subsection{Limits and Safeguards}
+
+Authority is bounded at four independent places, and the redundancy is
+deliberate because each bound protects against a different failure. The action
+chain of Section~\ref{sec:ctrl:ppo} limits the rate of change of the command,
+fades authority as cylinder travel headroom is consumed, and caps how far the
+integrated target may lead the measured extension. The actuator path clips the
+valve command to its per-axis limits. The environment terminates an episode on
+the safety conditions of Section~\ref{sec:sys:evaluation-criteria} rather than
+letting it accumulate reward in a state an operator would stop. And every
+learned component falls back to a defined behaviour on a non-finite output.
+
+Preflight runs before any training or evaluation and refuses to start on a
+violated precondition. The check that does the most work asserts that the
+commanded reference stays inside the measured actuator authority ceiling of
+Section~\ref{sec:sys:capability}: the cylinders move the cutter laterally at
+most $\unit[0.240]{m/s}$, so a path family demanding more is infeasible by
+construction and no reward, critic or optimiser change could recover it.
+Terrain is derived from that ceiling, and the preflight assertion keeps the two
+from drifting apart.
+
+\subsection{Matching Rules for the Three-Stack Comparison}
+
+The comparison is only informative if the three stacks differ where the
+hypothesis says they differ and nowhere else. The following are held identical
+across \ppoROM, \ppoIDFD{} and \ppoAAMIDFD: the verge task and its eleven path
+families, the terrain generator and the held-out mesh set, the reward function
+of Table~\ref{tab:ctrl:reward}, the action chain and its authority budget, the
+eight acceptance gates and their aggregation to the worst mesh and worst path
+family, episode length, actor and critic capacity, and the three-layer training
+construction of distillation, critic warm-up and reference-anchored PPO. This is
+the rule the comparison was designed to follow.
+
+Four departures from that rule exist and are declared rather than smoothed
+over, because each of them weakens a comparison that would otherwise be clean.
+
+\paragraph{The Reference Stack Contains the Plant}
+\ppoROM's actuator is the command ROM, and the command ROM plus PhysX
+\emph{is} the deployment plant (Section~\ref{sec:models:rom-calibration}). Its
+tracking advantage over \ppoIDFD{} is therefore not evidence that a
+reduced-order model approximates the actuator better than an identified pair,
+because one of the two defines the target. \ppoROM{} is a reference condition,
+not a competitor.
+
+\paragraph{The Adaptive Stack Has a Larger Observation}
+\ppoAAMIDFD's actor reads $68$ values against the others' $66$. Any difference
+in its favour is therefore attributable to the latent's content, to the two
+extra inputs, or to the adapter, and these are separated by evaluation-time
+ablation rather than by assumption: the zeroed, shuffled, frozen and mean-latent
+arms of Section~\ref{sec:models:adapter} all keep the architecture fixed and
+change only what occupies those channels.
+
+\paragraph{The Training Runs Are Not Matched}
+The rule above governs the design; the runs that produced the three deployed
+checkpoints do not satisfy it, and the deviation is recorded in
+Section~\ref{sec:eval:hypotheses} from the run manifests rather than inferred.
+\ppoROM{} and \ppoIDFD{} agree on every recorded training field, but the adaptive
+run differs in three: seed ($41$ against $17$), actor learning rate
+($3\times10^{-6}$ against $3\times10^{-4}$) and frozen-actor warm-up ($0$ against
+$150$ iterations). The truck-speed schedule of the two reference runs is not
+recorded at all. Only one PPO training run exists per stack, so training variance
+is not estimated and the $33$ evaluation cells measure scenario variation rather
+than optimiser variability. The across-stack result is therefore conditional on
+the selected checkpoints, and causal attribution to the architecture comes from
+the within-checkpoint latent substitutions instead.
+
+\paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
+Either all three stacks are distilled with identical teacher data and budget and
+then evaluated, or all three receive the same bounded fine-tuning budget, with
+both the distilled and the fine-tuned checkpoints reported. Comparing a
+distilled baseline against a separately optimised adaptive policy and
+attributing the difference to the AAM is not permitted, for the reason
+established in Section~\ref{sec:ctrl:finding}: reward ascent moves a policy off
+the acceptance criterion, so an unmatched budget is itself a treatment.

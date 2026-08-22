@@ -73,11 +73,14 @@ from verge_task.terrain import (
     MOW_STRIP_CFG,
     MOW_STRIP_EVAL_CFG,
     TRACKING_PATH_FAMILIES,
+    add_visual_mesh_skirt,
     apply_natural_verge_vertex_colors,
     apply_relief_profile,
     build_mow_strip_mesh,
     build_sparse_grass_tuft_mesh,
     build_tracking_line_mesh,
+    build_visual_bank_vegetation_mesh,
+    build_visual_surface_debris_mesh,
     build_visual_verge_skin,
     decoration_seed,
     terrain_height_scale_for_environment,
@@ -99,6 +102,9 @@ from verge_task.vehicle_speed import (
 MOW_STRIP_ROOT = "/World/MowStrip"
 MOW_STRIP_VISUAL_ROOT = "/World/MowStripVisual"
 GRASS_TUFT_ROOT = "/World/PPO3GrassTufts"
+MOW_STRIP_DEBRIS_ROOT = "/World/PPO3MowStripDebris"
+BANK_VEGETATION_ROOT = "/World/PPO3BankVegetation"
+BANK_DEBRIS_ROOT = "/World/PPO3BankDebris"
 ROAD_ROOT = "/World/TruckRoad"
 TRACKING_LINE_ROOT = "/World/MowTrackingLine"
 VISUAL_FLOOR_ROOT = "/World/PPO3VisualFloor"
@@ -318,6 +324,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             seed=int(getattr(self.cfg, "deployment_factor_seed", 17)),
             manifest=self._deployment_factor_manifest,
             reset_index=self._deployment_factor_reset_index,
+            scale=float(getattr(self.cfg, "deployment_factor_scale", 1.0)),
         )
         self._deployment_factor_reset_index += 1
         all_values = torch.as_tensor(
@@ -768,25 +775,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._add_ground_sensors()
 
     def _configure_dark_visual_theme(self) -> None:
-        """Use Isaac's dark viewport background without darkening the robot.
+        """Set the viewport background without changing scene illumination.
 
         The parent scene's uniform dome light is visible to primary camera rays,
         which is why the empty world renders as solid white. Hiding the dome
         from primary rays restores the default dark renderer background while
         keeping the same dome illumination and therefore the trained scene's
-        object visibility. This is visual-only and changes no physics.
+        object visibility. Set the attribute in both directions so a white scene
+        cannot inherit a hidden dome from a previously authored stage. This is
+        visual-only and changes no physics.
         """
-        if not bool(getattr(self.cfg, "dark_visual_background", True)):
-            return
+        dark_background = bool(
+            getattr(self.cfg, "dark_visual_background", False)
+        )
         light = sim_utils.get_prim_at_path("/World/Light")
         attribute = light.GetAttribute("visibleInPrimaryRay")
         if not attribute.IsValid():
             attribute = light.CreateAttribute(
                 "visibleInPrimaryRay", Sdf.ValueTypeNames.Bool
             )
-        attribute.Set(False)
+        attribute.Set(not dark_background)
         print(
-            "[PPO3-VISUAL] Isaac dark background enabled; dome illumination retained",
+            f"[PPO3-VISUAL] Isaac {'dark' if dark_background else 'white'} "
+            "background enabled; dome illumination retained",
             flush=True,
         )
 
@@ -796,7 +807,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
 
         Isaac's unbound display-color fallback has a visible specular lobe,
         which makes a vertex-painted terrain look like glossy plastic.  A
-        primvar reader preserves every grass/soil vertex color while roughness
+        primvar reader preserves every procedural grass vertex color while roughness
         1 and zero metallic remove that glassy response.
         """
         mesh_prim = sim_utils.get_prim_at_path(f"{root_path}/mesh")
@@ -1062,8 +1073,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         the wheel-road contact sensors keep resolving against it. Everything here
         has collision disabled, so physics and every gate metric are unchanged.
 
-        Three merged prims (asphalt apron, white markings, grass apron) rather
-        than one prim per piece -- the same reason ``_spawn_mow_strip`` merges.
+        Merged road, grass and vegetation prims are used rather than one prim per
+        piece -- the same reason ``_spawn_mow_strip`` merges.
         Off by default; ``evaluate.py``/``probe_drive.py`` enable it only for
         interactive viewing, where ``--num_envs 1`` makes the cost negligible.
         """
@@ -1083,9 +1094,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         shoulder_width = float(
             getattr(self.cfg, "road_gravel_shoulder_width_m", 0.34)
         )
-        apron_m = float(getattr(self.cfg, "verge_visual_apron_m", 3.2))
+        apron_m = float(getattr(self.cfg, "verge_visual_apron_m", 6.0))
+        overlap_m = float(getattr(self.cfg, "verge_apron_overlap_m", 0.45))
         if min(edge_width, dash_width, dash_length, dash_gap, shoulder_width) <= 0.0:
             raise ValueError("road marking dimensions must be positive")
+        if apron_m <= 0.0 or not 0.0 < overlap_m < apron_m:
+            raise ValueError("verge apron width/overlap must be positive and ordered")
         if not edge_width * 0.5 <= edge_inset < road_width * 0.5:
             raise ValueError("road scenery edge-line inset is outside a lane")
 
@@ -1102,11 +1116,17 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         strip_width = float(strip_cfg.width_m)
         strip_outer_y = strip_center_y - 0.5 * strip_width
 
+        palette = tuple(getattr(self.cfg, "verge_visual_palette", ()))
+        if len(palette) < 5:
+            raise ValueError("verge_visual_palette must contain five RGB colors")
         asphalt, markings, grass, shoulders = [], [], [], []
+        bank_vegetation, bank_debris = [], []
         # Sit each layer a hair above the one below it: apron under the markings,
         # both just under the colliding road so no z-fight with the tyre surface.
         apron_z, marking_z = -0.012, -0.004
-        for origin in self.scene.env_origins.detach().cpu().numpy():
+        for env_index, origin in enumerate(
+            self.scene.env_origins.detach().cpu().numpy()
+        ):
             ox, oy, oz = float(origin[0]), float(origin[1]), float(origin[2])
             mid_x = ox + start_x + 0.5 * length
 
@@ -1156,29 +1176,210 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             # Grass outboard of the mowed verge, and a matching bank beyond the
             # far kerb, so the carriageway reads as a road between two verges.
             uneven = bool(getattr(self.cfg, "uneven_verge_apron", True))
-            for centre, band in (
-                (strip_outer_y - 0.5 * apron_m, apron_m),
-                (far_edge_y + 0.5 * apron_m, apron_m),
-            ):
+            bank_specs = (
+                (
+                    strip_outer_y - apron_m,
+                    strip_outer_y + overlap_m,
+                    strip_outer_y,
+                    True,
+                ),
+                (
+                    far_edge_y - overlap_m,
+                    far_edge_y + apron_m,
+                    far_edge_y,
+                    False,
+                ),
+            )
+            for bank_index, (
+                bank_y0,
+                bank_y1,
+                covered_edge_y,
+                cover_upper,
+            ) in enumerate(bank_specs):
+                centre = 0.5 * (bank_y0 + bank_y1)
+                band = bank_y1 - bank_y0
                 if uneven:
                     bank = self._lawn_apron_mesh(
                         x0=ox + start_x,
                         x1=ox + start_x + length,
-                        y0=oy + centre - 0.5 * band,
-                        y1=oy + centre + 0.5 * band,
+                        y0=oy + bank_y0,
+                        y1=oy + bank_y1,
                         z=oz + apron_z,
                         seed_offset=int(round(centre * 1000.0)),
                     )
                 else:
                     bank = trimesh.creation.box(extents=(length, band, 0.02))
                     bank.apply_translation((mid_x, oy + centre, oz + apron_z))
+                # The apron reaches underneath its neighbour instead of meeting
+                # it edge-to-edge. Keep the hidden vertices below both surfaces
+                # so the overlap closes cracks without producing z-fighting.
+                covered = (
+                    bank.vertices[:, 1] >= oy + covered_edge_y
+                    if cover_upper
+                    else bank.vertices[:, 1] <= oy + covered_edge_y
+                )
+                bank.vertices[covered, 2] = np.minimum(
+                    bank.vertices[covered, 2], oz + apron_z - 0.01
+                )
+                apply_natural_verge_vertex_colors(
+                    bank,
+                    palette,
+                    soil_threshold=float(
+                        getattr(self.cfg, "mow_strip_soil_field_threshold", 0.95)
+                    ),
+                    coordinate_offset_xy=(ox, oy),
+                )
                 grass.append(bank)
+                if bool(getattr(self.cfg, "enable_verge_grass_tufts", True)):
+                    vegetation = build_visual_bank_vegetation_mesh(
+                        bank,
+                        grass_count=int(
+                            getattr(self.cfg, "verge_bank_grass_tufts_per_side", 240)
+                        ),
+                        bush_count=int(
+                            getattr(self.cfg, "verge_bushes_per_side", 8)
+                        ),
+                        seed=decoration_seed(
+                            int(getattr(self.cfg, "terrain_base_seed", 42)),
+                            env_index * 104_729 + bank_index * 19_937 + 31_337,
+                        ),
+                        edge_clearance_m=max(
+                            overlap_m,
+                            float(
+                                getattr(self.cfg, "verge_grass_edge_clearance_m", 0.18)
+                            ),
+                        ),
+                        grass_height_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_height_range_m",
+                                (0.16, 0.52),
+                            )
+                        ),
+                        grass_width_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_width_range_m",
+                                (0.09, 0.26),
+                            )
+                        ),
+                        grass_palette=tuple(
+                            getattr(self.cfg, "verge_grass_palette", ((0.05, 0.18, 0.03),))
+                        ),
+                        bush_height_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_bush_height_range_m",
+                                (0.38, 0.82),
+                            )
+                        ),
+                        bush_width_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_bush_width_range_m",
+                                (0.38, 0.90),
+                            )
+                        ),
+                        bush_palette=tuple(
+                            getattr(self.cfg, "verge_bush_palette", ((0.04, 0.14, 0.02),))
+                        ),
+                    )
+                    bank_vegetation.append(vegetation)
+                    seam_vegetation = build_visual_bank_vegetation_mesh(
+                        bank,
+                        grass_count=int(
+                            getattr(
+                                self.cfg,
+                                "verge_seam_grass_tufts_per_side",
+                                90,
+                            )
+                        ),
+                        bush_count=0,
+                        seed=decoration_seed(
+                            int(getattr(self.cfg, "terrain_base_seed", 42)),
+                            env_index * 104_729 + bank_index * 19_937 + 73_919,
+                        ),
+                        edge_clearance_m=0.25,
+                        grass_height_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_height_range_m",
+                                (0.16, 0.52),
+                            )
+                        ),
+                        grass_width_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_width_range_m",
+                                (0.09, 0.26),
+                            )
+                        ),
+                        grass_palette=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_palette",
+                                ((0.05, 0.18, 0.03),),
+                            )
+                        ),
+                        placement_bounds_xy=(
+                            ox + start_x,
+                            ox + start_x + length,
+                            oy + covered_edge_y - 0.28,
+                            oy + covered_edge_y + 0.28,
+                        ),
+                    )
+                    bank_vegetation.append(seam_vegetation)
+                    debris = build_visual_surface_debris_mesh(
+                        bank,
+                        twig_count=int(
+                            getattr(self.cfg, "verge_twigs_per_side", 28)
+                        ),
+                        log_count=int(
+                            getattr(self.cfg, "verge_logs_per_side", 4)
+                        ),
+                        seed=decoration_seed(
+                            int(getattr(self.cfg, "terrain_base_seed", 42)),
+                            env_index * 104_729 + bank_index * 19_937 + 91_883,
+                        ),
+                        edge_clearance_m=max(overlap_m, 0.35),
+                        twig_length_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_twig_length_range_m",
+                                (0.22, 0.65),
+                            )
+                        ),
+                        log_length_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_log_length_range_m",
+                                (0.70, 1.60),
+                            )
+                        ),
+                        wood_palette=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_wood_palette",
+                                ((0.16, 0.08, 0.025),),
+                            )
+                        ),
+                    )
+                    bank_debris.append(debris)
             # Close the narrow gap between the verge mesh and the near kerb.
             shoulder = (near_edge_y) - (strip_center_y + 0.5 * strip_width)
             if shoulder > 1.0e-3:
-                fill = trimesh.creation.box(extents=(length, shoulder, 0.02))
+                fill_width = shoulder + 2.0 * overlap_m
+                fill = trimesh.creation.box(extents=(length, fill_width, 0.02))
                 fill.apply_translation(
                     (mid_x, oy + near_edge_y - 0.5 * shoulder, oz + apron_z)
+                )
+                apply_natural_verge_vertex_colors(
+                    fill,
+                    palette,
+                    soil_threshold=float(
+                        getattr(self.cfg, "mow_strip_soil_field_threshold", 0.95)
+                    ),
+                    coordinate_offset_xy=(ox, oy),
                 )
                 grass.append(fill)
 
@@ -1234,71 +1435,41 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             )
 
-        # Reuse the exact apron triangles but sort them into broad, irregular
-        # color regions.  This is material variation only: no vertex is moved,
-        # no triangle is added, and every resulting prim remains visual-only.
-        # The low-frequency field avoids the artificial single-color carpet
-        # look while keeping the result deterministic across screenshots.
-        palette = tuple(
-            getattr(
-                self.cfg,
-                "verge_visual_palette",
-                (
-                    getattr(self.cfg, "verge_visual_color", (0.08, 0.27, 0.05)),
-                ),
-            )
+        apron_mesh = trimesh.util.concatenate(grass)
+        create_prim_from_mesh(VERGE_APRON_ROOT, apron_mesh)
+        apron_prim = sim_utils.get_prim_at_path(f"{VERGE_APRON_ROOT}/mesh")
+        sim_utils.define_collision_properties(
+            apron_prim.GetPrimPath(),
+            sim_utils.CollisionPropertiesCfg(collision_enabled=False),
         )
-        if not palette:
-            raise ValueError("verge_visual_palette must contain at least one color")
-        grass_by_color: list[list[trimesh.Trimesh]] = [
-            [] for _ in range(len(palette))
-        ]
-        # The last palette entry is soil. Wide outer thresholds keep that
-        # region sparse while the four green shades occupy most of the lawn.
-        thresholds = np.linspace(-1.05, 1.05, len(palette) - 1)
-        for piece in grass:
-            centers = piece.triangles_center
-            color_field = (
-                np.sin(0.31 * centers[:, 0] + 0.73 * centers[:, 1])
-                + 0.55 * np.sin(0.83 * centers[:, 0] - 0.29 * centers[:, 1])
-            )
-            color_ids = np.digitize(color_field, thresholds)
-            for color_id in range(len(palette)):
-                faces = piece.faces[color_ids == color_id]
-                if len(faces) == 0:
-                    continue
-                grass_by_color[color_id].append(
-                    trimesh.Trimesh(
-                        vertices=piece.vertices.copy(),
-                        faces=faces.copy(),
-                        process=False,
-                    )
-                )
-        for color_id, (color, color_pieces) in enumerate(
-            zip(palette, grass_by_color, strict=True)
-        ):
-            if not color_pieces:
-                continue
-            root = (
-                VERGE_APRON_ROOT
-                if color_id == 0
-                else f"{VERGE_APRON_ROOT}Shade{color_id + 1}"
-            )
+        self._bind_matte_vertex_material(VERGE_APRON_ROOT)
+        if bank_vegetation:
             create_prim_from_mesh(
-                root,
-                trimesh.util.concatenate(color_pieces),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=tuple(color), roughness=1.0
-                ),
+                BANK_VEGETATION_ROOT,
+                trimesh.util.concatenate(bank_vegetation),
             )
-            mesh_prim = sim_utils.get_prim_at_path(f"{root}/mesh")
+            vegetation_prim = sim_utils.get_prim_at_path(
+                f"{BANK_VEGETATION_ROOT}/mesh"
+            )
             sim_utils.define_collision_properties(
-                mesh_prim.GetPrimPath(),
+                vegetation_prim.GetPrimPath(),
                 sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             )
+            self._bind_matte_vertex_material(BANK_VEGETATION_ROOT)
+        if bank_debris:
+            create_prim_from_mesh(
+                BANK_DEBRIS_ROOT,
+                trimesh.util.concatenate(bank_debris),
+            )
+            debris_prim = sim_utils.get_prim_at_path(f"{BANK_DEBRIS_ROOT}/mesh")
+            sim_utils.define_collision_properties(
+                debris_prim.GetPrimPath(),
+                sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            )
+            self._bind_matte_vertex_material(BANK_DEBRIS_ROOT)
         print(
             f"[PPO3-SCENERY] {lanes}-lane marked road with "
-            f"dashed centreline, matte shoulder and {len(palette)}-tone grass verges "
+            f"dashed centreline, seamless grass verges and varied vegetation "
             f"(visual-only, y=[{strip_outer_y - apron_m:.2f}, "
             f"{far_edge_y + apron_m:.2f}])",
             flush=True,
@@ -1329,6 +1500,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         pieces = []
         visual_pieces = []
         grass_tuft_pieces = []
+        mow_strip_debris_pieces = []
         line_pieces = []
         path_y_samples = []
         path_family_names = []
@@ -1336,8 +1508,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         terrain_height_scales = []
         env_amplitude_scales = []
         env_sweep_gains = []
+        # Rich rendering is display-only. Interactive road scenery opts into
+        # the same vertex-painted skin automatically, while headless training
+        # keeps the original single-material collision mesh and pays no cost.
         use_vertex_palette = bool(
             getattr(self.cfg, "mow_strip_use_vertex_palette", False)
+            or getattr(self.cfg, "enable_road_scenery", False)
         )
         palette = tuple(getattr(self.cfg, "mow_strip_visual_palette", ()))
         soil_weighted_vertices = 0.0
@@ -1525,11 +1701,21 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                         )
                     ),
                 )
+                visual_piece = add_visual_mesh_skirt(
+                    visual_piece,
+                    depth_m=float(
+                        getattr(
+                            self.cfg,
+                            "mow_strip_visual_skirt_depth_m",
+                            0.35,
+                        )
+                    ),
+                )
                 piece_soil_fraction = apply_natural_verge_vertex_colors(
                     visual_piece,
                     palette,
                     soil_threshold=float(
-                        getattr(self.cfg, "mow_strip_soil_field_threshold", 1.0)
+                        getattr(self.cfg, "mow_strip_soil_field_threshold", 0.95)
                     ),
                 )
                 soil_weighted_vertices += piece_soil_fraction * len(
@@ -1545,7 +1731,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                     tufts = build_sparse_grass_tuft_mesh(
                         env_strip_cfg,
                         count=int(
-                            getattr(self.cfg, "verge_grass_tufts_per_env", 72)
+                            getattr(self.cfg, "verge_grass_tufts_per_env", 150)
                         ),
                         road_edge_y=road_near_edge_y,
                         seed=decoration_seed(
@@ -1568,14 +1754,14 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                             getattr(
                                 self.cfg,
                                 "verge_grass_height_range_m",
-                                (0.10, 0.19),
+                                (0.16, 0.52),
                             )
                         ),
                         width_range_m=tuple(
                             getattr(
                                 self.cfg,
                                 "verge_grass_width_range_m",
-                                (0.07, 0.14),
+                                (0.09, 0.26),
                             )
                         ),
                         palette=tuple(
@@ -1590,6 +1776,59 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                         (float(origin[0]), float(origin[1]), float(origin[2]))
                     )
                     grass_tuft_pieces.append(tufts)
+                    debris = build_visual_surface_debris_mesh(
+                        piece,
+                        twig_count=int(
+                            getattr(self.cfg, "verge_strip_twigs_per_env", 16)
+                        ),
+                        log_count=int(
+                            getattr(self.cfg, "verge_strip_logs_per_env", 2)
+                        ),
+                        seed=decoration_seed(
+                            int(getattr(self.cfg, "terrain_base_seed", 42)),
+                            env_index * seed_stride + 83_117,
+                        ),
+                        edge_clearance_m=float(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_edge_clearance_m",
+                                0.18,
+                            )
+                        ),
+                        twig_length_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_twig_length_range_m",
+                                (0.22, 0.65),
+                            )
+                        ),
+                        log_length_range_m=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_log_length_range_m",
+                                (0.70, 1.60),
+                            )
+                        ),
+                        wood_palette=tuple(
+                            getattr(
+                                self.cfg,
+                                "verge_wood_palette",
+                                ((0.16, 0.08, 0.025),),
+                            )
+                        ),
+                        tracking_cfg=env_strip_cfg,
+                        tracking_clearance_m=float(
+                            getattr(
+                                self.cfg,
+                                "verge_grass_tracking_clearance_m",
+                                0.24,
+                            )
+                        ),
+                    )
+                    debris.apply_translation(
+                        (float(origin[0]), float(origin[1]), float(origin[2]))
+                    )
+                    mow_strip_debris_pieces.append(debris)
             piece.apply_translation(
                 (float(origin[0]), float(origin[1]), float(origin[2]))
             )
@@ -1630,6 +1869,11 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         grass_tuft_mesh = (
             trimesh.util.concatenate(grass_tuft_pieces)
             if grass_tuft_pieces
+            else None
+        )
+        mow_strip_debris_mesh = (
+            trimesh.util.concatenate(mow_strip_debris_pieces)
+            if mow_strip_debris_pieces
             else None
         )
         line_mesh = trimesh.util.concatenate(line_pieces)
@@ -1704,7 +1948,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if not use_vertex_palette:
             strip_spawn_args["visual_material"] = sim_utils.PreviewSurfaceCfg(
                 diffuse_color=tuple(
-                    getattr(self.cfg, "mow_strip_color", (0.075, 0.27, 0.050))
+                    getattr(self.cfg, "mow_strip_color", (0.052, 0.18, 0.025))
                 ),
                 roughness=1.0,
             )
@@ -1725,7 +1969,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             self._bind_matte_vertex_material(MOW_STRIP_VISUAL_ROOT)
             print(
                 f"[PPO3-VISUAL] matte natural verge skin enabled "
-                f"({100.0 * soil_fraction:.1f}% soil vertices; collision mesh unchanged)",
+                f"({100.0 * soil_fraction:.1f}% accent vertices; collision mesh unchanged)",
                 flush=True,
             )
             if grass_tuft_mesh is not None:
@@ -1739,13 +1983,29 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 )
                 self._bind_matte_vertex_material(GRASS_TUFT_ROOT)
                 tuft_count = int(
-                    getattr(self.cfg, "verge_grass_tufts_per_env", 72)
+                    getattr(self.cfg, "verge_grass_tufts_per_env", 150)
+                )
+                tuft_triangles_per_env = len(grass_tuft_mesh.faces) // max(
+                    len(origins), 1
                 )
                 print(
                     f"[PPO3-VISUAL] sparse grass enabled ({tuft_count} clumps/env, "
-                    f"{4 * tuft_count} triangles/env, non-colliding)",
+                    f"{tuft_triangles_per_env} triangles/env, non-colliding)",
                     flush=True,
                 )
+            if mow_strip_debris_mesh is not None:
+                create_prim_from_mesh(
+                    MOW_STRIP_DEBRIS_ROOT,
+                    mow_strip_debris_mesh,
+                )
+                debris_prim = sim_utils.get_prim_at_path(
+                    f"{MOW_STRIP_DEBRIS_ROOT}/mesh"
+                )
+                sim_utils.define_collision_properties(
+                    debris_prim.GetPrimPath(),
+                    sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                )
+                self._bind_matte_vertex_material(MOW_STRIP_DEBRIS_ROOT)
         if not bool(getattr(self.cfg, "mow_strip_collision", False)):
             mesh_prim = sim_utils.get_prim_at_path(f"{MOW_STRIP_ROOT}/mesh")
             sim_utils.define_collision_properties(
@@ -3651,6 +3911,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         y0 = torch.gather(samples, 1, lower)
         y1 = torch.gather(samples, 1, upper)
         result = y0 + alpha * (y1 - y0)
+        # Scheduled step in the COMMANDED line. Applied here so that it reaches
+        # both the tracking error and `tracking_line_preview_local`, which is
+        # what the policy observes -- a step visible to the metric but not to the
+        # controller would measure nothing but the metric's own discontinuity.
+        step_m = float(getattr(self.cfg, "tracking_reference_step_m", 0.0) or 0.0)
+        if step_m:
+            step_t = float(
+                getattr(self.cfg, "tracking_reference_step_time_s", 0.0) or 0.0)
+            elapsed = self._scored_elapsed
+            if torch.is_tensor(elapsed):
+                fired = (elapsed >= step_t).to(result.dtype).reshape(-1, 1)
+                result = result + step_m * fired
+            elif float(elapsed) >= step_t:
+                result = result + step_m
         return result.squeeze(1) if squeeze else result
 
     def tracking_line_preview_local(self) -> torch.Tensor:
@@ -4380,9 +4654,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         z_raw = getattr(self, "_aam_z_hat_raw", None)
         valve = getattr(self, "_current_valve_cmd", None)
         applied = getattr(self, "_applied_valve_cmd", None)
+        # Cutter position and the reference it is tracking, both in LOCAL
+        # coordinates. The aggregated reports carry only the scalar errors, so
+        # without these a reference-versus-tracked plot in the XY plane cannot
+        # be drawn at all -- the error alone does not say where either curve ran.
+        cutter_w = self._compute_cutter_pos_w()
+        origins = self.scene.env_origins
+        cutter_x_local = cutter_w[:, 0] - origins[:, 0]
         row = {
             "step": torch.full((self.num_envs,), float(self.common_step_counter),
                                device=self.device),
+            "cutter_x": cutter_x_local,
+            "cutter_y": cutter_w[:, 1] - origins[:, 1],
+            "cutter_z": cutter_w[:, 2] - origins[:, 2],
+            "reference_y": self._tracking_line_y_at_x_local(cutter_x_local),
             "lateral_error": self.verge_lateral_error(),
             "cut_height_error": self.cut_height_error(),
             "z_hat": z_hat if z_hat is not None else zeros,
@@ -4392,6 +4677,27 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             "valve_cmd": valve if valve is not None else zeros,
             "valve_applied": applied if applied is not None else zeros,
         }
+        # Actuation-chain signals, so the command -> pressure -> cylinder ->
+        # joint latency can be measured on EACH stack rather than only on the
+        # open-loop collection. Guarded individually: the command-ROM actuator
+        # does not expose every intermediate the ID/FD path does, and a missing
+        # one should drop a column rather than fail the rollout.
+        dp = getattr(self, "_dP", None)
+        if dp is not None:
+            row["chain_dP"] = dp
+        adapter = getattr(self, "_cylinder_adapter", None)
+        cyl_ids = getattr(self, "_cylinder_joint_ids", None)
+        if adapter is not None and cyl_ids is not None:
+            q = self.robot.data.joint_pos[:, cyl_ids]
+            qd = self.robot.data.joint_vel[:, cyl_ids]
+            ext, vel = adapter.current_from_cylinder_joints(q, qd)
+            row["chain_cyl_ext"] = ext
+            row["chain_cyl_vel"] = vel
+        arm_ids = getattr(self, "_arm_joint_ids", None)
+        if arm_ids is not None:
+            row["chain_joint_pos"] = self.robot.data.joint_pos[:, arm_ids]
+            row["chain_joint_vel"] = self.robot.data.joint_vel[:, arm_ids]
+
         perturbation = getattr(self, "_plant_perturbation", None)
         if perturbation is not None:
             theta = perturbation.true_theta()

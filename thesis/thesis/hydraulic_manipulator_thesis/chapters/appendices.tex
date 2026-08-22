@@ -1,0 +1,675 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Appendices A–E (per the experimental plan)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\chapter{System Parameters and Coordinate Mappings}
+\label{app:system-parameters}
+
+The kinematic structure, the cylinder-to-joint mapping and the calibrated cutter
+Jacobian are derived in Section~\ref{sec:sys:kinematics} and are not repeated
+here. This appendix records the quantities a reader needs in order to reproduce
+a run and cannot read off those derivations: the rate of every layer, the limits
+the command path enforces, and the geometry of the scored course. Every value
+below is read from the shipped configuration or from a stored evaluation
+record, and the source is named in each case.
+
+\section{Rates}
+
+Five different rates operate in this system and confusing them is the most
+common way to misread a result. The control step is $\unit[1/60]{s}$, the
+physics substep is half that because the environment runs with a decimation of
+two, and every learned component operates on the $\unit[20]{Hz}$ grid at which
+the reduced-order model and the identification data were sampled.
+
+\begin{table}[htbp]
+  \centering
+  \caption{The rate of every layer. Control and physics rates are read from the
+  stored evaluation records (\texttt{control\_dt\_s}); the learned-model sample
+  time is stored inside the frozen forward-model checkpoint
+  (\texttt{sample\_time\_s}); the AAM update period is the runtime
+  configuration \texttt{update\_period\_ticks}.}
+  \label{tab:app:rates}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Layer & Rate & Period \\
+    \midrule
+    PhysX physics substep      & $\unit[120]{Hz}$ & $\unit[8.33]{ms}$ \\
+    Policy and control step    & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
+    Inverse / forward model    & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
+    AAM inference update       & $\unit[20]{Hz}$  & $\unit[50]{ms}$ (every 3rd control step) \\
+    Simscape logging grid      & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two derived latencies follow from Table~\ref{tab:app:rates} and are used in
+Section~\ref{sec:eval:delay}. The AAM consumes a history of $20$ rows on the
+$\unit[50]{ms}$ grid, so its input window is exactly $\unit[1.0]{s}$ and no
+estimate at all is available for the first $\unit[1.0]{s}$ after a reset; until
+then the adapter is bypassed and the frozen inverse action is returned
+unchanged. Its output smoother averages five consecutive predictions, which adds
+a further $\unit[250]{ms}$ of group delay.
+
+\section{Command-Path Limits}
+
+The command path enforces four limits, all of which bound the policy rather than
+advise it. They are listed in Table~\ref{tab:app:limits}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Limits enforced on the command path, per cylinder where applicable.
+  Valve command limits and the adapter residual bound are stored inside the
+  frozen adapter checkpoint (\texttt{command\_limits},
+  \texttt{residual\_bound}); lead caps and the c3 reserve are read from the
+  stored evaluation records.}
+  \label{tab:app:limits}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Limit & c1 & c2 \quad c3 \quad c4 & Meaning \\
+    \midrule
+    Valve command limit & $0.95$ & $0.95$ \quad $0.80$ \quad $0.80$
+      & accumulated command is clipped here \\
+    Adapter residual bound & $0.15$ & $0.15$ \quad $0.15$ \quad $0.15$
+      & maximum adapter correction \\
+    Target lead cap (m) & $0.03$ & $0.03$ \quad $0.03$ \quad $0.02$
+      & how far the target may lead the state \\
+    c3 extension reserve & --- & $\unit[0.008]{m}$ on c3
+      & solver-enforced stroke reserve \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The lead cap is the mechanism by which the reference governor prevents the
+commanded target from running away from the measured state, and the c3 reserve
+is enforced by the solver while headroom is still scored against the original
+stroke, so the gate is not satisfied by moving the goalposts. The adapter
+residual bound is what makes the adaptive path fail safe: an adapter output that
+is invalid, uninitialised or late is replaced by zero, which returns the stack
+to the frozen-inverse configuration rather than to an untested one.
+
+\section{Course and Episode Geometry}
+
+Every closed-loop result in Chapter~\ref{chap:evaluation} uses the geometry in
+Table~\ref{tab:app:course}. The scored window is the full course: the count of
+control steps differs between evaluations only because the carrier speed does,
+and it is the travelled distance rather than the step count that defines the
+window.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Course geometry and the two evaluation speeds that appear in this
+  thesis. Values are read from the stored evaluation records
+  (\texttt{tracking\_active\_length\_m}, \texttt{max\_truck\_travel\_m},
+  \texttt{steps}).}
+  \label{tab:app:course}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Quantity & Chapter~\ref{chap:evaluation} protocol & Earlier $\unit[2]{km/h}$ records \\
+    \midrule
+    Tracking line length      & $\unit[26.0]{m}$ & $\unit[26.0]{m}$ \\
+    Carrier speed             & $\unit[4.0]{km/h}$ & $\unit[2.0]{km/h}$ \\
+    Control steps scored      & $1403$ & $2808$ \\
+    Truck travel achieved     & $\unit[25.98]{m}$ & $\unit[26.00]{m}$ \\
+    Episode length            & $\unit[47.3]{s}$ & $\unit[46.8]{s}$ \\
+    Trajectory families       & $11$ & $8$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The right-hand column is included because stored records under it exist in the
+project and are not comparable to the results of Chapter~\ref{chap:evaluation};
+Section~\ref{sec:eval:horizon} explains why one such record, which passes all
+eight gates, is not used.
+
+\chapter{Dataset Manifests and Factor Ranges}
+\label{app:dataset}
+% (a) Historical Simscape campaigns: parameter ranges,
+%     trajectory-generation settings, run split, preprocessing.
+% (b) IsaacLab adaptation collection: full run manifest, the six factor
+%     ranges, per-domain draw seeds, segment structure, PRBS settings,
+%     the 82/20/16 run-level split and its factor keys, and the frozen
+%     dataset checksums.
+\section{Trajectories}
+
+Each run receives its own reference trajectory, sampled rather than
+scripted. Between twelve and twenty waypoints are drawn by Latin
+hypercube sampling within the joint limits, and the arm moves between
+them without dwelling, so that the data contains transitions rather than
+long static holds. Segment durations are drawn from four speed classes,
+slow ($1.5$--$\unit[2.5]{s}$), medium ($0.8$--$\unit[1.5]{s}$), fast
+($0.3$--$\unit[0.7]{s}$), and variable ($0.5$--$\unit[2.5]{s}$), and
+about a third of the runs receive additional exploratory perturbations
+on top of the waypoint path.
+
+An earlier version of this generator used four to eight waypoints with
+dwell periods between them. It produced data in which the arm was
+stationary for a large fraction of the time, which flatters any model
+that learns to predict persistence. The current settings were chosen to
+remove that easy mass of near-static samples, and the increase in
+waypoint count is the single change that most improved the usefulness of
+the batch.
+
+
+
+
+\section{Execution and Logging}
+
+Each run simulates $\unit[22]{s}$ of operation. The solver is the stiff
+implicit \texttt{ode23t} integrator in accelerator mode with relative
+and absolute tolerances of $10^{-2}$ and $10^{-3}$. The loose tolerances
+are a deliberate throughput compromise, and their effect is bounded by
+the consistency checks of Section~\ref{sec:data:diagnostics}. Output is
+written on a fixed $\unit[0.05]{s}$ grid, giving 441 logged samples per
+run, and the batch is checkpointed to disk every hundred runs so that a
+failure late in a multi-day batch does not cost the whole collection.
+
+For every run the archive stores the time vector, the five valve
+commands, the four cylinder extensions, the four chamber pressure
+differences, the four rod forces, the five joint positions and
+velocities, the reference position and velocity signals, and, crucially,
+the complete parameter structure that produced the run. That last item
+is what makes the batch usable for the latent-adaptation work: the
+privileged plant descriptor $\bm{\xi}$ of
+Section~\ref{sec:fund:domain-randomization} is not something that has to
+be reconstructed later, it is recorded alongside the trajectory.
+
+The cost quantifies the argument made in
+Section~\ref{sec:fund:sim-data-source}. A single
+$\unit[64]{s}$ open-loop run takes roughly $\unit[2000]{s}$ of wall time
+on the collection machine, a real-time factor of about $0.03$. The
+Simscape plant runs some thirty times slower than the machine it
+models. No policy-optimisation loop that needs millions of environment
+steps can be built on that, which is why the learned actuator
+surrogates exist.
+
+
+
+\section{Parameter Ranges and Dataset Audit}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Randomized hydraulic parameters. The seal-wear coordinate is
+  drawn independently for each of the four cylinders and drives three
+  physically linked quantities at once.}
+  \label{tab:data:hydraulic}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Parameter & Nominal & Randomized range & Acts on \\
+    \midrule
+    Entrained air fraction $\varepsilon_{\mathrm{air}}$
+      & $0.005$ & $0.001$ -- $0.080$ & fluid compliance \\
+    Dead-volume fraction $\varepsilon_{\mathrm{vol}}$
+      & $0.020$ & $0.005$ -- $0.080$ & fluid compliance \\
+    Discharge coefficient $c_d$
+      & $0.70$ & $0.56$ -- $0.84$ & valve flow gain \\
+    Seal wear $w_{\mathrm{seal},i}$
+      & $0$ & $0$ -- $0.25$ (per cylinder)
+      & clearance, leakage, spool lag \\
+    Relief setting $p_{\mathrm{set}}$
+      & $\unit[27.6]{MPa}$ & $\unit[24.8]{MPa}$ -- $\unit[30.4]{MPa}$
+      & pressure ceiling \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Randomized mechanical parameters. The rigid-body
+  perturbations are applied independently to each of the fourteen
+  bodies.}
+  \label{tab:data:mechanical}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Parameter & Nominal & Randomized range \\
+    \midrule
+    Body mass & CAD value & $\pm 20\,\%$ \\
+    Centre-of-mass offset & CAD value & $\pm 5\,\%$ \\
+    Inertia tensor and products & CAD value & consistent with mass draw \\
+    Joint stiffness, J1 and J2 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
+    Joint stiffness, J3 and J4 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
+    Joint stiffness, J5 & $\unit[25]{kN/m}$ & $15$ -- $\unit[60]{kN/m}$ \\
+    Joint damping & $250$ & $100$ -- $600$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{The six randomized physical factors of the IsaacLab
+  adaptation collection and their final ranges. One factor vector is
+  drawn per run and held fixed for the whole run.}
+  \label{tab:data:factors}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    Coordinate & Range & Domain & Acts on \\
+    \midrule
+    $e_{\mathrm{flow}}$       & $[-0.25,\, 0.25]$ & hydraulic  & valve flow gain \\
+    $e_{\mathrm{compliance}}$ & $[-0.25,\, 0.10]$ & hydraulic  & effective chamber compliance \\
+    $e_{\mathrm{seal}}$       & $[0,\, 1]$        & hydraulic  & seal wear, leakage, spool lag \\
+    $e_{\mathrm{pressure}}$   & $[-0.15,\, 0.15]$ & hydraulic  & supply/relief pressure level \\
+    $e_{\mathrm{mass}}$       & $[0.8,\, 1.5]$    & mechanical & cutter mass scale \\
+    $e_{\mathrm{COM}_z}$      & $[-0.10,\, 0.05]$ & mechanical & cutter centre-of-mass height \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Audit of the strict open-loop excitation export. All checks
+  are computed by the extraction stage and stored with the data; the
+  export is accepted only if every one of them passes.}
+  \label{tab:data:audit}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Check & Result & Interpretation \\
+    \midrule
+    Rows, runs, columns & $25\,600$ / $4$ / $49$ & four complete runs \\
+    Median sample time & $\unit[0.01]{s}$ & as commanded \\
+    Maximum sample-time error & $9.1\times10^{-15}\,\mathrm{s}$ & numerically exact grid \\
+    Maximum $\Delta$extension error & $0$ & targets match state differences \\
+    Maximum $\Delta$velocity error & $0$ & targets match state differences \\
+    Maximum $\Delta(\Delta p)$ error & $\unit[0]{Pa}$ & targets match state differences \\
+    Non-finite values & $0$ & no solver escapes \\
+    Valid fraction & $0.937$ & startup, gaps, shutdown excluded \\
+    Command rank & $4$ & all four channels independent \\
+    Lagged excitation rank & $80$ & history matrix full rank \\
+    Valve saturation & $8.5\,\%$ per channel & limits reached but not dominant \\
+    Stroke coverage & $12\,\%$ -- $33\,\%$ & above floor, below target \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{The Frozen Adaptation Collection}
+\label{app:data:frozen}
+
+The IsaacLab adaptation collection is frozen, and every model-level result in
+this thesis is fitted and scored on it. Its manifest records $118$ runs, one
+factor vector per run, held fixed for the duration of that run. The
+domain composition and the run-level split are given in
+Table~\ref{tab:app:frozen}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Composition of the frozen adaptation collection, counted directly
+  from the manifest. The run-level split is $102$ training runs against $16$
+  held-out test runs; the training portion is further divided $82/20$ into
+  fitting and validation runs, so that no window from a validation or test run
+  is ever seen during fitting.}
+  \label{tab:app:frozen}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Domain & Runs & Factors varied \\
+    \midrule
+    \texttt{combined}   & $64$ & all six \\
+    \texttt{hydraulic}  & $40$ & flow, compliance, seal, pressure \\
+    \texttt{mechanical} & $12$ & mass scale, centre-of-mass height \\
+    \texttt{nominal}    & $2$  & none (factors at nominal) \\
+    \midrule
+    Total               & $118$ & \\
+    \midrule
+    \texttt{train} split & $102$ & further split $82$ fit / $20$ validation \\
+    \texttt{test} split  & $16$  & held out \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The split is at \emph{run} level rather than window level, and this is the
+single most important property of the collection. Within one run the factor
+vector is constant, so windows drawn from the same run are highly redundant; a
+window-level split would place near-duplicates of the same plant on both sides
+of the boundary and every held-out score in this thesis would be optimistic. The
+manifest stores the factor key of every run alongside its split label, so this
+property is checkable rather than asserted.
+
+\chapter{Model Architectures, Normalizers and Checkpoint Hashes}
+\label{app:models}
+
+This appendix pins the frozen artifacts. Every model-level and closed-loop
+result in this thesis was produced with the exact files listed in
+Table~\ref{tab:app:hashes}, and the SHA-256 digests are given so that a later
+reader can establish whether a file on disk is the one that produced a number
+here. This matters more than usual in this project, because resumed training
+runs overwrite checkpoints in place.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Frozen artifacts and their SHA-256 digests (first $32$ hex digits
+  shown). ``Frozen'' means the file's weights were not updated by any
+  subsequent stage; the three policy checkpoints are the ones evaluated in
+  Chapter~\ref{chap:evaluation}.}
+  \label{tab:app:hashes}
+  \scriptsize
+  \begin{tabular}{lll}
+    \toprule
+    Artifact & Role & SHA-256 (truncated) \\
+    \midrule
+    \texttt{aam.pt}          & AAM, frozen   & \texttt{cd6a7f0b118b96c7ce66b889b9b3e422} \\
+    \texttt{zhat\_adapter.pt} & ID adapter, frozen & \texttt{30629a4f83db5c2bed3c777bcf82dc57} \\
+    \texttt{best\_id\_cylinder\_control.pt} & inverse model, frozen
+      & \texttt{8e26c52e82d89efe193e001d0a8b07a6} \\
+    \texttt{best\_fd\_cylinder\_strict.pt} & forward model, frozen
+      & \texttt{1f41e44309a8f320430a3382ca88ce5f} \\
+    \midrule
+    \texttt{headroom\_priced\_v1/model\_299.pt} & \ppoAAMIDFD{} policy
+      & \texttt{aaf6b4bab7cfeac53fb95a3d15470cde} \\
+    \texttt{rom\_s6\_aligned/model\_598.pt} & \ppoROM{} policy
+      & \texttt{ce7e3ab9649b1193f123f9f91107bbf8} \\
+    \texttt{idfd\_s6\_aligned/model\_598.pt} & \ppoIDFD{} policy
+      & \texttt{06533b8e8614b0ad982dd8c238a17772} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{The Inverse and Forward Models}
+
+Both learned actuator models share one architecture: a linear input projection
+to $512$ units, four pre-norm residual blocks of two $512$-wide linear layers
+each, a final normalisation and a linear output projection. They differ only in
+their input and output layouts, given in Table~\ref{tab:app:idfd}. Each carries
+just over $2.12$ million parameters. Both are trained on the Simscape campaign,
+both operate on the $\unit[50]{ms}$ grid, and both are frozen for every result
+in Chapters~\ref{chap:control} and~\ref{chap:evaluation}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Input and output layouts of the two frozen actuator models, read from
+  the \texttt{input\_layout} and \texttt{output\_layout} fields stored in the
+  checkpoints themselves.}
+  \label{tab:app:idfd}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    & Inverse model & Forward model (strict) \\
+    \midrule
+    Input width  & $28$ & $20$ \\
+    Input layout & extension(4), velocity(4),
+                   & valve(4), extension(4), \\
+                 & $\Delta p$(4), force(4),
+                   & velocity(4), $\Delta p$(4), \\
+                 & target $\Delta$extension(4), & force(4) \\
+                 & target $\Delta$velocity(4), $\Delta t$(4) & \\
+    Output width & $4$ & $12$ \\
+    Output layout & valve command(4)
+                  & $\Delta$extension(4), $\Delta$velocity(4), \\
+                  & & $\Delta(\Delta p)$(4) \\
+    Target mode  & normalised $\Delta$ valve command
+                 & normalised $\Delta$ cylinder state \\
+    Parameters   & $2\,124\,292$ & $2\,124\,300$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Only the predicted extension increment of the forward model is integrated in
+the control loop. Its velocity output failed validation on two axes
+(Section~\ref{sec:models:fd}) and is carried as a diagnostic rather than used.
+
+\section{The Adaptation Module}
+
+The AAM is a causal one-dimensional convolutional network over the last $20$
+rows of the $\unit[50]{ms}$ deployment observable. The input row is $18$
+columns wide,
+%
+\[
+  h_t = \bigl[\, q(5),\ \dot q(5),\ \Delta p(4),\ u_{t-1}(4) \,\bigr],
+\]
+%
+and the trunk is four convolutional stages of width $64$ and kernel three, the
+first carrying a $1\times1$ skip projection from $18$ to $64$ channels, each
+stage normalised. A two-layer head maps the final $64$-channel activation to the
+$2$-dimensional latent $\hat z$. The whole module is $42\,562$ parameters, which
+is what makes $\unit[20]{Hz}$ inference affordable alongside $256$ parallel
+environments.
+
+The latent dimension is $2$ because the module regresses onto the frozen state
+predictor's latent, which is $2$-dimensional by construction. This is the
+structural reason the deployed latent decodes only one of the six physical
+factors, and Section~\ref{sec:eval:latent-anatomy} treats it as a finding rather
+than a configuration choice.
+
+The ID adapter is deliberately small: a two-layer network of width $64$, mapping
+a $30$-dimensional feature row to a $4$-dimensional residual, $76$ stored
+tensors' worth of normalisation statistics included. Its feature row is the
+inverse model's $28$ inputs concatenated with the $2$ latent components, which
+is the pressure-inclusive contract discussed in
+Section~\ref{sec:eval:validity}. Its output is bounded at $0.15$ per cylinder
+(Table~\ref{tab:app:limits}) and scaled by a declared residual factor, $0.25$
+for every result reported here.
+
+The adapter checkpoint additionally stores the digests of the inverse and
+forward models it was fitted against, so a latent adapter cannot silently be
+paired with a different frozen actuator than the one it was trained for.
+
+\chapter{PPO and IsaacLab Configuration}
+\label{app:ppo-config}
+
+\section{The Observation Vector}
+
+The policy observation is $66$ columns for \ppoROM{} and \ppoIDFD{}, and $68$
+for \ppoAAMIDFD{}: the same $66$ with the two latent components appended.
+Table~\ref{tab:app:obs} gives the layout by index. The final twelve columns are
+the model-error block, and they exist because the policy is a memoryless
+multilayer perceptron: it already observes the actuator's prediction and the
+current measured extension, but forming the error between them requires
+differencing across two steps, which a feedforward network cannot do. Without
+these columns the standing model error of a learned actuator is invisible to the
+policy no matter how long it trains.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Policy observation layout. Indices are zero-based and half-open.
+  Columns $0$--$53$ are the task block, $54$--$65$ the model-error block, and
+  $66$--$67$ exist only for \ppoAAMIDFD{}.}
+  \label{tab:app:obs}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Index & Width & Contents \\
+    \midrule
+    $0$--$9$   & $9$ & verge height profile ahead of the cutter \\
+    $9$        & $1$ & cut-height error \\
+    $10$       & $1$ & lateral error \\
+    $11$       & $1$ & cutter vertical velocity \\
+    $12$--$16$ & $4$ & measured cylinder extensions \\
+    $16$--$20$ & $4$ & measured cylinder velocities \\
+    $20$--$24$ & $4$ & cylinder headroom, low side (normalised) \\
+    $24$--$28$ & $4$ & cylinder headroom, high side (normalised) \\
+    $28$--$32$ & $4$ & previous applied action \\
+    $32$--$36$ & $4$ & current valve commands \\
+    $36$--$40$ & $4$ & actuator-predicted $\Delta$extension \\
+    $40$--$44$ & $4$ & commanded target lead \\
+    $44$       & $1$ & head-down alignment \\
+    $45$       & $1$ & head-down alignment rate \\
+    $46$       & $1$ & truck speed \\
+    $47$       & $1$ & scan valid fraction \\
+    $48$--$50$ & $2$ & world-XY components of the cutter's local $+Z$ axis \\
+    $50$       & $1$ & normalised cutter--terrain interaction force \\
+    $51$--$54$ & $3$ & path preview at $0.5$, $1.0$, $\unit[2.0]{m}$ ahead \\
+    \midrule
+    $54$--$58$ & $4$ & cylinder tracking residual (measured $-$ commanded) \\
+    $58$--$62$ & $4$ & actuator prediction residual \\
+    $62$--$66$ & $4$ & normalised cylinder effort \\
+    \midrule
+    $66$--$68$ & $2$ & $\hat z$, \ppoAAMIDFD{} only \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Channel $46$ caused a campaign-scale failure. It carries truck speed, and with a frozen observation normaliser inherited from a
+fixed-speed run its recorded standard deviation was zero. The normaliser divides
+by that standard deviation plus a small constant, which multiplied the channel by
+roughly one hundred everywhere except at the speed the statistics were collected
+at. The policy scored perfectly at that one speed and collapsed at every other.
+Freezing a normaliser is correct when resuming; freezing one whose statistics
+were gathered under a narrower distribution than the one about to be trained on
+is not.
+
+\section{The Action}
+
+The action is four-dimensional in every stack: a desired cylinder motion, not a
+valve command. What converts it to a valve command is the actuator under test,
+which is the only free variable in the three-way comparison. The limits enforced
+between the action and the plant are given in Table~\ref{tab:app:limits}.
+
+\section{The Reward}
+
+The ten reward terms and their shaping functions are given in
+Table~\ref{tab:ctrl:reward} and are not repeated here. Two weights behind that
+table are the ones a reproduction is most likely to get wrong: contact loss is
+weighted at $20.0$ and hard impacts at $20.0$, against a support reward of
+$4.0$. The hard-impact
+weight was introduced after the measurement described in
+Section~\ref{sec:sys:gates}: the quantity was gated but not priced, and the
+optimizer traded it away while its return rose.
+
+\section{PPO Hyperparameters}
+
+Table~\ref{tab:app:ppo} lists the optimisation settings of the three evaluated
+runs, read from their stored run manifests rather than from the scripts that
+launched them. The manifests share a schema, which is what makes the comparison
+in Section~\ref{sec:eval:hypotheses} checkable; the fields on which the runs
+differ are exactly those discussed there.
+
+\begin{table}[htbp]
+  \centering
+  \caption{PPO configuration of the three evaluated runs, from
+  \texttt{run\_manifest.json}. A dash marks a field the manifest does not
+  record. Differences between the adaptive run and the matched pair are
+  discussed in Section~\ref{sec:eval:hypotheses}.}
+  \label{tab:app:ppo}
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    & \ppoROM{} & \ppoIDFD{} & \ppoAAMIDFD{} \\
+    \midrule
+    manifest schema        & \multicolumn{3}{c}{\texttt{terrain\_shared\_v2}} \\
+    seed                   & $17$ & $17$ & $41$ \\
+    terrain base seed      & $17$ & $17$ & $41$ \\
+    environments           & $256$ & $256$ & $256$ \\
+    curriculum stage       & $6$ & $6$ & $6$ \\
+    actor learning rate    & $3\times10^{-4}$ & $3\times10^{-4}$ & $3\times10^{-6}$ \\
+    entropy coefficient    & $0.001$ & $0.001$ & $0.001$ \\
+    frozen-actor warm-up   & $150$ & $150$ & $0$ \\
+    observation normaliser & freeze & freeze & freeze \\
+    observation width      & $66$ & $66$ & $68$ \\
+    discount $\gamma$      & --- & --- & $0.97$ \\
+    GAE $\lambda$          & --- & --- & $0.95$ \\
+    steps per environment  & --- & --- & $32$ \\
+    episode length         & --- & --- & $\unit[47.3]{s}$ \\
+    truck speed            & --- & --- & $2$--$\unit[7]{km/h}$, per episode \\
+    residual scale         & --- & --- & $0.25$ \\
+    trajectory families    & \multicolumn{3}{c}{all $11$} \\
+    actor parameters       & --- & --- & $59\,080$ \\
+    critic parameters      & --- & --- & $58\,881$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The dashes are informative and are left visible rather than filled in from the
+launch scripts. The two reference runs' manifests do not record their truck
+speed schedule, discount or GAE settings, so those cannot be verified from the
+frozen record; the adaptive run's manifest does record them. Section
+\ref{sec:eval:hypotheses} states the consequence.
+
+\chapter{Supplementary Results}
+\label{app:results}
+
+\section{Per-Family Results on the Reference Mesh}
+
+Table~\ref{tab:app:perfamily} gives the per-family breakdown behind the pooled
+means of Table~\ref{tab:eval:tracking}, on mesh $1337$, for the adaptive stack.
+It is included because the pooled statistics of Chapter~\ref{chap:evaluation}
+are carried by a small number of cells, and the reader should be able to see
+which.
+
+\begin{table}[htbp]
+  \centering
+  \caption{\ppoAAMIDFD{} per-family results on mesh $1337$, full
+  $\unit[26]{m}$ path at $\unit[4]{km/h}$, checkpoint
+  \texttt{headroom\_priced\_v1}/$299$. Families are ordered by lateral error.
+  Nine of eleven sit near $\unit[0.03]{m}$; the distribution is not
+  approximately uniform and its mean is not a typical value.}
+  \label{tab:app:perfamily}
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    Family & lateral (m) & cut height (m) & ground contact \\
+    \midrule
+    \texttt{s\_curve}          & $0.0288$ & $0.0014$ & $0.9768$ \\
+    \texttt{lateral\_sine}     & $0.0293$ & $0.0012$ & $0.9754$ \\
+    \texttt{straight}          & $0.0309$ & $0.0015$ & $0.9694$ \\
+    \texttt{lane\_change\_hold} & $0.0312$ & $0.0026$ & $0.9629$ \\
+    \texttt{gaussian\_slalom}  & $0.0313$ & $0.0015$ & $0.9701$ \\
+    \texttt{random\_spline}    & $0.0315$ & $0.0020$ & $0.9622$ \\
+    \texttt{boom\_sweep}       & $0.0318$ & $0.0016$ & $0.9729$ \\
+    \texttt{fourier\_meander}  & $0.0324$ & $0.0013$ & $0.9786$ \\
+    \texttt{lateral\_chirp}    & $0.0342$ & $0.0032$ & $0.9615$ \\
+    \midrule
+    \texttt{double\_s\_curve}  & $0.0951$ & $0.0021$ & $0.9772$ \\
+    \texttt{offset\_return}    & $\mathbf{0.2240}$ & $\mathbf{0.0532}$ & $\mathbf{0.8485}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two features of Table~\ref{tab:app:perfamily} govern how
+Chapter~\ref{chap:evaluation} should be read. The first is the gap between the
+ninth and eleventh rows: a factor of seven in lateral error separates the
+typical family from the worst one, so the worst-family aggregation used by the
+acceptance gates is a different measurement from the mean, not a conservative
+version of it. The second is that \texttt{offset\_return} is the family that
+fails, and it fails on all three metrics at once. Lateral error, cut height and
+ground contact degrade together, which is the signature of the cutter leaving
+the ground rather than of a tracking error alone.
+
+\section{The Latent Substitution Arms}
+
+The four latent conditions of Section~\ref{sec:eval:oracle} share one
+checkpoint and one set of weights, and differ only in what occupies the latent
+slot. This is the comparison that carries the most weight in this thesis,
+because it is immune to the training-condition asymmetries of
+Section~\ref{sec:eval:hypotheses}: no training differs between the arms, since
+no training occurs.
+
+\begin{table}[htbp]
+  \centering
+  \caption{The four latent arms, as evaluated. All four use checkpoint
+  \texttt{headroom\_priced\_v1}/$299$ with identical weights; only the value
+  supplied in the latent slot changes.}
+  \label{tab:app:arms}
+  \small
+  \begin{tabular}{ll}
+    \toprule
+    Arm & Latent supplied \\
+    \midrule
+    \texttt{estimated} & the deployed AAM estimate, updated at $\unit[20]{Hz}$ \\
+    \texttt{true}      & privileged encoding of the run's actual factor vector \\
+    \texttt{mean}      & a constant carrying no plant information \\
+    \texttt{shuffled}  & a constant belonging to a \emph{different} plant \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The ordering of these four arms is the mechanism result of this thesis. The
+\texttt{shuffled} arm is the control that distinguishes the two candidate
+explanations: if the deployed estimate were losing because it carries the wrong
+plant identity, then \texttt{shuffled}, which is by definition wrong about the
+plant, would lose by at least as much. It does not. What separates the
+estimate from both constants is not its information content but its movement.
+
+\section{Reproduction}
+
+Every closed-loop number in Chapter~\ref{chap:evaluation} is produced by the
+experiment scripts stored with the project under \texttt{experiments/E1}
+through \texttt{experiments/E5}, each of which records the checkpoint, the mesh
+set, the family set, the speed and the scored horizon in its own manifest. The
+model-level results come from the frozen collection of
+Appendix~\ref{app:data:frozen}. The artifacts named in
+Table~\ref{tab:app:hashes} are sufficient, together with those scripts, to
+regenerate every table in this thesis.

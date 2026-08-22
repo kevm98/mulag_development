@@ -98,13 +98,22 @@ def run_factors(sd_root: Path, run_id: int) -> np.ndarray:
     return np.asarray([float(meta["z"][k]) for k in FACTOR_KEYS], dtype=np.float64)
 
 
-def load_run(sd_root: Path, run_id: int) -> dict:
+def _usable(z, enabled: bool, n: int) -> np.ndarray:
+    """Per-row training usability; all-ones when masking is off."""
+    if not enabled:
+        return np.ones(n, dtype=np.float64)
+    from aam_data.sample_mask import usable_rows
+    return usable_rows(z).astype(np.float64)
+
+
+def load_run(sd_root: Path, run_id: int, sample_mask: bool = False) -> dict:
     with np.load(sd_root / f"{int(run_id):05d}" / "samples.npz", allow_pickle=False) as z:
         return {
             "s": z["s_h"].astype(np.float64),
             "u": z["u"].astype(np.float64),
             "q": z["q"].astype(np.float64),
             "target": z["target"].astype(np.float64),
+            "m": _usable(z, sample_mask, int(z["s_h"].shape[0])),
             "e": run_factors(sd_root, run_id),
         }
 
@@ -244,6 +253,11 @@ def main() -> None:
         help="exclude the 10-D joint context q from the SD input "
         "(Stage 18 item 48 keeps joints as context; enabled by default).",
     )
+    p.add_argument("--sample-mask", action="store_true",
+                   help="exclude command-saturated / cylinder-limited samples "
+                        "from the LOSS (rows stay in place). Required for the "
+                        "open-loop excitation collection, and must match "
+                        "whatever the model it is compared against used.")
     p.add_argument("--unroll", type=int, default=1,
                    help=">1 trains with an unrolled (multi-step) loss so the "
                    "latent must explain config-dependent state divergence "
@@ -366,9 +380,9 @@ def main() -> None:
     val_ids = load_split(root, "val")
     test_ids = load_split(root, "test")
 
-    train_runs = {rid: load_run(sd_root, rid) for rid in train_ids}
-    val_runs = {rid: load_run(sd_root, rid) for rid in val_ids}
-    test_runs = {rid: load_run(sd_root, rid) for rid in test_ids}
+    train_runs = {rid: load_run(sd_root, rid, args.sample_mask) for rid in train_ids}
+    val_runs = {rid: load_run(sd_root, rid, args.sample_mask) for rid in val_ids}
+    test_runs = {rid: load_run(sd_root, rid, args.sample_mask) for rid in test_ids}
 
     # Normalize e with TRAINING domains only (item 51).
     E_train = np.stack([r["e"] for r in train_runs.values()])
@@ -593,7 +607,10 @@ def main() -> None:
             T = torch.stack(
                 [torch.as_tensor(runs[rid]["target"], dtype=torch.float32, device=device) for rid in order]
             )
-            return {"rows": rows, "S": S, "U": U, "Q": Q, "T": T}
+            M = torch.stack(
+                [torch.as_tensor(runs[rid]["m"], dtype=torch.float32, device=device) for rid in order]
+            )
+            return {"rows": rows, "S": S, "U": U, "Q": Q, "T": T, "M": M}
 
         t_tr = stack_runs(train_runs)
         t_val = stack_runs(val_runs)
@@ -627,6 +644,16 @@ def main() -> None:
             """
             B = starts.shape[0]
             S, U, Q, T = runs["S"], runs["U"], runs["Q"], runs["T"]
+            Mm = runs["M"]
+
+            def _mmse(pred, tgt, w):
+                """MSE over usable rows only; identical semantics to the e2e
+                trainer's masked_mse so the two are scored the same way."""
+                ww = w[:, None]
+                denom = ww.sum() * pred.shape[1]
+                if float(denom) == 0.0:
+                    return pred.sum() * 0.0
+                return ((pred - tgt) ** 2 * ww).sum() / denom
             s_cur = S[rows, starts]
             if args.latent_source == "none":
                 z = torch.zeros(B, 0, device=device)
@@ -661,11 +688,14 @@ def main() -> None:
                     cols.append(h)
                 X = torch.cat(cols + [z], dim=-1)
                 pred_norm = sd(X)
-                l1_total = l1_total + loss_fn(pred_norm, (target - y_mean_t) / y_std_t)
+                # Saturated steps propagate but contribute no gradient.
+                mj = Mm[rows, ticks]
+                l1_total = l1_total + _mmse(pred_norm, (target - y_mean_t) / y_std_t, mj)
                 delta_raw = pred_norm * y_std_t + y_mean_t
                 s_next = s_cur + delta_raw
                 if not teacher_forced:
-                    st_total = st_total + torch.mean(((s_next - s_true_next) / s_std_full_t) ** 2)
+                    st_total = st_total + _mmse(
+                        s_next / s_std_full_t, s_true_next / s_std_full_t, mj)
                 if teacher_forced:
                     s_cur = s_true_next
                 else:
@@ -977,6 +1007,7 @@ def main() -> None:
         "belief_dim": args.belief_dim if use_belief else 0,
         "history_lag": history_lag,
         "state_loss_weight": args.state_loss_weight,
+        "sample_mask_applied": bool(args.sample_mask),
         "rollout_q_mode": args.rollout_q_mode,
         "latent_rank_weight": args.latent_rank_weight,
         "latent_rank_margin": args.latent_rank_margin,

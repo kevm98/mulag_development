@@ -445,22 +445,30 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     assert "road_roughness: float = 0.92" in cfg_source
     assert "visual_floor_color: tuple = (0.085, 0.22, 0.045)" in cfg_source
     assert "visual_grid_color: tuple = (0.13, 0.285, 0.065)" in cfg_source
-    assert "(0.27, 0.16, 0.070)" in cfg_source
+    assert "(0.125, 0.068, 0.024)" in cfg_source
     # The mowed strip now shares the verge's exact green so the tracked band
     # and the grass around it read as one continuous surface instead of a
     # lighter slab laid on the lawn. Visual only -- the strip is still its own
     # collider and no gate metric moves.
-    assert "mow_strip_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
-    assert "verge_visual_color: tuple = (0.075, 0.27, 0.050)" in cfg_source
+    assert "mow_strip_color: tuple = (0.052, 0.18, 0.025)" in cfg_source
+    assert "verge_visual_color: tuple = (0.052, 0.18, 0.025)" in cfg_source
     assert "tracking_line_color: tuple = (0.92, 0.92, 0.88)" in cfg_source
     assert "verge_visual_palette: tuple = (" in cfg_source
+    assert "verge_visual_apron_m: float = 6.0" in cfg_source
+    assert "verge_apron_overlap_m: float = 0.45" in cfg_source
+    assert "verge_bushes_per_side: int = 8" in cfg_source
+    assert "verge_twigs_per_side: int = 28" in cfg_source
+    assert "verge_logs_per_side: int = 4" in cfg_source
+    assert "verge_strip_twigs_per_env: int = 16" in cfg_source
+    assert "verge_strip_logs_per_env: int = 2" in cfg_source
+    assert "mow_strip_visual_skirt_depth_m: float = 0.35" in cfg_source
     assert "visual_grid_length_m: float = 70.0" in cfg_source
-    assert "dark_visual_background: bool = True" in cfg_source
+    assert "dark_visual_background: bool = False" in cfg_source
     theme = ast.get_source_segment(
         _TERRAIN_ENV_SOURCE, _terrain_method("_configure_dark_visual_theme")
     )
     assert 'GetAttribute("visibleInPrimaryRay")' in theme
-    assert "attribute.Set(False)" in theme
+    assert "attribute.Set(not dark_background)" in theme
     grid = ast.get_source_segment(
         _TERRAIN_ENV_SOURCE, _terrain_method("_spawn_visual_grid_floor")
     )
@@ -469,8 +477,11 @@ def test_terrain_visual_theme_is_dark_asphalt_without_changing_task_geometry():
     scenery = ast.get_source_segment(
         _TERRAIN_ENV_SOURCE, _terrain_method("_spawn_road_scenery")
     )
-    assert "piece.faces[color_ids == color_id]" in scenery
-    assert "vertices=piece.vertices.copy()" in scenery
+    assert "coordinate_offset_xy=(ox, oy)" in scenery
+    assert "build_visual_bank_vegetation_mesh" in scenery
+    assert "BANK_VEGETATION_ROOT" in scenery
+    assert "BANK_DEBRIS_ROOT" in scenery
+    assert "self._bind_matte_vertex_material(VERGE_APRON_ROOT)" in scenery
     assert "collision_enabled=False" in scenery
 
 

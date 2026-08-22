@@ -68,6 +68,10 @@ LEAD_ARGS=()
 # updating from static conditioning. ROM_FACTOR_* only bite on the command-ROM
 # actuator; the ID-AAM-FD task runs the FD plant and uses PLANT_ALPHA_RANGE.
 [ -n "${FREEZE_TICK:-}" ] && LEAD_ARGS+=(--online_aam_latent_freeze_tick "$FREEZE_TICK")
+# Policy-latent low-pass cutoff in Hz. Only read by LATENT_MODE=lpf; the
+# evaluator rejects it on any other arm rather than recording a cutoff that was
+# never applied.
+[ -n "${LPF_HZ:-}" ] && LEAD_ARGS+=(--online_aam_policy_latent_lpf_hz "$LPF_HZ")
 [ -n "${PLANT_ALPHA_RANGE:-}" ] && LEAD_ARGS+=(--plant_alpha_range "$PLANT_ALPHA_RANGE")
 [ -n "${PLANT_DELAY_RANGE:-}" ] && LEAD_ARGS+=(--plant_delay_steps_range "$PLANT_DELAY_RANGE")
 [ -n "${PLANT_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--plant_step_time_s "$PLANT_STEP_TIME_S")
@@ -75,6 +79,13 @@ LEAD_ARGS=()
 [ -n "${PLANT_STEP_DELAY_STEPS:-}" ] && LEAD_ARGS+=(--plant_step_delay_steps "$PLANT_STEP_DELAY_STEPS")
 [ -n "${ROM_FACTOR_PERTURBATION:-}" ] && LEAD_ARGS+=(--rom_factor_perturbation "$ROM_FACTOR_PERTURBATION")
 [ -n "${ROM_FACTOR_STEP:-}" ] && LEAD_ARGS+=(--rom_factor_step "$ROM_FACTOR_STEP")
+# Commanded-line step: changes the REFERENCE rather than the plant, so the
+# latency it exposes belongs to the control stack and not to the hydraulics.
+# The adapter must match the latent it is fed; see --online_aam_adapter_checkpoint.
+[ -n "${ADAPTER_CKPT:-}" ] && LEAD_ARGS+=(--online_aam_adapter_checkpoint "$ADAPTER_CKPT")
+[ -n "${FACTOR_SCALE:-}" ] && LEAD_ARGS+=(--deployment_factor_scale "$FACTOR_SCALE")
+[ -n "${REF_STEP_M:-}" ] && LEAD_ARGS+=(--tracking_reference_step_m "$REF_STEP_M")
+[ -n "${REF_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--tracking_reference_step_time_s "$REF_STEP_TIME_S")
 
 mkdir -p "$OUT"
 cd "$ROOT"

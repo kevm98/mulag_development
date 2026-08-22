@@ -1,0 +1,366 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 2 — Fundamentals and Related Work (12–18 pages)
+%% Purpose: provide only the theory and literature needed to
+%% understand the research choices, then end with the
+%% unresolved gap addressed by the thesis.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{Fundamentals and Related Work}
+\label{chap:fundamentals}
+
+Chapter~\ref{chap:introduction} argued that precise task-space tracking
+with a hydraulic mowing arm is limited less by kinematics than by the
+actuator. The path from a valve command to actual cylinder motion is
+nonlinear and load dependent, and it differs from one machine, season, or
+attachment to the next. This chapter collects the background needed to
+judge that argument and to understand the design decisions made later in
+the thesis. Section~\ref{sec:fund:actuation} introduces the machine class
+and its electro-hydraulic actuation. Section~\ref{sec:fund:kinematics}
+recalls the kinematic tools behind the classical controller, and
+Section~\ref{sec:fund:conventional-control} reviews how conventional
+model-based control deals with hydraulic uncertainty. The remaining sections cover the learning methods this work builds on.
+Section~\ref{sec:fund:learned-dynamics} treats data-driven dynamics models and
+the pitfalls of identifying them from closed-loop data.
+Section~\ref{sec:fund:rom} covers reduced-order and grey-box modeling,
+Section~\ref{sec:fund:domain-randomization} domain randomization and latent
+adaptation, and Section~\ref{sec:fund:rl-residual} policy optimization with
+structured priors.
+Section~\ref{sec:fund:gap} then states the gap that remains and how the
+three control stacks of this thesis (\ppoROM, \ppoIDFD, and
+\ppoAAMIDFD) address it. Only material that is
+needed for the later chapters is included. The concrete system definition
+and problem formulation follow in Chapter~\ref{chap:system}.
+
+\section{Manipulator Actuation and Control Fundamentals}
+\label{sec:fund:actuation}
+
+\subsection{Application Context and Implement Carriers}
+
+The MULAG FME~500 mounts a multi-link hydraulic boom and a
+$\unit[1.2]{m}$ flail head on a Unimog carrier~\cite{mulag2026fme500}.
+It reaches about $\unit[6.5]{m}$ laterally, below road level and over
+obstacles, while an operator adjusts cutter height, tilt and lateral position
+as the vehicle moves. Automating this continuous tracking task is the practical
+motivation of the thesis.
+
+Hydraulic cylinders suit the required force, shock tolerance and existing
+vehicle power supply, but their command gain changes strongly with load and
+configuration. This trade-off between force density and precision is central
+to hydraulic manipulator control~\cite{mattila2017survey}.
+
+\subsection{The Electro-Hydraulic Actuation Chain}
+\label{sec:fund:actuation-chain}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fund_actuation_chain}
+  \caption{The electro-hydraulic actuation chain from valve command to
+  mowing-head motion. Color-coded callouts identify the electrical, hydraulic,
+  and mechanical stages and the principal physical quantities passed between
+  them.}
+  \label{fig:fund:chain}
+\end{figure}
+
+In Figure~\ref{fig:fund:chain}, an electrical command moves a proportional
+valve spool and meters flow to the cylinder chambers. The orifice
+law~\cite{merritt1967hydraulic} makes flow depend on spool position and the
+square root of the pressure margin. Valve authority is therefore
+load-dependent and directional; overlap creates a dead zone near null and the
+spool saturates at large commands~\cite{jelali2003hydraulic}.
+
+Compressibility, changing chamber volume, relief limits, leakage and seal
+friction further separate flow from motion. Several of these effects are
+non-smooth, while bulk modulus, leakage and friction drift with temperature and
+wear. The mechanical linkage then converts cylinder translation through
+configuration-dependent lever arms. Chapter~\ref{chap:models} consequently
+models the hydraulic realization in cylinder space, before kinematic effects
+are mixed into cutter error.
+
+\subsection{High-Fidelity Simulation as a Data Source}
+\label{sec:fund:sim-data-source}
+
+The component-level Simscape plant~\cite{mathworks2024simscape} resolves the
+stiff hydraulic dynamics but runs one machine at small integration steps.
+Policy optimization instead benefits from thousands of GPU-parallel
+plants~\cite{makoviychuk2021isaac}. The detailed model is therefore used
+offline to generate identification data; compact actuator models carry its
+behavior into parallel training, as summarized in
+Figure~\ref{fig:fund:simtosim}.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fund_sim_to_sim}
+  \caption{Simscape supplies high-fidelity hydraulic data; compact actuator
+  models transfer that behavior to GPU-parallel training in IsaacLab. Product
+  images: MathWorks and NVIDIA.}
+  \label{fig:fund:simtosim}
+\end{figure}
+
+\section{Kinematics and Task-Space Tracking}
+\label{sec:fund:kinematics}
+
+\subsection{Differential Kinematics}
+
+The cutter path is specified in vehicle coordinates, so the manipulator
+Jacobian maps joint rates to the required tool velocity
+~\cite{siciliano2009robotics}. Near singular configurations the ordinary
+pseudo-inverse produces excessive commands. The damped least-squares inverse
+of Wampler~\cite{wampler1986manipulator} and Nakamura and
+Hanafusa~\cite{nakamura1986inverse} trades some local accuracy for bounded
+commands and is retained as the classical controller.
+
+\subsection{From Joint Space to Cylinder Space}
+
+The actuated coordinates are cylinder lengths, and their nonlinear
+cylinder-to-joint map has a configuration-dependent lever arm. A passive head
+joint further limits independently controllable directions. The calibrated
+cutter Jacobian in Chapter~\ref{chap:system} composes these mappings. It still
+assumes that commanded cylinder motion is realized; the learned actuator models
+address that remaining gap.
+
+\section[Model-Based and Conventional Control Approaches]
+  {Model-Based and Conventional Control\\Approaches}
+\label{sec:fund:conventional-control}
+
+Industrial systems commonly map joystick input directly to valve current.
+Fixed-gain position--velocity or position--pressure cascades improve on this
+practice~\cite{jelali2003hydraulic}, but tuning across large changes in valve
+gain and linkage leverage produces either weak response or oscillation.
+
+Nonlinear model-based control instead cancels known rigid-body dynamics
+~\cite{slotine1991applied}, estimates uncertain parameters online
+~\cite{astrom1995adaptive}, or bounds their effect. Yang et
+al.~\cite{yang2026stateconstrained}, for example, combine state constraints
+with explicit valve dead-band inversion. Such methods can track accurately,
+but depend on valve, friction and inertia models that are costly to maintain on
+a commercial implement~\cite{mattila2017survey}.
+
+This thesis therefore retains reliable structure and learns the uncertain
+part. The DLS kinematic controller acts as teacher and data-collection
+controller; learning covers the mapping from cylinder command to realized
+motion and the policy that issues that command
+(Section~\ref{sec:fund:rl-residual}).
+
+\section{Data-Driven System Identification and Learned Dynamics}
+\label{sec:fund:learned-dynamics}
+
+\subsection{Learned Forward and Inverse Dynamics}
+
+Robot model learning distinguishes forward models, which predict the next
+state from state and command, from inverse models, which predict the command
+for a desired transition~\cite{nguyentuong2011model}. Section
+~\ref{sec:models:overview} fixes both interfaces. One-step fit is insufficient
+when a forward model is recursively rolled out, because small errors compound
+~\cite{nagabandi2018neural}. The models here are therefore trained with
+multi-step objectives. Probabilistic ensembles represent growing rollout
+uncertainty~\cite{chua2018deep}; recurrent architectures instead retain
+unobserved pressure and valve history~\cite{hochreiter1997long,cho2014learning},
+as used by the reduced-order model.
+
+\subsection{Closed-Loop Identifiability}
+\label{sec:fund:identifiability}
+
+Informative identification requires inputs that excite the plant independently
+of feedback~\cite{ljung1999system,isermann2011identification}. In closed-loop
+data, command and state history are correlated; a flexible predictor can score
+well by ignoring the command, and validation from the same distribution will
+not reveal the shortcut~\cite{schoukens2019nonlinear}.
+
+That failure occurred here: a closed-loop forward model reached one-step
+$R^2\approx0.999$ yet showed almost no command dependence under ablation.
+Chapter~\ref{chap:data} therefore uses open-loop valve excitation, and every
+learned model is checked with zeroed and shuffled commands. Prediction score
+alone is not treated as evidence of control authority.
+
+\section{Reduced-Order Modeling}
+\label{sec:fund:rom}
+
+Reduced-order models retain dominant behavior at lower cost
+\cite{benner2015survey}. Here the full Simscape plant is reduced to
+per-cylinder extension, velocity and pressure difference. The construction is
+grey-box: known structure is embedded so that data fits what remains unknown
+\cite{karniadakis2021physics}. As in the structured dynamics network of
+Lutter et al. \cite{lutter2019deep}, explicit physical layers improve
+interpretability. The hydraulic ROM retains the orifice, pressure and
+integration structure; learned terms represent valve realization,
+configuration-dependent load and bounded residuals.
+
+Hwangbo et al.~\cite{hwangbo2019learning} combined analytic rigid-body
+mechanics with a learned actuator response, a pattern later scaled in
+GPU-parallel simulation~\cite{rudin2022learning}. Yamamori et
+al.~\cite{yamamori2026actuator} instead shaped the physical actuator to match
+the simulation. A commercial valve and pump cannot be redesigned in that way,
+so this thesis learns the hydraulic realization while PhysX retains the
+rigid-body mechanics (Figure~\ref{fig:fund:workflow}).
+
+\begin{figure}[tb]
+  \centering
+  \resizebox{\textwidth}{!}{\input{images/fund_workflow}}
+  \caption{Workflow from the hydraulic plant model to matched evaluation. The
+  separation between rigid-body physics and learned actuation follows the
+  actuator-network approach in~\cite{hwangbo2019learning}; all stages use the
+  same cylinder-motion interface.}
+  \label{fig:fund:workflow}
+\end{figure}
+
+\section{Domain Randomization and Latent Adaptation}
+\label{sec:fund:domain-randomization}
+
+\subsection{Robustness Through Randomized Training}
+
+A model trained on one simulated plant inherits its parameters as assumptions.
+Domain randomization instead trains across a family, first for visual
+appearance~\cite{tobin2017domain} and then for dynamics such as mass,
+friction, gain and latency~\cite{peng2018sim}. The hydraulic family in
+Chapter~\ref{chap:data} varies bulk modulus, valve gain, leakage, friction and
+payload, producing robustness to physically plausible plant variation.
+
+\subsection{From Robustness to Adaptation}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/fund_robust_adaptive}
+  \caption{Robust training uses one response across the plant family. In the
+  adaptive stack, privileged factors supervise the AAM during training;
+  deployment uses observable history.}
+  \label{fig:fund:robust-adaptive}
+\end{figure}
+
+Figure~\ref{fig:fund:robust-adaptive} contrasts one policy trained to be robust
+across the plant family with an adaptive stack that conditions its response on
+the current plant. Teacher--student methods encode known simulation factors
+into a privileged latent and train an estimator to recover it from observable
+history. Lee et
+al.~\cite{lee2020learning} used this construction for hidden terrain
+properties; Kumar et al.~\cite{kumar2021rma} developed rapid motor adaptation.
+Unlike classical online parameter estimation~\cite{astrom1995adaptive}, the
+learned latent need not have a direct physical interpretation. It can also
+condition a dynamics model rather than a policy, as in the contextual neural
+ODE of Yu et al.~\cite{yu2026context}.
+
+The AAM in Chapter~\ref{chap:models} estimates a two-dimensional latent from
+one second of causal observable history. In \ppoAAMIDFD, that estimate enters
+the actor observation and a bounded adapter around frozen inverse dynamics; it
+does not condition the ROM, forward model or PhysX plant. The experiments keep
+two distinctions explicit: randomized training is robust but not automatically
+adaptive, and an informative privileged latent does not prove that an inferred
+latent improves closed-loop control.
+
+\section{Reinforcement Learning and Structured Priors}
+\label{sec:fund:rl-residual}
+
+\subsection{Policy Optimization}
+
+Reinforcement learning optimizes a policy from observations to actions for
+expected cumulative reward~\cite{sutton2018reinforcement}. This thesis uses
+PPO~\cite{schulman2017proximal} with generalized advantage estimation
+~\cite{schulman2016gae}; Section~\ref{sec:ctrl:optimization} gives the exact
+objective. GPU-parallel simulation supplies the required throughput
+~\cite{makoviychuk2021isaac,rudin2022learning}, which is why compact actuator
+surrogates replace the full hydraulic plant during training.
+
+\subsection{Structured Priors for Policy Learning}
+\label{sec:fund:prior}
+
+Learning from scratch would discard reliable kinematics. Residual RL instead
+adds a bounded learned correction to a controller at runtime
+~\cite{johannink2019residual,silver2018residual}. Policy distillation moves the
+prior to training: a privileged DLS teacher supplies demonstrations, then the
+student acts alone~\cite{ross2011reduction}. This thesis distils the teacher and
+then anchors PPO updates to the frozen student (Section
+~\ref{sec:ctrl:anchored}). The deployed actor remains the sole controller.
+
+The idea parallels real-world fine-tuning that retains a simulation-trained
+value function~\cite{yin2025rapidly}, but here the retained object is the
+reference policy. Anchoring was introduced because unconstrained PPO improved
+reward while degrading the physical tracking criterion
+(Section~\ref{sec:ctrl:training}).
+
+\subsection{Reinforcement Learning on Hydraulic Machines}
+
+Deep RL has reached full-size hydraulic excavators in simulation-to-machine
+tracking \cite{egli2020towards} and general automation
+\cite{egli2022general}. Spinelli et al. \cite{spinelli2024rl} extended it to
+commercial material handlers with underactuated tools. Maitan et
+al. \cite{maitan2026contraction} learned force control on a physical cylinder,
+using a contraction-metric filter to bound exploration. These studies establish
+scale and feasibility, but do not combine a randomized plant family, online
+actuator adaptation, a privileged kinematic teacher and a matched comparison of
+actuator representations.
+
+A policy can also compensate for a poor actuator model. Chapter
+~\ref{chap:evaluation} therefore reports rollout error, command magnitude and
+smoothness, and cylinder-level residuals alongside task tracking. Equal task
+error alone is not evidence of equal model quality.
+
+\section{Research Gap and Thesis Positioning}
+\label{sec:fund:gap}
+
+The literature leaves a specific combination unresolved. Hydraulic control
+provides structure but requires maintained plant models; learned dynamics
+replace derivation with data but depend on identifiable excitation; actuator
+surrogates and latent adaptation are established mainly for electric legged
+robots; and hydraulic RL studies do not isolate actuator representation under
+a matched protocol. Table~\ref{tab:fund:positioning} summarizes this position.
+
+The five criteria are: (I) learned hydraulic actuation, (II) data audited for
+causal input identifiability, (III) online latent adaptation, (IV) a structured
+controller retained as a bounded prior, and (V) a matched actuator comparison.
+Parenthesized marks denote partial or implicit coverage.
+
+\begin{table}[tb]
+  \centering
+  \caption{Positioning against the reviewed lines of work.}
+  \label{tab:fund:positioning}
+  \small
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{@{}p{.69\textwidth}ccccc@{}}
+    \toprule
+    Line of work & I & II & III & IV & V \\
+    \midrule
+    \raggedright Model-based hydraulic control\\[-1pt]
+      {\scriptsize\cite{mattila2017survey,jelali2003hydraulic}}
+      & --- & ($\checkmark$) & ($\checkmark$) & $\checkmark$ & --- \\
+    \raggedright Actuator networks for legged robots\\[-1pt]
+      {\scriptsize\cite{hwangbo2019learning,rudin2022learning,yamamori2026actuator}}
+      & --- & $\checkmark$ & --- & --- & --- \\
+    \raggedright RL for hydraulic machines\\[-1pt]
+      {\scriptsize\cite{egli2020towards,egli2022general,spinelli2024rl,maitan2026contraction}}
+      & $\checkmark$ & ($\checkmark$) & --- & --- & --- \\
+    \raggedright Latent online adaptation\\[-1pt]
+      {\scriptsize\cite{lee2020learning,kumar2021rma,yu2026context,liu2025frma,hu2026bayesian}}
+      & --- & --- & $\checkmark$ & --- & --- \\
+    \raggedright Residual RL and policy distillation\\[-1pt]
+      {\scriptsize\cite{johannink2019residual,silver2018residual,ross2011reduction,yin2025rapidly}}
+      & --- & --- & --- & $\checkmark$ & --- \\
+    \midrule
+    This thesis (\ppoROM{} / \ppoIDFD{} / \ppoAAMIDFD)
+      & $\checkmark$ & $\checkmark$ & ($\checkmark$) & $\checkmark$ & $\checkmark$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The partial mark in column III reflects the results: the latent is recovered
+causally, but its closed-loop benefit is less conclusive. The contribution is
+therefore the complete experimental chain---identifiable cylinder data,
+physics-structured models fast enough for parallel training, online latent
+estimation, and a common evaluation protocol---rather than an unqualified claim
+that adaptation always improves control. The three tested stacks are:
+
+\begin{description}
+  \item[\ppoROM.] A command-conditioned ROM realizes the policy's desired
+    cylinder motion. It is the reference and the only actuator calibrated to
+    the deployment plant (Section~\ref{sec:ctrl:constraints}).
+  \item[\ppoIDFD.] The same policy interface drives the frozen inverse model
+    followed by the strict forward model, forming the non-adaptive learned
+    baseline.
+  \item[\ppoAAMIDFD.] The AAM infers a dynamics latent from causal observable
+    history. It conditions the policy observation and a bounded adapter around
+    the frozen inverse model, ahead of the same forward model and PhysX.
+\end{description}
+
+All stacks share the task, action contract, terrain, trajectories, deployment
+factors and acceptance gates. Their training runs are not fully matched, and
+the ROM is calibrated to the deployment plant; causal architectural claims
+therefore rely on within-checkpoint ablations rather than the across-stack
+contrast (Section~\ref{sec:ctrl:constraints}). Chapter~\ref{chap:system}
+now grounds this comparison in the concrete machine.

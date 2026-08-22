@@ -242,6 +242,17 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._aam_policy_z_frozen_valid = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device
         )
+        # Policy-side one-pole low-pass state for
+        # online_aam_policy_latent_mode='lpf'. It is advanced once per control
+        # step in _run_cylinder_id_pipeline, NOT in the observation builder:
+        # the observation is built more than once per step (reset and step, and
+        # the terrain task has its own builder), so filtering there would
+        # integrate the same sample twice and the realised cutoff would not be
+        # the configured one.
+        self._aam_policy_z_lpf = torch.zeros((self.num_envs, 2), device=self.device)
+        self._aam_policy_z_lpf_valid = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
         # Training-only privileged label.  It is never appended by either
         # observation builder; latent-teacher training reads it explicitly.
         self._aam_privileged_z = torch.zeros((self.num_envs, 2), device=self.device)
@@ -1923,6 +1934,51 @@ class MulagUpperLevelEnv(DirectRLEnv):
             valve_cmd=self._current_valve_cmd,  # becomes PreviousValveCmd next step
         )
 
+    def _policy_latent_lpf_alpha(self) -> float:
+        """One-pole smoothing coefficient for the configured policy-latent cutoff.
+
+        ``alpha = dt / (tau + dt)`` with ``tau = 1 / (2*pi*f_c)`` and ``dt`` the
+        control period, which is the discrete equivalent of a first-order
+        low-pass at ``f_c``. The filter runs on the 60 Hz control clock while
+        the raw latent is a 20 Hz staircase; filtering the staircase is well
+        defined and keeps ``f_c`` an exact quantity in Hz, whereas running on
+        the model clock would tie the cutoff to the AAM update period.
+        """
+        f_c = float(getattr(self.cfg, "online_aam_policy_latent_lpf_hz", 0.0))
+        if not (f_c > 0.0):
+            raise ValueError(
+                "online_aam_policy_latent_mode='lpf' requires "
+                "online_aam_policy_latent_lpf_hz > 0"
+            )
+        dt = max(float(self._control_dt), 1.0e-6)
+        tau = 1.0 / (2.0 * math.pi * f_c)
+        return dt / (tau + dt)
+
+    def _advance_policy_latent_lpf(self) -> None:
+        """Advance the policy-latent low-pass by exactly one control step.
+
+        A no-op unless the policy arm is 'lpf', so every other arm stays
+        bit-identical to its behaviour before this mode existed. The first
+        sample of an episode seeds the state rather than being filtered towards
+        zero, which would otherwise inject a startup transient that grows as the
+        cutoff falls and would confound the bandwidth sweep with a settling
+        artefact.
+        """
+        mode = str(
+            getattr(self.cfg, "online_aam_policy_latent_mode", "estimated")
+        ).strip().lower()
+        if mode != "lpf":
+            return
+        z = self._aam_z_hat_raw
+        alpha = self._policy_latent_lpf_alpha()
+        seeded = self._aam_policy_z_lpf_valid.reshape(-1, 1)
+        self._aam_policy_z_lpf = torch.where(
+            seeded,
+            self._aam_policy_z_lpf + alpha * (z - self._aam_policy_z_lpf),
+            z,
+        )
+        self._aam_policy_z_lpf_valid[:] = True
+
     def _policy_latent_observation(self) -> torch.Tensor:
         """Return the PPO-only latent arm without changing the AAM controller.
 
@@ -1943,6 +1999,16 @@ class MulagUpperLevelEnv(DirectRLEnv):
         z = self._aam_z_hat_raw
         if mode == "estimated":
             return z
+        if mode == "lpf":
+            # Read-only: the state is advanced in _run_cylinder_id_pipeline so
+            # that repeated observation builds within one step cannot double
+            # integrate it. Same content as 'estimated', band-limited.
+            self._policy_latent_lpf_alpha()  # validate the cutoff was declared
+            return torch.where(
+                self._aam_policy_z_lpf_valid.reshape(-1, 1),
+                self._aam_policy_z_lpf,
+                z,
+            )
         if mode == "privileged":
             return self._aam_privileged_z
         if mode == "zero":
@@ -1985,7 +2051,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
             )
         raise ValueError(
             "online_aam_policy_latent_mode must be one of "
-            "estimated/true/privileged/zero/mean/shuffled/frozen, "
+            "estimated/true/privileged/zero/mean/shuffled/frozen/lpf, "
             f"got {mode!r}"
         )
 
@@ -2394,6 +2460,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         else:
             self._aam_z_hat.zero_()
             self._aam_z_hat_raw.zero_()
+        self._advance_policy_latent_lpf()
         self._aam_residual.zero_()
         self._aam_base_valve_cmd.zero_()
 
@@ -3614,6 +3681,8 @@ class MulagUpperLevelEnv(DirectRLEnv):
         # a reset starts a new episode, so the policy latch must be re-armed
         self._aam_policy_z_frozen[env_ids] = 0.0
         self._aam_policy_z_frozen_valid[env_ids] = False
+        self._aam_policy_z_lpf[env_ids] = 0.0
+        self._aam_policy_z_lpf_valid[env_ids] = False
         self._aam_residual[env_ids] = 0.0
         self._aam_base_valve_cmd[env_ids] = 0.0
         self._aam_fallback_mask[env_ids] = False

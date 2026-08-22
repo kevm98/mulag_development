@@ -1,0 +1,312 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Chapter 1 — Introduction (indicative length: 6–9 pages)
+%% Purpose: introduce the practical and scientific problem,
+%% motivate the proposed learning-based adaptive architecture,
+%% and state exactly what the thesis contributes.
+%% Main output: research problem, research questions,
+%% objectives, contributions, scope, and chapter roadmap.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{Introduction}
+\label{chap:introduction}
+
+\section{The Role of Mechanised Verge Maintenance}
+\label{sec:intro:verge}
+
+Road verges are cut because they are infrastructure. Vegetation left to grow
+closes sight lines at junctions and bends, obscures signs and barriers, blocks
+the drainage channels that keep water off the carriageway, and encroaches on the
+running surface itself. A national road network carries tens of thousands of
+kilometres of verge, and each kilometre is cut several times in a growing
+season, so the work is continuous, repetitive and performed almost entirely by
+machine.
+
+It is also performed from a moving vehicle. Stopping to cut each section would
+require closing the lane, so a carrier drives the road at a few kilometres per
+hour while a boom-mounted mowing head works the verge alongside it. The head
+must hold a cut height of a few centimetres over ground that rises and falls
+continuously, follow a grass line that curves with the road, and do so without
+striking the surface hard enough to damage the tool or lift the machine.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=.82\textwidth]{images/fme500_operation}
+  \caption{MULAG FME~500 front mower on a Unimog during roadside verge
+  maintenance. Source: \cite{mulag2026fme500}.}
+  \label{fig:intro:fme500}
+\end{figure}
+
+The demands on the manipulator follow from that. The machine studied here,
+shown in Figure~\ref{fig:intro:fme500}, carries a heavy rotating tool at the end
+of a long boom, works in intermittent contact with the ground,
+and must place that tool accurately while its own base is in motion. Hydraulic
+actuation is the standard answer at this scale: it supplies the force density
+and the tolerance to shock loading that electric drives do not, and it does so
+with components rugged enough for continuous outdoor operation. Precision,
+however, is not what hydraulics are good at, and that tension is the subject of
+this thesis.
+
+\section{Advances in Learning-Based Control for Hydraulic Manipulators}
+\label{sec:intro:advances}
+
+Two developments have changed what is achievable on machines of this kind.
+
+The first is that policy optimisation in simulation has become practical for
+contact-rich manipulation. GPU-parallel physics engines run thousands of
+environments simultaneously, which makes reinforcement learning feasible on
+tasks that would take years of real-machine experience, and randomising the
+simulator across a family of plants produces policies that transfer without
+being tuned to one machine. The second is that the actuator itself can be
+learned. Rather than deriving valve and cylinder behaviour from first
+principles and fitting its parameters, a network trained on recorded motion can
+represent the command-to-motion relationship directly, including the
+nonlinearities that analytical models approximate away.
+
+Combining the two is attractive and not straightforward. A learned actuator
+model must be cheap enough to evaluate inside the training loop, which rules out
+the high-fidelity models used for offline analysis, and it must remain valid
+across the family of machines the policy will meet. This has motivated a line of
+work in which a compact code describing the current plant is inferred from
+recent interaction history and supplied to the controller, so that a single
+policy can serve a family rather than a single machine. Such methods report
+substantial gains in legged locomotion and in manipulation, and they are the
+direct antecedent of the architecture examined here.
+
+\section{Challenges of Precise Tracking with Hydraulic Mowing Arms}
+\label{sec:intro:challenges}
+
+A valve command does not produce a proportional cylinder motion. The
+relationship is nonlinear, depends on load and supply pressure, and is subject
+to dead time between the command and any measurable response. It also differs
+between machines: seal condition, fluid temperature, hose compliance and the
+attachment fitted all change it, so two machines of the same model respond
+differently and one machine responds differently across a season. A controller
+that inverts only the geometry therefore leaves the largest source of tracking
+error unaddressed.
+
+That difficulty admits two responses, and they are routinely conflated. The
+first is robustness: train across a randomised family so that a single fixed
+model is adequate everywhere. It costs nothing at run time and gives up the
+difference between the family and the individual. The second is adaptation:
+infer which member of the family is present from the interaction history and
+condition the model or the policy on that estimate. It promises to recover that
+difference, at the cost of an estimator that must work from observable signals
+alone, since a deployed machine has no access to its own plant parameters.
+
+The second response is only worth pursuing under conditions that are rarely
+checked before the work is done. Plant identity must be recoverable from the
+data the machine actually produces, which depends on how the machine is being
+driven while that data is collected. And the difference between knowing the
+plant and not knowing it must be large enough to matter once the estimate
+reaches a feedback controller. Neither condition is guaranteed, both are
+specific to the task, and both can be measured before an estimator is built.
+Establishing those measurements, and applying them to a hydraulic mowing arm, is
+the problem this thesis addresses.
+
+\section{Contribution of This Thesis}
+\label{sec:intro:contributions}
+
+The difficulty described in Section~\ref{sec:intro:challenges} is a modelling
+problem before it is a control problem. A hydraulic actuator can be simulated
+accurately, but the models that do so are too slow to sit inside a
+reinforcement-learning loop that requires millions of environment steps. The
+alternative usually taken is to discard the hydraulics and command joint
+positions directly, which removes the load and pressure dependence that makes
+the machine difficult to control. What is needed is a representation that is
+cheap enough to train against and faithful enough that the resulting policy is
+controlling something close to the real actuator.
+
+Learned actuator models and latent-conditioned adaptation are both established
+techniques, and Section~\ref{sec:intro:advances} described the progress that
+makes them practical on machines of this class. What remains unclear is how such
+models should be identified so that they retain the command dependence a
+controller needs, whether they transfer between simulators without being
+retrained, and whether online adaptation adds anything once a policy has been
+trained against them. This thesis therefore treats representation and transfer
+as the primary questions, and treats online adaptation as the last of them
+rather than the first. The research statement of the thesis is as follows:
+
+\researchstatement{To determine how hydraulic actuator dynamics learned from
+high-fidelity simulation can be reduced, transferred into a computationally
+efficient robotic simulation and used for reinforcement-learning control, and
+under what conditions online adaptation improves on the robustness those learned
+models already provide.}
+
+The statement decomposes into six research questions, which are answered in the
+order given. The first three concern how the actuator is represented, the fourth
+concerns control through that representation, and the last two concern what
+remains for adaptation once the first four are settled. The six questions are:
+
+\begin{enumerate}
+  \item How can data from a high-fidelity Simscape model be used to learn
+    computationally tractable representations of hydraulic actuation while
+    preserving the command dependence a controller requires?
+  \item To what extent do actuator models identified from Simscape transfer to
+    an IsaacLab manipulator without deployment-specific retraining?
+  \item Can a physics-structured reduced-order hydraulic model supply dynamics
+    that are accurate and stable enough for GPU-parallel policy training?
+  \item Can a policy trained from a privileged classical teacher become the sole
+    deployed controller while acting through learned actuator dynamics?
+  \item How does the choice of actuator representation affect tracking, command
+    behaviour, latency and robustness under plant variation?
+  \item Where plant variation survives that robustness, is it identifiable from
+    recent observations, and does conditioning the controller on it improve
+    closed-loop performance?
+\end{enumerate}
+
+The first is answered in Chapters~\ref{chap:data} and~\ref{chap:models}, the
+second and third in Chapter~\ref{chap:models}, the fourth in
+Chapter~\ref{chap:control}, and the last two in
+Chapter~\ref{chap:evaluation}.
+
+RQ6 is the question named in the title, and it is deliberately placed last. It
+is only worth asking once the preceding questions have established that the
+learned models transfer, that a policy can control through them, and how much
+plant variation the resulting closed loop already absorbs unaided. A small
+answer to RQ6 is then a result about the system rather than a failure of the
+method, because accurate models and a robust policy leave less for adaptation to
+recover. The work rests on the following contributions:
+
+\textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
+hydraulic actuation from high-fidelity Simscape data and transfers it into
+IsaacLab through two representations, a modular inverse and forward chain and a
+physics-structured reduced-order model. The inverse model is trained on Simscape
+data and evaluated on deployment runs drawn entirely outside that training
+distribution, where it reproduces most of the valve-command variance with an
+accuracy that is nearly flat across plant domains. It requires no
+deployment-specific retraining and remains frozen in every downstream stack. The
+reduced-order model is transferred differently and the difference is stated
+wherever it matters: it receives a small bounded calibration against the
+deployment plant, which is why it serves as a reference condition rather than as
+an independent competitor to the inverse and forward pair.
+
+\textbf{Control-Relevant Identification and Validation:} A demonstration that
+predictive accuracy can conceal the loss of exactly the property a controller
+needs, together with the procedure that detects it. The first forward model
+reached a near-perfect supervised score while learning to ignore the valve
+command and reconstruct motion from the state history instead. The validation
+loss did not show this; ablating the command did. Redesigning the excitation and
+retraining recovered genuine command sensitivity, and the pairing of excitation
+design with input ablation is established here as a required test for learned
+hydraulic models intended for control rather than for prediction.
+
+\textbf{Reduced-Order Actuator Model:} A command-conditioned grey-box actuator
+in which pressure, force, velocity and extension propagation remain explicit
+while learning covers valve realisation, unmodelled loading and bounded residual
+effects. It is accurate enough to serve as the deployment plant, stable in
+recursive rollout, and cheap enough to evaluate inside GPU-parallel policy
+training. Zeroing or shuffling its command collapses its extension and velocity
+accuracy, which establishes that the command authority is real rather than
+inferred from context.
+
+\textbf{Policy-Only Control Through Learned Hydraulics:} A damped least-squares
+controller supplies privileged demonstrations during training and is then
+removed, so that the distilled policy emits desired cylinder motion directly
+into a learned actuator representation and constitutes the entire deployed
+controller. Both representations support closed-loop terrain following in this
+configuration, although two learned models placed in series could have
+compounded their errors.
+
+\textbf{Robustness and the Limits of Adaptation:} A matched evaluation protocol
+that scores the resulting stacks on tracking, control effort, latency,
+disturbance rejection and sensitivity to the magnitude of plant variation,
+together with a procedure that decides in advance whether online plant
+conditioning will repay the effort. The first of its two measurements
+establishes whether plant identity is present in the data the machine produces.
+The second supplies the true plant parameters through a privileged encoder and
+measures what the closed loop does with them. Both precede estimator training,
+and either can end the effort before it is incurred.
+
+The components on which these contributions rest, namely the causal plant
+estimator, the bounded adaptation path and the eight-gate evaluation harness,
+are described where they are used. They are technical enablers rather than
+separate claims.
+
+\section{Thesis Structure}
+\label{sec:intro:structure}
+
+This thesis investigates how hydraulic actuator dynamics learned from
+high-fidelity simulation can be reduced, transferred into a computationally
+efficient robotic simulation and used for reinforcement-learning control,
+grounding its investigation in the identifiability of the actuator models and in
+the robustness of the controllers built on them. The document is organized as
+follows:
+
+\textbf{Chapter~\ref{chap:fundamentals}} establishes the background against
+which the remainder is read. It introduces the machine class and its
+electro-hydraulic actuation, recalls the kinematic tools underlying the
+classical controller, and reviews how conventional model-based control handles
+hydraulic uncertainty. It then treats the learning methods this work builds on,
+namely data-driven dynamics models and the pitfalls of identifying them from
+closed-loop data, reduced-order and grey-box modelling, domain randomisation and
+latent adaptation, and policy optimisation with structured priors. The chapter
+closes by stating the gap that remains and the position of the three control
+stacks examined here.
+
+\textbf{Chapter~\ref{chap:system}} analyses the platform, using the MULAG
+FME~500 mounted on a Unimog carrier as the case study. It describes the rigid
+bodies and the serial chain they form, the coordinate mappings between task
+space and cylinder space, and the closed kinematic loops introduced by the
+cylinder mounts. It specifies what the controller can observe, separating
+measured quantities from quantities produced by a model, and presents the
+high-fidelity Simscape model from which the actuator data derives. The chapter
+also states the task, the plant capability limits and the acceptance criteria
+against which every later result is scored.
+
+\textbf{Chapter~\ref{chap:data}} presents the data generation strategy and
+answers the first research question. It describes the excitation design, the
+randomised factor set defining the family of plants, and the procedures that
+keep training, validation and reserved test configurations separate. It then
+reports the identifiability audit applied to the resulting collection, including
+the measured finding that excitation gathered under a task controller does not
+separate plants, and the open-loop collection that repairs this.
+
+\textbf{Chapter~\ref{chap:models}} develops the learned models and answers the
+first three research questions. It presents the inverse model that maps a
+desired cylinder motion to a valve command, the forward model that predicts the
+response, and the evidence that supervised accuracy alone does not establish
+that either model retains command authority. It then presents the
+command-conditioned reduced-order model that serves as the deployment plant
+inside GPU-parallel training. The chapter closes with the material required for
+the final research question, namely the privileged latent and its measured
+limits, the causal estimator that infers a deployable substitute from observable
+history, and the bounded adapter through which that estimate reaches the
+actuator path.
+
+\textbf{Chapter~\ref{chap:control}} describes the control framework and its
+integration with the simulator, and answers the fourth research question. It
+presents the damped least-squares teacher used for demonstration and data
+collection, the observation and action interfaces shared by all three stacks,
+the distillation of the teacher into a student policy, and the
+reference-anchored fine-tuning that makes further policy optimisation admissible
+without discarding the distilled behaviour. It then assembles the three deployed
+control stacks and states the rules under which they may be compared.
+
+\textbf{Chapter~\ref{chap:evaluation}} reports the experimental evaluation and
+answers the last two research questions. It establishes the excitation envelope
+within which plant identity is recoverable, the sufficiency of the frozen
+inverse model, and what the inferred latent encodes. It measures latency through
+the actuation chain and the response of each stack to a commanded change, then
+compares the three deployed controllers on closed-loop tracking and control
+effort. It closes by measuring the disturbance envelope of each controller, an
+oracle reference for what plant-identity conditioning contributes within this
+architecture, and the sensitivity of each stack to the magnitude of plant
+variation.
+
+\textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
+the work establishes and what it does not, states the design implications that
+follow from the measured results, records the limitations of the evidence, and
+identifies the measurements that should be taken next.
+
+\textbf{Appendix~\ref{app:system-parameters}} provides the system parameters and
+the coordinate mappings between task space, joint space and cylinder space
+referred to in Chapter~\ref{chap:system}.
+\textbf{Appendix~\ref{app:dataset}} lists the dataset manifests and the factor
+ranges that define the family of plants used in
+Chapters~\ref{chap:data} and~\ref{chap:evaluation}.
+\textbf{Appendix~\ref{app:models}} records the model architectures, the
+normalisers and the checkpoint hashes for every learned model reported in
+Chapter~\ref{chap:models}.
+\textbf{Appendix~\ref{app:ppo-config}} documents the PPO and IsaacLab
+configuration used for the training described in Chapter~\ref{chap:control}.
+\textbf{Appendix~\ref{app:results}} collects supplementary results supporting
+Chapter~\ref{chap:evaluation}.

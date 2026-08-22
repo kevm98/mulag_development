@@ -54,6 +54,33 @@ parser.add_argument(
 parser.add_argument("--limit", type=int, default=None)
 parser.add_argument("--run-ids", default=None)
 parser.add_argument("--seed-base", type=int, default=20260820)
+parser.add_argument(
+    "--plan",
+    choices=("dls_prbs", "open_loop_excitation"),
+    default="dls_prbs",
+    help=(
+        "dls_prbs: the classical task plan with small PRBS probe windows "
+        "superimposed on a held cylinder reference (the Stage-31 default). "
+        "open_loop_excitation: NO task controller at all -- the desired "
+        "cylinder command IS the excitation. The command ROM's input is a "
+        "desired cylinder motion, not a valve, so the excitation is applied "
+        "at that interface and the ROM's internally predicted valve is "
+        "RECORDED rather than commanded. Removing the feedback controller is "
+        "the point: in closed-loop data the controller computes the command "
+        "from the state, which is what made the valve unidentifiable in the "
+        "Simscape export."
+    ),
+)
+parser.add_argument(
+    "--excitation-amplitudes",
+    default="0.05,0.15,0.35,0.70",
+    help="open_loop_excitation only: command amplitudes as a fraction of full authority",
+)
+parser.add_argument(
+    "--excitation-holds",
+    default="5,15,40",
+    help="open_loop_excitation only: square-wave half-periods in control steps",
+)
 parser.add_argument("--probe", choices=("prbs", "multisine"), default="prbs")
 parser.add_argument("--probe-amplitude", type=float, default=0.02)
 parser.add_argument("--probe-hold-steps", type=int, default=10)
@@ -266,6 +293,104 @@ def resample_path(path: np.ndarray, steps: int) -> np.ndarray:
         [np.interp(target, source, path[:, channel]) for channel in range(path.shape[1])],
         axis=1,
     )
+
+
+def build_open_loop_plan(cfg) -> tuple[list[dict], dict]:
+    """Open-loop cylinder-command excitation: no task controller in the loop.
+
+    The command ROM accepts a desired cylinder motion, never a valve, so the
+    excitation lives at that interface and the ROM's internal valve is a
+    RECORDED response. That is the closest realisable analogue on this plant
+    of the strict Simscape valve excitation which repaired the forward model.
+
+    Every burst is a zero-mean square wave: a plateau of ``hold`` steps
+    followed immediately by its negation. Because the action is a motion
+    INCREMENT, the integrated cylinder target returns exactly to its starting
+    posture after each pair, so full-authority excitation is possible without
+    the arm walking out of its workspace. Per-axis bursts come first, so each
+    channel is excited alone, and a simultaneous burst with independent phases
+    follows, which is what makes the command matrix rank 4 rather than a set
+    of four scalar experiments.
+    """
+    amplitudes = [float(x) for x in str(args.excitation_amplitudes).split(",") if x]
+    holds = [int(x) for x in str(args.excitation_holds).split(",") if x]
+    if not amplitudes or not holds:
+        raise RuntimeError("open_loop_excitation needs amplitudes and holds")
+
+    posture = np.asarray(cfg.terrain_deployment_cylinder_target_m, dtype=np.float64)
+    rng = np.random.default_rng(int(args.probe_seed))
+    segments: list[dict] = []
+    cursor = 0
+
+    def add(name: str, kind: str, n: int, probe_action=None) -> None:
+        nonlocal cursor
+        segments.append({
+            "name": name,
+            # Excitation bursts keep kind "probe" so that
+            # validate_verge_classical.py still hashes them per segment and
+            # asserts the SAME excitation was applied to every factor draw --
+            # which is what makes the plant the only difference between runs.
+            # `open_loop` is the flag the rollout reads to bypass the DLS.
+            "kind": kind,
+            "open_loop": True,
+            "start": cursor,
+            "end": cursor + n,
+            # the reference is inert in open loop; it is kept so the record
+            # layout is identical to the dls_prbs plan.
+            "reference": np.repeat(posture[None, :], n, axis=0).astype(np.float32),
+            "probe": None if probe_action is None else np.asarray(probe_action, dtype=np.float32),
+        })
+        cursor += n
+
+    def square(hold: int, amp: float, axes, cycles: int, phase=None) -> np.ndarray:
+        n = 2 * hold * cycles
+        a = np.zeros((n, 4), dtype=np.float32)
+        for k, ax in enumerate(axes):
+            off = 0 if phase is None else int(phase[k]) % (2 * hold)
+            for i in range(n):
+                a[i, ax] = amp if ((i + off) // hold) % 2 == 0 else -amp
+        return a
+
+    settle = 120
+    rest = 60
+    cycles = 3
+    add("settle", "hold", settle)
+    for amp in amplitudes:
+        for hold in holds:
+            for ax in range(4):
+                add(f"ol_c{ax + 1}_a{amp:g}_h{hold}", "probe",
+                    2 * hold * cycles, square(hold, amp, [ax], cycles))
+                add("rest", "hold", rest)
+            phase = rng.integers(0, 2 * hold, size=4)
+            add(f"ol_all_a{amp:g}_h{hold}", "probe",
+                2 * hold * cycles, square(hold, amp, range(4), cycles, phase))
+            add("rest", "hold", rest)
+    add("final_hold", "hold", settle)
+
+    if cursor % STEPS_PER_MODEL_TICK:
+        pad = STEPS_PER_MODEL_TICK - (cursor % STEPS_PER_MODEL_TICK)
+        add("align_pad", "hold", pad)
+    params = {
+        "name": "open_loop_cylinder_command_excitation",
+        "task": TASK,
+        "actuator": args.actuator,
+        "control_dt": DT,
+        "model_dt": MODEL_DT,
+        "steps_per_model_tick": STEPS_PER_MODEL_TICK,
+        "probe": "open_loop_square",
+        "amplitudes": amplitudes,
+        "holds": holds,
+        "cycles_per_burst": cycles,
+        "controller_in_loop": False,
+        "rom_external_valve_command": False,
+        "probe_seed": int(args.probe_seed),
+        "segments": [
+            {k: v for k, v in segment.items() if k not in {"reference", "probe"}}
+            for segment in segments
+        ],
+        "total_steps": cursor,
+    }
+    return segments, params
 
 
 def build_plan(cfg) -> tuple[list[dict], dict]:
@@ -719,7 +844,8 @@ def make_metadata(
             for name in list(STATE_SIGNALS) + list(COMMAND_SIGNALS) + list(FLAG_SIGNALS)
         },
         "collection": {
-            "controller": "DLS",
+            "controller": ("open_loop_excitation"
+                           if args.plan == "open_loop_excitation" else "DLS"),
             "ppo_used": False,
             "data_source": "rom_deployment_plant",
             "id_fd_dataset_collected": False,
@@ -832,16 +958,23 @@ def main_batched(rows: list[dict], segments: list[dict], plan: dict, cfg, plant_
             goal = torch.as_tensor(
                 segment["reference"][local], dtype=torch.float32, device=env.device
             ).reshape(1, 4).expand(args.num_envs, -1)
-            base_action, singular = dls.action(goal)
             probe = (
                 segment["probe"][local]
                 if segment["probe"] is not None
                 else np.zeros(4, dtype=np.float32)
             )
-            action = torch.clamp(
-                base_action + torch.as_tensor(probe, dtype=torch.float32, device=env.device).reshape(1, 4),
-                -1.0, 1.0,
-            )
+            probe_t = torch.as_tensor(
+                probe, dtype=torch.float32, device=env.device).reshape(1, 4)
+            # The DLS solve is still evaluated so the singular-value diagnostic
+            # keeps the same layout in both plans, but in open loop its action
+            # is discarded and never reaches the plant.
+            base_action, singular = dls.action(goal)
+            if segment.get("open_loop"):
+                # No controller in the loop: the excitation IS the command, so
+                # the command never becomes a function of the state.
+                action = torch.clamp(probe_t.expand(args.num_envs, -1), -1.0, 1.0)
+            else:
+                action = torch.clamp(base_action + probe_t, -1.0, 1.0)
             if stepped_slots and not step_fired:
                 from_tick = step_plan[stepped_slots[0][1]]["from_tick"]
                 if step >= from_tick:
@@ -953,7 +1086,9 @@ def main() -> None:
     cfg.deployment_factor_log = False
     cfg.randomize_start_phase = False
     plant_contract = assert_shared_rom_plant(cfg)
-    segments, plan = build_plan(cfg)
+    segments, plan = (build_open_loop_plan(cfg)
+                      if args.plan == "open_loop_excitation"
+                      else build_plan(cfg))
     segments, plan = limit_plan(segments, plan, args.max_steps)
     cfg.episode_length_s = max(
         float(cfg.episode_length_s), plan["total_steps"] * DT + 5.0
@@ -1045,16 +1180,18 @@ def main() -> None:
             goal = torch.as_tensor(
                 segment["reference"][local], dtype=torch.float32, device=env.device
             ).reshape(1, 4)
-            base_action, singular = dls.action(goal)
             probe = (
                 segment["probe"][local]
                 if segment["probe"] is not None
                 else np.zeros(4, dtype=np.float32)
             )
-            action = base_action + torch.as_tensor(
-                probe, dtype=torch.float32, device=env.device
-            ).reshape(1, 4)
-            action = torch.clamp(action, -1.0, 1.0)
+            probe_t = torch.as_tensor(
+                probe, dtype=torch.float32, device=env.device).reshape(1, 4)
+            base_action, singular = dls.action(goal)
+            if segment.get("open_loop"):
+                action = torch.clamp(probe_t, -1.0, 1.0)
+            else:
+                action = torch.clamp(base_action + probe_t, -1.0, 1.0)
             _obs, _reward, terminated, truncated, _info = env.step(action)
             if bool(torch.as_tensor(terminated).any()) or bool(torch.as_tensor(truncated).any()):
                 raise RuntimeError(f"environment ended during run {row['run_id']} at step {step}")
@@ -1156,7 +1293,8 @@ def main() -> None:
                 for name in list(STATE_SIGNALS) + list(COMMAND_SIGNALS) + list(FLAG_SIGNALS)
             },
             "collection": {
-                "controller": "DLS",
+                "controller": ("open_loop_excitation"
+                           if args.plan == "open_loop_excitation" else "DLS"),
                 "ppo_used": False,
                 "data_source": "rom_deployment_plant",
                 "id_fd_dataset_collected": False,

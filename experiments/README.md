@@ -1,38 +1,29 @@
-# Three-pipeline tracking comparison
+# Experiments
 
-This comparison uses the same difficult `double_s_curve`, held-out mesh `909`,
-stage 6, seed `17`, 2.2x path amplitude, and 2808 control steps for:
+Each experiment is judged by one question: does it defend a word in the thesis
+title, *Learning-Based Online Adaptation for Control of a Hydraulic Manipulator*?
 
-- PPO-ROM
-- PPO-ID-FD
-- PPO-ID(AAM)-FD, with the online AAM residual scale fixed at `0.25`
+| | Experiment | Covers | Defends | Status |
+|---|---|---|---|---|
+| [E1](E1/) | Closed-loop task performance | R · IF · AIF | Control | rollouts done |
+| [E2](E2/) | Plant characterisation — delay, nonlinearity | R · IF · AIF | Hydraulic Manipulator | delay done |
+| [E3](E3/) | Mid-episode plant change | R · IF · AIF | Online Adaptation | running |
+| [E4](E4/) | Latent ablation | R · IF · AIF | Online Adaptation | model level done |
+| [E5](E5/) | Robustness degradation curve | R · IF · AIF | Hydraulic Manipulator | to run |
 
-Run the complete evaluation and plotting workflow:
+R = PPO-ROM · IF = PPO-ID-FD · AIF = PPO-(AAM)-ID-FD
 
-```bash
-bash experiments/run_three_pipeline_comparison.sh
-```
+Each folder holds `code/`, `results/`, `figures/` and a README stating the
+method, the result and the traps specific to that experiment.
 
-## Ordered truck-speed robustness campaign
+## Rules that apply to every experiment
 
-`run_ordered_training_forever.sh` trains ROM, then ID-FD, then ID(AAM)-FD with
-one constant truck speed sampled per episode from 2--7 km/h. After all three
-policies pass their held-out gates, it evaluates the promoted checkpoint at
-`unimog_speed` 2, 3, 4, 5, 6, and 7 km/h. The six-mesh reports and checkpoint identities are summarized
-in `experiments/speed_range_2_7_pathfix_v2/post_training_eval/summary.json`.
+- **Paired comparisons only.** Report the sign count over the paired unit
+  alongside the mean; a mean can be carried by one outlying pair, a unanimous
+  sign cannot. Uncertainty by paired bootstrap, reported as a range.
+- **Never compare numbers across collections**, even for the same estimand — the
+  state distribution and normaliser differ. Retrain the baseline instead.
+- **Name the checkpoint and the scoring horizon** in every closed-loop result.
+- **Validate the instrument before attributing a result to the system.**
 
-The run writes per-step traces to
-`experiments/three_pipeline_tracking/traces/` and plots to
-`experiments/three_pipeline_tracking/plots/`:
-
-- `ee_tracking_errors.png`: EE norm and signed x/y/z errors
-- `joint_tracking_errors.png`: signed error for each of the five joints and RMS bars
-- `ee_paths.png`: actual versus reference EE paths
-- `summary.csv`: MAE, RMS, p95, and maximum errors
-
-To replot existing traces only:
-
-```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
-  experiments/plot_three_pipeline_errors.py --no-show
-```
+Material predating this structure is in `legacy/`.

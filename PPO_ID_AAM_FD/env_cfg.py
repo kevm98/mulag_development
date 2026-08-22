@@ -73,6 +73,16 @@ class PpoIDAAMFDEnvCfg(Ppo41IDFDEnvCfg):
     # refuses to create fields that do not exist -- an invented field would be
     # silently ignored and the arm would score identically to 'estimated'.
     online_aam_latent_freeze_tick: int = 0
+    # Cutoff in Hz for policy_latent_mode='lpf', which band-limits the latent on
+    # the POLICY path only while the adapter keeps the full-rate estimate.
+    # 'estimated' is the unlimited-bandwidth end of that axis and 'frozen' the
+    # zero-bandwidth end, so the three together vary the latent's temporal
+    # variation while holding its content fixed.
+    # Declared here rather than left to getattr for the same reason as the
+    # freeze tick: override_cfg refuses to create fields that do not exist, so
+    # an undeclared field would be ignored and the arm would silently score as
+    # 'estimated'. 0.0 means unset and is an error only when the mode is 'lpf'.
+    online_aam_policy_latent_lpf_hz: float = 0.0
     online_aam_fail_safe: bool = True
 
     # Keep the validated ID-FD plant contract intact.  AAM changes the ID

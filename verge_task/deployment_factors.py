@@ -135,6 +135,7 @@ def select_factors(
     seed: int,
     manifest: str | Path = DEFAULT_MANIFEST,
     reset_index: int = 0,
+    scale: float = 1.0,
 ) -> list[DeploymentFactor]:
     """Select one latched factor row for each environment.
 
@@ -142,6 +143,14 @@ def select_factors(
     key such as ``combined_test:102``.  Without a key, rows in the selected
     domain are assigned deterministically per environment; no global random
     state is touched.
+
+    ``scale`` stretches every draw away from the nominal plant along the line
+    joining them: ``value -> nominal + scale * (value - nominal)``.  At ``0``
+    every environment runs the nominal plant, at ``1`` the manifest is
+    reproduced exactly, and above ``1`` the same draws are exaggerated.  This
+    keeps the DIRECTION of each draw fixed while varying only its magnitude, so
+    a degradation curve measured over it is not confounded with a change in
+    which plants are being visited.
     """
     if int(num_envs) <= 0:
         raise ValueError("num_envs must be positive")
@@ -172,8 +181,19 @@ def select_factors(
     # every arm sees the same factor keys when seed and reset index match.
     rng = random.Random(int(seed) + 1000003 * int(reset_index) + 7919 * len(domain))
     offset = rng.randrange(len(candidates))
-    return [candidates[(offset + env_id) % len(candidates)] for env_id in range(int(num_envs))]
-
+    selected = [candidates[(offset + env_id) % len(candidates)] for env_id in range(int(num_envs))]
+    if float(scale) != 1.0:
+        base = nominal_factor().values
+        k = float(scale)
+        selected = [
+            DeploymentFactor(
+                run_id=r.run_id, domain=r.domain, split=r.split,
+                label=r.label,
+                values=tuple(b + k * (v - b) for v, b in zip(r.values, base)),
+            )
+            for r in selected
+        ]
+    return selected
 
 def validate_factor_isolation(*, policy_observation_width: int, expected_width: int, aam_feature_dim: int | None) -> None:
     """Fail loudly if factor plumbing changes the deployable interfaces."""

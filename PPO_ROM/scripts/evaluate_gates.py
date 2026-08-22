@@ -203,7 +203,7 @@ p.add_argument(
 p.add_argument(
     "--online_aam_latent_mode",
     dest="online_aam_latent_mode",
-    choices=('estimated', 'privileged', 'zero', 'mean', 'shuffled', 'frozen'),
+    choices=('estimated', 'privileged', 'zero', 'mean', 'shuffled', 'frozen', 'lpf'),
     default=None,
     help=(
         "Degrade only the two PPO latent observation columns to test whether "
@@ -218,6 +218,25 @@ p.add_argument(
         "--online_aam_latent_freeze_tick and holds it: same content and "
         "magnitude as 'estimated', differing only in that it stops updating, "
         "so it isolates ONLINE adaptation from static conditioning."
+        " 'lpf' band-limits the same estimate at "
+        "--online_aam_policy_latent_lpf_hz, holding its content and removing "
+        "only its high-frequency movement. With 'estimated' (unlimited) and "
+        "'frozen' (zero) it forms a bandwidth axis, which is what separates "
+        "the latent's temporal variation from the plant identity it carries; "
+        "the two cannot be told apart by mean/shuffled alone, because those "
+        "change content and variability at once."
+    ),
+)
+p.add_argument(
+    "--online_aam_policy_latent_lpf_hz",
+    type=float,
+    default=None,
+    help=(
+        "Cutoff in Hz for --online_aam_latent_mode lpf. Applies to the two PPO "
+        "latent observation columns only; the ID adapter keeps the full-rate "
+        "estimate. UNITS: Hz against the 60 Hz control clock. The raw latent "
+        "is a 20 Hz staircase, so cutoffs above about 10 Hz are indistinguishable "
+        "from 'estimated'."
     ),
 )
 p.add_argument(
@@ -396,6 +415,43 @@ p.add_argument(
     default="",
     help="Explicit factor key/run id, e.g. flow_min, flow_max, or combined_test:102.",
 )
+p.add_argument(
+    "--tracking_reference_step_m",
+    type=float,
+    default=None,
+    help=(
+        "Metres of lateral step added to the COMMANDED tracking line at "
+        "--tracking_reference_step_time_s. Unlike a plant perturbation this "
+        "changes what the controller is asked to do, so the response latency "
+        "it produces is a property of the control stack."
+    ),
+)
+p.add_argument(
+    "--tracking_reference_step_time_s",
+    type=float,
+    default=None,
+    help="When the commanded-line step fires, in seconds of scored travel.",
+)
+p.add_argument(
+    "--online_aam_adapter_checkpoint",
+    default=None,
+    help=(
+        "Bounded ID adapter to load. Required when changing the latent source: "
+        "an adapter trained on estimated latents refuses a privileged one, "
+        "because it would then consume a distribution it never saw."
+    ),
+)
+p.add_argument(
+    "--deployment_factor_scale",
+    type=float,
+    default=None,
+    help=(
+        "Magnitude of the deployment-factor randomisation as a multiple of the "
+        "manifest draw: 0 is the nominal plant, 1 reproduces the manifest, 2 "
+        "doubles every deviation. Direction is fixed, so a sweep varies only "
+        "how far the plant is from nominal and not which plants are visited."
+    ),
+)
 p.add_argument("--factor_manifest", default="")
 p.add_argument(
     "--online-aam-residual-scale",
@@ -519,6 +575,11 @@ def safety_component_masks(raw) -> dict[str, torch.Tensor]:
 
 
 _Z_HAT_LIVE: dict = {}
+# Policy-side latent statistics and command-reversal rate. The controller-side
+# z_hat above is identical in every policy-latent arm by construction, so it
+# cannot serve as the mechanism variable for a bandwidth comparison.
+_Z_POLICY_LIVE: dict = {}
+_CMD_LIVE: dict = {}
 
 FACTOR_FIELD_NAMES = (
     "flow",
@@ -827,6 +888,48 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 _Z_HAT_LIVE['across_env_std'] > 1.0e-6
                 or _Z_HAT_LIVE['temporal_delta'] > 1.0e-6
             )
+            # What the ACTOR reads, after the policy latent mode is applied.
+            # Read-only: _policy_latent_observation never advances filter state,
+            # which is advanced once per control step inside the ID pipeline.
+            # Welford accumulation gives the per-environment temporal variance.
+            try:
+                zp = raw._policy_latent_observation().detach()
+            except Exception:
+                zp = None
+            if zp is not None:
+                n = int(_Z_POLICY_LIVE.get('n', 0)) + 1
+                mean = _Z_POLICY_LIVE.get('mean')
+                m2 = _Z_POLICY_LIVE.get('m2')
+                if not isinstance(mean, torch.Tensor) or mean.shape != zp.shape:
+                    mean = torch.zeros_like(zp)
+                    m2 = torch.zeros_like(zp)
+                    n = 1
+                delta = zp - mean
+                mean = mean + delta / float(n)
+                m2 = m2 + delta * (zp - mean)
+                _Z_POLICY_LIVE['n'] = n
+                _Z_POLICY_LIVE['mean'] = mean
+                _Z_POLICY_LIVE['m2'] = m2
+        # Command reversal rate, the second mechanism variable. A reversal is a
+        # sign change of the commanded increment, counted per axis per step and
+        # scaled to the control rate, matching experiments/E1 control effort.
+        u_now = getattr(raw, '_current_valve_cmd', None)
+        if isinstance(u_now, torch.Tensor):
+            u_now = u_now.detach()
+            prev_u = _CMD_LIVE.get('prev_u')
+            if isinstance(prev_u, torch.Tensor) and prev_u.shape == u_now.shape:
+                sign_now = torch.sign(u_now - prev_u)
+                prev_sign = _CMD_LIVE.get('prev_sign')
+                if (
+                    isinstance(prev_sign, torch.Tensor)
+                    and prev_sign.shape == sign_now.shape
+                ):
+                    _CMD_LIVE['reversals'] = _CMD_LIVE.get('reversals', 0.0) + float(
+                        (sign_now != prev_sign).float().mean()
+                    )
+                    _CMD_LIVE['steps'] = int(_CMD_LIVE.get('steps', 0)) + 1
+                _CMD_LIVE['prev_sign'] = sign_now
+            _CMD_LIVE['prev_u'] = u_now.clone()
         target_headrooms.append(torch.minimum(target_low, target_high))
         target_overshoots.append(measured_x - target_x)
         measured_xs.append(measured_x.clone())
@@ -1224,8 +1327,35 @@ def main() -> None:
         if a.online_aam_latent_mode is not None:
             if EXPECTED_ACTUATOR != "id_aam_fd":
                 p.error("--online_aam_latent_mode requires the PPO-ID(AAM)-FD task")
+            if (
+                str(a.online_aam_latent_mode) == "lpf"
+                and a.online_aam_policy_latent_lpf_hz is None
+            ):
+                p.error(
+                    "--online_aam_latent_mode lpf requires "
+                    "--online_aam_policy_latent_lpf_hz"
+                )
             override_cfg(
                 env_cfg, "online_aam_policy_latent_mode", str(a.online_aam_latent_mode)
+            )
+        if a.online_aam_policy_latent_lpf_hz is not None:
+            if EXPECTED_ACTUATOR != "id_aam_fd":
+                p.error(
+                    "--online_aam_policy_latent_lpf_hz requires the "
+                    "PPO-ID(AAM)-FD task"
+                )
+            if str(a.online_aam_latent_mode) != "lpf":
+                p.error(
+                    "--online_aam_policy_latent_lpf_hz is only read by "
+                    "--online_aam_latent_mode lpf; passing it to another arm "
+                    "would record a cutoff the run never applied"
+                )
+            if not (float(a.online_aam_policy_latent_lpf_hz) > 0.0):
+                p.error("--online_aam_policy_latent_lpf_hz must be > 0")
+            override_cfg(
+                env_cfg,
+                "online_aam_policy_latent_lpf_hz",
+                float(a.online_aam_policy_latent_lpf_hz),
             )
         if a.online_aam_controller_latent_mode is not None:
             if EXPECTED_ACTUATOR != "id_aam_fd":
@@ -1268,6 +1398,18 @@ def main() -> None:
             override_cfg(
                 env_cfg, "plant_perturbation_delay_steps_range", (int(lo), int(hi))
             )
+        if a.deployment_factor_scale is not None:
+            override_cfg(env_cfg, "deployment_factor_scale",
+                         float(a.deployment_factor_scale))
+        if a.online_aam_adapter_checkpoint is not None:
+            override_cfg(env_cfg, "online_aam_adapter_checkpoint",
+                         str(a.online_aam_adapter_checkpoint))
+        if a.tracking_reference_step_m is not None:
+            override_cfg(env_cfg, "tracking_reference_step_m",
+                         float(a.tracking_reference_step_m))
+        if a.tracking_reference_step_time_s is not None:
+            override_cfg(env_cfg, "tracking_reference_step_time_s",
+                         float(a.tracking_reference_step_time_s))
         if a.plant_step_time_s is not None:
             override_cfg(env_cfg, "plant_perturbation_step_time_s", float(a.plant_step_time_s))
             override_cfg(
@@ -1503,6 +1645,24 @@ def main() -> None:
         "online_aam_controller_latent_mode": str(
             getattr(env_cfg, "online_aam_latent_mode", "estimated")
         ),
+        # The bandwidth axis. Recorded on every arm, not only the lpf ones, so
+        # a sweep summariser can order the arms without parsing their names.
+        "online_aam_policy_latent_lpf_hz": float(
+            getattr(env_cfg, "online_aam_policy_latent_lpf_hz", 0.0)
+        ),
+        # Mechanism variables. The first is the temporal variance of the latent
+        # AS THE ACTOR READS IT, which is what a bandwidth sweep varies; the
+        # second is how often the commanded increment changes sign.
+        "policy_latent_temporal_var": float(
+            (
+                _Z_POLICY_LIVE["m2"] / max(int(_Z_POLICY_LIVE.get("n", 1)) - 1, 1)
+            ).mean()
+        ) if isinstance(_Z_POLICY_LIVE.get("m2"), torch.Tensor) else 0.0,
+        "command_reversals_per_s": (
+            float(_CMD_LIVE["reversals"]) / float(_CMD_LIVE["steps"])
+            / max(float(getattr(env_cfg.sim, "dt", 1.0 / 180.0))
+                  * float(getattr(env_cfg, "decimation", 3)), 1e-9)
+        ) if int(_CMD_LIVE.get("steps", 0)) > 0 else 0.0,
         "c3_physical_extension_reserve_m": float(
             getattr(env_cfg, "c3_physical_extension_reserve_m", 0.0)
         ),

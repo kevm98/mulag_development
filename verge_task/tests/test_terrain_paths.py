@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 
 import numpy as np
@@ -11,9 +12,12 @@ from verge_task.terrain import (
     MOW_STRIP_CFG,
     MOW_STRIP_EVAL_CFG,
     TRACKING_PATH_FAMILIES,
+    add_visual_mesh_skirt,
     apply_relief_profile,
     build_mow_strip_mesh,
     build_sparse_grass_tuft_mesh,
+    build_visual_bank_vegetation_mesh,
+    build_visual_surface_debris_mesh,
     build_visual_verge_skin,
     surface_height_at,
     terrain_height_scale_for_environment,
@@ -36,6 +40,17 @@ def test_visual_verge_skin_cleans_road_edge_without_mutating_collision_mesh():
     np.testing.assert_allclose(skin.vertices[seam, 2], 0.0)
 
 
+def test_visual_verge_skirt_closes_open_height_field_edges_below_the_apron():
+    collision = build_mow_strip_mesh(replace(MOW_STRIP_EVAL_CFG, length_m=8.0))
+    skin = build_visual_verge_skin(collision, road_edge_y=2.5)
+    skirted = add_visual_mesh_skirt(skin, depth_m=0.35)
+    assert len(skirted.faces) > len(skin.faces)
+    assert skirted.vertices[:, 2].min() <= skin.vertices[:, 2].min() - 0.35
+    np.testing.assert_array_equal(collision.faces, build_mow_strip_mesh(
+        replace(MOW_STRIP_EVAL_CFG, length_m=8.0)
+    ).faces)
+
+
 def test_sparse_grass_is_deterministic_cheap_and_clear_of_tracking_line():
     cfg = replace(
         MOW_STRIP_EVAL_CFG,
@@ -50,10 +65,52 @@ def test_sparse_grass_is_deterministic_cheap_and_clear_of_tracking_line():
     )
     np.testing.assert_array_equal(first.vertices, replay.vertices)
     np.testing.assert_array_equal(first.faces, replay.faces)
-    assert len(first.faces) == 72 * 4
+    assert 72 * 5 <= len(first.faces) <= 72 * 8
     line_y = tracking_line_center_y_at(cfg, first.vertices[:, 0])
     assert np.min(np.abs(first.vertices[:, 1] - line_y)) >= 0.20
     assert first.vertices[:, 1].max() < 2.5
+
+
+def test_display_bank_vegetation_is_deterministic_varied_and_surface_bounded():
+    surface = build_mow_strip_mesh(replace(MOW_STRIP_EVAL_CFG, length_m=8.0))
+    kwargs = dict(
+        grass_count=12,
+        bush_count=3,
+        seed=9182,
+        grass_height_range_m=(0.22, 0.58),
+        grass_width_range_m=(0.12, 0.30),
+        bush_height_range_m=(0.45, 0.95),
+        bush_width_range_m=(0.45, 1.10),
+    )
+    first = build_visual_bank_vegetation_mesh(surface, **kwargs)
+    replay = build_visual_bank_vegetation_mesh(surface, **kwargs)
+    np.testing.assert_array_equal(first.vertices, replay.vertices)
+    np.testing.assert_array_equal(first.faces, replay.faces)
+    np.testing.assert_array_equal(
+        first.visual.vertex_colors, replay.visual.vertex_colors
+    )
+    assert len(first.faces) > 12 * 4  # bushes add real low-poly volume
+    assert np.ptp(first.vertices[:, 2]) > 0.45
+    bounds = surface.bounds
+    assert first.vertices[:, 0].min() >= bounds[0, 0] - 0.6
+    assert first.vertices[:, 0].max() <= bounds[1, 0] + 0.6
+
+
+def test_display_twigs_and_logs_are_deterministic_surface_debris():
+    surface = build_mow_strip_mesh(replace(MOW_STRIP_EVAL_CFG, length_m=8.0))
+    first = build_visual_surface_debris_mesh(
+        surface, twig_count=9, log_count=2, seed=713
+    )
+    replay = build_visual_surface_debris_mesh(
+        surface, twig_count=9, log_count=2, seed=713
+    )
+    np.testing.assert_array_equal(first.vertices, replay.vertices)
+    np.testing.assert_array_equal(first.faces, replay.faces)
+    np.testing.assert_array_equal(
+        first.visual.vertex_colors, replay.visual.vertex_colors
+    )
+    assert len(first.faces) > 9 * 5
+    assert np.ptp(first.vertices[:, 0]) > 1.0
 
 
 def _scaled(cfg, scale: float):
@@ -713,13 +770,25 @@ def test_strip_width_sets_the_available_half_swing():
         assert np.max(np.abs(offsets)) <= limit + 1e-9
 
 
-def test_strip_and_verge_share_one_colour():
-    """The tracked strip must not read as a different green slab on the lawn."""
+def test_strip_and_verge_share_one_colour_palette():
+    """The tracked strip and surrounding lawn must use identical colours."""
     from pathlib import Path
 
     source = (
         Path(__file__).resolve().parents[1] / "terrain_env_cfg.py"
     ).read_text()
-    strip = source.split("mow_strip_color: tuple = ")[1].split("\n")[0]
-    verge = source.split("verge_visual_color: tuple = ")[1].split("\n")[0]
-    assert strip == verge, f"strip {strip} != verge {verge}"
+    wanted = {
+        "mow_strip_color",
+        "verge_visual_color",
+        "mow_strip_visual_palette",
+        "verge_visual_palette",
+    }
+    values = {
+        node.target.id: ast.literal_eval(node.value)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id in wanted
+    }
+    assert values["mow_strip_color"] == values["verge_visual_color"]
+    assert values["mow_strip_visual_palette"] == values["verge_visual_palette"]

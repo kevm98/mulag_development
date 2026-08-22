@@ -1,0 +1,132 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Master Thesis
+%% Learning-Based Online Adaptation for Control of a
+%% Hydraulic Manipulator
+%%
+%% main file: main.tex
+%% Template: RRLab rrlab.cls (RPTU Kaiserslautern-Landau)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[thesis,en]{template/rrlab}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Mandatory information
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Title of the work:
+\RRLABtitle{Learning-Based Online Adaptation for Control of a Hydraulic Manipulator}
+
+% Author of the work:
+\RRLABauthor{Kevin Kudakwashe Murera}
+
+% Type of the work:
+\RRLABtype{Master Thesis}
+
+% Date of issue
+\RRLABinception{TODO: date of issue}
+
+% Date of submission
+\RRLABsubmission{TODO: date of submission}
+
+% First reviewer
+\RRLABfirstreviewer{Prof. Dr. Karsten Berns}
+
+% Supervisor
+\RRLABsupervisor{TODO: supervisor}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Additional packages and own macros
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\input{packages}
+\input{macros}
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Front matter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Title page (optional middle content, e.g. an image, and the date)
+\RRLABtitlepage{}{\today}
+
+% Second page with title, author, supervisor etc.
+\RRLABsecondpage
+
+% Declaration of academic integrity (parameter: signing date)
+\RRLABdeclaration{\today}
+
+% Acknowledgements (optional)
+\RRLABpreface{Acknowledgements}{%
+TODO: acknowledgements.
+}
+
+% Abstract (~250--400 words: problem, approach, datasets, the three
+% stacks PPO-ROM / PPO-ID-FD / PPO-(AAM)-ID-FD, principal results,
+% contribution. State results according to completed evidence.)
+\RRLABabstract{Abstract}{%
+Hydraulic manipulators are difficult to control precisely, because the actuator
+response is nonlinear, depends on load and supply pressure, and varies between
+individual machines. Simulating that response faithfully is possible, but the
+models that do so are far too slow to be evaluated inside reinforcement
+learning. Ignoring the hydraulics and commanding joint positions directly avoids
+that cost, but discards the behaviour that makes the machine difficult to
+control in the first place.
+
+This thesis investigates how hydraulic actuator dynamics learned from
+high-fidelity simulation can be reduced, transferred into a computationally
+efficient robotic simulation, and used for reinforcement-learning control of a
+verge mowing arm. Two actuator representations are identified from randomised
+simulation campaigns. The first is a modular chain of an inverse model, which
+maps a desired cylinder motion to a valve command, and a forward model, which
+predicts the resulting response. The second is a physics-structured
+reduced-order model, in which pressure, force and extension propagation remain
+explicit while learning covers valve realisation and unmodelled loading. Both
+representations are realised in the deployment simulator and used as the
+actuation interface for policy learning. A damped least-squares controller
+provides privileged demonstrations during training and is removed afterwards, so
+that the distilled policy becomes the sole deployed controller.
+
+The inverse and forward representation is shown to transfer to the deployment
+simulator without deployment-specific retraining, while the reduced-order model
+is transferred with a small bounded calibration against the deployment plant.
+Supervised accuracy is shown to be an unreliable guide to control,
+because a forward model achieved a high predictive score while learning to
+ignore the valve command. Excitation design and input ablation are established
+as the tests that expose this failure. Both representations then support
+closed-loop terrain following, and the choice of representation is shown to
+change the control strategy that the policy learns. Online adaptation is
+examined last, against the robustness already obtained. Plant identity proves
+recoverable only from deliberate excitation and not from the data the task
+controller produces, and the trained stacks absorb the plant variation studied
+here without assistance, which limits the benefit that conditioning on plant
+identity can provide.
+}
+
+% Table of contents (plus list of figures/tables)
+\RRLABcontents
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Main matter — one file per chapter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\include{chapters/ch1_introduction}
+\include{chapters/ch2_fundamentals_related_work}
+\include{chapters/ch3_system_fundamentals_problem_formulation}
+\include{chapters/ch4_data_generation_preparation}
+\include{chapters/ch5_learned_models_online_adaptation}
+\include{chapters/ch6_control_framework_simulation_integration}
+\include{chapters/ch7_experimental_evaluation_discussion}
+\include{chapters/ch8_conclusion_outlook}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Appendices
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\appendix
+\include{chapters/appendices}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Bibliography
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RRLABbibliography{literature}
+
+\end{document}

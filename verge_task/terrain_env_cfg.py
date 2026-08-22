@@ -376,11 +376,11 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     road_edge_marking_width_m: float = 0.11
     road_edge_marking_color: tuple = (0.82, 0.82, 0.76)
     """Dark, rough asphalt-like road, physically separate from the green verge."""
-    dark_visual_background: bool = True
-    """Hide the bright dome from camera rays while retaining its illumination."""
+    dark_visual_background: bool = False
+    """Opt into a black renderer background; the default visible dome is white."""
     enable_visual_grid_floor: bool = False
     visual_floor_color: tuple = (0.085, 0.22, 0.045)
-    """Dark grass base; exposed soil appears only in the apron palette."""
+    """Dark grass base below the wider visual banks."""
     visual_grid_color: tuple = (0.13, 0.285, 0.065)
     visual_grid_length_m: float = 70.0
     visual_grid_width_m: float = 26.0
@@ -407,35 +407,59 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     road_scenery_edge_inset_m: float = 0.28
     road_gravel_shoulder_width_m: float = 0.34
     road_gravel_shoulder_color: tuple = (0.10, 0.085, 0.060)
-    verge_visual_apron_m: float = 3.2
+    verge_visual_apron_m: float = 6.0
     """Grass width added outboard of the mowed verge and beyond the far kerb."""
-    verge_visual_color: tuple = (0.075, 0.27, 0.050)
+    verge_apron_overlap_m: float = 0.45
+    """Display-only overlap beneath adjacent meshes, preventing visible cracks."""
+    verge_visual_color: tuple = (0.052, 0.18, 0.025)
     verge_visual_palette: tuple = (
-        (0.055, 0.21, 0.035),
-        (0.075, 0.27, 0.050),
-        (0.105, 0.32, 0.060),
-        (0.135, 0.285, 0.055),
-        (0.27, 0.16, 0.070),
+        (0.022, 0.095, 0.010),
+        (0.035, 0.135, 0.015),
+        (0.052, 0.180, 0.025),
+        (0.072, 0.145, 0.030),
+        (0.125, 0.068, 0.024),
     )
-    """Mostly dark lawn shades with sparse exposed-soil brown patches."""
+    """Muted grass, dry growth and sparse soil shared with the mow-strip skin."""
     uneven_verge_apron: bool = True
     """Displace the roadside grass into lawn relief instead of flat slabs."""
     verge_apron_relief_m: float = 0.09
     verge_apron_resolution_m: float = 0.45
     """Apron mesh step. Visual-only, so this stays coarse relative to the verge."""
 
-    enable_verge_grass_tufts: bool = False
-    verge_grass_tufts_per_env: int = 72
-    verge_grass_tracking_clearance_m: float = 0.20
+    enable_verge_grass_tufts: bool = True
+    verge_grass_tufts_per_env: int = 150
+    verge_grass_tracking_clearance_m: float = 0.24
     verge_grass_edge_clearance_m: float = 0.18
-    verge_grass_height_range_m: tuple = (0.10, 0.19)
-    verge_grass_width_range_m: tuple = (0.07, 0.14)
+    verge_grass_height_range_m: tuple = (0.16, 0.52)
+    verge_grass_width_range_m: tuple = (0.09, 0.26)
     verge_grass_palette: tuple = (
-        (0.035, 0.13, 0.018),
-        (0.055, 0.18, 0.025),
-        (0.085, 0.22, 0.035),
+        (0.025, 0.10, 0.012),
+        (0.042, 0.145, 0.018),
+        (0.070, 0.19, 0.028),
+        (0.10, 0.16, 0.035),
     )
-    """Sparse four-triangle grass clumps; visual-only and non-colliding."""
+    verge_bank_grass_tufts_per_side: int = 240
+    verge_seam_grass_tufts_per_side: int = 90
+    verge_bushes_per_side: int = 8
+    verge_bush_height_range_m: tuple = (0.38, 0.82)
+    verge_bush_width_range_m: tuple = (0.38, 0.90)
+    verge_bush_palette: tuple = (
+        (0.018, 0.075, 0.008),
+        (0.032, 0.11, 0.014),
+        (0.052, 0.145, 0.020),
+    )
+    verge_twigs_per_side: int = 28
+    verge_logs_per_side: int = 4
+    verge_strip_twigs_per_env: int = 16
+    verge_strip_logs_per_env: int = 2
+    verge_twig_length_range_m: tuple = (0.22, 0.65)
+    verge_log_length_range_m: tuple = (0.70, 1.60)
+    verge_wood_palette: tuple = (
+        (0.11, 0.055, 0.018),
+        (0.16, 0.080, 0.025),
+        (0.21, 0.115, 0.040),
+    )
+    """Clustered grass, sparse shrubs and wood debris; visual-only/non-colliding."""
 
     # Relief class of the mowed verge. "gentle" is the stage 1-4 surface every
     # existing score was measured on; "lawn_rough" is stage 5. Set by
@@ -494,21 +518,23 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # around it read as one continuous surface. Kept as its own field because
     # the strip is a real collider and the apron is visual-only; they are
     # separate meshes that happen to share a colour.
-    mow_strip_color: tuple = (0.075, 0.27, 0.050)
+    mow_strip_color: tuple = (0.052, 0.18, 0.025)
     mow_strip_use_vertex_palette: bool = False
-    """Enable the zero-geometry-cost grass/soil vertex palette for viewing."""
+    """Enable the zero-geometry-cost natural grass vertex palette for viewing."""
     mow_strip_visual_palette: tuple = (
-        (0.010, 0.050, 0.004),
-        (0.020, 0.085, 0.008),
-        (0.040, 0.140, 0.015),
-        (0.075, 0.120, 0.022),
-        (0.090, 0.052, 0.022),
+        (0.022, 0.095, 0.010),
+        (0.035, 0.135, 0.015),
+        (0.052, 0.180, 0.025),
+        (0.072, 0.145, 0.030),
+        (0.125, 0.068, 0.024),
     )
-    """Four grass tones followed by exposed-soil brown."""
-    mow_strip_soil_field_threshold: float = 1.0
-    """Higher values make the deterministic exposed-soil regions sparser."""
+    """The exact apron palette: muted grass, dry growth and sparse soil."""
+    mow_strip_soil_field_threshold: float = 0.95
+    """Produces about five percent sparse soil accents on the reference mesh."""
     mow_strip_visual_shoulder_transition_m: float = 0.30
     """Visual-only easing into the clean road edge; collision stays unchanged."""
+    mow_strip_visual_skirt_depth_m: float = 0.35
+    """Deep display-only sidewall that hides open height-field edges."""
     mow_strip_collision: bool = True
     """The green verge is a real collider; contact cannot be faked geometrically."""
     terrain_tracking_height_sweep_gain: float = 1.5
@@ -584,6 +610,19 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     tracking_path_family: str = "mixed"
     """Cycle every path family across parallel environments."""
     tracking_path_family_offset: int = 0
+    # Scheduled step in the COMMANDED tracking line, in metres of lateral
+    # offset, applied after `tracking_reference_step_time_s` seconds of scored
+    # travel. This changes what the controller is ASKED to do rather than the
+    # plant it acts on, so the latency it exposes belongs to the control stack.
+    # Zero leaves the commanded line untouched.
+    # Magnitude of the deployment-factor randomisation, as a multiple of the
+    # manifest draw. 0 is the nominal plant, 1 reproduces the manifest, 2
+    # doubles each deviation. Only the magnitude changes; the direction of each
+    # draw is fixed, so a sweep over this is not confounded with visiting
+    # different plants.
+    deployment_factor_scale: float = 1.0
+    tracking_reference_step_m: float = 0.0
+    tracking_reference_step_time_s: float = 0.0
     tracking_path_family_schedule: tuple = ()
     """Optional training-only weighted family schedule; empty stays balanced."""
     tracking_path_start_phase_schedule: tuple = ()

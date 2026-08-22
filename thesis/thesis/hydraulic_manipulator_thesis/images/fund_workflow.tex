@@ -1,0 +1,71 @@
+\begin{tikzpicture}[
+  card/.style={draw=black!70, fill=white, line width=0.8pt,
+    rounded corners=1.5pt, minimum width=38mm, minimum height=31mm,
+    align=center, inner sep=2.5mm, font=\small},
+  number/.style={circle, draw=#1, fill=#1, text=white, minimum size=7mm,
+    inner sep=0pt, font=\small\bfseries},
+  flow/.style={-{Latex[length=2.8mm]}, draw=black!70, line width=1.15pt,
+    shorten <=2pt, shorten >=2pt},
+  ribbon/.style={draw=black!60, fill=black!3, line width=0.8pt,
+    rounded corners=1.5pt, minimum width=166mm, minimum height=8mm,
+    align=center, font=\footnotesize},
+]
+  \node[card, fill=cborange!5] (model) at (0,0) {};
+  \draw[cborange, line width=2.2pt]
+    ([xshift=1.5mm,yshift=-1.5mm]model.north west) --
+    ([xshift=-1.5mm,yshift=-1.5mm]model.north east);
+  \node[number=cborange] at ([xshift=5mm,yshift=-6mm]model.north west) {1};
+  \node[font=\scriptsize\bfseries, text=cborange, anchor=west]
+    at ([xshift=10mm,yshift=-6mm]model.north west) {MODEL};
+  \node[font=\small\bfseries] at ([yshift=2mm]model.center) {Simscape plant};
+  \node[font=\footnotesize, text=black!65] at ([yshift=-5mm]model.center)
+    {detailed hydraulics};
+  \node[font=\scriptsize, text=black!60] at ([yshift=4mm]model.south)
+    {Chapter 3};
+
+  \node[card, fill=cbblue!5] (learn) at (4.8,0) {};
+  \draw[cbblue, line width=2.2pt]
+    ([xshift=1.5mm,yshift=-1.5mm]learn.north west) --
+    ([xshift=-1.5mm,yshift=-1.5mm]learn.north east);
+  \node[number=cbblue] at ([xshift=5mm,yshift=-6mm]learn.north west) {2};
+  \node[font=\scriptsize\bfseries, text=cbblue, anchor=west]
+    at ([xshift=10mm,yshift=-6mm]learn.north west) {IDENTIFY};
+  \node[font=\small\bfseries] at ([yshift=2mm]learn.center) {Actuator models};
+  \node[font=\footnotesize, text=black!65] at ([yshift=-5mm]learn.center)
+    {four learned variants};
+  \node[font=\scriptsize, text=black!60] at ([yshift=4mm]learn.south)
+    {Chapters 4--5};
+
+  \node[card, fill=cbgreen!5] (train) at (9.6,0) {};
+  \draw[cbgreen, line width=2.2pt]
+    ([xshift=1.5mm,yshift=-1.5mm]train.north west) --
+    ([xshift=-1.5mm,yshift=-1.5mm]train.north east);
+  \node[number=cbgreen] at ([xshift=5mm,yshift=-6mm]train.north west) {3};
+  \node[font=\scriptsize\bfseries, text=cbgreen, anchor=west]
+    at ([xshift=10mm,yshift=-6mm]train.north west) {TRAIN};
+  \node[font=\small\bfseries] at ([yshift=2mm]train.center) {Policy training};
+  \node[font=\footnotesize, text=black!65] at ([yshift=-5mm]train.center)
+    {IsaacLab + PhysX};
+  \node[font=\scriptsize, text=black!60] at ([yshift=4mm]train.south)
+    {Chapter 6};
+
+  \node[card, fill=cbpink!5] (test) at (14.4,0) {};
+  \draw[cbpink, line width=2.2pt]
+    ([xshift=1.5mm,yshift=-1.5mm]test.north west) --
+    ([xshift=-1.5mm,yshift=-1.5mm]test.north east);
+  \node[number=cbpink] at ([xshift=5mm,yshift=-6mm]test.north west) {4};
+  \node[font=\scriptsize\bfseries, text=cbpink, anchor=west]
+    at ([xshift=10mm,yshift=-6mm]test.north west) {EVALUATE};
+  \node[font=\small\bfseries] at ([yshift=2mm]test.center) {Matched tests};
+  \node[font=\footnotesize, text=black!65] at ([yshift=-5mm]test.center)
+    {three control stacks};
+  \node[font=\scriptsize, text=black!60] at ([yshift=4mm]test.south)
+    {Chapter 7};
+
+  \draw[flow] (model) -- (learn);
+  \draw[flow] (learn) -- (train);
+  \draw[flow] (train) -- (test);
+
+  \node[ribbon] at (7.2,-2.15)
+    {Shared cylinder-motion interface throughout the pipeline};
+\end{tikzpicture}

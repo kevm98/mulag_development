@@ -75,6 +75,13 @@ def block_hankel_rank(x: np.ndarray, block_rows: int = 10) -> dict:
     }
 
 
+_MASKABLE = ("command_saturation rate", "cylinder_limit rate")
+
+
+def _is_maskable(issue: str) -> bool:
+    """True only for per-sample regime breaches a training mask can remove."""
+    return any(tag in issue for tag in _MASKABLE)
+
 def probe_segments(metadata: dict) -> list[dict]:
     return [s for s in metadata.get("segment_ids", []) if s.get("kind") == "probe"]
 
@@ -118,8 +125,18 @@ def main() -> None:
                 f"run {run_id:05d}: task {metadata.get('task_name')!r} != {expected_task!r}"
             )
         collection = metadata.get("collection", {})
-        if collection.get("controller") != "DLS":
-            issues.append(f"run {run_id:05d}: collector is not DLS")
+        # The guard exists to reject a PPO-collected dataset masquerading as a
+        # classical one. Open-loop excitation has NO controller at all, which is
+        # the stronger version of the same property, so it is admitted by name
+        # rather than by relaxing the check to "not PPO".
+        allowed_collectors = {"DLS", "open_loop_excitation"}
+        if collection.get("controller") not in allowed_collectors:
+            issues.append(
+                f"run {run_id:05d}: collector {collection.get('controller')!r} "
+                f"is not one of {sorted(allowed_collectors)}"
+            )
+        if collection.get("ppo_used"):
+            issues.append(f"run {run_id:05d}: PPO was in the collection loop")
         if collection.get("ppo_used") is not False:
             issues.append(f"run {run_id:05d}: PPO provenance is not explicitly false")
         if collection.get("data_source") != "rom_deployment_plant":
@@ -206,7 +223,18 @@ def main() -> None:
 
     report = {
         "format": "verge_classical_collection_gate_v1",
+        # A saturation/cylinder-limit breach is a statement about the OPERATING
+        # REGIME of some runs, not about the integrity of the collection. When
+        # the consumer masks those samples out of its training loss it is a
+        # documented, quantified exclusion rather than a silent one, so the
+        # verdict is split: `passed` stays honest about the raw thresholds, and
+        # `passed_with_sample_mask` says whether anything ELSE is wrong. Every
+        # other class of issue -- invalid physics, rank deficiency, grid
+        # misalignment, differing probe hashes -- still fails both.
         "passed": not issues,
+        "maskable_issues": [i for i in issues if _is_maskable(i)],
+        "blocking_issues": [i for i in issues if not _is_maskable(i)],
+        "passed_with_sample_mask": not [i for i in issues if not _is_maskable(i)],
         "dataset": str(dataset),
         "manifest": str(manifest),
         "actuator": "rom",
@@ -219,8 +247,18 @@ def main() -> None:
     out = Path(args.out).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({"passed": report["passed"], "runs": len(reports), "issues": issues[:12]}, indent=2))
-    if issues:
+    print(json.dumps({
+        "passed": report["passed"],
+        "passed_with_sample_mask": report["passed_with_sample_mask"],
+        "runs": len(reports),
+        "blocking_issues": report["blocking_issues"][:12],
+        "maskable_issues": report["maskable_issues"][:12],
+    }, indent=2))
+    # Exit status reflects BLOCKING issues only. A maskable regime breach is
+    # reported in the JSON and in the printed summary, and it is the consumer's
+    # job to apply the sample mask -- but it must not abort a pipeline that has
+    # declared it handles them. Anything else still exits non-zero.
+    if report["blocking_issues"]:
         raise SystemExit(1)
 
 

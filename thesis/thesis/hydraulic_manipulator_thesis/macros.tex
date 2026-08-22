@@ -1,0 +1,47 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Own macros
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Nomenclature shorthands (q, q-dot, cylinder extension/velocity,
+% differential pressure, valve command, latent vector, PPO action)
+\newcommand{\jointpos}{\ensuremath{\mathbf{q}}}
+\newcommand{\jointvel}{\ensuremath{\dot{\mathbf{q}}}}
+\newcommand{\cylext}{\ensuremath{\mathbf{s}}}
+\newcommand{\cylvel}{\ensuremath{\dot{\mathbf{s}}}}
+\newcommand{\dpress}{\ensuremath{\Delta p}}
+\newcommand{\valvecmd}{\ensuremath{\mathbf{u}}}
+\newcommand{\latent}{\ensuremath{\mathbf{z}}}
+\newcommand{\ppoaction}{\ensuremath{\mathbf{a}}}
+
+% Model / method abbreviations
+\newcommand{\ID}{ID}
+\newcommand{\FD}{FD}
+\newcommand{\ROM}{ROM}
+\newcommand{\SD}{SD}
+\newcommand{\AAM}{AAM}
+\newcommand{\DLS}{DLS}
+\newcommand{\PPO}{PPO}
+
+% The three control stacks of the final comparison.  These are the ONLY
+% names the thesis may use for them; the earlier PPO1/PPO2 and
+% PPO1-A/B, PPO2-A/B/C labels are superseded and must not reappear.
+\newcommand{\ppoROM}{\mbox{PPO--ROM}}
+\newcommand{\ppoIDFD}{\mbox{PPO--ID--FD}}
+\newcommand{\ppoAAMIDFD}{\mbox{PPO--(AAM)--ID--FD}}
+
+% Privileged factor vector, privileged latent, deployable latent estimate.
+\newcommand{\factorvec}{\ensuremath{\mathbf{e}}}
+\newcommand{\latenthat}{\ensuremath{\hat{\mathbf{z}}}}
+
+% TODO marker visible in the draft
+\newcommand{\todo}[1]{\textbf{[TODO: #1]}}
+
+% Boxed research statement, used once in Section~\ref{sec:intro:contributions}.
+\newcommand{\researchstatement}[1]{%
+  \begin{center}
+  \begin{tikzpicture}
+    \node[draw=red!65!black, fill=red!3, rounded corners=5pt, line width=1pt,
+          inner sep=11pt, text width=.86\linewidth, align=center]
+      {\itshape #1};
+  \end{tikzpicture}
+  \end{center}}
