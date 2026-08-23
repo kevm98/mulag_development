@@ -7,7 +7,7 @@
 %% Template: RRLab rrlab.cls (RPTU Kaiserslautern-Landau)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\documentclass[thesis,en]{template/rrlab}
+\documentclass[thesis,en,openany]{template/rrlab}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Mandatory information
@@ -109,14 +109,33 @@ identity can provide.
 %% Main matter — one file per chapter
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% Insert exactly one unnumbered, header-free blank page between chapters.
+% The openany class option prevents the book class from adding a second
+% parity-dependent blank page at the following chapter opening.
+\newcommand{\RRLABchapterblank}{%
+  \clearpage
+  \begingroup
+    \thispagestyle{empty}%
+    \null
+    \newpage
+  \endgroup}
+
 \include{chapters/ch1_introduction}
+\RRLABchapterblank
 \include{chapters/ch2_fundamentals_related_work}
+\RRLABchapterblank
 \include{chapters/ch3_system_fundamentals_problem_formulation}
+\RRLABchapterblank
 \include{chapters/ch4_data_generation_preparation}
+\RRLABchapterblank
 \include{chapters/ch5_learned_models_online_adaptation}
+\RRLABchapterblank
 \include{chapters/ch6_control_framework_simulation_integration}
+\RRLABchapterblank
 \include{chapters/ch7_experimental_evaluation_discussion}
+\RRLABchapterblank
 \include{chapters/ch8_conclusion_outlook}
+\RRLABchapterblank
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Appendices

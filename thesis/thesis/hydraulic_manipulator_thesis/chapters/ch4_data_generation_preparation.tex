@@ -592,9 +592,8 @@ and the systematic offset between the extension the ROM commits to and the one
 PhysX realizes is invisible to any amount of further Simscape training.
 
 The calibration set is therefore collected from the deployment loop itself. A
-previous ROM checkpoint is rolled out through the parked workflow of
-Section~\ref{sec:sys:parked} on its five reference shapes, logged on the ROM's
-own $\unit[0.05]{s}$ grid, giving $4\,084$ transitions. Each record stores the
+previous ROM checkpoint was logged in closed loop against PhysX on its native
+$\unit[0.05]{s}$ grid, giving $4\,084$ transitions. Each record stores the
 six-step ROM history as the runtime assembles it, together with the measured
 PhysX transition. The targets are what the plant did, not what Simscape said it
 would do.
@@ -608,11 +607,10 @@ cannot span the poses a thousand Simscape runs visit. The correction is
 command-gated and therefore exactly zero at zero command, so the stationary
 hold contract survives unchanged.
 
-One limitation is carried forward. The calibration data comes from the
-\emph{parked} diagnostic workflow rather than the moving-verge task, so it
-fits the actuator to PhysX under free-space tracking and not under
-cutter--ground contact. The calibration is therefore weakest in the regime the
-verge task spends most of its time in, and the bounded correction head keeps
+One limitation is carried forward. The calibration trajectories predate the
+moving-verge benchmark and exclude cutter--ground contact. The calibration is
+therefore weakest in the regime the verge task spends most of its time in, and
+the bounded correction head keeps
 that gap contained rather than closing it. This calibration is also what
 qualifies the ROM as the deployment actuator, with the consequences for the
 three-way comparison set out in Section~\ref{sec:sys:rom-is-plant}.
