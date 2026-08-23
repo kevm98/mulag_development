@@ -54,11 +54,11 @@ to hydraulic manipulator control~\cite{mattila2017survey}.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{images/fund_actuation_chain}
+  \input{images/fund_actuation_chain_clean}
   \caption{The electro-hydraulic actuation chain from valve command to
-  mowing-head motion. Color-coded callouts identify the electrical, hydraulic,
-  and mechanical stages and the principal physical quantities passed between
-  them.}
+  mowing-head motion. The block colors distinguish the electrical, hydraulic
+  and mechanical stages; each subtitle identifies the principal quantity
+  passed to the next stage.}
   \label{fig:fund:chain}
 \end{figure}
 
@@ -196,11 +196,10 @@ rigid-body mechanics (Figure~\ref{fig:fund:workflow}).
 
 \begin{figure}[H]
   \centering
-  \resizebox{\textwidth}{!}{\input{images/fund_workflow}}
+  \includegraphics[width=\textwidth]{images/fund_workflow.png}
   \caption{Workflow from the hydraulic plant model to matched evaluation. The
   separation between rigid-body physics and learned actuation follows the
-  actuator-network approach in~\cite{hwangbo2019learning}; all stages use the
-  same cylinder-motion interface.}
+  actuator-network approach in~\cite{hwangbo2019learning}.}
   \label{fig:fund:workflow}
 \end{figure}
 
@@ -216,22 +215,26 @@ friction, gain and latency~\cite{peng2018sim}. The hydraulic family in
 Chapter~\ref{chap:data} varies bulk modulus, valve gain, leakage, friction and
 payload, producing robustness to physically plausible plant variation.
 
+\newpage
 \subsection{From Robustness to Adaptation}
+
+Figure~\ref{fig:fund:robust-adaptive} contrasts a policy trained for one robust
+response across the plant family with an adaptive stack that conditions its
+response on the current plant.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{images/fund_robust_adaptive}
-  \caption{Robust training uses one response across the plant family. In the
-  adaptive stack, privileged factors supervise the AAM during training;
-  deployment uses observable history.}
+  \input{images/fund_robust_adaptive}
+  \caption{Comparison of robust training and latent adaptation. Robust
+  training applies one fixed response across the randomized plant family. The
+  adaptive stack uses privileged factors only to supervise training; during
+  deployment, the AAM infers context from observable history and conditions
+  the downstream response.}
   \label{fig:fund:robust-adaptive}
 \end{figure}
 
-Figure~\ref{fig:fund:robust-adaptive} contrasts one policy trained to be robust
-across the plant family with an adaptive stack that conditions its response on
-the current plant. Teacher--student methods encode known simulation factors
-into a privileged latent and train an estimator to recover it from observable
-history. Lee et
+Teacher--student methods encode known simulation factors into a privileged
+latent and train an estimator to recover it from observable history. Lee et
 al.~\cite{lee2020learning} used this construction for hidden terrain
 properties; Kumar et al.~\cite{kumar2021rma} developed rapid motor adaptation.
 Unlike classical online parameter estimation~\cite{astrom1995adaptive}, the

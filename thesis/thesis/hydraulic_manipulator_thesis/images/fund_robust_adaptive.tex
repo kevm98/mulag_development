@@ -1,0 +1,62 @@
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex,font=\small]
+  % Reuse the node colors, line weights and rounded geometry of Figure 3.7.
+  \node[draw=cbblue!90!black,line width=.8pt,rounded corners=3pt,
+    fill=cbblue!6,minimum width=6.60cm,minimum height=8.55cm] (robustpanel) at (-3.62,-4.05) {};
+  \node[font=\normalsize\bfseries,text=cbblue!85!black] at (-3.62,-.25)
+    {(a) Robust training};
+
+  \node[draw=cborange!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cborange!78,minimum width=5.55cm,minimum height=1.28cm,
+    align=center,font=\small\bfseries] (familyR) at (-3.62,-1.45)
+    {randomized plant family\\[-1pt]\footnotesize nominal, leakage, stiffness, load};
+  \node[draw=cbblue!95!black,line width=.8pt,rounded corners=2pt,
+    fill=cbblue!82,text=white,minimum width=5.55cm,minimum height=1.28cm,
+    align=center,font=\small\bfseries] (fixed) at (-3.62,-3.75)
+    {one fixed policy/model};
+  \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cbgreen!68,text=white,minimum width=5.55cm,minimum height=1.38cm,
+    align=center,font=\small\bfseries] (shared) at (-3.62,-6.18)
+    {one shared response\\[-1pt]\footnotesize robust across the family};
+  \draw[sigarrow,cborange!90!black] (familyR) -- (fixed);
+  \draw[sigarrow,cbgreen!80!black] (fixed) -- (shared);
+  \node[font=\footnotesize,text=black!62,align=center] at (-3.62,-7.45)
+    {same deployed mapping\\for every plant};
+
+  \node[draw=cbblue!90!black,line width=.8pt,rounded corners=3pt,
+    fill=cbblue!6,minimum width=6.60cm,minimum height=8.55cm] (adaptpanel) at (3.62,-4.05) {};
+  \node[font=\normalsize\bfseries,text=cbblue!85!black] at (3.62,-.25)
+    {(b) Latent adaptation};
+
+  \node[draw=cbblue!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cbblue!42,minimum width=3.45cm,minimum height=1.05cm,
+    align=center,font=\small] (history) at (2.75,-1.30)
+    {observable history\\[-1pt]\footnotesize states and commands};
+  \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cbgreen!78,text=white,minimum width=3.65cm,minimum height=1.05cm,
+    align=center,font=\small\bfseries] (aam) at (2.85,-2.88)
+    {AAM};
+  \node[draw=cborange!95!black,line width=.8pt,rounded corners=2pt,
+    fill=cborange!86,minimum width=3.65cm,minimum height=1.05cm,
+    align=center,font=\small\bfseries] (latent) at (2.85,-4.46)
+    {inferred context $\widehat{\bm{z}}$};
+  \node[draw=cbblue!95!black,line width=.8pt,rounded corners=2pt,
+    fill=cbblue!82,text=white,minimum width=3.65cm,minimum height=1.12cm,
+    align=center,font=\small\bfseries] (mapping) at (2.85,-6.10)
+    {policy + bounded\\adapter};
+  \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cbgreen!68,text=white,minimum width=3.65cm,minimum height=1.12cm,
+    align=center,font=\small\bfseries] (response) at (2.85,-7.72)
+    {conditioned response};
+
+  \draw[sigarrow,cbblue!90!black] (history) -- (aam);
+  \draw[sigarrow,cborange!90!black] (aam) -- (latent);
+  \draw[sigarrow,cbblue!90!black] (latent) -- (mapping);
+  \draw[sigarrow,cbgreen!80!black] (mapping) -- (response);
+
+  \node[draw=cborange!90!black,line width=.8pt,rounded corners=2pt,
+    fill=cborange!22,minimum width=1.45cm,minimum height=.82cm,
+    align=center,font=\scriptsize\bfseries,inner sep=2pt] (teacher) at (5.98,-1.30)
+    {training only\\factors $\bm{\xi}$};
+  \draw[-{Latex[length=2.0mm]},line width=.8pt,dashed,cborange!90!black]
+    (teacher.south west) to[out=-115,in=20] (aam.east);
+\end{tikzpicture}

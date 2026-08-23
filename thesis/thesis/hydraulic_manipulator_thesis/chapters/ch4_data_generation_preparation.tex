@@ -7,188 +7,136 @@
 \chapter{Data Generation and Preparation}
 \label{chap:data}
 
-Chapter~\ref{chap:system} fixed the plant. It did not fix how its two
-simulated representations meet. The Simscape model knows the hydraulics but is
-far too slow to train a policy against, and the IsaacLab articulation is fast
-but has no hydraulics at all. Everything the learned models of
-Chapter~\ref{chap:models} can say about the actuator has to travel from the
-first world to the second inside a dataset. This chapter describes how those
-datasets were designed, collected, audited and prepared.
+Chapter~\ref{chap:system} defined two plant representations: detailed
+hydraulics in Simscape and fast rigid-body dynamics in IsaacLab. This chapter
+documents the datasets that connect them, including collection, auditing,
+feature construction and splitting. Table~\ref{tab:sys:provenance} records
+their provenance.
 
-The datasets come from two different sources, and keeping their provenance
-straight is a precondition for reading the results honestly
-(Table~\ref{tab:sys:provenance}).
+\emph{Simscape campaigns.} Closed-loop runs provide realistic operating data
+for the inverse and reduced-order models. Separate open-loop valve excitation
+provides the causal command information needed by the strict forward model
+(Section~\ref{sec:data:open-loop}).
 
-\emph{Historical Simscape provenance.} Two Simscape campaigns identified
-the frozen actuator models that this thesis carries forward as
-comparison components: the command-conditioned reduced-order model and
-the inverse/strict-forward pair. The first campaign drives the arm with
-a closed-loop controller and produces the realistic operating
-distribution the inverse and reduced-order models learn from. The second
-removes the controller entirely and applies deliberate excitation to the
-valves, because the closed-loop campaign turned out to be unable, in
-principle, to identify what the valve does. Section~\ref{sec:data:open-loop} sets out that diagnosis and its repair in
-full, because the failure is easy to repeat and the repair is what makes the
-forward model usable.
+\emph{ROM calibration.} After Simscape training, the command ROM was
+fine-tuned on five closed-loop IsaacLab reference shapes. Only its bounded
+correction head remained trainable, with Simscape replay retained
+(Section~\ref{sec:data:rom-calibration}). The ID--FD pair was not calibrated
+in IsaacLab.
 
-\emph{Closed-loop calibration of the ROM in IsaacLab.} The command ROM is not a pure Simscape artifact, whereas its partner in
-the comparison, the ID--FD pair, \emph{is}. After
-Simscape training the ROM was fine-tuned on closed-loop rollouts
-collected inside IsaacLab itself, on the five plant-reachable reference
-shapes, with only a small bounded correction head left trainable and the
-Simscape material retained as a replay term
-(Section~\ref{sec:data:rom-calibration}). It is therefore the one
-actuator model in this thesis that has seen the plant it is deployed in.
-
-\emph{The IsaacLab adaptation collection.} The system-dynamics
-surrogate, the privileged factor encoder, and the Arm Adaptation Module
-are not trained on Simscape data at all. They are trained on a
-$118$-run collection made in IsaacLab through the deployment plant itself
-(the command ROM plus PhysX), driven by the DLS controller
-with dedicated PRBS excitation windows
-(Section~\ref{sec:data:isaaclab}). The reason is simple: those models
-exist to describe the plant the adaptive controller faces,
-and that plant is the IsaacLab one. No new Simscape data was collected
-for this thesis, and no earlier adaptation or system-dynamics model was
-reused. The route every one of these bodies of data takes, from the run that produced it to the tensors a model is fitted on, is shown in Figure~\ref{fig:data:pipeline}, and the sections below follow it in order.
+\emph{IsaacLab adaptation data.} The system-dynamics surrogate, privileged
+encoder and AAM use a separate $118$-run collection from the deployed command
+ROM--PhysX plant, including dedicated PRBS windows
+(Section~\ref{sec:data:isaaclab}). No earlier adaptation or system-dynamics
+model was reused. Figure~\ref{fig:data:pipeline} summarizes the common
+preparation workflow.
 
 \begin{figure}[p]
   \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tikzpicture}[
-    src/.style={draw=black!70, rounded corners=2pt, fill=cborange!15,
-      text width=33mm, align=center, inner sep=3pt, minimum height=30mm,
-      anchor=north, font=\small},
-    dead/.style={draw=black!45, dashed, rounded corners=2pt, fill=black!4,
-      text width=33mm, align=center, inner sep=3pt, minimum height=14mm,
-      anchor=north, font=\small, text=black!55},
-    proc/.style={draw=black!70, rounded corners=2pt, fill=cbblue!10,
-      text width=142mm, align=center, inner sep=5pt, anchor=north,
-      font=\small},
-    dec/.style={draw=black!70, diamond, aspect=2.1, fill=cbgreen!16,
-      align=center, inner sep=2pt, font=\small},
-    stop/.style={draw=black!70, rounded corners=2pt, fill=cbpink!20,
-      text width=34mm, align=center, inner sep=4pt, font=\small},
-    cons/.style={draw=black!70, rounded corners=2pt, fill=cbblue!22,
-      text width=33mm, align=center, inner sep=3pt, minimum height=26mm,
-      anchor=north, font=\small},
-    lbl/.style={font=\footnotesize\itshape, text=black!65},
-    num/.style={circle, draw=black!60, fill=white, inner sep=1pt,
-      font=\footnotesize\bfseries, minimum size=5.5mm},
-    ar/.style={-{Latex[length=2.6mm]}, semithick},
-    bus/.style={semithick, black!70},
-  ]
+  \begin{tikzpicture}[x=1cm,y=1cm,>=Latex,font=\small,
+    source/.style={draw=black!55,line width=.8pt,rounded corners=2pt,
+      fill=white,minimum width=3.05cm,minimum height=1.25cm,
+      align=center,inner sep=3pt},
+    process/.style={draw=black!55,line width=.8pt,rounded corners=2pt,
+      fill=white,minimum width=5.4cm,minimum height=1.08cm,
+      align=center,font=\small},
+    output/.style={draw=black!65,line width=.8pt,rounded corners=2pt,
+      fill=white,minimum width=3.05cm,minimum height=1.35cm,
+      align=center,font=\small},
+    stage/.style={circle,draw=black!70,fill=white,text=black,
+      line width=.8pt,minimum size=7mm,inner sep=0pt,font=\small\bfseries},
+    flow/.style={-{Latex[length=2.2mm]},line width=.8pt,draw=black!75},
+    bus/.style={line width=.8pt,draw=black!65}]
 
-  %% ---- group headers ----------------------------------------------------
-  \node[lbl, anchor=south] at (4.0,0.55)
-    {Simscape: high-fidelity hydraulics};
-  \node[lbl, anchor=south] at (12.0,0.55)
-    {IsaacLab: the deployment plant};
-  \draw[black!45] (0.35,0.4) -- (7.65,0.4);
-  \draw[black!45] (8.35,0.4) -- (15.65,0.4);
+    \node[font=\large\bfseries,text=black!80] at (0,.65) {DATA COLLECTION};
+    \draw[black!40] (-6.95,.25) -- (6.95,.25);
+    \node[font=\small\bfseries,text=black!80] at (-3.50,-.12) {SIMSCAPE};
+    \node[font=\small\bfseries,text=black!80] at (3.50,-.12)
+      {ISAACLAB / DEPLOYMENT};
+    \node[draw=black!60,line width=.7pt,rounded corners=5pt,
+      fill=white,minimum width=6.25cm,minimum height=.48cm,
+      font=\scriptsize,text=black!75] at (-3.50,-.67)
+      {\textbf{Randomized campaign}\quad $1\,000$ runs $\cdot$ $12$ parameters};
 
-  %% ---- source row -------------------------------------------------------
-  \node[src] (s1) at (2.0,0) {\textbf{Closed-loop\\aligned export}\\[2pt]
-    \footnotesize $1\,040$ runs, $452\,400$ transitions at $\unit[0.05]{s}$;
-    inherited and frozen};
-  \node[src] (s2) at (6.0,0) {\textbf{Open-loop excitation}\\[2pt]
-    \footnotesize $4$ runs of $\unit[64]{s}$ at $\unit[0.01]{s}$; valve driven
-    independently of the state};
-  \node[src] (s3) at (10.0,0) {\textbf{ROM calibration}\\[2pt]
-    \footnotesize $5$ reference shapes, $4\,084$ transitions through the
-    deployment loop};
-  \node[src] (s4) at (14.0,0) {\textbf{Adaptation collection}\\[2pt]
-    \footnotesize $118$ runs, $6$ physical factors, dedicated PRBS windows};
+    \node[source] (closed) at (-5.25,-1.85)
+      {\textbf{Closed-loop}\\[-1pt]\footnotesize $1\,040$ runs};
+    \node[source] (open) at (-1.75,-1.85)
+      {\textbf{Open-loop}\\[-1pt]\footnotesize $4$ runs};
+    \node[source] (romsrc) at (1.75,-1.85)
+      {\textbf{ROM calibration}\\[-1pt]\footnotesize $5$ references};
+    \node[source] (adapt) at (5.25,-1.85)
+      {\textbf{Adaptation data}\\[-1pt]\footnotesize $118$ runs};
+    \coordinate (collectbus) at (0,-2.85);
+    \foreach \s in {closed,open,romsrc,adapt}{
+      \draw[line width=.8pt,black!70] (\s.south) -- (\s.south |- collectbus);}
+    \draw[line width=.8pt,black!70] (-5.25,-2.85) -- (5.25,-2.85);
 
-  %% ---- collection bus ---------------------------------------------------
-  \foreach \x in {2.0,6.0,10.0,14.0}{\draw[bus] (\x,-3.0) -- (\x,-3.45);}
-  \draw[bus] (2.0,-3.45) -- (14.0,-3.45);
-  \draw[ar] (8.0,-3.45) -- (8.0,-5.35);
+    \node[process] (extract) at (0,-3.90)
+      {\textbf{EXTRACT \& ALIGN}\\[-1pt]\footnotesize states $\bullet$ actions $\bullet$ targets};
+    \node[stage] at (-3.25,-3.90) {1};
+    \draw[flow] (collectbus) -- (extract.north);
 
-  %% ---- excluded material ------------------------------------------------
-  \node[dead, text width=70mm, minimum height=10mm] (s0) at (4.0,-3.85)
-    {\textbf{Randomized curriculum}: $1\,000$ runs, $12$ parameters;
-     provenance only, and it trains no model in this thesis};
-  \draw[dashed, black!50] (2.0,-3.85) -- (2.0,-3.45);
-  \node[cbpink, font=\large\bfseries] at (2.0,-3.65) {$\times$};
+    \node[diamond,aspect=2.15,draw=black!75,line width=.9pt,
+      fill=black!12,align=center,inner sep=2pt,font=\footnotesize\bfseries]
+      (audit) at (0,-5.90)
+      {QUALITY AUDIT\\[-1pt]\scriptsize validity $\bullet$ excitation};
+    \node[stage] at (-3.25,-5.90) {2};
+    \draw[flow] (extract.south) -- (audit.north);
 
-  %% ---- stage 1: extraction ---------------------------------------------
-  \node[proc] (ext) at (8.0,-5.35) {\textbf{Extraction, feature and target
-    construction}\\[3pt]
-    \footnotesize
-    increments $\Delta\bm{x}_k=\bm{x}_{k+1}-\bm{x}_k$ as targets, never the
-    absolute state \quad$\bullet$\quad causal alignment: a feature at step
-    $k$ uses only step-$k$ quantities\\[2pt]
-    \footnotesize
-    time base $\unit[0.01]{s}\rightarrow\unit[0.05]{s}$, five samples per
-    transition, command held at the window start \quad$\bullet$\quad invalid
-    samples flagged, not deleted ($93.7\,\%$ valid)};
+    \node[draw=rltred,line width=1.5pt,rounded corners=2pt,
+      fill=rltred!10,minimum width=2.80cm,minimum height=1.10cm,
+      align=center,font=\footnotesize\bfseries] (recollect) at (5.55,-5.90)
+      {RECOLLECT\\[-1pt]OR REDESIGN};
+    \draw[-{Latex[length=2.2mm]},line width=1.3pt,rltred]
+      (audit.east) -- (recollect.west);
+    \node[anchor=south,fill=white,inner sep=1pt,
+      font=\scriptsize\bfseries,text=rltred]
+      at ($(audit.east)!.50!(recollect.west)+(0,1.7mm)$) {FAIL};
+    \draw[-{Latex[length=2.0mm]},line width=1.0pt,dashed,rltred]
+      (recollect.east) |- (5.25,-2.85);
 
-  %% ---- stage 2: audit ---------------------------------------------------
-  \node[dec] (aud) at (8.0,-9.5) {\textbf{Audit}\\[-1pt]\textbf{passes?}};
-  \node[stop] (rej) at (2.9,-9.5) {\textbf{Reject}\\[2pt]
-    \footnotesize redesign the experiment and recollect};
-  \node[lbl, anchor=west, text width=46mm] at (10.6,-9.5)
-    {command rank, persistent excitation, increment identity, leakage mask};
+    \node[process,draw=rltgreen,fill=rltgreen!10,line width=1.5pt]
+      (split) at (0,-8.20)
+      {\textbf{SPLIT BY RUN}\\[-1pt]\footnotesize train $\bullet$ validation $\bullet$ test};
+    \node[stage] at (-3.25,-8.20) {3};
+    \draw[-{Latex[length=2.2mm]},line width=1.3pt,rltgreen]
+      (audit.south) -- (split.north);
+    \node[anchor=west,fill=white,inner sep=1pt,
+      font=\scriptsize\bfseries,text=rltgreen]
+      at ($(audit.south)!.38!(split.north)+(4.0mm,0)$) {PASS};
 
-  \draw[ar] (ext.south) -- (aud.north);
-  \draw[ar] (aud.west) -- (rej.east)
-    node[midway, above, font=\footnotesize] {fail};
-  \draw[ar] (aud.south) -- (8.0,-11.0)
-    node[midway, right, font=\footnotesize] {pass};
+    \node[process] (normalize) at (0,-10.20)
+      {\textbf{NORMALIZE}\\[-1pt]\footnotesize training statistics only};
+    \node[stage] at (-3.25,-10.20) {4};
+    \draw[flow] (split.south) -- (normalize.north);
 
-  %% ---- stage 3: splitting ----------------------------------------------
-  \node[proc] (spl) at (8.0,-11.0) {\textbf{Split by complete run, never by
-    sample}\\[3pt]
-    \footnotesize
-    aligned export: $936/52/52$ runs \quad$\bullet$\quad strict open-loop:
-    twenty temporal blocks per run, every fifth to validation, five-sample
-    guard\\[2pt]
-    \footnotesize
-    IsaacLab: split by run \emph{and} by factor configuration ($82/20/16$),
-    so that unseen means an unseen plant rather than an unseen episode};
+    \coordinate (outbus) at (0,-12.50);
+    \draw[bus] (normalize.south) -- (0,-11.27);
+    \draw[bus] (0,-12.02) -- (outbus);
+    \draw[line width=.8pt,black!65] (-5.25,-12.50) -- (5.25,-12.50);
+    \node[font=\large\bfseries,text=black!80,fill=white,inner sep=2pt]
+      at (0,-11.65) {MODEL DATASETS};
+    \draw[black!40] (-6.95,-12.02) -- (-2.55,-12.02);
+    \draw[black!40] (2.55,-12.02) -- (6.95,-12.02);
 
-  \draw[ar] (spl.south) -- (8.0,-14.3);
-
-  %% ---- stage 4: normalisation ------------------------------------------
-  \node[proc] (nrm) at (8.0,-14.3) {\textbf{Normalization on the training
-    split only, statistics stored inside each checkpoint}\\[2pt]
-    \footnotesize the loader enforces the stored contract rather than
-    recomputing it, so a model always normalizes as it was fitted};
-
-  %% ---- distribution bus -------------------------------------------------
-  \coordinate (bp) at ($(nrm.south)+(0,-0.55)$);
-  \draw[bus] (nrm.south) -- (bp);
-  \draw[bus] ($(bp)+(-6.0,0)$) -- ($(bp)+(6.0,0)$);
-  \foreach \dx in {-6.0,-2.0,2.0,6.0}{
-    \draw[ar] ($(bp)+(\dx,0)$) -- ($(bp)+(\dx,-0.6)$);}
-
-  %% ---- consumers --------------------------------------------------------
-  \node[cons] (c1) at ($(bp)+(-6.0,-0.6)$) {\textbf{Inverse model}\\[2pt]
-    \footnotesize closed-loop data only};
-  \node[cons] (c2) at ($(bp)+(-2.0,-0.6)$) {\textbf{Forward model}\\[2pt]
-    \footnotesize strict open-loop, closed-loop replayed at weight $0.25$};
-  \node[cons] (c3) at ($(bp)+(2.0,-0.6)$) {\textbf{Reduced-order model}\\[2pt]
-    \footnotesize joined closed-loop, then bounded calibration};
-  \node[cons] (c4) at ($(bp)+(6.0,-0.6)$) {\textbf{Surrogate, encoder, AAM}\\[2pt]
-    \footnotesize IsaacLab data only};
-  \node[lbl, anchor=north] at ($(c2.south east)!0.5!(c3.south west)+(0,-0.25)$)
-    {trained and validated in Chapter~\ref{chap:models}};
-
-  %% ---- stage numbers ----------------------------------------------------
-  \node[num] at (0.3,-6.3) {1};
-  \node[num] at (0.3,-9.5) {2};
-  \node[num] at (0.3,-11.9) {3};
-  \node[num] at (0.3,-15.0) {4};
-
-  \end{tikzpicture}}
-  \caption{Preparation pipeline, from the collected runs to the tensors the
-  learned models are fitted on. Four bodies of data enter at the top, two from
-  Simscape and two from the IsaacLab deployment plant, and all four pass
-  through the same four stages. The audit is a gate rather than a report:
-  material that fails it is recollected rather than repaired, which is what
-  happened to the closed-loop batch. The bottom row names the proportion in
-  which each learned model draws on the prepared material.}
+    \node[output] (inverse) at (-5.25,-13.55)
+      {\textbf{Inverse model}\\[-1pt]\footnotesize closed-loop data};
+    \node[output] (forward) at (-1.75,-13.55)
+      {\textbf{Forward model}\\[-1pt]\footnotesize open-loop data};
+    \node[output] (romout) at (1.75,-13.55)
+      {\textbf{ROM}\\[-1pt]\footnotesize calibrated dynamics};
+    \node[output] (aamout) at (5.25,-13.55)
+      {\textbf{AAM}\\[-1pt]\footnotesize adaptation history};
+    \foreach \o in {inverse,forward,romout,aamout}{
+      \draw[-{Latex[length=2.2mm]},line width=.8pt,black!70]
+        (\o.north |- outbus) -- (\o.north);}
+  \end{tikzpicture}
+  \caption{Data-preparation workflow. Two Simscape collections and two
+  IsaacLab collections pass through common extraction, audit, run-level
+  splitting and training-statistics normalization stages. The randomized
+  Simscape campaign is provenance metadata rather than a pipeline stage. A
+  failed audit returns the experiment to collection; accepted material forms
+  the inverse, forward, ROM and AAM datasets.}
   \label{fig:data:pipeline}
 \end{figure}
 
@@ -197,10 +145,7 @@ reused. The route every one of these bodies of data takes, from the run that pro
 
 
 
-Before any run was collected I fixed four requirements that the data had
-to satisfy jointly. They are stated explicitly, because the rest
-of the chapter is essentially the record of discovering that no single
-collection strategy meets all four.
+Four requirements governed collection and preparation.
 
 \begin{description}
   \item[R1: realistic operating distribution.] The learned models are
@@ -225,33 +170,20 @@ collection strategy meets all four.
     splits.
 \end{description}
 
-R1 and R2 pull against each other, and that tension is the organising
-idea of this chapter. A controller that produces realistic motion
-computes its command from the measured state, which makes command and
-state history redundant and destroys identifiability
-(Section~\ref{sec:fund:identifiability}). An experiment that guarantees
-identifiability has to break the feedback path, which immediately makes
-the motion unrealistic. Rather than compromise on one of them, I
-collected both: a closed-loop campaign that satisfies R1 and R3, and an
-open-loop campaign that satisfies R2. Section~\ref{sec:data:combining}
-explains how the two are used together without letting either one
-dominate.
+R1 and R2 require different experiments. Closed-loop control gives realistic
+motion but correlates command with state; open-loop excitation breaks that
+correlation but is less representative of deployment. The two campaigns are
+therefore retained and combined as described in
+Section~\ref{sec:data:combining}.
 
 \section{Randomized Parameter Space of the Simscape Campaign}
 \label{sec:data:randomization}
 
-This section documents the randomization design of the Simscape
-curriculum. Its status must be stated before its content, because the
-design was drawn up under an earlier plan in which randomized
-\emph{Simscape} data would be the substrate for adaptation, and that
-plan is superseded. No model reported in this thesis is trained on this
-curriculum. It is retained for two reasons that survive the change: it
-is the provenance record of the closed-loop material the actuator models
-were identified on, and the compliance-equivalence analysis of
-Section~\ref{sec:data:compliance} is what taught this project which quantity is randomizable in a hydraulic chamber model, a lesson carried directly into the factor space of
-Section~\ref{sec:data:isaaclab}. Readers interested only in the models
-that produce results may skip to
-Section~\ref{sec:data:closed-loop}.
+This section records the Simscape randomization design. No reported model is
+trained on this curriculum; it is retained as collection provenance and
+because its compliance analysis (Section~\ref{sec:data:compliance}) informed
+the IsaacLab factor design. Readers concerned only with trained models may
+continue at Section~\ref{sec:data:closed-loop}.
 
 \subsection{Sampling Design}
 
@@ -334,11 +266,8 @@ controller cannot anticipate.
 \section{Closed-Loop Data Collection}
 \label{sec:data:closed-loop}
 
-The complete closed-loop procedure is summarized in
-Algorithm~\ref{alg:data:closed-loop}. Two features stand out before the prose expands on them: the parameter table is
-drawn in full before any simulation runs, so the plant family is fixed
-and reproducible independently of the collection, and the reference
-trajectory is resampled inside every run, so no two runs share a path.
+Algorithm~\ref{alg:data:closed-loop} summarizes the procedure. The parameter
+table is fixed before simulation, and each run receives a new reference path.
 
 \begin{algorithm}[tb]
   \small
@@ -378,61 +307,35 @@ trajectory is resampled inside every run, so no two runs share a path.
 
 \subsection{The Controller as a Data-Collection Instrument}
 
-Every closed-loop run is driven by the same fixed integral-backstepping
-controller, operating on all five joints at a $\unit[0.005]{s}$ rate.
-Its gains are never retuned between runs. This is deliberate: the
-controller is here as a standardised instrument for putting the arm
-through realistic motion, not as a control contribution of this thesis,
-and holding it fixed is what makes the resulting behavioural differences
-attributable to the plant draw rather than to the controller.
+Every closed-loop run uses the same integral-backstepping controller at
+$\unit[0.005]{s}$. Its gains remain fixed, so response differences are caused
+by the plant draw rather than controller retuning.
 
-Three details of the controller matter later. The second joint carries
-the gravity load of the whole boom, so it is handled by a
-proportional-integral law with velocity damping and an explicit gravity
-bias rather than by the backstepping law used on the others. A barrier
-term keeps the commanded configuration away from the joint limits
-imported from the URDF. And the commands are saturated per axis at
-$[0.95,\, 0.95,\, 0.80,\, 0.80,\, 0.90]$. That last vector matters: the first four entries are exactly the clip limits stored in the
-inverse-dynamics checkpoint in Section~\ref{sec:models:id}. The ID
-network inherited its output limits from the instrument that generated
-its training labels, which is correct but easy to mistake for a
-free design choice.
+Joint~2 uses PI control with velocity damping and gravity bias because it
+carries the boom load. A barrier term enforces the URDF limits. Per-axis
+command limits are $[0.95,\,0.95,\,0.80,\,0.80,\,0.90]$; the first four are
+also stored in the inverse-dynamics checkpoint
+(Section~\ref{sec:models:id}).
 
 \section{Open-Loop Excitation Experiments}
 \label{sec:data:open-loop}
 
 \subsection{Limitations of the Closed-Loop Batch}
 
-The first forward-dynamics model was trained on the closed-loop material
-and scored a one-step $R^2$ near $0.999$. It was also, as
-Section~\ref{sec:models:fd-identifiability} documents, almost completely
-insensitive to its own valve input: zeroing that input changed the
-long-horizon rollout error by a few percent. The model had learned to
-continue a trajectory, not to respond to a command.
+The first forward model achieved one-step $R^2\approx0.999$ on closed-loop
+data but was almost insensitive to valve input: zeroing the input changed
+long-horizon error by only a few percent
+(Section~\ref{sec:models:fd-identifiability}). In closed loop, command is
+largely determined by the state history already given to the model, so the
+data do not separate command causality from state correlation
+~\cite{ljung1999system}.
 
-This is not a training failure and no amount of retraining on the same
-material would have fixed it. In closed loop the controller computes the
-command from the state, so the command is very nearly a deterministic
-function of the state history that the network already
-sees~\cite{ljung1999system}. The information needed to separate cause
-from correlation is simply not present in the data. Recovering it
-requires an experiment in which the command is generated independently
-of the state, which means opening the loop.
-
-This is not a coverage problem in disguise.
-Figure~\ref{fig:data:regimes} shows that the closed-loop batch is in
-fact varied in its control effort: pooled over a run, the valve spends
-about a quarter of the time saturated, roughly half in the mid-authority
-band, and the rest in low-command creep, so all three control regimes
-are represented. The difficulty is visible in the same figure. Plotting
-the valve command against the cylinder velocity it produced shows the
-two riding together along a band rather than filling the plane: in a
-feedback loop a fast motion is when the controller commands a
-large valve opening, so command and state move as one. A model can read
-the command off the velocity, which is why it never has to learn what
-the command \emph{causes}. Diverse control effort and identifiable
-control effort are not the same thing, and this batch has the first
-without the second.
+Figure~\ref{fig:data:regimes} confirms that coverage alone is not the issue.
+The valve is saturated for about one quarter of a pooled run, operates at
+mid-authority for roughly half, and otherwise remains in low-command creep.
+Despite this spread, command and cylinder velocity remain concentrated along a
+narrow band. The data are diverse in control effort but not identifiable,
+motivating a separate open-loop experiment.
 
 \begin{figure}[tb]
   \centering
@@ -457,29 +360,12 @@ twenty-second phase then drives all four channels at once, and a final
 second of zero command closes the run. Commands are limited to
 $\pm 0.90$ of full authority.
 
-The most consequential design decision here is one that runs against the
-textbook reflex. A persistently exciting input for a linear system is
-usually a rapidly switching signal, and the first version of this
-excitation was built that way. It was persistently exciting in the
-formal sense and still produced poor data, because the cylinders
-reversed before they had travelled anywhere: the commanded energy went
-into repeatedly accelerating and decelerating the piston near one point
-of the stroke instead of moving it through the workspace. The present
-signal replaces fast switching with long full-authority plateaus during
-the sequential phase and a slow, high-authority component during the
-simultaneous phase, so that each cylinder traverses a
-substantial part of its stroke while its valve is open. The simultaneous
-phase additionally superimposes one slow near-square cycle across the
-full twenty seconds with a distinct medium-frequency component on each
-channel, and short raised-cosine ramps at entry and exit keep the
-transitions differentiable.
-
-The lesson generalises, and it is one this thesis would offer to anyone
-identifying a hydraulic actuator: persistent excitation is a condition
-on the input signal, but the quantity that decides whether a
-\emph{cylinder} is identifiable is how much of the stroke the input covers. The two are not the same, and optimising the first
-while ignoring the second produces data that passes the classical test
-and still cannot support a model.
+An initial rapidly switching signal met the formal persistence condition but
+kept each piston near one stroke position. The final design instead uses long
+full-authority plateaus in the sequential phase and slow, high-authority motion
+in the simultaneous phase. A slow near-square cycle is combined with distinct
+medium-frequency channel components, with raised-cosine entry and exit ramps.
+This provides both input excitation and useful stroke coverage.
 
 \subsection{Plant Draws and Acceptance}
 
@@ -499,35 +385,21 @@ the stroke depending on the cylinder, which is above the acceptance
 floor but below the target. Cylinder 4 is the weakest, and improving its
 coverage is the clearest available next step for this campaign.
 
-One earlier excitation export was rejected outright rather than repaired.
-Half of its runs turned out to contain duplicated state trajectories, so
-the nominally distinct plant draws were not distinct in the data, and
-the valve was again not causally identifiable. That export and its
-reports are not part of the maintained workflow. It is mentioned here
-because it is the reason the acceptance checks in
-Section~\ref{sec:data:diagnostics} exist in their present form: they were
-written to make that particular failure impossible to miss a second
-time.
+An earlier export was rejected because half its runs contained duplicated
+state trajectories. The acceptance checks in
+Section~\ref{sec:data:diagnostics} now detect this failure directly.
 
 \section{Combining Closed-Loop and Open-Loop Datasets}
 \label{sec:data:combining}
 
-The two campaigns are complementary, and each learned model of
-Chapter~\ref{chap:models} draws on them in a different proportion.
+The inverse model uses only closed-loop data because its target is the
+controller command for a measured state. The forward model is retrained on the
+strict open-loop export while retaining closed-loop replay at weight $0.25$.
+Without replay, four excitation runs do not provide enough pose coverage.
 
-The inverse-dynamics model is trained entirely on closed-loop material,
-because its target is the command a competent controller issued in a given
-state. The forward-dynamics model begins there and is then retrained on the
-strict open-loop export, with the closed-loop data retained as a replay term at
-weight $0.25$. Ablation showed that dropping the replay term costs state
-coverage and extension accuracy, because four excitation runs cannot span the
-poses a thousand operating runs visit.
-
-Figure~\ref{fig:data:coverage} shows why. The closed-loop distribution fills
-the reachable range smoothly; the open-loop distribution concentrates into
-narrow plateaus. The open-loop bands are where the valve is identifiable, the
-closed-loop mass is where the model must be accurate at deployment, and neither
-campaign covers both. The forward model is therefore trained on their union.
+Figure~\ref{fig:data:coverage} shows the difference: closed-loop data covers
+the reachable range, while open-loop data concentrates at identifiable valve
+plateaus. The forward model therefore uses both.
 
 \begin{figure}[tb]
   \centering
@@ -539,81 +411,46 @@ campaign covers both. The forward model is therefore trained on their union.
   \label{fig:data:coverage}
 \end{figure}
 
-The reduced-order model consumes the closed-loop material in a joined
-form. The inverse and forward exports are aligned on exact run
-identifiers, time indices, and sample times, and the join is accepted
-only when the sixteen-dimensional cylinder state agrees between them
-sample for sample. The resulting command-conditioned dataset contains
-$452\,400$ transitions at $\unit[0.05]{s}$ drawn from $1\,040$ aligned
-runs. The logged valve command is carried through this join, but only as
-a supervision target for the model's internal valve head. It is never a
-runtime input, which is the property that lets the ROM be driven by
-desired cylinder motion alone (Section~\ref{sec:models:rom}).
+For ROM training, the inverse and forward exports are joined by run identifier,
+time index and sample time. The join is accepted only when their
+sixteen-dimensional cylinder states match sample for sample. It contains
+$452\,400$ transitions at $\unit[0.05]{s}$ from $1\,040$ runs, split into
+$936$/$52$/$52$ complete runs. Valve command is used only to supervise the
+ROM's internal valve head; it is not a runtime input
+(Section~\ref{sec:models:rom}).
 
-Two closed-loop bodies of Simscape material therefore exist, they are easy to
-confuse, and only one of them trains anything in this thesis. The distinction
-is worth making sharply.
+This aligned nominal-plant export trains the inverse, forward and ROM models.
+It predates the thesis and its collection script is unavailable, so its
+measurable contents and audits define its reproducibility boundary. Exact
+alignment, increment consistency and the identifiability failure were checked
+directly on the export.
 
-The \emph{aligned export} is the one that trains the inverse, forward and
-reduced-order models. It is a nominal-plant closed-loop collection of $1\,040$
-runs yielding $452\,400$ aligned transitions at $\unit[0.05]{s}$, split by
-complete run into $936$ training, $52$ validation and $52$ test. It predates
-this thesis: it was inherited as a frozen export, and its collection script is
-not part of this work, so what can be stated about it is what can be measured
-from it, which is the run count, the sample time, the channel set, the split,
-and the audit results reported in Section~\ref{sec:data:diagnostics}. That is a
-reproducibility limitation and is recorded as one. Every property this thesis
-actually relies on, exact run-and-time alignment, increment consistency, and
-the identifiability failure of Section~\ref{sec:data:open-loop}, was verified
-on the export itself rather than assumed from its provenance.
-
-The \emph{thousand-run randomized curriculum} of
-Section~\ref{sec:data:closed-loop} is the campaign designed and executed for
-this thesis, and it is documented in Appendix~\ref{app:dataset} in full. It
-occupies a different position in the argument, and I want to be exact about it
-because it is easy to overstate. The randomized curriculum was
-collected under the earlier plan, in which randomized Simscape runs
-would supply both the robust actuator variants and the privileged
-factor vectors for latent adaptation. Neither role survives: the
-adaptation evidence chain of this thesis is built entirely on the
-IsaacLab collection of Section~\ref{sec:data:isaaclab}, for the reason
-given there, and no result in this thesis is trained on or evaluated
-against the randomized Simscape curriculum. It is reported as
-provenance and as a negative methodological record, not as a substrate
-whose consequences appear later.
+The separate thousand-run randomized curriculum was collected for an earlier
+adaptation plan. No reported result is trained on or evaluated against it; the
+adaptation chain uses the IsaacLab collection of
+Section~\ref{sec:data:isaaclab}. The curriculum is retained as provenance and
+documented in Appendix~\ref{app:dataset}.
 
 \section{Closed-Loop Calibration Data for the Command ROM}
 \label{sec:data:rom-calibration}
 
-The reduced-order model is the one actuator model that does not stop at the
-Simscape boundary. It is accurate about hydraulics, but the plant it drives at
-runtime is a PhysX articulation with its own contact behaviour and compliance,
-and the systematic offset between the extension the ROM commits to and the one
-PhysX realizes is invisible to any amount of further Simscape training.
+The ROM drives a PhysX articulation whose compliance and contact response are
+not present in Simscape. Further Simscape training cannot remove the resulting
+deployment offset.
 
-The calibration set is therefore collected from the deployment loop itself. A
-previous ROM checkpoint was logged in closed loop against PhysX on its native
-$\unit[0.05]{s}$ grid, giving $4\,084$ transitions. Each record stores the
-six-step ROM history as the runtime assembles it, together with the measured
-PhysX transition. The targets are what the plant did, not what Simscape said it
-would do.
+The calibration set therefore comes from closed-loop ROM--PhysX operation on
+the native $\unit[0.05]{s}$ grid. Its $4\,084$ transitions store the six-step
+runtime history and measured PhysX transition.
 
-Two properties make the set safe to use. Only the bounded command-gated
-correction head is trainable against it, with every other parameter frozen and
-the correction capped at $\unit[3]{mm}$, so the identified physics is preserved
-and only a deployment offset is added. And fine-tuning runs against a mixture,
-replaying the original dataset at weight $0.25$, because five parked shapes
-cannot span the poses a thousand Simscape runs visit. The correction is
-command-gated and therefore exactly zero at zero command, so the stationary
-hold contract survives unchanged.
+Only the command-gated correction head is trainable; all other parameters are
+frozen and the correction is capped at $\unit[3]{mm}$. Original-data replay at
+weight $0.25$ preserves wider pose coverage. The gate makes the correction
+zero at zero command, retaining stationary hold.
 
-One limitation is carried forward. The calibration trajectories predate the
-moving-verge benchmark and exclude cutter--ground contact. The calibration is
-therefore weakest in the regime the verge task spends most of its time in, and
-the bounded correction head keeps
-that gap contained rather than closing it. This calibration is also what
-qualifies the ROM as the deployment actuator, with the consequences for the
-three-way comparison set out in Section~\ref{sec:sys:rom-is-plant}.
+The trajectories predate the moving-verge benchmark and exclude
+cutter--ground contact. The bounded head limits, but does not remove, this
+coverage gap. Section~\ref{sec:sys:rom-is-plant} explains the consequence for
+the three-way comparison.
 
 \section{The IsaacLab Adaptation Collection}
 \label{sec:data:isaaclab}
@@ -717,6 +554,55 @@ line, coupled-sine, and reach-and-return motion were verified in a pilot
 to give full rank over all four action channels under varied geometry
 and load.
 
+Figure~\ref{fig:data:isaaclab-collection} summarizes the IsaacLab collection
+configuration and its frozen run-level outputs.
+
+\clearpage
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[x=1cm,y=1cm,font=\normalsize,
+    card/.style={draw=black!55,line width=.8pt,rounded corners=2pt,
+      fill=white,minimum height=2.05cm,align=center,inner sep=6pt}]
+
+    \node[font=\Large\bfseries,text=black!85] at (0,.42)
+      {ISAACLAB ADAPTATION COLLECTION};
+
+    \node[draw=black!45,line width=.8pt,inner sep=3pt]
+      (plant) at (0,-4.25)
+      {\includegraphics[width=13.35cm]{images/unimog_mulag_iso_v2.png}};
+
+    \draw[black!35] (-6.75,-8.82) -- (6.75,-8.82);
+
+    \node[card,text width=3.75cm] at (-4.55,-10.20)
+      {\textbf{PLANT DRAWS}\\[6pt]
+       \small four hydraulic\\two mechanical};
+    \node[card,text width=3.75cm] at (0,-10.20)
+      {\textbf{EXCITATION}\\[6pt]
+       \small DLS motion\\PRBS probes};
+    \node[card,text width=3.75cm] at (4.55,-10.20)
+      {\textbf{RUN RECORD}\\[6pt]
+       \small state $\bullet$ action\\factor key};
+
+    \node[font=\large\bfseries,text=black!85] at (0,-12.75)
+      {FROZEN DATASET};
+    \node[font=\small,text=black!60] at (0,-13.55)
+      {$118$ accepted runs $\bullet$ disjoint run-level splits};
+
+    \node[card,text width=3.15cm,minimum height=1.40cm]
+      at (-4.15,-15.15) {\textbf{TRAIN}\\[3pt]$82$ runs};
+    \node[card,text width=3.15cm,minimum height=1.40cm]
+      at (0,-15.15) {\textbf{VALIDATION}\\[3pt]$20$ runs};
+    \node[card,text width=3.15cm,minimum height=1.40cm]
+      at (4.15,-15.15) {\textbf{HELD-OUT TEST}\\[3pt]$16$ runs};
+  \end{tikzpicture}
+  \caption{IsaacLab adaptation-data collection. Each run uses one fixed
+  six-factor plant draw and combines DLS task motion with independent PRBS
+  probes. State, action and factor keys are logged, audited and frozen into
+  disjoint train, validation and held-out test splits.}
+  \label{fig:data:isaaclab-collection}
+\end{figure}
+\clearpage
+
 \subsection{The Frozen Dataset}
 
 The final collection contains $118$ complete runs: $2$ nominal, $40$
@@ -732,16 +618,10 @@ saturation limits.
 The dataset is then \emph{frozen}: the raw runs are checksummed and the
 run-level split is fixed at $82$ training, $20$ validation, and $16$
 reserved combined-test runs, with zero factor-key leakage between them.
-The reserved sixteen are held out of every \emph{decision}: no history length,
-no checkpoint, no hyperparameter and no architecture in this thesis was chosen
-using them. They are not unseen data in the stronger sense of never being
-scored, and the distinction matters enough to state precisely. They are
-\emph{reported on} once each model is fixed, which is what makes the numbers in
-Chapter~\ref{chap:models} a held-out estimate rather than a training score; and
-because those reported values were read before the thesis was written, they are
-best understood as a single-use test set rather than one that could absorb
-repeated interrogation. Any figure quoted from them is therefore reported
-alongside the validation figure, never in place of it.
+The reserved sixteen do not influence history length, checkpoint,
+hyperparameter or architecture selection. They are scored only after each
+model is fixed and are treated as a single-use test set. Test results are
+reported with validation results, not in place of them.
 
 \subsection{Learning Timebase and Hydraulic State}
 
@@ -762,18 +642,12 @@ The hydraulic state used by the system-dynamics models is
 %
 with joint position and velocity carried as \emph{context} only, and the
 prediction target the next $\unit[50]{ms}$ state delta. Differential pressure
-occupies an awkward position in this design and the resolution reached here
-should be stated rather than left implicit. A real machine does not publish
-chamber pressure on this interface, so treating it as a measurement would
-validate the models under an assumption deployment cannot honour. It is not a
-measurement in this system either: at runtime it is the learned actuator's own
-recursive state, generated inside the deployed loop by the command ROM or the
-frozen forward model (Section~\ref{sec:sys:actuation}). On that reading it is
-admissible, and both the system-dynamics model and the AAM do consume it. The
-price is that the estimator's richest channel inherits the actuator model's
-error rather than a sensor's, which is why the causal history \emph{belief}
-remains part of the design: it carries the fast pressure transient that a
-single sample cannot summarise, whether or not that sample is trusted.
+is not a measured signal. At runtime it is the actuator model's recursive
+state, generated by the command ROM or frozen forward model
+(Section~\ref{sec:sys:actuation}). The system-dynamics model and AAM may use it
+because it exists inside the deployed loop, but it inherits actuator-model
+error. Causal history is therefore retained to represent pressure transients
+that one sample cannot summarize.
 
 \section{Feature and Target Construction}
 \label{sec:data:features}
@@ -822,9 +696,8 @@ strict data satisfies to $R^2 = 0.994$--$0.9997$
 \subsection{Observable History of the Adaptation Models}
 \label{sec:data:history-features}
 
-The adaptation models draw their features from the frozen IsaacLab
-collection, and here the interesting question is not what goes in but
-what is kept out. A history window carries only quantities the deployed stack itself produces at
+The adaptation models use the frozen IsaacLab collection. A history window
+carries only quantities produced by the deployed stack at
 runtime: the five joint positions, the five joint velocities, the four
 cylinder pressure differences and the four previously applied valve commands,
 giving the eighteen-value row of Section~\ref{sec:models:aam}. The pressure
@@ -926,7 +799,7 @@ have been reordered or concatenated across run boundaries, which are the failure
 question, addressed by the validation study in
 Section~\ref{sec:sys:simscape-validation}.
 
-Two limitations of the Simscape material are carried forward honestly. Stroke
+Two limitations of the Simscape material remain. Stroke
 coverage reaches only $12\,\%$ on the head-pivot cylinder, which is also the
 cylinder the strict forward model predicts least well. The rod-force channel
 fails a piston-area consistency check on this export, so it carries zero

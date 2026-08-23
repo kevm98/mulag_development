@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch
+from matplotlib.legend_handler import HandlerTuple
 
 
 BASE = Path(__file__).resolve().parents[1]
@@ -515,7 +516,7 @@ def figure_4_6_coverage(cl_pool, ol_pool) -> None:
     fig, axes = plt.subplots(
         2, 2, figsize=(FULLW, 4.55), sharey=False,
         gridspec_kw=dict(hspace=0.47, wspace=0.28, left=0.10, right=0.985,
-                         top=0.92, bottom=0.12))
+                         top=0.82, bottom=0.12))
     axes = axes.ravel()
     for c, ax in enumerate(axes):
         lo = min(np.min(cl_pool[c]), np.min(ol_pool[c]))
@@ -523,9 +524,9 @@ def figure_4_6_coverage(cl_pool, ol_pool) -> None:
         bins = np.linspace(lo, hi, 36)
         ax.hist(cl_pool[c], bins=bins, density=True, color=CYL[c],
                 alpha=0.55, edgecolor="white", linewidth=0.22,
-                label="closed loop · 120 runs")
+                label="closed loop")
         ax.hist(ol_pool[c], bins=bins, density=True, histtype="step",
-                color=INK, linewidth=1.55, label="open loop · 4 runs")
+                color=INK, linewidth=1.55, label="open loop")
         ax.set_xlabel("extension [m]")
         ax.set_yticks([])
         ax.grid(True, axis="x")
@@ -533,10 +534,14 @@ def figure_4_6_coverage(cl_pool, ol_pool) -> None:
         panel_badge(ax, chr(ord("a") + c), CYL[c])
     axes[0].set_ylabel("density")
     axes[2].set_ylabel("density")
-    axes[0].legend(loc="upper right", fontsize=7.7)
-    fig.text(0.5, 0.985,
-             "filled = realistic pose coverage     outline = causal plateaus",
-             ha="center", va="top", color=MUTED, fontsize=8.7)
+    closed_swatches = tuple(Patch(facecolor=color, edgecolor="white")
+                             for color in CYL)
+    open_swatch = Patch(facecolor="white", edgecolor=INK, linewidth=1.55)
+    fig.legend([closed_swatches, open_swatch], ["closed loop", "open loop"],
+               handler_map={tuple: HandlerTuple(ndivide=None)},
+               ncol=2, loc="upper center",
+               bbox_to_anchor=(0.5, 0.945), fontsize=7.7,
+               columnspacing=1.4, handlelength=1.7)
     save(fig, "ch4_coverage.pdf")
 
 
