@@ -90,21 +90,31 @@ trajectory without online adaptation (RQ2, RQ5).} Every closed-loop result is
 measured on held-out meshes, on eleven trajectory families scored individually,
 and on plants drawn from sixteen reserved factor configurations whose keys are
 disjoint from training and validation by construction, so a scored run is an
-unseen plant rather than an unseen episode. Under those conditions \ppoIDFD{}
+unseen plant rather than an unseen episode -- on the inverse/forward stacks,
+unseen in its mechanical factors, since the hydraulic ones do not reach that
+plant. Under those conditions \ppoIDFD{}
 holds the lateral criterion in $32$ of $33$ cells at a median of
 $\unit[0.0281]{m}$, and the frozen inverse model beneath it, identified on
 Simscape alone, scores flat to a factor of $1.09$ across $64$ IsaacLab runs
 outside its training distribution. This is the broadest claim the work
 supports, and it requires no plant estimation of any kind.
 
-\textbf{The robust closed loop already absorbs the plant variation this
-work can generate (RQ5).} Doubling every deployment-factor deviation moves no
+\textbf{No robustness boundary was located, and the instrument that looked for
+it is bounded (RQ5).} Doubling every deployment-factor deviation moves no
 stack's median, and a $40\,\%$ reduction in valve effectiveness does not move
-the task either. The sweep was built to locate a breakdown point and finds none
-within twice the deployment range. This result bounds the disturbance rather
-than the controllers, and it determines the last finding. Where the closed loop
-is insensitive to plant variation, knowledge of plant identity has little to
-contribute.
+the task either. Neither result licenses a robustness claim, because an audit of
+the perturbation path shows that it cannot deliver the stress it requests: the
+inverse/forward plant consumes no factor input, so on two of the three stacks
+the sweep varied tool mass and centre-of-mass height alone, and on the third the
+hydraulic factors are clamped back to their identified ranges above scale $1$,
+with at most $62\,\%$ of actuator authority removable by that route
+(Section~\ref{sec:eval:delivered-stress}). What the closed loop absorbs is
+therefore established only for the perturbations this work can actually apply,
+and the point at which command authority becomes insufficient remains
+unmeasured. This qualification carries into the last finding: knowledge of plant
+identity has little to contribute \emph{where the plant variation reaching the
+controller is small}, which is the condition these experiments establish rather
+than the general one.
 
 The remaining findings concern adaptation itself (RQ6).
 
@@ -362,9 +372,11 @@ established.
 
 The closed-loop comparisons resolve differences to a few per cent over $33$
 paired conditions and do not establish equivalence. The available plant
-variation bounds the disturbance rather than the architecture: a stack shown to
-absorb a $40\%$ reduction in valve effectiveness and a doubling of every
-deployment factor has been shown to tolerate that much, not more. The three
+variation bounds the disturbance rather than the architecture, and more tightly
+than the sweep's labels suggest: a stack shown to absorb a $40\%$ reduction in
+valve effectiveness and a nominal doubling of every deployment factor has been
+shown to tolerate what actually reached it, which on the inverse/forward plant
+is a mechanical perturbation only. The three
 stacks are matched on evaluation but not on training budget, so the comparison
 describes three deployed controllers rather than three equally tuned training
 procedures.

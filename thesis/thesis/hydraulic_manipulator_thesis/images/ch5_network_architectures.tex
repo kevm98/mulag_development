@@ -56,8 +56,8 @@
   \pagetitle{Inverse dynamics network (ID)}
   \node[panel, minimum width=3.1cm, minimum height=7.45cm,
         anchor=south west] at (0.38,1.65) {};
-  \node[anchor=west, font=\sffamily\bfseries\fontsize{12.5}{14.5}\selectfont,
-        text=navy] at (0.66,8.70) {Normalised inputs - 28};
+  \node[anchor=center, font=\sffamily\bfseries\fontsize{8}{9.5}\selectfont,
+        text=navy] at (1.93,8.70) {Normalised inputs - 28};
   \accentcard{1.93}{7.35}{2.35}{1.18}{State\\[-1pt]\normalfont 16}{blue}{idstate}
   \accentcard{1.93}{5.38}{2.35}{1.18}{Desired motion\\[-1pt]\normalfont 8}{violet}{idtarget}
   \accentcard{1.93}{3.40}{2.35}{1.18}{Previous valve\\[-1pt]\normalfont 4}{orange}{idhistory}
@@ -74,9 +74,10 @@
      Dropout $\rightarrow$ Linear $+$ skip}{blue}{idtrunk}
   \draw[flow] (idproj.east) -- (idtrunk.west);
   \draw[draw=blue, line width=1pt, -{Latex[length=2.2mm,width=1.6mm]}]
-    ($(idtrunk.north west)+(0.45,0.12)$) .. controls +(0,0.70) and +(0,0.70) ..
+    ($(idtrunk.north west)+(0.45,0.12)$) .. controls +(0,0.48) and +(0,0.48) ..
     ($(idtrunk.north east)+(-0.45,0.12)$);
-  \node[small, anchor=south] at (8.65,7.28) {identity skip path};
+  \node[small, font=\sffamily\fontsize{10}{12}\selectfont, anchor=south]
+    at (8.65,7.48) {identity skip path};
   \accentcard{12.65}{5.38}{2.05}{2.05}{Output head\\[-1pt]\normalfont $512\rightarrow4$}{cyan}{idout}
   \draw[flow] (idtrunk.east) -- (idout.west);
   \accentcard{15.60}{5.38}{1.65}{1.42}{$\Delta\boldsymbol{u}_k$}{cyan}{iddu}

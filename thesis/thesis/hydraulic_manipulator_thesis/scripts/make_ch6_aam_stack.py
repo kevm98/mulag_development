@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Chapter 6 figure: the PPO-(AAM)-ID-FD stack.
+"""Chapter 6 figure: complete R, IF, and AIF control pipelines.
 
 Produces
     images/ch6_aam_stack.pdf
 
-Shows where the estimated latent enters: the causal AAM reads only the
-observable history window, and z-hat conditions BOTH the policy observation
-and the bounded adapter around the frozen inverse model. The dashed region is
-what the stack collapses to when the residual is zero, which is exactly
-PPO-ID-FD.
+The AIF lane distinguishes simulation-only latent supervision from the
+deployable history-to-estimate path.  The true latent never enters the deployed
+controller.
 
 Same house idiom and legibility budget as ``make_ch6_figures.py``: a 1000 px
 canvas included at \\textwidth, so no font below 17 px.
@@ -17,20 +15,24 @@ Run:  /home/rrlab/miniconda3/envs/thesis_figures/bin/python \
           scripts/make_ch6_aam_stack.py
 """
 from pathlib import Path
+import subprocess
 
-import cairosvg
+try:
+    import cairosvg
+except ImportError:  # macOS thesis workstation: use installed Chrome instead
+    cairosvg = None
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(__file__).resolve().parents[1]
 IMG = BASE / "images"
 DRAWIO = BASE / "drawio"
 DRAWIO.mkdir(exist_ok=True)
 
 ORANGE, BLUE, TEAL, PURPLE, RED, GRAY = (
-    "#C97816", "#2F5DA8", "#16847A", "#7A52A8", "#B64B42", "#69737D")
+    "#A58A68", "#7288A5", "#789A94", "#9182A4", "#A97976", "#7B838A")
 INK, MUTED = "#1F2933", "#66727E"
 FONT = "DejaVu Sans, Arial, sans-serif"
 
-CANVAS, MIN_FONT = 1000, 17
+CANVAS, MIN_FONT = 1000, 19
 
 
 def _check(size):
@@ -69,7 +71,8 @@ def path(d, color=INK, sw=2.2, dash=None, marker="arrowhead"):
 def defs():
     out = ['<defs>']
     for name, col in (("arrowhead", INK), ("arrowpurple", PURPLE),
-                      ("arrowgray", GRAY), ("arrowteal", TEAL)):
+                      ("arrowgray", GRAY), ("arrowteal", TEAL),
+                      ("arroworange", ORANGE), ("arrowblue", BLUE)):
         out.append(
             f'<marker id="{name}" markerWidth="9" markerHeight="7" refX="8.5" '
             'refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" '
@@ -79,78 +82,116 @@ def defs():
 
 
 def build():
-    W, H = CANVAS, 580
+    W, H = 1000, 930
     s = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
          f'viewBox="0 0 {W} {H}">', defs(),
          f'<rect width="{W}" height="{H}" fill="white"/>']
 
-    # ---- estimation lane (top) -------------------------------------------
-    s.append(rect(58, 36, 250, 84, "#F4F7FC", BLUE, 2.2))
-    s.append(txt(183, 68, "observable history", 20, BLUE, "bold"))
-    s.append(txt(183, 96, "20 rows × 18, 1.0 s", 18, MUTED))
+    s.append(txt(500, 35, "Complete actuator-control pipelines", 27,
+                 INK, "bold"))
 
-    s.append(rect(360, 36, 232, 84, "#F4F7FC", BLUE, 2.2))
-    s.append(txt(476, 68, "causal AAM", 20, BLUE, "bold"))
-    s.append(txt(476, 96, "1-D CNN, 20 Hz", 18, MUTED))
-    s.append(arrow(310, 78, 356, 78, BLUE))
+    def lane(y, h, name, subtitle, fill, edge, label_fill):
+        s.append(rect(15, y, 970, h, fill, edge, 1.8, 10))
+        s.append(rect(20, y + 22, 80, h - 44, label_fill, edge, 2.2, 8))
+        s.append(txt(60, y + 65, name, 25, edge, "bold"))
+        s.append(txt(60, y + 94, subtitle, 19, INK, "bold"))
 
-    s.append(rect(648, 38, 150, 80, "#F6F2FA", PURPLE, 2.2))
-    s.append(txt(723, 72, "&#7825;", 26, PURPLE, "bold"))
-    s.append(txt(723, 100, "2 values", 18, MUTED))
-    s.append(arrow(594, 78, 644, 78, BLUE))
+    def block(x, y, w, h, title, equation=None, fill="#FFFFFF", sw=1.9,
+              edge=INK, detail_size=26):
+        s.append(rect(x, y, w, h, fill, edge, sw, 7))
+        if equation:
+            multi = isinstance(equation, (tuple, list))
+            s.append(txt(x + w / 2, y + 29, title, 20, INK, "bold"))
+            if multi:
+                for offset, line in zip((58, 86), equation):
+                    s.append(txt(x + w / 2, y + offset, line, detail_size,
+                                 INK, "500"))
+            else:
+                s.append(txt(x + w / 2, y + 68, equation, detail_size,
+                             INK, "500"))
+        else:
+            s.append(txt(x + w / 2, y + h / 2 + 7, title, 20,
+                         INK, "bold"))
 
-    # z-hat -> policy observation
-    s.append(path("M 690 120 L 690 152 L 183 152 L 183 306", PURPLE, 2.2,
-                  marker="arrowpurple"))
-    s.append(txt(437, 145, "conditions the policy", 18, PURPLE))
+    # R: policy command is realized by the command ROM.
+    lane(55, 170, "R", "ROM", "#FFFFFF", ORANGE, "#F4F0EA")
+    block(112, 78, 135, 100, "Policy  πR", "cₖ = πᴿ(oₖ)", "#FAF7F2",
+          edge=ORANGE, detail_size=24)
+    block(285, 78, 185, 100, "Command ROM", ("Δx̂ₖ = fᴿ", "(sₖ,cₖ)"),
+          "#FAF7F2", edge=ORANGE)
+    block(510, 78, 195, 100, "Target update",
+          ("x*ₖ₊₁ = clip", "(xₖ+Δx̂ₖ)"), "#FAF7F2", edge=ORANGE,
+          detail_size=25)
+    block(745, 78, 190, 100, "PhysX arm", "xₖ₊₁ , oₖ₊₁", "#F4F7F4",
+          edge="#859888", detail_size=25)
+    for a, b in ((247, 281), (470, 506), (705, 741)):
+        s.append(arrow(a, 128, b, 128, ORANGE, marker="arroworange"))
+    s.append(path("M 840 180 L 840 204 L 180 204 L 180 182", GRAY,
+                  1.8, marker="arrowgray"))
 
-    # z-hat -> adapter
-    s.append(path("M 762 120 L 762 176 L 575 176 L 575 210", PURPLE, 2.2,
-                  marker="arrowpurple"))
-    s.append(txt(786, 160, "conditions the adapter", 18, PURPLE,
-                 anchor="start"))
+    # IF: inverse valve command followed by strict forward prediction.
+    lane(245, 195, "IF", "ID → FD", "#FFFFFF", BLUE, "#EDF1F5")
+    block(104, 272, 125, 100, "Policy  πIF", "cₖ = πIF(oₖ)", "#F4F6F8",
+          edge=BLUE, detail_size=22)
+    block(260, 272, 150, 100, "Inverse model", ("Δuₖ = fID", "(sₖ,cₖ)"),
+          "#F4F6F8", edge=BLUE, detail_size=24)
+    block(441, 272, 155, 100, "Valve update",
+          ("uₖ = clip(", "uₖ₋₁+Δuₖ)"), "#F4F6F8", edge=BLUE,
+          detail_size=24)
+    block(627, 272, 145, 100, "Forward model", ("Δx̂ₖ = fFD", "(sₖ,uₖ)"),
+          "#F4F6F8", edge=BLUE, detail_size=24)
+    block(803, 272, 158, 100, "Target + PhysX", "x*ₖ₊₁ → oₖ₊₁",
+          "#F4F7F4", edge="#859888", detail_size=23)
+    for a, b in ((229, 256), (410, 437), (596, 623), (772, 799)):
+        s.append(arrow(a, 322, b, 322, BLUE, marker="arrowblue"))
+    s.append(path("M 882 374 L 882 414 L 166 414 L 166 376", GRAY,
+                  1.8, marker="arrowgray"))
 
-    # ---- the bounded adapter ---------------------------------------------
-    s.append(rect(453, 212, 244, 78, "#F6F2FA", PURPLE, 2.2))
-    s.append(txt(575, 242, "bounded adapter", 19, PURPLE, "bold"))
-    s.append(txt(575, 270, "scale 0.25, clipped", 18, MUTED))
+    # AIF: a deployable causal estimate, plus a clearly isolated training-only
+    # target inspired by the user's reference.  True z never reaches policy or
+    # plant at deployment.
+    lane(465, 440, "AIF", "AAM + IF", "#FFFFFF", PURPLE, "#F2EFF5")
+    s.append(rect(108, 486, 330, 68, "#FCFAF5", ORANGE, 1.7, 7,
+                  dash="7 6"))
+    s.append(txt(126, 512, "TRAINING ONLY", 19, ORANGE, "bold", "start"))
+    s.append(txt(273, 541, "true z  →  loss ‖z − ẑ‖²", 24, INK, "500"))
 
-    # ---- the frozen PPO-ID-FD core ---------------------------------------
-    s.append(rect(336, 316, 476, 108, "#FBFBFC", GRAY, 2.0, 14, dash="7 6"))
+    block(108, 640, 150, 100, "History Hₖ", ("20 samples", "× 18 signals"),
+          "#F6F7F8", edge=GRAY, detail_size=24)
+    block(292, 640, 150, 100, "Causal AAM", ("ẑₖ = fAAM", "(Hₖ)"),
+          "#F1F6F5", 2.1, edge=TEAL, detail_size=24)
+    s.append(arrow(258, 690, 288, 690, TEAL, marker="arrowteal"))
+    s.append(f'<circle cx="492" cy="690" r="31" fill="#F1F6F5" '
+             f'stroke="{TEAL}" stroke-width="2.2"/>')
+    s.append(txt(492, 698, "ẑₖ", 23, INK, "bold"))
+    s.append(arrow(442, 690, 457, 690, TEAL, marker="arrowteal"))
+    s.append(path("M 273 554 L 273 580 L 492 580 L 492 657", GRAY,
+                  1.7, dash="6 5", marker="arrowgray"))
 
-    s.append(rect(356, 328, 158, 84, "#EFF6F5", TEAL, 2.2))
-    s.append(txt(435, 360, "frozen ID", 20, TEAL, "bold"))
-    s.append(txt(435, 388, "target → valve", 18, MUTED))
+    block(558, 552, 165, 100, "Policy  πAIF", "cₖ=πAIF(oₖ,ẑₖ)", "#F5F2F7",
+          edge=PURPLE, detail_size=23)
+    block(558, 742, 165, 100, "Base inverse",
+          ("uᵇᵃˢᵉ =", "fID(sₖ,cₖ)"), "#F4F6F8", edge=BLUE,
+          detail_size=24)
+    block(766, 635, 205, 110, "Bounded adapter",
+          ("uₖ = clip(", "uᵇᵃˢᵉ+0.25 gψ)"), "#F5F2F7", 2.1,
+          edge=PURPLE, detail_size=25)
+    block(766, 755, 205, 100, "FD + target + PhysX",
+          ("Δx̂ₖ=fFD(sₖ,uₖ)", "x*ₖ₊₁ → PhysX"), "#F1F6F6", edge=TEAL,
+          detail_size=22)
 
-    s.append(f'<circle cx="575" cy="370" r="27" fill="#F6F2FA" '
-             f'stroke="{PURPLE}" stroke-width="2.2"/>')
-    s.append(txt(575, 379, "+", 27, PURPLE, "bold"))
-    s.append(arrow(516, 370, 544, 370))
-    s.append(path("M 575 290 L 575 339", PURPLE, 2.2, marker="arrowpurple"))
-
-    s.append(rect(634, 328, 162, 84, "#EFF6F5", TEAL, 2.2))
-    s.append(txt(715, 360, "frozen FD", 20, TEAL, "bold"))
-    s.append(txt(715, 388, "valve → Δx", 18, MUTED))
-    s.append(arrow(604, 370, 630, 370))
-
-    s.append(txt(574, 448, "= PPO-ID-FD when the residual is zero", 18, MUTED,
-                 style="italic"))
-
-    # ---- policy and plant -------------------------------------------------
-    s.append(rect(58, 328, 250, 84, "#FDF6EE", ORANGE, 2.2))
-    s.append(txt(183, 360, "PPO policy", 20, ORANGE, "bold"))
-    s.append(txt(183, 388, "68 obs → desired motion", 18, MUTED))
-    s.append(arrow(310, 370, 352, 370))
-
-    s.append(rect(634, 486, 162, 76, "#F3F4F5", INK, 2.2))
-    s.append(txt(715, 516, "PhysX", 20, INK, "bold"))
-    s.append(txt(715, 544, "the plant", 18, MUTED))
-    s.append(path("M 715 412 L 715 482", INK, 2.2))
-
-    # feedback to the history window, routed clear of every block
-    s.append(path("M 630 524 L 22 524 L 22 78 L 54 78", GRAY, 2.2, dash="6 5",
-                  marker="arrowgray"))
-    s.append(txt(330, 546, "measured state and previous command", 18, MUTED))
+    s.append(path("M 523 674 L 540 674 L 540 602 L 554 602", PURPLE,
+                  2.2, marker="arrowpurple"))
+    s.append(path("M 523 706 L 746 706 L 746 674 L 762 674", PURPLE,
+                  2.2, marker="arrowpurple"))
+    s.append(arrow(640, 656, 640, 738, BLUE, 2.2, marker="arrowblue"))
+    s.append(path("M 723 792 L 744 792 L 744 724 L 762 724", BLUE,
+                  2.2, marker="arrowblue"))
+    s.append(arrow(868, 749, 868, 751, TEAL, 2.2, marker="arrowteal"))
+    s.append(path("M 971 805 L 978 805 L 978 868 L 183 868 L 183 744",
+                  GRAY, 1.8, marker="arrowgray"))
+    s.append(txt(580, 895, "deployment feedback: measured state and previous command",
+                 20, MUTED))
 
     s.append('</svg>')
     return "".join(s), W, H
@@ -158,11 +199,24 @@ def build():
 
 def main():
     svg, W, H = build()
-    (DRAWIO / "ch6_aam_stack.svg").write_text(svg)
-    cairosvg.svg2pdf(bytestring=svg.encode(),
-                     write_to=str(IMG / "ch6_aam_stack.pdf"),
-                     output_width=W, output_height=H)
-    print("wrote", IMG / "ch6_aam_stack.pdf")
+    svg_path = DRAWIO / "ch6_aam_stack.svg"
+    pdf_path = IMG / "ch6_aam_stack.pdf"
+    svg_path.write_text(svg)
+    if cairosvg is not None:
+        cairosvg.svg2pdf(bytestring=svg.encode(), write_to=str(pdf_path),
+                         output_width=W, output_height=H)
+    else:
+        chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        html_path = DRAWIO / ".ch6_aam_stack_print.html"
+        html_path.write_text(
+            f'<style>@page{{size:{W}px {H}px;margin:0}}'
+            'html,body{margin:0;padding:0}</style>' + svg)
+        subprocess.run(
+            [str(chrome), "--headless", "--disable-gpu", "--no-pdf-header-footer",
+             f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        html_path.unlink()
+    print("wrote", pdf_path)
 
 
 if __name__ == "__main__":

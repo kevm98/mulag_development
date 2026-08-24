@@ -52,15 +52,13 @@ policy.
 
 \begin{figure}[tb]
   \centering
-  \includegraphics[width=.92\textwidth]{images/ch6_teacher_student}
-  \caption{Where the classical controller lives. At training time the
-  privileged teacher reads quantities the deployed system cannot
-  (the exact terrain height under the cutter and the true contact force)
-  and converts them into a desired cylinder target, which is then
-  pushed through \emph{the student's own} action chain and plant. At
-  deployment the teacher is gone entirely: the policy is the whole
-  controller, and no nominal command is summed with its output. The
-  distilled actor is the only thing that crosses the boundary.}
+  \includegraphics[width=\textwidth]{images/ch6_teacher_student}
+  \caption{Training supervision and deployment. Simulator-only terrain and
+  contact signals drive the DLS teacher, which supplies DAgger labels to the
+  actor. At deployment only the lower feedback loop remains: measured
+  observations pass through the PPO actor, the shared cylinder interface and
+  the selected R, IF or AIF actuator path before PhysX updates the arm. No
+  nominal command is added to the policy output.}
   \label{fig:ctrl:teacher-student}
 \end{figure}
 
@@ -106,12 +104,18 @@ Section~\ref{sec:sys:task-jacobian},
 %
 \begin{equation}
   \label{eq:ctrl:teacher-dls}
-  \Delta\bm{x}^{*}_{1:3}
-    = \operatorname{clip}\Bigl(
-        g\, \bm{J}_c^{+}\, \bm{W}\bm{e},\;
-        \pm\, \Delta x_{\max}\Bigr),
-  \qquad g = 0.30,
-  \qquad \Delta x_{\max} = \unit[3]{mm},
+  \begin{aligned}
+    \bm{J}_c^{\#}(\lambda)
+      &= \bm{J}_c^{\mathsf T}
+         \left(\bm{J}_c\bm{J}_c^{\mathsf T}
+               + \lambda^2\bm{I}\right)^{-1}, \\
+    \Delta\bm{x}^{*}_{1:3}
+      &= \operatorname{clip}\Bigl(
+          g\, \bm{J}_c^{\#}(\lambda)\, \bm{W}\bm{e},\;
+          \pm\, \Delta x_{\max}\Bigr),
+      \quad g = 0.30,
+      \quad \Delta x_{\max} = \unit[3]{mm}.
+  \end{aligned}
 \end{equation}
 %
 with $\bm{W}$ the lateral weighting and the per-step clamp bounding how far any
@@ -127,7 +131,7 @@ controller that closes quickly on the task error simply excites it.
   \caption{Feedback realization of the damped least-squares teacher of
   \eqref{eq:ctrl:teacher-dls}. The weighted task error is scaled by $g$, mapped
   to the first three cylinder coordinates by the measured damped inverse
-  $\bm{J}_c^{+}$, and clipped to $\pm\Delta x_{\max}$ per tick. Cylinder~4 is
+  $\bm{J}_c^{\#}(\lambda)$, and clipped to $\pm\Delta x_{\max}$ per tick. Cylinder~4 is
   held at its head-down reference. Cutter position closes the task-space loop
   and the measured cylinder state updates $\bm{J}_c$ at every step. The loop is
   used only for teaching and data collection, never at deployment.}
@@ -224,10 +228,9 @@ actuator interface, ten of pose and context, and twelve of model error.
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch6_observation}
-  \caption{The $66$-value policy observation, drawn to scale by group. Every
-  channel is available or computable at runtime on the target machine: some are
-  measured, some are derived from measurements, and the model-error group is
-  estimated by the actuator models rather than sensed. No trajectory-family
+  \caption{The $66$-value policy observation, drawn to scale by group. The
+  channels combine measurements, derived quantities and actuator-model
+  estimates. No trajectory-family
   label, no physical factor vector and no true latent enters the actor.
   \ppoAAMIDFD{} appends the two estimated latent channels to this vector,
   giving $68$, and is reported as the different architecture that it is.}
@@ -258,18 +261,21 @@ shortcomings, which is what a fair comparison requires.
 
 The policy emits $\bm{a} \in \mathbb{R}^4$, sampled from its Gaussian at
 training time and taken at the mean for evaluation. Between that sample and the
-PhysX cylinder target sit five stages, shown in
-Figure~\ref{fig:ctrl:action-chain}. Every one of them can only \emph{reduce}
-authority. None can introduce motion the policy did not request.
+PhysX cylinder target sit five bounding stages. Figure~\ref{fig:ctrl:action-chain}
+places them in the complete PPO actor--critic loop. The critic is used only
+during training; the actor and bounded action interface form the deployed
+controller. Each bounding stage can only \emph{reduce} authority and cannot
+introduce motion the policy did not request.
 
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch6_action_chain}
-  \caption{The action chain. With no nominal controller to explore around, the
-  contract itself is the safety argument: a rate limit, an exponential filter,
-  a limit shield that fades authority as travel headroom is consumed, a small
-  per-step command scale, and an anti-windup cap on how far the integrated
-  target may lead the measured extension.}
+  \caption{PPO actor--critic formulation and deployed control path. The actor
+  maps the observation to a four-dimensional Gaussian action. Rate limiting,
+  exponential filtering, the travel shield, command scaling and the target-lead
+  cap bound that action before the selected R, IF or AIF actuator path drives
+  the PhysX arm. The critic and reward update are training-only; measured state
+  closes the deployed loop.}
   \label{fig:ctrl:action-chain}
 \end{figure}
 
@@ -498,10 +504,10 @@ teacher is still driving, reaches its minimum around the handover, and then
 distribution shift DAgger exists to expose: the student is now visiting states
 the teacher never chose, and the teacher's advice on those states is new
 information rather than a repetition of what has already been fitted.
-Panel~(c) confirms that the closed-loop task metrics stay in the neighbourhood
-of the teacher's own, without matching them.
+Panel~(c) shows the corresponding closed-loop task metrics. They remain near
+the teacher's preflight values without matching them.
 
-\begin{figure}[tb]
+\begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch6_distillation}
   \caption{A measured distillation run for the \ppoROM{} stack, from the stored
@@ -509,8 +515,8 @@ of the teacher's own, without matching them.
   first $70\,\%$ of iterations. (b)~Behaviour-cloning loss falls by over an
   order of magnitude under teacher execution, then rises once the student is alone,
   the distribution shift that DAgger is designed to surface, not a
-  regression. (c)~Closed-loop task metrics during distillation. Dotted lines
-  are the teacher's own measured values from
+  regression. (c)~Cut-height error, lateral error and ground-contact fraction;
+  dotted lines mark the teacher's preflight values from
   Table~\ref{tab:ctrl:teacher}.}
   \label{fig:ctrl:distillation}
 \end{figure}
@@ -735,86 +741,82 @@ travel far from the last point at which proxy and intent were measured to
 agree. In this construction distillation is no longer the endpoint: it is
 $\vartheta_{\mathrm{ref}}^{(0)}$.
 
-Algorithm~\ref{alg:ctrl:anchored} states the construction in full.
+Algorithm~\ref{alg:ctrl:anchored} summarizes the procedure in five stages.
+The first two produce the initial verified anchor. Stages~3 and~4 repeat for
+each PPO block, and Stage~5 returns the last promoted checkpoint.
 
 \begin{algorithm}[!ht]
   \small
   \DontPrintSemicolon
   \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
-  \Input{privileged teacher $\pi_{T}$; gates $\bm{G}$ with thresholds
-    $\bm{g}^{\star}$; bounds $\delta_{\mathrm{upd}}=0.01$,
-    $\delta_{\mathrm{ref}}=0.05$; anchor weight
-    $\lambda_{\mathrm{ref}}=0.10$; fixed $\sigma=0.15$;
-    $\epsilon=0.1$, $\gamma=0.97$, $\lambda_{\mathrm{GAE}}=0.95$;
-    $\eta_{\mathrm{actor}}=10^{-5}$, $\eta_{\mathrm{critic}}=10^{-4}$}
-  \Output{accepted policy $\vartheta^{\star}$ with
-    $\bm{G}(\vartheta^{\star})\preceq\bm{g}^{\star}$}
-  \BlankLine
-  \tcp{Layer 1: a physically feasible student}
+  \Input{teacher $\pi_T$; gate test
+    $\bm{G}(\vartheta)\preceq\bm{g}^{\star}$; $M$ PPO blocks; anchored loss
+    and divergence bounds from Equations~\eqref{eq:ctrl:anchored-loss}
+    and~\eqref{eq:ctrl:bounds}}
+  \Output{last promoted actor $\vartheta^{\star}$ satisfying the gate test}
+  \tcp{\textbf{Stage 1 -- Distil a feasible actor}}
+  $\mathcal{D}\leftarrow$ DAgger states labelled by teacher mean action
+    $\bm{y}^{T}$\;
   $\vartheta \leftarrow \arg\min_{\vartheta}
-    \mathbb{E}\bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$
-    on DAgger states
-    \tcp*{on the mean, not a sample}
-  discard $\pi_{T}$
-    \tcp*{never in the loop again}
-  \BlankLine
-  \tcp{Layer 2: critic warm-up, actor frozen}
+    \mathbb{E}_{(\bm{o},\bm{y}^{T})\sim\mathcal{D}}
+    \bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$\;
+  remove $\pi_T$ from the controller
+    \tcp*{all later rollouts are teacher-free}
+  \tcp{\textbf{Stage 2 -- Warm the critic and set the first anchor}}
   freeze $\vartheta$ and the observation normalizers\;
-  \For{$150$ iterations}{
+  \For{$j\leftarrow1$ \KwTo $150$}{
+    roll out $\pi_{\vartheta}$ and set
     $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
       \nabla_{\psi}\mathcal{L}_{V}(\psi)$\;
   }
-  assert $\vartheta_{\text{after}}=\vartheta_{\text{before}}$\;
-  $\vartheta_{\mathrm{ref}} \leftarrow \vartheta$
-    \tcp*{block-0 anchor}
-  \BlankLine
-  \tcp{Layer 3: anchored PPO in blocks}
-  \For{block $m\leftarrow 0,1,2,\dots$}{
-    \For{each iteration of block $m$}{
+  verify $\vartheta_{\mathrm{after}}=\vartheta_{\mathrm{before}}$\;
+  $\vartheta_{\mathrm{ref}}\leftarrow\vartheta$;
+    $\vartheta^{\star}\leftarrow\vartheta$
+    \tcp*{initial verified anchor}
+  \For{block $m\leftarrow0$ \KwTo $M-1$}{
+    \tcp{\textbf{Stage 3 -- Train inside the frozen reference bound}}
+    freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
+    \For{each PPO iteration in block $m$}{
       collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
-      compute GAE advantages from $\gamma,\lambda_{\mathrm{GAE}}$; normalize\;
-      snapshot $(\vartheta,\psi,\text{optimizer})$\;
-      \For{$3$ epochs, each over the minibatches}{
+      compute and normalize GAE; save snapshot $\mathcal{S}$;
+        set $\vartheta_{\mathrm{old}}\leftarrow\vartheta$\;
+      \For{$3$ epochs over the rollout minibatches}{
         \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
-          > \delta_{\mathrm{upd}}$}{\textbf{break}
-          \label{alg:line:earlystop}}
-        $\mathcal{L} \leftarrow \mathcal{L}_{\mathrm{PPO}}
-          + \mathcal{L}_{V} - \beta\mathcal{H}
-          + \lambda_{\mathrm{ref}}\,
-            \mathrm{KL}(\pi_{\mathrm{ref}}\|\pi_{\vartheta})$\;
-        step Adam on $\mathcal{L}$ with
-          $\eta_{\mathrm{actor}},\eta_{\mathrm{critic}}$\;
+          >\delta_{\mathrm{upd}}$}{stop the update epochs}
+        update actor and critic using Equation~\eqref{eq:ctrl:anchored-loss}\;
       }
-      $D_{\mathrm{upd}}\leftarrow
-        \mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})$,\quad
-      $D_{\mathrm{ref}}\leftarrow
-        \mathrm{KL}(\pi_{\mathrm{ref}}\|\pi_{\vartheta})$
-        \tcp*{over the whole rollout}
-      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ non-finite}{
-        restore $\vartheta$, $\psi$ and the optimizer\;
+      compute $(D_{\mathrm{upd}},D_{\mathrm{ref}})$ on the full rollout
+        \tcp*{full rollout}
+      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ is non-finite}{
+        restore the complete snapshot $\mathcal{S}$\;
       }
-      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{\emph{or}}
+      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{or}
         $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
-        restore $\vartheta$ and the actor optimizer group; \textbf{retain}
-          the critic fit \label{alg:line:reject}
-          \tcp*{the bounds constrain the policy, not $V$}
+        restore the actor and its optimizer moments from $\mathcal{S}$;
+          retain the new critic fit\;
       }
     }
-    score the block's checkpoints on $\ge 3$ held-out terrain meshes;
-      aggregate $\bm{G}$ to the worst mesh, and to the worst path family for
-      the tracking gates\;
-    \eIf{some candidate $\vartheta^{\star}$ has
-      $\bm{G}(\vartheta^{\star})\preceq\bm{g}^{\star}$}{
-      $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$; reset the
-        \emph{actor} optimizer moments, retain the critic's
-        \label{alg:line:promote}\;
+    \tcp{\textbf{Stage 4 -- Evaluate the block and promote a passing checkpoint}}
+    score every saved checkpoint on at least three held-out terrain meshes\;
+    aggregate each gate to the worst mesh and, for tracking gates, the worst
+      path family\;
+    $\mathcal{C}\leftarrow
+      \{\vartheta_c:\bm{G}(\vartheta_c)\preceq\bm{g}^{\star}\}$\;
+    \eIf{$\mathcal{C}\neq\varnothing$}{
+      choose $\vartheta^{\star}\in\mathcal{C}$ using the fixed checkpoint
+        selection rule\;
+      load $\vartheta\leftarrow\vartheta^{\star}$ and set
+        $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
+      reset the actor optimizer moments; retain the critic state\;
     }{
-      keep $\vartheta_{\mathrm{ref}}$; the block is not promoted\;
+      leave $\vartheta_{\mathrm{ref}}$ unchanged; do not promote the block\;
     }
   }
-  \caption{Reference-anchored PPO for the \ppoROM{} verge policy. The teacher
-  appears only in layer~1 and the reference only as a divergence target: at
-  every step of layer~3 the plant is driven by $\pi_{\vartheta}$ alone.}
+  \tcp{\textbf{Stage 5 -- Return the deployable policy}}
+  \Return{$\vartheta^{\star}=\vartheta_{\mathrm{ref}}$}\;
+  \caption{Five-stage reference-anchored PPO procedure. The teacher is used
+  only in Stage~1. All PPO rollouts are controlled by $\pi_{\vartheta}$ alone,
+  and the frozen reference moves only when a checkpoint passes every gate.}
   \label{alg:ctrl:anchored}
 \end{algorithm}
 
@@ -968,23 +970,23 @@ from the run manifest rather than assumed to match.
 \label{sec:ctrl:ppo-idaamfd}
 
 \ppoAAMIDFD{} adds online adaptation to the \ppoIDFD{} path and changes nothing
-else about the plant. At every model tick the AAM of
+else about the plant. Figure~\ref{fig:ctrl:aam-stack} compares the complete R,
+IF and AIF signal paths. At every model tick the AAM of
 Section~\ref{sec:models:aam} reads the observable history window and produces
-$\hat{\bm{z}}$, which enters the stack in two places, shown in
-Figure~\ref{fig:ctrl:aam-stack}: it is appended to the policy observation, and
+$\hat{\bm{z}}$, which enters AIF in two places: it is appended to the policy observation, and
 it conditions the bounded adapter that corrects the frozen inverse model's
 valve command. The forward model, the base inverse model and the command ROM
 are untouched.
 
-\begin{figure}[tb]
+\begin{figure}[H]
   \centering
-  \includegraphics[width=.92\textwidth]{images/ch6_aam_stack}
-  \caption{The \ppoAAMIDFD{} stack. The causal AAM reads only the observable
-  history window and estimates $\hat{\bm{z}}$, which conditions both the policy
-  observation and the bounded adapter around the frozen inverse model. The
-  forward model and the plant are unchanged from \ppoIDFD, and during warm-up or
-  on an invalid estimate the correction is exactly zero, so the actuator path
-  reverts to \ppoIDFD{} while the latent-conditioned actor stays in place.}
+  \includegraphics[width=\textwidth]{images/ch6_aam_stack}
+  \caption{Complete R, IF and AIF control pipelines. R maps policy commands
+  through the command ROM. IF composes the inverse and strict forward models.
+  AIF adds a causal history encoder whose estimate $\hat{\bm{z}}$ conditions
+  both the actor and the bounded inverse-model adapter. The true latent is a
+  simulation-only training target and is absent from deployment. All three
+  paths produce the same bounded cylinder target for the PhysX arm.}
   \label{fig:ctrl:aam-stack}
 \end{figure}
 

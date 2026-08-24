@@ -18,16 +18,21 @@ Run:  /home/rrlab/miniconda3/envs/thesis_figures/bin/python \
 from pathlib import Path
 import json
 import base64
+import subprocess
 
-import cairosvg
+try:
+    import cairosvg
+except ImportError:  # macOS thesis workstation: use installed Chrome instead
+    cairosvg = None
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[4]
 IMG = BASE / "images"
 DRAWIO = BASE / "drawio"
 DRAWIO.mkdir(exist_ok=True)
 
-DISTILL_REPORT = Path(
-    "/home/rrlab/rrlab_mulag/PPO_ROM/reports/distillation.json"
+DISTILL_REPORT = (
+    REPO / "archive/ppo_rom_retired_2026-08-16/PPO_ROM/reports/distillation.json"
 )
 
 ORANGE, BLUE, TEAL, PURPLE, RED, GRAY = (
@@ -69,14 +74,37 @@ def defs():
         '<marker id="arrowpurple" markerWidth="9" markerHeight="7" refX="8.5" '
         'refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" '
         f'fill="{PURPLE}"/></marker>'
+        '<marker id="arrowblue" markerWidth="9" markerHeight="7" refX="8.5" '
+        'refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" '
+        f'fill="{BLUE}"/></marker>'
+        '<marker id="arroworange" markerWidth="9" markerHeight="7" refX="8.5" '
+        'refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" '
+        f'fill="{ORANGE}"/></marker>'
+        '<marker id="arrowteal" markerWidth="9" markerHeight="7" refX="8.5" '
+        'refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" '
+        f'fill="{TEAL}"/></marker>'
         '</defs>'
     )
 
 
 def save(svg, name, W, H):
-    (DRAWIO / f"{name}.svg").write_text(svg)
-    cairosvg.svg2pdf(bytestring=svg.encode(), write_to=str(IMG / f"{name}.pdf"),
-                     output_width=W, output_height=H)
+    svg_path = DRAWIO / f"{name}.svg"
+    pdf_path = IMG / f"{name}.pdf"
+    svg_path.write_text(svg)
+    if cairosvg is not None:
+        cairosvg.svg2pdf(bytestring=svg.encode(), write_to=str(pdf_path),
+                         output_width=W, output_height=H)
+    else:
+        chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        html_path = DRAWIO / f".{name}_print.html"
+        html_path.write_text(
+            f'<style>@page{{size:{W}px {H}px;margin:0}}'
+            'html,body{margin:0;padding:0}</style>' + svg)
+        subprocess.run(
+            [str(chrome), "--headless", "--disable-gpu", "--no-pdf-header-footer",
+             f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        html_path.unlink()
     print("wrote", IMG / f"{name}.pdf")
 
 
@@ -215,33 +243,31 @@ def observation():
     groups = [
         (0, 9, "terrain profile",
          "nine forward height bins ahead of the cutter",
-         "#DCE6F2", BLUE, "#1e3f72"),
+         "#F1F4F7", "#8EA4B7", INK),
         (9, 3, "task error",
          "cut-height and lateral error, cutter vertical velocity",
-         "#FBE7C6", ORANGE, "#8a5410"),
+         "#F8F3EA", "#B8A078", INK),
         (12, 16, "cylinder state",
          "four extensions, four velocities, low/high travel headroom",
-         "#E8F1EF", TEAL, "#0e5f58"),
+         "#EFF5F4", "#88A8A3", INK),
         (28, 16, "actuator interface",
          "previous action, inferred valve, predicted increment, target lead",
-         "#E7DFF2", PURPLE, "#4b3170"),
+         "#F3F0F6", "#A596B3", INK),
         (44, 10, "pose and context",
          "head alignment and rate, truck speed, scan validity, head axis, "
          "contact force, path preview",
-         "#EDEFF1", GRAY, "#4a545e"),
+         "#F3F4F5", "#A0A7AD", INK),
         (54, 12, "model error",
          "cylinder tracking residual, actuator prediction residual, "
          "normalized effort",
-         "#F0D2CD", RED, "#7d332c"),
+         "#F8EFEF", "#B99490", INK),
     ]
 
     x0, x1 = 40, 960
     y, bar_h = 92, 62
     scale = (x1 - x0) / 66
 
-    s.append(T(500, 46, "The 66-value policy observation", 26, INK, "bold"))
-    s.append(T(500, 72, "every channel is something a real machine could "
-               "measure", 18, MUTED))
+    s.append(T(500, 54, "The 66-value policy observation", 26, INK, "bold"))
 
     for start_i, width, _n, _d, fill, stroke, dark in groups:
         gx = x0 + start_i * scale
@@ -286,64 +312,92 @@ def observation():
 # Figure 3: the action chain
 # --------------------------------------------------------------------------
 def action_chain():
-    W, H = CANVAS, 600
+    """PPO actor--critic formulation and bounded cylinder-action contract."""
+    W, H = 1200, 700
     s = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
          f'viewBox="0 0 {W} {H}">',
          f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>', defs()]
 
     def T(x, y, t, size, fill=INK, weight="normal", anchor="middle"):
-        return txt(x, y, t, _check(size), fill, weight, anchor)
+        if size < 20:
+            size = 20
+        return txt(x, y, t, size, fill, weight, anchor)
 
-    s.append(T(500, 44, "From raw policy output to PhysX cylinder target",
-               26, INK, "bold"))
-    s.append(T(500, 70, "every stage can only REDUCE authority", 18, MUTED))
+    s.append(T(600, 40, "PPO formulation and bounded cylinder control", 30,
+               INK, "bold"))
 
-    stages = [
-        ("raw action", "a &#8712; &#8477;&#8308;", "#FBE7C6", ORANGE, "#8a5410"),
-        ("rate limit", "|&#916;a| &#8804; 0.25 / step", "#DCE6F2", BLUE, "#1e3f72"),
-        ("EMA filter", "&#946; = 0.70", "#DCE6F2", BLUE, "#1e3f72"),
-        ("limit shield", "fades over 20 mm", "#DCE6F2", BLUE, "#1e3f72"),
-        ("command scale", "&#215; 4 mm per unit", "#E8F1EF", TEAL, "#0e5f58"),
-        ("target integrator", "lead &#8804; 18 mm", "#E8F1EF", TEAL, "#0e5f58"),
-        ("actuator + PhysX", "ROM | ID&#8594;FD | +adapter", "#E7DFF2",
-         PURPLE, "#4b3170"),
-    ]
+    # Observation tensor, drawn as a small stack in the spirit of the supplied
+    # architectural references without importing their encoder--decoder model.
+    for dx, dy in ((12, -12), (6, -6)):
+        s.append(rect(46 + dx, 263 + dy, 150, 126, "#FFFFFF", GRAY, 1.3, 7))
+    s.append(rect(46, 263, 150, 126, "#EAF3FC", BLUE, 2.2, 7))
+    s.append(T(121, 302, "Observation", 23, INK, "bold"))
+    s.append(T(121, 335, "oₖ", 26, BLUE, "bold"))
+    s.append(T(121, 366, "66 / 68 channels", 20, INK))
 
-    bw, bh, gap = 216, 78, 18
-    rows = [stages[:3], stages[3:6], stages[6:]]
-    ytop = 100
-    centres = []
-    for r, row in enumerate(rows):
-        n = len(row)
-        total = n * bw + (n - 1) * gap
-        x = (W - total) / 2
-        yy = ytop + r * (bh + 44)
-        for i, (name, detail, fill, stroke, dark) in enumerate(row):
-            s.append(rect(x, yy, bw, bh, fill, stroke, 2.2, 10))
-            s.append(T(x + bw / 2, yy + 32, name, 19, dark, "bold"))
-            s.append(T(x + bw / 2, yy + 58, detail, 17))
-            centres.append((x + bw / 2, yy, x, yy + bh))
-            if i < n - 1:
-                s.append(arrow(x + bw + 2, yy + bh / 2, x + bw + gap - 4,
-                               yy + bh / 2))
-            x += bw + gap
-        if r < len(rows) - 1:
-            nxt = ytop + (r + 1) * (bh + 44)
-            s.append(f'<path d="M{(W + total) / 2 - bw / 2} {yy + bh} '
-                     f'L{(W + total) / 2 - bw / 2} {yy + bh + 22} '
-                     f'L{(W - total) / 2 + bw / 2} {yy + bh + 22} '
-                     f'L{(W - total) / 2 + bw / 2} {nxt - 4}" fill="none" '
-                     f'stroke="{INK}" stroke-width="2.2" '
-                     f'marker-end="url(#arrowhead)"/>')
+    # Layered actor and critic blocks. The unequal widths communicate the
+    # actual 256--128--64 architecture more clearly than a dense node drawing.
+    def network(x, y, title, fill, edge, subtitle):
+        s.append(rect(x, y, 220, 128, fill, edge, 2.2, 8))
+        s.append(T(x + 110, y + 30, title, 23, INK, "bold"))
+        xs = (x + 20, x + 87, x + 154)
+        for xx, label in zip(xs, ("256", "128", "64")):
+            s.append(rect(xx, y + 52, 46, 28, "#FFFFFF", edge, 1.2, 4))
+            s.append(T(xx + 23, y + 73, label, 20, INK, "bold"))
+        s.append(T(x + 110, y + 110, subtitle, 20, INK))
 
-    s.append(rect(40, 440, 920, 140, "#FDF3F2", RED, 1.8, 12))
-    s.append(T(500, 470, "The ceiling this implies", 20, "#7d332c", "bold"))
-    s.append(T(500, 498, "4 mm of cylinder travel per step is the entire "
-               "authority budget, and it bounds", 18))
-    s.append(T(500, 522, "the lateral cutter rate at roughly 0.2 m/s. "
-               "Reference paths are DERIVED from", 18))
-    s.append(T(500, 546, "that ceiling, and a preflight check refuses a run "
-               "on a path that demands more.", 18))
+    network(244, 92, "Actor  πθ", "#F3ECFA", PURPLE, "ELU hidden layers")
+    network(244, 422, "Critic  Vφ", "#EDF4FB", BLUE, "training only")
+
+    # Clean branches from one observation; neither branch crosses a box.
+    s.append('<path d="M196 326 L218 326 L218 156 L240 156" fill="none" '
+             f'stroke="{BLUE}" stroke-width="2.5" marker-end="url(#arrowblue)"/>')
+    s.append('<path d="M196 326 L218 326 L218 486 L240 486" fill="none" '
+             f'stroke="{BLUE}" stroke-width="2.5" marker-end="url(#arrowblue)"/>')
+
+    s.append(rect(505, 92, 210, 128, "#FFF2E3", ORANGE, 2.2, 8))
+    s.append(T(610, 126, "Gaussian policy", 23, INK, "bold"))
+    s.append(T(610, 163, "aₖ ~ N(μθ(oₖ), σ²)", 21, INK))
+    s.append(T(610, 196, "aₖ ∈ [-1, 1]⁴", 21, INK, "bold"))
+    s.append(arrow(468, 156, 501, 156, ORANGE, 2.5, marker="arroworange"))
+
+    # One grouped safety contract gives the stages room while retaining the
+    # numerical limits that make the interface scientifically meaningful.
+    s.append(rect(758, 70, 390, 176, "#EAF7F4", TEAL, 2.4, 10))
+    s.append(T(953, 104, "Bounded action interface", 24, INK, "bold"))
+    s.append(T(953, 139, "rate 0.25  →  EMA 0.70  →  travel shield", 21))
+    s.append(T(953, 174, "Δx*ₖ = 4 mm · ãₖ", 23, INK, "bold"))
+    s.append(T(953, 208, "target lead ≤ 50 / 20 mm", 21, INK))
+    s.append(arrow(719, 156, 754, 156, TEAL, 2.5, marker="arrowteal"))
+
+    s.append(rect(798, 300, 310, 88, "#F2ECF9", PURPLE, 2.2, 8))
+    s.append(T(953, 335, "Actuator realization", 23, INK, "bold"))
+    s.append(T(953, 368, "R   |   IF   |   AIF", 22, PURPLE, "bold"))
+    s.append(arrow(953, 250, 953, 296, PURPLE, 2.5, marker="arrowpurple"))
+
+    s.append(rect(798, 450, 310, 92, "#EEF8F1", "#5F946D", 2.3, 8))
+    s.append(T(953, 486, "PhysX arm and terrain", 23, INK, "bold"))
+    s.append(T(953, 520, "oₖ₊₁,  rₖ", 22, "#477A54", "bold"))
+    s.append(arrow(953, 392, 953, 446, PURPLE, 2.5, marker="arrowpurple"))
+
+    s.append(rect(515, 438, 185, 92, "#EDF4FB", BLUE, 2.0, 8))
+    s.append(T(607, 474, "Value estimate", 21, INK, "bold"))
+    s.append(T(607, 506, "Vφ(oₖ)", 22, BLUE, "bold"))
+    s.append(arrow(468, 486, 518, 486, GRAY, 2.0, marker="arrowgray"))
+
+    # Reward and next-state feedback are separated vertically and terminate at
+    # the correct consumers; this avoids the crossing lines of the old figure.
+    s.append('<path d="M798 496 L742 496 L742 582 L354 582 L354 554" fill="none" '
+             f'stroke="{GRAY}" stroke-width="2.0" stroke-dasharray="7 6" '
+             'marker-end="url(#arrowgray)"/>')
+    s.append(T(552, 608, "reward rₖ updates actor and critic during training", 20,
+               MUTED))
+    s.append('<path d="M500 582 L500 248 L354 248 L354 224" fill="none" '
+             f'stroke="{GRAY}" stroke-width="1.8" stroke-dasharray="7 6" '
+             'marker-end="url(#arrowgray)"/>')
+    s.append('<path d="M953 546 L953 654 L121 654 L121 395" fill="none" '
+             f'stroke="{INK}" stroke-width="2.1" marker-end="url(#arrowhead)"/>')
+    s.append(T(548, 678, "measured next observation oₖ₊₁", 21, INK))
 
     s.append('</svg>')
     save("".join(s), "ch6_action_chain", W, H)
@@ -365,50 +419,70 @@ def distillation():
     cut = [h["mean_abs_cut_height_error_m"] for h in hist]
     lat = [h["mean_abs_lateral_error_m"] for h in hist]
     contact = [h["ground_contact_fraction"] for h in hist]
-
     pre = report["preflight"]
-
     plt.rcParams.update({
-        "font.family": "DejaVu Sans", "font.size": 9,
+        "font.family": "DejaVu Sans", "font.size": 12,
         "axes.edgecolor": INK, "axes.labelcolor": INK,
         "text.color": INK, "xtick.color": INK, "ytick.color": INK,
         "axes.spines.top": False, "axes.spines.right": False,
     })
-    fig, ax = plt.subplots(1, 3, figsize=(10.6, 3.1))
+    fig, ax = plt.subplots(3, 1, figsize=(8.2, 10.0))
 
-    ax[0].plot(it, prob, color=PURPLE, lw=1.9)
-    ax[0].fill_between(it, 0, prob, color=PURPLE, alpha=0.12)
+    ax[0].plot(it, prob, color="#777181", lw=2.4)
+    ax[0].fill_between(it, 0, prob, color="#E2DFE7", alpha=0.72)
     ax[0].set_xlabel("DAgger iteration")
     ax[0].set_ylabel("teacher execution probability")
     ax[0].set_ylim(-0.03, 1.03)
-    ax[0].set_title("(a) the teacher hands over", fontsize=9.5, loc="left")
+    ax[0].set_title("(a) Teacher-to-student handover", fontsize=13,
+                    loc="left", fontweight="bold")
     ax[0].axvline(84, color=GRAY, lw=1.0, ls="--")
     ax[0].annotate("student alone\nfrom here", xy=(84, 0.52),
-                   xytext=(52, 0.62), fontsize=8, color=MUTED,
+                   xytext=(50, 0.66), fontsize=11, color=MUTED,
                    arrowprops=dict(arrowstyle="->", color=GRAY, lw=1.0))
 
-    ax[1].semilogy(it, loss, color=BLUE, lw=1.6)
+    ax[1].semilogy(it, loss, color="#7189A6", lw=2.2)
     ax[1].set_xlabel("DAgger iteration")
     ax[1].set_ylabel("behaviour-cloning loss")
-    ax[1].set_title("(b) imitation error", fontsize=9.5, loc="left")
+    ax[1].set_title("(b) Imitation error", fontsize=13, loc="left",
+                    fontweight="bold")
     ax[1].axvline(84, color=GRAY, lw=1.0, ls="--")
+    ax[1].annotate("minimum near handover", xy=(82, min(loss)),
+                   xytext=(48, min(loss) * 2.4), fontsize=11, color=MUTED,
+                   arrowprops=dict(arrowstyle="->", color=GRAY, lw=1.0))
 
-    ax[2].plot(it, cut, color=ORANGE, lw=1.5, label="cut-height error [m]")
-    ax[2].plot(it, lat, color=RED, lw=1.5, label="lateral error [m]")
-    ax[2].plot(it, contact, color=TEAL, lw=1.5, label="ground contact [--]")
-    ax[2].axhline(pre["mean_abs_lateral_error_m"], color=RED, lw=1.0,
-                  ls=":", alpha=0.8)
-    ax[2].axhline(pre["ground_contact_fraction"], color=TEAL, lw=1.0,
-                  ls=":", alpha=0.8)
-    ax[2].set_xlabel("DAgger iteration")
-    ax[2].set_ylim(0.0, 1.62)
-    ax[2].set_title("(c) task metrics, dotted = teacher", fontsize=9.5,
-                    loc="left")
-    ax[2].legend(frameon=False, fontsize=7.4, loc="upper right",
-                 ncol=1, borderaxespad=0.2, handlelength=1.4)
+    # Restore the measured task metrics below the two enlarged training plots.
+    # Muted hues distinguish quantities without turning the figure into a
+    # presentation-style colour chart.
+    metric_colors = {
+        "cut": "#B69670", "lateral": "#B97E7E", "contact": "#719D96"
+    }
+    ax[2].plot(it, cut, color=metric_colors["cut"], lw=2.0,
+               label="cut-height error [m]")
+    ax[2].plot(it, lat, color=metric_colors["lateral"], lw=2.0,
+               label="lateral error [m]")
+    ax[2].plot(it, contact, color=metric_colors["contact"], lw=2.0,
+               label="ground contact [-]")
+    for key, value in (
+        ("cut", pre["mean_abs_cut_height_error_m"]),
+        ("lateral", pre["mean_abs_lateral_error_m"]),
+        ("contact", pre["ground_contact_fraction"]),
+    ):
+        ax[2].axhline(value, color=metric_colors[key], lw=1.25,
+                      ls=":", alpha=0.9)
     ax[2].axvline(84, color=GRAY, lw=1.0, ls="--")
+    ax[2].set_xlabel("DAgger iteration")
+    ax[2].set_ylabel("task metric")
+    ax[2].set_ylim(0.0, 1.05)
+    ax[2].set_title("(c) Closed-loop task metrics", fontsize=13, loc="left",
+                    fontweight="bold", pad=38)
+    # Keep every label outside the data region.  The caption identifies the
+    # dotted teacher-preflight references, so no explanatory text is needed
+    # over the curves themselves.
+    ax[2].legend(frameon=False, fontsize=10.2, loc="lower left", ncol=3,
+                 bbox_to_anchor=(0.0, 1.01), borderaxespad=0.0,
+                 handlelength=1.8, columnspacing=1.2)
 
-    fig.tight_layout()
+    fig.tight_layout(h_pad=2.0)
     out = IMG / "ch6_distillation.pdf"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
@@ -416,77 +490,84 @@ def distillation():
 
 
 def teacher_student():
-    """Image-led training/deployment comparison for Figure 6.1."""
-    W, H = 1200, 800
+    """Training-only teacher and deployable closed-loop controller."""
+    W, H = 1200, 720
     s = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
          f'viewBox="0 0 {W} {H}">',
          f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>', defs()]
 
     def T(x, y, value, size=18, fill=INK, weight="normal", anchor="middle",
           style="normal"):
-        return txt(x, y, value, size, fill, weight, anchor, 0, style)
+        return txt(x, y, value, max(size, 21), fill, weight, anchor, 0, style)
 
     def href(path):
         mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
-    # Training: real task context, privileged DLS teacher, and student actor.
-    s += [rect(20, 25, 1160, 405, "#FFFFFF", PURPLE, 2.2, 14),
-          T(45, 58, "TRAINING — privileged teacher supervises the student", 24,
-            "#4b3170", "bold", "start"),
-          rect(40, 80, 300, 275, "#FFFFFF", PURPLE, 1.8, 8),
-          f'<image x="50" y="90" width="280" height="210" '
-          f'preserveAspectRatio="xMidYMid slice" href="{href(IMG / "fme500_operation.jpg")}"/>',
-          rect(55, 302, 270, 45, "#E7DFF2", PURPLE, 1.4, 16),
-          T(190, 322, "exact terrain height", 15, "#4b3170", "bold"),
-          T(190, 340, "+ true contact force", 15, "#4b3170", "bold")]
+    s.append(T(600, 38, "Training supervision and deployed control loop", 30,
+               INK, "bold"))
 
-    s += [rect(380, 95, 315, 190, "#F3EFFA", PURPLE, 2.2, 10),
-          T(538, 128, "PRIVILEGED DLS TEACHER", 19, "#4b3170", "bold"),
-          rect(405, 150, 120, 64, "#FFFFFF", PURPLE, 1.5, 8),
-          T(465, 176, "contact", 17, "#4b3170", "bold"),
-          T(465, 199, "250 N", 16, MUTED),
-          rect(550, 150, 120, 64, "#FFFFFF", PURPLE, 1.5, 8),
-          T(610, 176, "verge line", 17, "#4b3170", "bold"),
-          T(610, 199, "lateral ×3", 16, MUTED),
-          T(538, 250, "Δx = 0.30 · J⁺e   |   cylinders 1–3", 17, INK, "bold")]
+    # Everything in this dashed lane is simulator-only and disappears after
+    # distillation. The restrained grayscale treatment makes that boundary
+    # immediately legible.
+    s += [rect(28, 65, 1144, 220, "#FFFFFF", "#D59A55", 1.8, 12,
+               dash="8 7"),
+          T(52, 96, "TRAINING ONLY", 20, MUTED, "bold", "start"),
+          rect(60, 120, 250, 112, "#F7F7F7", INK, 1.8, 8),
+          T(185, 153, "Privileged simulation", 20, INK, "bold"),
+          T(185, 184, "terrain height", 18, MUTED),
+          T(185, 211, "true contact force", 18, MUTED),
+          rect(382, 104, 250, 148, "#FFFFFF", INK, 2.0, 8),
+          T(507, 138, "DLS teacher", 22, INK, "bold"),
+          T(507, 176, "&#916;x* = clip(", 27, INK, "bold"),
+          T(507, 207, "g J# W e)", 27, INK, "bold"),
+          T(507, 238, "cylinders 1&#8211;4; C4 held", 17, MUTED),
+          rect(704, 120, 230, 112, "#F7F7F7", INK, 1.8, 8),
+          T(819, 153, "DAgger labels", 20, INK, "bold"),
+          T(819, 186, "teacher execution", 18, MUTED),
+          T(819, 213, "1 &#8594; 0", 19, INK, "bold"),
+          arrow(314, 176, 378, 176, INK, 2.3),
+          arrow(636, 176, 700, 176, INK, 2.3)]
 
-    s += [rect(780, 95, 360, 190, "#FBE7C6", ORANGE, 2.2, 10),
-          T(960, 132, "STUDENT POLICY", 20, "#8a5410", "bold"),
-          T(960, 166, "66 measurable observations", 17, INK),
-          T(960, 196, "four desired-cylinder actions", 17, INK),
-          T(960, 245, "DAgger: teacher execution 1 → 0", 16, MUTED),
-          arrow(695, 188, 770, 188, PURPLE, 2.8, marker="arrowpurple"),
-          T(733, 174, "BC label", 16, PURPLE, "bold")]
+    # Deployable loop. The only colour is inside the two simulation renders.
+    s += [T(52, 330, "DEPLOYMENT", 20, INK, "bold", "start"),
+          rect(42, 365, 166, 112, "#FFFFFF", INK, 2.0, 8),
+          T(125, 402, "Observation", 20, INK, "bold"),
+          T(125, 438, "o&#8342;", 23, INK, "bold"),
+          T(125, 463, "measurable", 17, MUTED),
+          rect(258, 365, 166, 112, "#F2F2F2", INK, 2.2, 8),
+          T(341, 403, "PPO actor", 21, INK, "bold"),
+          T(341, 439, "&#960;&#952;(o&#8342;)", 21, INK),
+          T(341, 464, "no nominal input", 17, MUTED),
+          arrow(212, 421, 254, 421, INK, 2.4)]
 
-    s += [rect(380, 325, 760, 65, "#DCE6F2", BLUE, 2.2, 10),
-          T(760, 353, "SAME ACTION CHAIN", 18, "#1e3f72", "bold"),
-          T(760, 378, "rate limit → filter → shield → bounded target", 16, MUTED),
-          arrow(538, 285, 538, 315, PURPLE, 2.4, marker="arrowpurple"),
-          arrow(960, 285, 960, 315, ORANGE, 2.4)]
+    s += [rect(474, 345, 196, 152, "#FFFFFF", INK, 2.0, 8),
+          f'<image x="489" y="354" width="166" height="92" '
+          f'preserveAspectRatio="xMidYMid meet" href="{href(IMG / "links/link_cylinder.png")}"/>',
+          T(572, 469, "desired cylinder", 19, INK, "bold"),
+          T(572, 492, "motion", 19, INK, "bold"),
+          arrow(428, 421, 470, 421, INK, 2.4),
+          rect(720, 365, 166, 112, "#F7F7F7", INK, 2.0, 8),
+          T(803, 401, "Actuator path", 20, INK, "bold"),
+          T(803, 438, "R | IF | AIF", 20, INK, "bold"),
+          T(803, 464, "bounded target", 17, MUTED),
+          arrow(674, 421, 716, 421, INK, 2.4)]
 
-    # Deployment: the distilled actor is the only controller that survives.
-    s += [rect(20, 465, 1160, 310, "#FFFFFF", TEAL, 2.2, 14),
-          T(45, 500, "DEPLOYMENT — the policy is the whole controller", 24,
-            "#0e5f58", "bold", "start"),
-          rect(45, 525, 250, 55, "#EDEFF1", GRAY, 1.8, 8, dash="7 6"),
-          T(170, 549, "teacher gone", 18, MUTED, "bold"),
-          T(170, 572, "no nominal command", 16, MUTED, "normal", "middle", "italic"),
-          rect(45, 605, 250, 105, "#FBE7C6", ORANGE, 2.2, 10),
-          T(170, 642, "DISTILLED ACTOR", 19, "#8a5410", "bold"),
-          T(170, 674, "observations → action", 17, INK),
-          arrow(300, 657, 390, 657, ORANGE, 3.0)]
+    s += [rect(936, 330, 222, 205, "#FFFFFF", INK, 2.0, 8),
+          f'<image x="946" y="340" width="202" height="150" '
+          f'preserveAspectRatio="xMidYMid meet" href="{href(IMG / "fme500_cad_iso_orange.png")}"/>',
+          T(1047, 514, "PhysX arm plant", 19, INK, "bold"),
+          arrow(890, 421, 932, 421, INK, 2.4)]
 
-    s += [rect(405, 605, 300, 105, "#DCE6F2", BLUE, 2.2, 10),
-          T(555, 640, "ACTION CHAIN", 19, "#1e3f72", "bold"),
-          T(555, 671, "same bounded contract", 17, INK),
-          arrow(710, 657, 770, 657, BLUE, 3.0),
-          rect(785, 525, 355, 205, "#FFFFFF", TEAL, 2.0, 8),
-          f'<image x="800" y="540" width="325" height="150" '
-          f'preserveAspectRatio="xMidYMid meet" href="{href(IMG / "unimog_mulag_iso.png")}"/>',
-          T(962, 712, "ROM | ID→FD | ID+AAM→FD → PhysX", 16, "#0e5f58", "bold"),
-          arrow(962, 730, 170, 730, GRAY, 2.0, dash="8 6", marker="arrowgray"),
-          T(565, 757, "measured plant state closes the deployed loop", 16, MUTED)]
+    # The teacher supervises the actor but never enters the deployed signal
+    # path. Measured state closes the lower loop with ample clearance.
+    s.append('<path d="M819 236 L819 300 L341 300 L341 361" fill="none" '
+             f'stroke="{PURPLE}" stroke-width="2.0" stroke-dasharray="7 6" '
+             'marker-end="url(#arrowpurple)"/>')
+    s.append(T(575, 291, "supervision", 17, MUTED))
+    s.append('<path d="M1047 539 L1047 630 L125 630 L125 481" fill="none" '
+             f'stroke="{INK}" stroke-width="2.2" marker-end="url(#arrowhead)"/>')
+    s.append(T(590, 658, "measured state closes the deployed loop", 18, MUTED))
 
     s.append('</svg>')
     save("".join(s), "ch6_teacher_student", W, H)

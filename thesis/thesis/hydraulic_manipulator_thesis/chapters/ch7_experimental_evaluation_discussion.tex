@@ -1,9 +1,15 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Chapter 7 — Experimental Evaluation and Discussion
-%% (18–28 pages)
-%% Purpose: test the model and control hypotheses under matched
-%% conditions, EXPLAIN the results rather than only reporting them,
-%% and keep robustness, privileged-latent and adaptation claims apart.
+%% Structure:
+%%   7.1 Experimental protocol (RQs, hypotheses, matrix, metrics, fairness)
+%%   7.2 Closed-loop task performance            <- the robot, up front
+%%   7.3 Actuator representation and dynamic response (RQ5)
+%%   7.4 Generalisation and robustness
+%%   7.5 Identifiability of plant variation
+%%   7.6 Online adaptation
+%%   7.7 Why the model-level gain does not reach the controller
+%%   7.8 Integrated discussion (RQ5, RQ6)
+%%   7.9 Threats to validity
 %%
 %% Every closed-loop experiment evaluates exactly three rows:
 %%   PPO-ROM            frozen: command ROM              adaptive: none
@@ -14,13 +20,54 @@
 \chapter{Experimental Evaluation and Discussion}
 \label{chap:evaluation}
 
-\section{Hypotheses, Estimands and Fairness Controls}
+% Float placement, scoped to this chapter: 17 figures and 16 tables otherwise
+% overflow the float queue and land in a block at the end of the chapter.
+% Restored to the LaTeX defaults at the end of the file.
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.75}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.70}
+
+\section{Experimental Protocol}
 \label{sec:eval:hypotheses}
 
-The chapter tests four hypotheses. The first two are settled at model level in
-Sections~\ref{sec:eval:excitation}--\ref{sec:eval:latent-content}; the last two
-require the control loop and are taken up from
-Section~\ref{sec:eval:tracking} onwards.
+This chapter evaluates the three control stacks assembled in
+Chapter~\ref{chap:control} and the learned actuator models they act through. It
+answers the last two research questions of
+Section~\ref{sec:intro:contributions}:
+
+\begin{description}
+  \item[RQ5] How does the choice of actuator representation affect tracking,
+    command behaviour, latency and robustness under plant variation?
+  \item[RQ6] Where plant variation survives that robustness, is it identifiable
+    from recent observations, and does online adaptation by latent
+    identification improve closed-loop performance?
+\end{description}
+
+The two differ in kind. RQ5 asks what a design choice changes and is answered by
+direct measurement on the matched pair \ppoROM{} (R) and \ppoIDFD{} (IF), which
+agree on every recorded training field and differ only in the actuator path.
+RQ6 asks whether a mechanism pays, could fail in ways worth declaring in
+advance, and is therefore carried by predeclared hypotheses and by
+within-checkpoint substitutions rather than by the position of \ppoAAMIDFD{}
+(AIF) in a table. The short labels R, IF and AIF of
+Section~\ref{sec:intro:contributions} are used interchangeably with the full
+names. RQ6 also decomposes into a chain of dependent questions, each worth
+testing only if the one before it holds: is plant identity present in the data
+at all; can an estimator recover it; does the estimate follow the plant when the
+plant moves; does it improve a model that consumes it; does that improvement
+reach the controller; and if it does not, what stops it? The first four links
+hold and the fifth does not, which is why the chapter spends its last
+experiments on the sixth.
+
+\subsection{Hypotheses}
+\label{sec:eval:hyp-list}
+
+Four hypotheses are declared in advance, the first two settled at model level
+and the last two in the control loop.
 
 \begin{description}
   \item[H1] The inverse model trained on randomised Simscape data is
@@ -34,766 +81,229 @@ Section~\ref{sec:eval:tracking} onwards.
     constant latent costs materially more than substituting a wrong constant.
   \item[H3] The closed-loop effect of plant-identity conditioning, estimated
     under a common evaluation protocol. H3 is an \emph{estimand} rather than a
-    hypothesis: its product is an interval, and that interval is informative
-    wherever it is narrower than the baseline mean it is measured against. No
-    practical-equivalence margin was predeclared, so a narrow interval bounds
-    the effect and does not establish equivalence.
+    hypothesis: its product is an interval, informative wherever it is narrower
+    than the baseline mean it is measured against. No practical-equivalence
+    margin was predeclared, so a narrow interval bounds the effect and does not
+    establish equivalence.
   \item[H4] The effect estimated in H3 is boundable before an estimator is
-    built, from what a
-    privileged latent read from the true factors achieves.
+    built, from what a privileged latent read from the true factors achieves.
 \end{description}
 
-H1, H2 and H4 are hypotheses and carry rejection criteria fixed before the
-experiment runs: H1 fails without a majority of seeds, H2 if the
-constant-latent and wrong-latent substitutions cost the same, and H4 if a
-privileged latent does not outperform an uninformative one. H3 carries an
-adequacy criterion instead: the estimate is reportable if the protocol is
-matched across stacks and the interval is calibrated, whether or not it
-excludes zero. Its product is the interval width, which is what a later
-equivalence test would need.
+H1, H2 and H4 carry rejection criteria fixed before the experiment runs: H1
+fails without a majority of seeds, H2 if the constant-latent and wrong-latent
+substitutions cost the same, and H4 if a privileged latent does not outperform
+an uninformative one. H3 carries an adequacy criterion instead -- a matched
+protocol and a calibrated interval -- whether or not that interval excludes
+zero.
 
-Fairness is enforced by construction rather than by argument, and the guarantee
-differs by experiment. All model-level and within-checkpoint ablations are
-\emph{paired}: the two arms share the dataset, the split, the training
-objective, the model-selection criterion and the random seed, and differ in
-exactly one declared respect. The across-stack control comparison is matched on
-evaluation conditions but not on PPO training realisation, for the reasons set
-out above. Where a baseline could have been quoted
-from an earlier collection it is instead retrained on the current data, because
-a different collection carries a different state distribution and a different
-normaliser, and the resulting numbers are not comparable even when they measure
-the same quantity. Closed-loop comparisons additionally share trajectory
-family, truck speed schedule, terrain mesh, episode length, scored window and
-safety stops across all three stacks.
+\subsection{Test Conditions and Experimental Matrix}
+\label{sec:eval:matrix}
 
-Several asymmetries survive that control and are stated rather than absorbed,
-read from the three run manifests rather than assumed. The \ppoROM{} and
-\ppoIDFD{} checkpoints come from runs that agree with each other on every
-recorded field (seed $17$, terrain seed $17$, $256$ environments, stage $6$,
-actor learning rate $3\times10^{-4}$, entropy coefficient $0.001$, frozen
-normaliser, and a $150$-iteration frozen-actor warm-up) and differ only in
-the actuator. The adaptive stack is represented by a different run, for the
-reason given in Section~\ref{sec:eval:horizon}, and that run differs from the
-matched pair in three recorded respects: a different seed ($41$, with terrain
-seed $41$), an actor learning rate two orders of magnitude lower
-($3\times10^{-6}$), and no frozen-actor warm-up at all ($0$ against $150$
-iterations). Its observation is $68$ columns against $66$, which is the latent
-itself and is the intended difference rather than a confound.
+Every closed-loop experiment scores exactly three rows -- \ppoROM{},
+\ppoIDFD{} and \ppoAAMIDFD{} -- under one common condition: three held-out
+terrain meshes, the eleven trajectory families of the library, a pinned truck
+speed of $\unit[4]{km/h}$, a $\unit[26]{m}$ scored window, $32$ environments and
+a fixed evaluation seed. Model-level experiments use the open-loop excitation
+collection \texttt{rom\_openloop\_v1} of Section~\ref{sec:eval:excitation}.
+Everything scored here is held out: the meshes are unseen, the families are
+scored individually rather than pooled, and the plant is drawn from sixteen
+reserved factor configurations whose keys are disjoint from training and
+validation by construction (Section~\ref{sec:data:isaaclab}), so a scored run is
+a plant the stack has never seen and not merely an episode it has not seen. How
+much of that factor draw reaches each stack's plant differs, and is audited in
+Section~\ref{sec:eval:delivered-stress}.
+Table~\ref{tab:eval:matrix} lists every experiment with its arms and its
+replication unit.
 
-All three manifests use the same schema and record the same eleven trajectory
-families. One field is missing where it would be most useful: the \ppoROM{} and
-\ppoIDFD{} manifests do not record the truck-speed schedule at all, while the
-adaptive run records $2$ to $\unit[7]{km/h}$ sampled per episode. The training
-speed schedule of the two reference stacks therefore cannot be verified from the
-manifests, and it is the reference pair rather than the adaptive run that is
-undocumented in this respect.
+\begin{table}[tbp]
+  \centering
+  \caption{The experimental matrix. Closed-loop experiments share the common
+  condition described in the text; model-level experiments use the open-loop
+  excitation collection. The replication unit differs between the two and is
+  stated for each.}
+  \label{tab:eval:matrix}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}p{4.1cm}cp{4.0cm}p{3.1cm}@{}}
+    \toprule
+    Experiment & \S & Arms & Unit \\
+    \midrule
+    \multicolumn{4}{@{}l}{\emph{Closed loop}} \\
+    Task performance      & \ref{sec:eval:tracking} & three stacks & $33$ (mesh, family) cells \\
+    Chain latency by stack & \ref{sec:eval:delay-stacks} & three stacks & $4$ cylinders $\times$ $16$ envs \\
+    Commanded step        & \ref{sec:eval:step-response} & three stacks & $16$ envs \\
+    Control effort        & \ref{sec:eval:effort} & three stacks & one mesh \\
+    Randomisation sweep   & \ref{sec:eval:robustness} & three stacks $\times$ five scales & $11$ families per point \\
+    Mid-episode plant change & \ref{sec:eval:ablations} & online, frozen, shuffled, mean, sham & $33$ cells \\
+    Oracle latent         & \ref{sec:eval:oracle} & privileged, estimated, mean, shuffled & $33$ cells \\
+    Latent bandwidth      & \ref{sec:eval:bandwidth} & six time constants & $33$ cells \\
+    \midrule
+    \multicolumn{4}{@{}l}{\emph{Model level}} \\
+    Identifiability envelope & \ref{sec:eval:excitation} & four excitation tiers & $36$ held-out runs \\
+    Latent content        & \ref{sec:eval:latent-content} & online, constant, shuffled & five training seeds \\
+    Frozen-inverse sufficiency & \ref{sec:eval:id-sufficiency} & latent, no latent & five training seeds \\
+    Predictive utility    & \ref{sec:eval:predictive-utility} & privileged, estimated, mean, shuffled & $36$ held-out runs \\
+    Constructed plant switch & \ref{sec:eval:plant-switch} & spliced run pairs & eight pairs \\
+    Actuation dead time   & \ref{sec:eval:delay-plant} & four excitation tiers & $24$ runs \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-What is identical for all three is the evaluation: same meshes, same families,
-same speed, same window, same seed.
+\subsection{Metrics, Statistics and Fairness}
+\label{sec:eval:metrics}
 
-Those training settings were not arbitrary. Each stack was trained under the
-best configuration found for it during development, so the delivered controller
-carries the configuration under which that stack performed best rather than a
-configuration imposed on all three for symmetry. The adaptive stack's lower
-actor learning rate reflects a stability judgement specific to its
-architecture. Its actor consumes an estimated latent that moves within an
-episode, which the two fixed-observation stacks do not have to contend with, and
-higher rates were found during development to destabilise that actor. This
-rationale is the author's engineering judgement and is recorded as such: the
-manifests store the settings, not the reasoning that produced them.
+The closed-loop primary metrics are mean absolute lateral error of the cutter
+against the commanded line and mean absolute cut-height error, with ground
+contact, hard impacts, head alignment and tool acceleration reported alongside
+them and the eight-gate acceptance contract of Section~\ref{sec:sys:gates} used
+as the selection instrument. The shared estimand for every model-level
+experiment is the free-running accumulated normalised state error over a
+five-tick horizon, with no teacher forcing: the model integrates its own
+predicted increments and is charged for where it lands, which is the quantity a
+controller depends on, whereas a one-step error would flatter every arm equally
+and hide the compounding behaviour that distinguishes them.
 
-The three stacks therefore do not all stand in the same relation to one
-another, and the distinction governs every figure and table in this chapter.
+Primary metrics and seeds are fixed before each experiment is run. Every
+comparison is paired and reports the sign count over the paired unit alongside
+the mean, because a mean can be carried by a single outlying pair while a
+unanimous sign cannot. Uncertainty is quantified by a paired bootstrap rather
+than a parametric test, intervals are reported as ranges rather than converted
+into a verdict, model selection uses the validation split only, and reserved
+test runs are scored once.
+
+The unit of replication differs between the two kinds of experiment.
+Model-level experiments replicate over training seeds. The closed-loop
+evaluation is deterministic -- fixed mesh, deterministic policy, no variation in
+initial conditions -- and five evaluation seeds returned bit-identical numbers
+to nine decimal places, so the seed is \emph{not} a unit of replication and a
+sign count over seeds would report one observation five times. The closed-loop
+unit is therefore the (mesh, family) cell, and metrics that exist only per mesh
+are labelled $n=3$ so that the weaker evidence stays visible.
+
+Three reporting rules follow from failures met during this work: numbers from
+different collections are never compared, even for the same estimand, because
+the state distribution and the normaliser differ, so a baseline is retrained
+instead; every gate is reported with the measured floor of the quantity it
+constrains and a positive control, since a threshold no run could violate
+produces a passing verdict carrying no information; and every closed-loop result
+names its checkpoint and its scoring horizon
+(Section~\ref{sec:eval:horizon}).
+
+Fairness is enforced by construction, and the guarantee differs by experiment.
+All model-level and within-checkpoint ablations are \emph{paired}: the arms
+share the dataset, the split, the objective, the selection criterion and the
+seed, and differ in exactly one declared respect. The across-stack comparison is
+matched on evaluation conditions but not on PPO training realisation.
+Table~\ref{tab:eval:controls} lists the controls that enforce this and what each
+one established, because several of them changed a conclusion during this
+work.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Experimental controls used in this chapter, and what each one
+  established. Entries in the third column are outcomes of applying the control,
+  not hypothetical failure modes.}
+  \label{tab:eval:controls}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}p{3.0cm}p{4.3cm}p{6.4cm}@{}}
+    \toprule
+    Control & Guards against & Outcome \\
+    \midrule
+    Input ablation
+      & a model scoring well without command authority
+      & a forward model at one-step $R^2\approx0.999$ was insensitive to the
+        valve \\
+    Open-loop excitation
+      & command and state made redundant by feedback
+      & the valve was not identifiable from controller-driven data at all \\
+    Sham arm
+      & crediting a perturbation for what the schedule alone produces
+      & the mid-episode plant change left the task unmoved \\
+    Onset positive control
+      & an estimator manufacturing lag
+      & the linkage contributes zero delay at every amplitude \\
+    Determinism check
+      & reporting one observation several times
+      & five evaluation seeds agree bit-exactly, so the seed is not a unit of
+        replication \\
+    In-distribution null arm
+      & an out-of-distribution input posing as an ablation
+      & a zeroed latent lies two to three standard deviations outside the
+        distribution, so the mean latent is used instead \\
+    Full-path re-scoring
+      & a selection window certifying part of an episode
+      & the default window covers $8.9$ of $\unit[26]{m}$ \\
+    Retrained baselines
+      & comparing numbers across collections
+      & differing normalisers make such numbers incomparable even for the same
+        estimand \\
+    Per-family resolution
+      & a worst-family aggregate hiding a threshold artefact
+      & \ppoROM{} and \ppoIDFD{} exceed the lateral threshold on one family
+        each, and on different families \\
+    Matched-pair design
+      & crediting the architecture for what the training run produced
+      & \ppoROM{} and \ppoIDFD{} are controlled; \ppoAAMIDFD{} is not \\
+    Within-checkpoint substitution
+      & crediting a latent for a training run
+      & carries every adaptation claim in this chapter \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{What the Three Stacks Can and Cannot Be Compared For}
+\label{sec:eval:standing}
+
+The three stacks do not stand in the same relation to one another, and the
+distinction governs every figure and table that follows.
 
 \paragraph{The matched pair.}
-\ppoROM{} and \ppoIDFD{} agree on every recorded training field and differ
-only in the actuator path. Their contrast is a controlled single-variable
-comparison, and a difference between them \emph{is} attributable to the
-actuator representation. This is the pair that answers the representation
-question of Section~\ref{sec:intro:contributions}, and wherever this chapter
-reports an effect of representation it is this pair that carries it. One
-residual caveat belongs with them: the truck-speed schedule is unrecorded for
-both, so it cannot be verified from the manifests that they shared it, though
-its absence does not differentiate them.
+\ppoROM{} and \ppoIDFD{} come from runs that agree on every recorded manifest
+field -- seed $17$, terrain seed $17$, $256$ environments, stage $6$, actor
+learning rate $3\times10^{-4}$, entropy coefficient $0.001$, frozen normaliser
+and a $150$-iteration frozen-actor warm-up -- and differ only in the actuator
+path. A difference between them \emph{is} attributable to the actuator
+representation, and this is the pair that answers RQ5.
 
 \paragraph{The third condition.}
-\ppoAAMIDFD{} is a separately trained run at a different seed, a lower actor
-learning rate and no frozen-actor warm-up. It is reported as a deployed
-controller that demonstrates the adaptive stack running end to end under the
-common protocol, and \emph{not} as a ranked competitor to the matched pair. A
-difference between it and either of the others may be a difference of the
-adaptation path or of its training run, and this evidence cannot separate the
-two. No claim in this thesis rests on that contrast.
+\ppoAAMIDFD{} is adaptive in the ordinary sense: its actor is
+$\pi(\bm{a}\mid\bm{o},\latenthat)$, conditioned at every model tick on an online
+estimate of the current plant, which also reaches the actuator through a bounded
+adapter. That it is adaptive \emph{in operation} and not only in architecture is
+established rather than assumed: substituting what occupies those two extra
+observation channels moves closed-loop behaviour by $20.7\,\%$ on lateral error
+and $39.3\,\%$ on cut height (Section~\ref{sec:eval:oracle}), which an actor
+indifferent to the latent could not produce. It is nonetheless a separately
+trained run at a different seed ($41$), an actor learning rate two orders of
+magnitude lower ($3\times10^{-6}$) and no frozen-actor warm-up, so a difference
+between it and either of the others may be a difference of the adaptation path
+or of its training run, and this evidence cannot separate the two. It is
+therefore reported as a deployed controller running end to end under the common
+protocol and \emph{not} as a ranked competitor; the remaining asymmetries are
+set out in Section~\ref{sec:eval:validity}.
 
-Architectural claims about adaptation are carried elsewhere, by design.
-Wherever this thesis makes a causal statement about the adaptation path, that
-statement rests on a within-checkpoint ablation: one input is substituted while
-the policy, the actuator path, the plant, the mesh, the trajectory family and
-the evaluation seed are all held fixed. The four-way latent substitution of
+\paragraph{Where the adaptation claims live.}
+Every causal statement about the adaptation path rests instead on a
+within-checkpoint ablation: one input is substituted while the policy, the
+actuator path, the plant, the mesh, the trajectory family and the evaluation
+seed are held fixed. The four-way latent substitution of
 Section~\ref{sec:eval:oracle}, the bandwidth sweep of
 Section~\ref{sec:eval:bandwidth}, the predictive comparison of
 Section~\ref{sec:eval:predictive-utility} and the input ablations of
-Chapter~\ref{chap:models} are all of this form. Those substitutions, and not
-the position of \ppoAAMIDFD{} in a table, carry every adaptation claim made
-here.
+Chapter~\ref{chap:models} are all of this form.
 
-The shared estimand for every model-level experiment is the free-running
-accumulated normalised state error over a five-tick horizon, with no
-teacher forcing. The model integrates its own predicted increments and is
-charged for where it actually lands, which is the quantity a controller
-depends on and is the criterion the state predictor selects on. Reporting a
-one-step error instead would flatter every arm equally and hide exactly the
-compounding behaviour that distinguishes them.
-
-\section{Excitation Design and the Identifiability Envelope}
-\label{sec:eval:excitation}
-
-What the data makes identifiable determines what any estimator can recover, so
-it is measured first. Excitation gathered under a task controller does not
-separate plants: with the command computed from the state, command and response
-are nearly redundant.
-
-The reason is structural. A task controller computes its command from the
-measured state, so command and response are close to redundant and little is
-left for a plant descriptor to explain; the input must be rich enough for the
-regressor to stay well conditioned~\cite{ljung1999system}, which makes
-excitation design a first-class decision~\cite{schoukens2019nonlinear}. The
-collection used throughout this chapter therefore removes the controller
-entirely and applies open-loop
-zero-mean square-wave excitation directly, at the cylinder-command interface
-because the command reduced-order model accepts cylinder extensions and not
-valve signals by design (Section~\ref{sec:models:rom}). This collection, \texttt{rom\_openloop\_v1}, comprises $118$ plant draws of
-$11\,040$ control steps each, split $82/20/16$ by run into
-training, validation and reserved test sets, and its Hankel matrix reaches full
-rank $40$ of $40$ at a condition number of $17.8$.
-
-The excitation sweeps four amplitude tiers. Table~\ref{tab:eval:identifiability}
-reports what each tier makes identifiable, decoding the six true plant factors
-from the per-tier mean latent estimate and scoring on held-out runs. The
-seal-condition factor is the positive control throughout, since it is the one
-factor the estimator is known to represent (Section~\ref{sec:models:aam-content});
-if it collapses, the decode is broken and no other entry in the row carries
-information.
-
-\begin{table}[tb]
-  \centering
-  \caption{What each excitation tier makes identifiable, and why the higher
-  tiers do not. Decode $R^2$ is held out over $36$ reserved runs; drift is the
-  across-plant spread of cylinder extension at matched ticks, expressed as a
-  fraction of the stroke the probe itself produces. Plant identity survives the
-  first two tiers and is gone by the third, while command saturation never
-  exceeds ten per cent.}
-  \label{tab:eval:identifiability}
-  \begin{tabular}{lcccc}
-    \toprule
-    Amplitude & seal $R^2$ & mean $R^2$ & drift / stroke & command sat. \\
-    \midrule
-    $0.05$ & $0.703$  & $0.109$  & $0.18$ & $0.11\%$ \\
-    $0.15$ & $0.505$  & $0.099$  & $0.28$ & $0.35\%$ \\
-    $0.35$ & $-0.018$ & $-0.040$ & $0.39$ & $3.26\%$ \\
-    $0.70$ & $0.043$  & $-0.021$ & $0.50$ & $9.98\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=.62\textwidth]{images/ch7_identifiability}
-  \caption{The identifiability envelope. (a) Held-out decode $R^2$ for each of
-  the six plant factors at each excitation level. Only the seal condition is
-  recoverable, and only in the two lowest tiers. (b) The reason: operating-point
-  drift, as a fraction of the stroke the probe produces, rises steadily with
-  amplitude while command saturation stays low throughout and cannot account for
-  the collapse.}
-  \label{fig:eval:identifiability}
-\end{figure}
-
-The obvious explanation for the collapse is actuator saturation, and it is
-wrong. Saturation reaches only $9.98\%$ of steps even at the largest amplitude,
-which cannot account for a decode falling from $R^2 = 0.703$ to zero. The
-measurement that does account for it is operating-point drift. Every run
-executes an identical excitation schedule, so at a matched tick the only thing
-that differs between runs is the plant, and the across-run spread of cylinder
-extension is a direct reading of how far the plants have desynchronised in
-position. That spread grows from $1.5$\,mm at the start of the episode to
-$54.2$\,mm at the end, reaching half of the stroke the probe itself produces.
-Once runs are that far apart, a one-second observation window cannot separate a
-response that differs because the seal is leaking from one that differs because
-the cylinder is sitting five centimetres lower. The confound is an accumulated
-history effect, and it is not one the estimator can be blamed for.
-
-Two consequences follow, and both constrain later sections. First, all
-adaptation experiments in this chapter are run below amplitude $0.35$, inside
-the band where plant identity is present at all; an experiment run above it
-would be testing the estimator on data that contains no answer. Second, the
-excitation plan ramps amplitude monotonically across the episode, one tier per
-quarter. That schedule is deliberate: it sweeps the full amplitude range inside
-every run, so each plant draw contributes to all four tiers and the tiers are
-compared on identical plants rather than across separate collections. The
-consequence for interpretation follows from the design and is stated so that the
-collection is read correctly: amplitude and episode time are the same axis here,
-so this collection supports statements about amplitude and not about elapsed
-time within an episode. A pilot analysis that read decode quality as decaying
-over the episode was reading the amplitude sweep, and is recorded as such.
-
-\section{Sufficiency of the Frozen Inverse Model}
-\label{sec:eval:id-sufficiency}
-
-The inverse model is trained on randomised Simscape data and deployed against
-the IsaacLab reduced-order plant, and the architecture of
-Chapter~\ref{chap:control} depends on it staying frozen. H1 asks whether that
-is defensible. The direct measurement of inverse-model transfer error is
-reported in Section~\ref{sec:models:id-trust}; what is tested here is the
-weaker but more consequential proposition that whatever residual gap remains is
-learnable \emph{without touching the inverse model at all}.
-
-The test removes the inverse model from the loop entirely. A state predictor
-consumes the current state, the applied command and an estimated latent inferred
-end to end from $[\jointpos, \jointvel, \dpress, \valvecmd]$, and predicts the
-next state. The baseline is the same predictor with no latent input, retrained
-on the identical data, split and objective, at five matched seeds.
-Figure~\ref{fig:eval:sufficiency} reports the pairs.
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_id_sufficiency}
-  \caption{Latent conditioning against a matched no-latent baseline, five seeds.
-  (a)~Each line is one seed. No pair crosses, which is the result; the mean is
-  not. (b)~The same data as paired changes, with the mean dashed. Seed $23$
-  carries the mean because its baseline is an outlier, so the median
-  $-22.3\,\%$ is the figure to quote.}
-  \label{fig:eval:sufficiency}
-\end{figure}
-
-\begin{table}[tb]
-  \centering
-  \caption{Sufficiency of the frozen inverse model, five matched seeds. The
-  estimated latent lowers free-running state error in every seed. Seed
-  $20260823$ has an anomalously poor baseline and inflates the mean, so the
-  median of $-22.3\%$ is the representative figure.}
-  \label{tab:eval:id-sufficiency}
-  \begin{tabular}{lccc}
-    \toprule
-    Seed & no latent & estimated latent & change \\
-    \midrule
-    $20260820$ & $0.02438$ & $0.01893$ & $-22.3\%$ \\
-    $20260821$ & $0.02410$ & $0.01855$ & $-23.0\%$ \\
-    $20260822$ & $0.02328$ & $0.01945$ & $-16.5\%$ \\
-    $20260823$ & $0.03190$ & $0.01808$ & $-43.3\%$ \\
-    $20260824$ & $0.02359$ & $0.01920$ & $-18.6\%$ \\
-    \midrule
-    mean       & $0.02545$ & $0.01884$ & $-24.7\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The estimated latent improves on the no-latent baseline in $5$ of $5$ seeds,
-with a mean paired change of $-24.7\%$ and a paired bootstrap $95\%$ confidence
-interval of $[-34.2\%, -18.2\%]$ that excludes zero
-(Figure~\ref{fig:eval:claims}a). One qualification belongs with the number
-rather than in a footnote: seed $20260823$ produced an unusually poor baseline
-at $0.03190$ against roughly $0.024$ elsewhere, and its $-43.3\%$ is as much a
-statement about that baseline as about the latent. The median change of
-$-22.3\%$ is the figure to quote, and the sign, reproduced in every seed of a
-paired design, is what supports H1.
-
-The same comparison on the earlier closed-loop collection is what makes this
-result interpretable. There the ordering reversed: the no-latent predictor
-scored $0.17278$, the end-to-end latent $0.17596$ and the privileged latent
-$0.18515$, so the latent appeared to be worthless or worse. The architecture
-was identical in both cases. What changed was the excitation, exactly as
-Section~\ref{sec:eval:excitation} predicts. Reporting only the closed-loop
-result would have supported a confident negative conclusion about the
-architecture that the open-loop data contradicts.
-
-H1 is therefore supported, with its scope stated plainly. The experiment does
-not measure inverse-model error, and it is not evidence that the inverse model
-is accurate in any absolute sense. It shows that the residual mismatch between
-the Simscape training distribution and the deployment plant is recoverable by a
-latent-conditioned state model, which is what licenses the simpler architecture
-in which the inverse model is never fine-tuned online.
-
-\section{Information Content of the Adaptive Latent}
-\label{sec:eval:latent-content}
-
-That the latent helps does not establish \emph{why}, and the two available
-explanations carry different consequences for the thesis. Under the first, the
-estimator recognises which plant it is operating on and the policy is
-conditioned on a plant identity. Under the second, the estimator tracks a
-time-varying operating condition and its value lies in the estimate moving.
-H2 separates them with a substitution experiment that changes nothing but the
-contents of the latent slot.
-
-One trained model is scored three ways on the same data. In the \emph{online}
-condition the latent is read from the observable history at every model tick,
-as in deployment. In the \emph{constant} condition it is replaced by that run's
-own mean estimate, which preserves the correct plant identity exactly and
-destroys all variation. In the \emph{shuffled} condition it is replaced by
-another run's mean, preserving the distribution of latent values while making
-the identity wrong. The gap between online and constant measures what the
-variation is worth; the gap between constant and shuffled measures what the
-identity is worth.
-
-\begin{table}[tb]
-  \centering
-  \caption{Where the latent's value lies, five seeds, one trained model each,
-  scored on the reserved validation runs. Freezing the estimate at its correct
-  per-episode value costs $13.6\%$; making that frozen value wrong costs a
-  further $0.43\%$. Both effects have the same sign in every seed.}
-  \label{tab:eval:latent-content}
-  \begin{tabular}{lccc}
-    \toprule
-    Latent supplied to the state model & mean error & vs.\ online & seeds \\
-    \midrule
-    online estimate $\latenthat(t)$        & $0.018842$ & ---        & --- \\
-    per-episode constant, correct identity & $0.021402$ & $+13.6\%$  & $5/5$ \\
-    per-episode constant, wrong identity   & $0.021492$ & $+14.1\%$  & $5/5$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The decomposition is unambiguous and tight across seeds
-(Figure~\ref{fig:eval:claims}b). Removing the variation costs $13.6\%$, with a
-per-seed range of $11.9$ to $14.3\%$. Removing the identity on top of that
-costs a further $0.43\%$, with a per-seed range of $0.32$ to $0.84\%$. The
-second effect is consistently signed in all five seeds and so is real rather
-than noise, but it is roughly thirty times smaller than the first. Essentially
-all of the latent's value lies in the estimate moving, and almost none of it in
-the estimate being correct about which plant this is. H2 is supported.
-
-This licenses one claim and forbids another. The claim it forbids is that the
-module identifies the plant it is operating on: at $0.43\%$, that reading is
-very nearly false, and the thesis does not make it. The claim it supports is
-that the module tracks a time-varying operating condition, and that the
-tracking is what earns the performance.
-
-This is the ordinary form of the claim rather than a weak one. The module
-estimates from a fixed one-second causal window and carries no state between
-ticks, so it re-estimates rather than accumulates: recursive estimation with a
-forgetting factor, the standard construction when the estimated parameters are
-themselves time-varying~\cite{astrom1995adaptive,ljung1999system}. A converging
-estimator would lock onto a past operating condition and stop
-responding~\cite{kumar2021rma}.
-
-Two boundaries are worth stating before the closed-loop chapters. The first is
-that this analysis concerns the jointly fine-tuned estimator trained on
-open-loop excitation, which is a different model on different data from the
-deployed estimator characterised in Section~\ref{sec:models:aam-content}; the
-two disagree about stability, and the disagreement is informative rather than
-contradictory. The deployed estimator, trained under a task controller, is
-static within a run, whereas this one varies within an episode by roughly nine
-times the spread between plants. Excitation decides which of the two behaviours
-the estimator exhibits. The second boundary is that everything here is measured
-on a dynamics model rather than in the control loop; H4 repeats the
-substitution experiment on the closed-loop stack in
-Section~\ref{sec:eval:ablations}, and only that result can carry the adaptation
-claim into the task.
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_openloop_claims}
-  \caption{The model-level result as a single sequence, worst at the top. Each
-  point is one of the five seeds and the heavy bar is the mean. The
-  \emph{gaps} are the claim: making the constant latent correct about the plant
-  rather than wrong is worth $0.43\%$, while allowing that same estimate to vary
-  in time is worth $13.6\%$ -- a factor of thirty-two. The topmost row is a
-  separately trained no-latent model rather than an ablation of the three below
-  it, so the step down to it is not attributable to the latent alone and is
-  divided off.}
-  \label{fig:eval:claims}
-\end{figure}
-
-\section{Predictive Utility of the Estimated Latent}
-\label{sec:eval:predictive-utility}
-
-Sections~\ref{sec:eval:id-sufficiency} and~\ref{sec:eval:latent-content}
-established that the latent carries information and that its value is temporal.
-Neither asked the question a controller cares about: is the \emph{estimated}
-latent as useful as the true one, and is it better than no plant information at
-all? That comparison is made here, on the frozen system-dynamics model, by
-supplying four different latents to one network and changing nothing else.
-
-\subsection{Estimated Against Privileged}
-
-The four arms are the privileged latent read from the true factors, the causal
-AAM estimate, an in-distribution mean carrying no plant information, and a
-shuffled latent with the right distribution and the wrong plant. All four are
-scored on the same $36$ held-out runs, on free-running rollouts at one, ten and
-twenty ticks, with the model integrating its own predictions.
-
-\begin{table}[tb]
-  \centering
-  \caption{Free-running rollout error under four latents, pooled over $36$
-  held-out runs. Lower is better. The estimate tracks the privileged latent at
-  every horizon, and both are clearly ahead of an uninformative or a wrong one.}
-  \label{tab:eval:four-latents}
-  \begin{tabular}{lcccc}
-    \toprule
-    Horizon & privileged $\bm{z}$ & estimated $\latenthat$ & mean & shuffled \\
-    \midrule
-    $1$ tick             & $2.961\times10^{5}$ & $2.966\times10^{5}$ & $3.388\times10^{5}$ & $3.499\times10^{5}$ \\
-    $10$ ($\unit[0.5]{s}$) & $1.820\times10^{6}$ & $1.826\times10^{6}$ & $1.952\times10^{6}$ & $1.998\times10^{6}$ \\
-    $20$ ($\unit[1.0]{s}$) & $2.961\times10^{6}$ & $2.977\times10^{6}$ & $3.196\times10^{6}$ & $3.256\times10^{6}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Table~\ref{tab:eval:four-latents} gives the ordering, and the paired statistics
-give its standing. Against the privileged latent the estimate is
-indistinguishable: the paired difference at twenty ticks is
-$+1.60\times10^{4}$ with a $95\,\%$ interval of
-$[-1.35\times10^{4},\, +4.62\times10^{4}]$, and the estimate is ahead in $18$ of
-$36$ runs, which is exactly chance. Against the two uninformative controls it
-resolves: $-2.19\times10^{5}$ with the interval excluding zero and $33$ of $36$
-runs against the mean latent, and $-2.79\times10^{5}$ with $29$ of $36$ against
-the shuffled one. On the reserved test split the estimate is marginally ahead of
-the privileged latent, $2.837\times10^{6}$ against $2.850\times10^{6}$.
-
-Two things follow. The AAM recovers essentially all of the information the
-privileged encoder carries, so the estimator is not the limiting component of
-the adaptation chain. And the advantage resolves on extension and velocity, not
-only on pressure: against the mean latent the extension difference is
-$-1.87\times10^{-4}$ with $32$ of $36$ runs and the velocity difference
-$-5.14\times10^{-4}$ with $31$ of $36$, both intervals excluding zero. This is a
-different comparison from the one in Section~\ref{sec:models:latent}, which
-contrasted a latent-conditioned model with a separately trained no-latent model
-and found the advantage confined to pressure. Substituting latents \emph{within}
-one model isolates the latent itself, and by that measure the channels the
-controller integrates do respond.
-
-\subsection{Response to a Change of Plant}
-\label{sec:eval:plant-switch}
-
-An estimator that identifies a fixed plant is not yet an adaptive one. What
-remains is whether the estimate follows the plant when the plant moves. No
-recorded run answers this, because each run holds one factor vector for its
-whole length. The trajectory is therefore \emph{constructed}: two held-out runs
-are spliced at a matched tick, which is admissible here because every run
-executes the identical eleven-segment schedule, so at a matched tick the
-commanded motion is the same and only the plant differs. The result is a
-constructed sequence rather than a recorded one and is reported as such.
-
-Eight pairs are used, chosen as the most separated in latent space among the
-sixteen reserved runs, and each is spliced at its midpoint. In all eight the
-estimate ends closer to the new plant than to the old one, and in all eight it
-moves away from the old plant after the splice. The median time to cross, that
-is for the estimate to become closer to the new plant than the old, is
-$\unit[0.18]{s}$, and the median time to cover ninety per cent of the distance
-between the two settled values is $\unit[0.70]{s}$. Both sit inside the
-$\unit[1.0]{s}$ observation window, which is the shortest interval in which a
-change can become fully visible to a causal estimator reading that window.
-
-The estimator therefore re-identifies rather than merely classifying: it does
-not carry a plant label fixed at the start of an episode but revises it from
-history when the evidence changes.
-
-\subsection{The Benefit Does Not Scale With Plant Deviation}
-\label{sec:eval:no-scaling}
-
-The natural expectation is that plant knowledge is worth more the further the
-plant sits from nominal, and it is the expectation under which an adaptive
-architecture is usually justified. It is not supported here. Ranking the $36$
-held-out runs by the magnitude of their factor deviation and measuring the
-latent's benefit as the paired gap between the mean-latent and estimated-latent
-arms, the milder half of the population returns a mean benefit of
-$2.53\times10^{5}$ and the more severe half $1.85\times10^{5}$, a ratio of
-$0.73$. The correlation between deviation magnitude and benefit is $-0.143$.
-
-The gain is therefore uniform across the plant family rather than concentrated
-where the plant is hardest. This is measured at model level, where the closed
-loop cannot absorb it, so it is a property of the latent rather than of the
-controller. It also forecloses one reading of the closed-loop result of
-Section~\ref{sec:eval:robustness}: the absence of a benefit under large plant
-deviation is not a case of the controller hiding an effect that grows with
-mismatch, because no such growth exists to hide.
-
-\section{Latency Along the Actuation Chain}
-\label{sec:eval:delay}
-
-Latency enters this system in two quite different places, and separating them is
-the point of this section. The hydraulics impose a transport delay that no
-controller can remove; the control stack then adds its own, and only the second
-is an architectural choice. Section~\ref{sec:eval:delay-plant} measures the
-first on open-loop excitation, where it can be isolated cleanly.
-Section~\ref{sec:eval:delay-stacks} asks whether the three stacks differ in how
-quickly they drive the plant. Section~\ref{sec:eval:step-response} asks the
-question that matters for the task -- how long each takes to answer a change in
-what it is asked to do -- and finds that the answer is dominated by the control
-side rather than the hydraulic one.
-
-\subsection{Dead Time in the Plant}
-\label{sec:eval:delay-plant}
-
-Delay is measured here rather than assumed, and it is worth separating from an
-earlier negative result. Attempts to identify the valve's dynamic \emph{model}
-from the available datasets did not succeed, but that is a parameter-fitting
-outcome and says nothing about whether the command-to-response \emph{latency} is
-observable. It is, and the open-loop collection of
-Section~\ref{sec:eval:excitation} is close to an ideal instrument for it: the
-excitation is a train of zero-mean square waves with known edge times, which is
-what one would design for a step-response measurement.
-
-The estimator locates each command edge and records the first sample at which
-the response leaves the pre-edge noise floor by four standard deviations. A
-cross-correlation peak was rejected because it conflates dead time with rise
-time. Only the pressure channel is drawn as a trace in
-Figure~\ref{fig:eval:delay-response}: cylinder and joint velocity are
-differentiated quantities whose edge-averages leave a transient at the command
-instant that reads as a response preceding its own cause.
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=.72\textwidth]{images/ch7_delay_response}
-  \caption{How a command propagates through the actuation chain, at excitation
-  amplitude $0.15$. The valve command changes at $t = 0$; each row below sits at
-  the delay measured before that stage begins to move, with the shaded lead-in
-  showing the wait and the bar giving the interquartile range over command
-  edges. Pressure, cylinder extension and joint angle all begin at $117$\,ms and
-  cylinder velocity at $167$\,ms. That extension and joint angle coincide is the
-  control: the linkage between them is static and must contribute no lag. Each
-  edge is aligned on the command's own onset rather than its steepest sample,
-  since aligning on the slope places the origin after the cause has already
-  acted and the response then appears to precede it.}
-  \label{fig:eval:delay-response}
-\end{figure}
-
-
-
-\begin{table}[tb]
-  \centering
-  \caption{Transport latency along the actuation chain, median over $24$ runs at
-  $60$\,Hz control, in milliseconds. The last two rows are the control: the two
-  onsets must coincide, and they do at every amplitude. Amplitude-invariance is
-  what distinguishes a transport delay from a threshold effect.}
-  \label{tab:eval:delay}
-  \begin{tabular}{lcccc}
-    \toprule
-    & \multicolumn{4}{c}{excitation amplitude} \\
-    \cmidrule(lr){2-5}
-    Link & $0.05$ & $0.15$ & $0.35$ & $0.70$ \\
-    \midrule
-    command $\rightarrow$ \dpress{}        & $117$ & $117$ & $117$ & $150$ \\
-    \dpress{} $\rightarrow$ \cylvel{}      & $150$ & $150$ & $133$ & $133$ \\
-    command $\rightarrow$ \cylvel{}        & $183$ & $167$ & $133$ & $117$ \\
-    \midrule
-    command $\rightarrow$ \cylext{}        & $117$ & $117$ & $100$ & $100$ \\
-    command $\rightarrow$ \jointpos{}      & $117$ & $117$ & $100$ & $100$ \\
-    \midrule
-    linkage contribution                   & $0$ & $0$ & $0$ & $0$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The dominant term is the command-to-pressure lag of $117$\,ms, stable across
-three of the four amplitude tiers. The kinematic control is exact: the
-command-to-extension and command-to-joint onsets agree to within $0.0$ control
-steps at every amplitude, so the linkage contributes nothing and the estimator
-is not manufacturing lag.
-
-The medians do not compose -- the first two links sum to $16$ control steps
-while the direct measurement gives $7$ to $11$ -- because the per-edge
-distributions are wide and the median of a sum is not the sum of medians. Each
-link is supported individually; the chain decomposition is not.
-
-This matters for the architecture rather than merely describing the plant. A
-dead time of $117$\,ms is $2.3$ model ticks at the $20$\,Hz estimator rate and
-roughly a tenth of the \AAM{}'s one-second observation window. A controller
-reading only the instantaneous state cannot compensate for it, because the
-information required is not present in a single slice; this is the standard
-argument for history-based estimation~\cite{ljung1999system}, and it holds here
-on measured rather than assumed grounds.
-
-\subsection{The Chain Compared Across the Three Stacks}
-\label{sec:eval:delay-stacks}
-
-The measurement above characterises one plant on open-loop excitation. The three
-control stacks reach that plant through different actuator paths, and whether
-those paths differ in latency is a question about the architectures rather than
-about the hydraulics. It is answered by recording the same chain during a
-closed-loop drive on each stack.
-
-One methodological difference must be stated before the numbers, because it
-prevents a false comparison. A closed-loop command varies continuously and has
-no step edges, so onset detection cannot be used and the estimator is instead a
-cross-correlation lag, which conflates dead time with rise time. The values in
-Table~\ref{tab:eval:chain-stacks} are therefore valid for comparing stacks,
-where the bias is identical across the three, and are \emph{not} comparable with
-the open-loop dead times of Table~\ref{tab:eval:delay}. The two tables do not
-measure the same quantity.
-
-\begin{table}[tb]
-  \centering
-  \caption{Actuation-chain latency during a closed-loop drive, median
-  cross-correlation lag over four cylinders and sixteen environments. The last
-  row is the control: cylinder and joint are coupled by a static linkage, so it
-  must read the resolution floor of one control step, and it does so on every
-  stack. \ppoROM{} and \ppoIDFD{} are the matched pair and differ only in the actuator; \ppoAAMIDFD{} is separately trained and its position here is not attributed to the adaptation path (Section~\ref{sec:eval:hypotheses}).}
-  \label{tab:eval:chain-stacks}
-  \begin{tabular}{lccc}
-    \toprule
-    Link & \ppoROM{} & \ppoIDFD{} & \ppoAAMIDFD{} \\
-    \midrule
-    command $\rightarrow$ pressure          & $450.0$ & $166.7$ & $158.3$ \\
-    pressure $\rightarrow$ cyl.\ velocity   & $0.0$   & $166.7$ & $58.3$ \\
-    command $\rightarrow$ cyl.\ velocity    & $283.3$ & $283.3$ & $\mathbf{133.3}$ \\
-    \midrule
-    cyl.\ $\rightarrow$ joint velocity      & $16.7$  & $16.7$  & $16.7$ \\
-    \bottomrule
-  \end{tabular}
-  \\[2pt]
-  \footnotesize All entries in milliseconds.
-\end{table}
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=.92\textwidth]{images/ch7_chain_by_stack}
-  \caption{The same comparison drawn. The mechanical link at the bottom is the
-  control and reads one control step on all three stacks, which is the
-  resolution floor; the hydraulic links above it separate the architectures.}
-  \label{fig:eval:chain-stacks}
-\end{figure}
-
-Three readings follow. The adaptive stack reaches cylinder motion in less than
-half the time of the other two, $133$\,ms against $283$\,ms, and the difference
-is in the hydraulic half of the chain rather than the mechanical one. \ppoROM{}
-records no lag at all from pressure to cylinder velocity, which is a structural
-fact rather than a fast plant: the command reduced-order model predicts pressure
-and velocity together from one internal state, so there is no transport between
-them to measure, and its long apparent command-to-pressure lag of $450$\,ms
-should be read in the same light, since the valve signal on that path is
-produced inside the model rather than applied to it. The two stacks that drive
-the plant through the inverse and forward models, by contrast, show a genuine
-two-stage propagation with comparable lag in each stage.
-
-The mechanical end is identical everywhere, at one control step, which is the
-resolution floor: the architectures differ in how they drive the hydraulics and
-not in how motion propagates through the linkage.
-
-\subsection{Step Response to a Commanded Change}
-\label{sec:eval:step-response}
-
-The dead time measured so far belongs to the hydraulics and is the same for
-every stack. What differs is how each control stack copes with it, and that cannot be
-recovered from an ordinary drive: reference and achieved path are coherent only
-below about $0.3$\,Hz, where phase reflects the controller's own lag dynamics
-rather than transport, so no delay extracted there is a dead time
-(Section~\ref{sec:eval:validity}). The delay is therefore injected rather than
-inferred. A step of $100$\,mm is
-added to the \emph{commanded} line partway through the scored window, and each
-stack is scored on the same mesh, seed and speed. The step is applied at the
-single point where the tracking line is computed, so it reaches the policy's own
-preview of the path as well as the error term: a step visible to the metric but
-not to the controller would measure only the metric's discontinuity.
-
-\begin{table}[tb]
-  \centering
-  \caption{Response to a $100$\,mm step in the commanded line, median over
-  sixteen environments. The rise time is $10$ to $90\%$ of the step and settling
-  is the first time the error stays within $20$\,mm for half a second. The
-  underlying trajectory is subtracted before measurement, so the only content
-  left is the response to the step itself.}
-  \label{tab:eval:step}
-  \begin{tabular}{lcccc}
-    \toprule
-    Stack & dead time & rise & settled & overshoot \\
-    \midrule
-    \ppoROM{}      & $333$ & $617$ & $2633$ & $57\%$ \\
-    \ppoIDFD{}     & $350$ & $717$ & $\mathbf{2183}$ & $73\%$ \\
-    \ppoAAMIDFD{}  & $558$ & $625$ & $3233$ & $78\%$ \\
-    \midrule
-    plant dead time, open loop & $117$ & --- & --- & --- \\
-    command rate limit         & ---   & $417$ & --- & --- \\
-    \bottomrule
-  \end{tabular}
-  \\[2pt]
-  \footnotesize All times in milliseconds.
-\end{table}
-
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_ref_step}
-  \caption{(a) Median response of each stack to the commanded step, in units of
-  the step, with the interquartile band over environments; the shaded strip at
-  the origin is the $117$\,ms the hydraulics alone require. (b) The same
-  summarised, against two references: the plant's dead time and the
-  $417$\,ms floor the command rate limit imposes on a $100$\,mm step.}
-  \label{fig:eval:step}
-\end{figure}
-
-The result is that \textbf{the hydraulics are not what makes these stacks slow}.
-Every stack begins to answer the step three to five times later than the
-$117$\,ms the plant needs, and none settles inside two seconds. Part of that is
-a hard bound rather than a control deficiency: at a command rate limit of
-$0.004$\,m per control step the fastest possible completion of a $100$\,mm step
-is $417$\,ms, which already exceeds the hydraulic dead time by a factor of
-three. The remainder is control-side, and settling times of $2.2$ to $3.2$\,s
-are five to eight times that bound.
-
-Between the stacks the ordering is modest and not uniform. \ppoIDFD{} settles
-soonest at $2.18$\,s, \ppoAAMIDFD{} is slowest to begin at $558$\,ms and slowest
-to settle at $3.23$\,s, and \ppoROM{} overshoots least. The adaptive stack is
-therefore not faster to answer a change in the command, which is worth stating
-plainly alongside the finding of
-Section~\ref{sec:eval:delay-stacks} that it reaches cylinder motion in less than
-half the time of the others: a shorter path from command to actuator does not
-translate into a quicker response at the tool.
-
-The dead-time column compares when a response becomes \emph{detectable} rather
-than pure transport, because it is measured against each stack's own pre-step
-band and the stacks oscillate differently during normal tracking; the rise and
-settling columns carry the more trustworthy comparison.
-
-\subsection{The Latency Budget of the Closed Loop}
-\label{sec:eval:delay-synthesis}
-
-The three results are easy to misread in isolation, and together they say
-something the chapter needs later. The plant costs $117$\,ms from valve command
-to differential pressure, and that figure is amplitude-invariant with an exact
-kinematic control, so it is a property of the hydraulics rather than of any
-controller. The stacks differ in how quickly they traverse that chain, and the
-adaptive stack traverses it fastest, reaching cylinder motion in $133$\,ms
-against $283$\,ms for both others. Yet when the commanded line moves, the
-adaptive stack is the \emph{slowest} of the three to respond and to settle.
-
-A short path from command to actuator therefore does not produce a quick
-response at the tool, and the reason is that the dominant term is neither of the
-two. A $100$\,mm step cannot be completed faster than $417$\,ms at the command
-rate limit, which already exceeds the hydraulic dead time threefold, and the
-stacks settle in $2.2$ to $3.2$\,s, five to eight times that bound. The
-actuation chain is not the bottleneck; the commanded rate and the policy's own
-dynamics are.
-
-This bears directly on the adaptation question. An estimator that updates every
-$50$\,ms and a plant that answers in $117$\,ms are both fast relative to a loop
-that needs seconds to move the tool to a new line. Whatever the latent
-contributes, it contributes it to a controller whose response is set elsewhere,
-which is one candidate explanation for the gap between the clear model-level
-effect of Section~\ref{sec:eval:id-sufficiency} and the closely matched
-closed-loop arms of Sections~\ref{sec:eval:tracking}
-and~\ref{sec:eval:ablations}.
-Section~\ref{sec:eval:discussion} returns to it.
-
-\section{Checkpoint Selection and the Scoring Horizon}
+\subsection{Checkpoint Selection and the Scoring Horizon}
 \label{sec:eval:horizon}
 
-The closed-loop results depend on which checkpoint represents each stack, and
-that choice turned out to be load-bearing in a way worth reporting rather than
-resolving silently.
+One protocol decision turned out to be load-bearing and is reported rather than
+resolved silently. The project's checkpoint-selection utility defaults to a
+$480$-step window, which at the $\unit[4]{km/h}$ evaluation speed covers $8.9$
+of the $\unit[26]{m}$ course, so a candidate can satisfy it on the opening third
+alone. Every candidate was therefore re-scored over the complete path against
+the same eight-gate contract.
 
-Checkpoints are selected over the full scored path. The project's selection
-utility defaults to $480$ control steps, which at the $4$\,km/h evaluation speed
-covers $8.9$ of the $26$\,m course, so a candidate can satisfy it on the opening
-third alone. Every candidate was therefore re-scored over the complete path
-against the same eight-gate contract.
-
-Two measurements fix what that selection is sensitive to. The adapter's residual
-scale is not the operative variable: setting it to zero moves ground contact by
-$0.001$. And the adaptive stack does not reduce to \ppoIDFD{} when the residual
-is disabled, because its policy is separately trained and conditioned on the
-estimated latent. The two stacks differ in the policy as well as in the adapter,
-which is why each is selected on its own terms.
-
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Candidate adaptive checkpoints re-scored over the full $26$\,m path,
   worst-family values on one held-out mesh. The incumbent is among the weakest
@@ -817,50 +327,45 @@ which is why each is selected on its own terms.
   \end{tabular}
 \end{table}
 
-The adaptive stack is therefore represented in
-Section~\ref{sec:eval:tracking} by \texttt{headroom\_priced\_v1} at iteration
-$299$, which passes seven of the eight gates on three meshes and fails only the
-lateral gate, at $0.326$ against a threshold of $0.300$. The name records the
-mechanism: headroom was priced into that run's reward. This is the same lesson
-the project has met before, that a quantity which is gated but not priced will
-be traded away, and it is reported here as a finding about the acceptance
-contract rather than buried in a checkpoint path.
+The adaptive stack is therefore represented throughout this chapter by
+\texttt{headroom\_priced\_v1} at iteration $299$, which passes seven of the
+eight gates on three meshes and fails only the lateral gate, at $0.326$ against
+a threshold of $0.300$. Its name records the mechanism: headroom was priced into
+that run's reward, and a quantity that is gated but not priced will be traded
+away. Two measurements fix what the selection is sensitive to. The adapter's
+residual scale is not the operative variable, since zeroing it moves ground
+contact by $0.001$; and the adaptive stack does not reduce to \ppoIDFD{} when
+that residual is disabled, because its policy is separately trained and
+conditioned on the latent. Each stack is therefore selected on its own terms.
+The $480$-step default was used for \ppoROM{} and \ppoIDFD{} as well, so the
+caveat was checked for all three rows; those two hold ground contact above
+$0.95$ over the full path and are unaffected.
 
-Two consequences follow for the rest of the chapter. First, every closed-loop
-result names its checkpoint and its scoring horizon, because a gate that
-observes a third of an episode certifies a third of an episode. Second, the
-$480$-step default was also used to select the \ppoROM{} and \ppoIDFD{}
-checkpoints, so the same caveat is checked for all three rows rather than
-applied only where it was first noticed; those two stacks hold ground contact
-above $0.95$ over the full path and are unaffected.
-
-A stored evaluation of an earlier checkpoint,
-\texttt{stage31\_idfd\_aam\_adapt\_v1}/$24$, records all eight gates passing on
-six held-out meshes and appears to beat the checkpoint promoted here. It was
-scored under an easier protocol: $\unit[2]{km/h}$ rather than $\unit[4]{km/h}$,
-and eight of the eleven trajectory families, omitting three of those that
-Figure~\ref{fig:eval:tracking} shows carrying the pooled means. A worst-family
-gate evaluated over a subset that excludes the hard families is a weaker test by
-construction.
-
-The comparison is therefore not available. No checkpoint of any stack has been
-shown to pass all eight gates under the protocol used in this chapter, and a
-record obtained under an easier protocol is not evidence about the harder one.
-The $7/8$ checkpoint scored correctly is reported here in preference to the
-$8/8$ checkpoint scored under conditions the rest of the chapter does not use.
-
-\section{End-Effector and Mowing Performance}
+One earlier checkpoint, \texttt{stage31\_idfd\_aam\_adapt\_v1}/$24$, records all
+eight gates passing on six held-out meshes and appears to beat the one promoted
+here. It was scored under an easier protocol -- $\unit[2]{km/h}$ rather than
+$\unit[4]{km/h}$, and eight of the eleven families, omitting three of those that
+Section~\ref{sec:eval:tracking} shows carrying the pooled means -- and a
+worst-family gate evaluated over a subset that excludes the hard families is a
+weaker test by construction. That comparison is therefore not available: no
+checkpoint of any stack has been shown to pass all eight gates under the
+protocol used here, and the $7/8$ checkpoint scored correctly is reported in
+preference to the $8/8$ checkpoint scored under conditions the rest of the
+chapter does not use.
+\section{Closed-Loop Task Performance}
 \label{sec:eval:tracking}
 
-This is the chapter's only unperturbed comparison of the three stacks, and it
-is where the estimand H3 is answered. All three stacks are scored on three held-out terrain meshes and
+The chapter begins with the machine doing the task, because everything after it
+either explains these numbers or asks how far they hold. This is the only
+unperturbed comparison of the three stacks, it carries the answer to RQ5 on
+tracking, and it is where the estimand H3 is answered. All three stacks are scored on three held-out terrain meshes and
 eleven trajectory families under identical conditions: the same pinned truck
 speed of $4$\,km/h, the same $26$\,m scored window, the same $32$ environments, distributed over eleven trajectory families,
 and the same evaluation seed. The unit of analysis is the (mesh, family) cell,
 which gives $33$ paired conditions per stack; Section~\ref{sec:eval:metrics}
 explains why the evaluation seed is not a unit of replication here.
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_e1_paths}
   \caption{Cutter path against the reference on held-out mesh $1337$, for the
@@ -885,7 +390,7 @@ explains why the evaluation seed is not a unit of replication here.
   \label{fig:eval:paths}
 \end{figure}
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Closed-loop performance over $33$ paired (mesh, family) cells.
   Lateral and cut-height error are the mean over families rather than the worst
@@ -912,7 +417,7 @@ explains why the evaluation seed is not a unit of replication here.
   \end{tabular}
 \end{table}
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_e1_tracking}
   \caption{Lateral error by trajectory family, which is what a pooled
@@ -990,7 +495,7 @@ the table: impacts and tool acceleration aggregate per mesh rather than per
 cell, so the bootstrap resamples three units and the interval should be read as
 a sign indication rather than a calibrated bound.
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=.86\textwidth]{images/ch7_e1_gates}
   \caption{Gate margins on worst-mesh statistics, in units of each gate's own
@@ -1019,7 +524,7 @@ it is worth resolving per family before it is interpreted.
 Table~\ref{tab:eval:family-lateral} does that, and the picture differs by
 stack.
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Mean absolute lateral error per trajectory family, worst of the three
   held-out meshes, against the $\unit[0.300]{m}$ gate. Families are ordered by
@@ -1084,7 +589,293 @@ discriminate, head alignment most sharply at $0.9763$ for the adaptive stack
 against $0.2247$ for \ppoIDFD{}, and it is on those that the comparative
 statements of this chapter rest.
 
-\subsection{Control Effort}
+Three questions follow from this table, and the next three sections take them in
+turn. Why the two representations produce different controllers at all, and what
+each spends to track, is a question about the actuation chain and is answered in
+Section~\ref{sec:eval:delay}. Whether the performance survives terrain, plant
+and trajectory it has not seen is answered in
+Section~\ref{sec:eval:robustness}. And why the adaptive stack does not convert
+its model-level advantage into task performance -- an advantage established
+in Section~\ref{sec:eval:adaptation} and absent from the table above -- occupies
+Sections~\ref{sec:eval:identifiability} to~\ref{sec:eval:ceiling}.
+
+\section{Actuator Representation and Dynamic Response}
+\label{sec:eval:delay}
+
+Section~\ref{sec:eval:tracking} established that the two actuator
+representations do not produce the same controller. This section measures what
+physically differs between them, and it is the section that answers RQ5 on
+latency and command behaviour: how long a command takes to reach the cylinder,
+how quickly each stack answers a change in what it is asked to do, and what
+each spends in actuation to track at all.
+
+Latency enters the system in two quite different places, and separating them
+comes first. The hydraulics impose a transport delay that no controller can
+remove; the control stack then adds its own, and only the second is an
+architectural choice. Section~\ref{sec:eval:delay-plant} measures the first on
+open-loop excitation, where it can be isolated cleanly.
+Section~\ref{sec:eval:delay-stacks} asks whether the three stacks differ in how
+quickly they drive the plant, and resolves the difference into its hydraulic and
+mechanical halves. Section~\ref{sec:eval:step-response} asks the question that
+matters for the task -- how long each takes to answer a change in the commanded
+line -- and finds the answer dominated by the control side rather than the
+hydraulic one. Section~\ref{sec:eval:effort} then prices the tracking of
+Section~\ref{sec:eval:tracking} in commanded actuation and in command
+reversals, which is what wears the machine.
+
+\subsection{Dead Time in the Plant}
+\label{sec:eval:delay-plant}
+
+Delay is measured here rather than assumed, and it is worth separating from an
+earlier negative result. Attempts to identify the valve's dynamic \emph{model}
+from the available datasets did not succeed, but that is a parameter-fitting
+outcome and says nothing about whether the command-to-response \emph{latency} is
+observable. It is, and the open-loop collection of
+Section~\ref{sec:eval:excitation} is close to an ideal instrument for it: the
+excitation is a train of zero-mean square waves with known edge times, which is
+what one would design for a step-response measurement.
+
+The estimator locates each command edge and records the first sample at which
+the response leaves the pre-edge noise floor by four standard deviations. A
+cross-correlation peak was rejected because it conflates dead time with rise
+time. Only the pressure channel is drawn as a trace in
+Figure~\ref{fig:eval:delay-response}: cylinder and joint velocity are
+differentiated quantities whose edge-averages leave a transient at the command
+instant that reads as a response preceding its own cause.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=.72\textwidth]{images/ch7_delay_response}
+  \caption{How a command propagates through the actuation chain, at excitation
+  amplitude $0.15$. The valve command changes at $t = 0$; each row below sits at
+  the delay measured before that stage begins to move, with the shaded lead-in
+  showing the wait and the bar giving the interquartile range over command
+  edges. Pressure, cylinder extension and joint angle all begin at $117$\,ms and
+  cylinder velocity at $167$\,ms. That extension and joint angle coincide is the
+  control: the linkage between them is static and must contribute no lag. Each
+  edge is aligned on the command's own onset rather than its steepest sample,
+  since aligning on the slope places the origin after the cause has already
+  acted and the response then appears to precede it.}
+  \label{fig:eval:delay-response}
+\end{figure}
+
+
+
+\begin{table}[tbp]
+  \centering
+  \caption{Transport latency along the actuation chain, median over $24$ runs at
+  $60$\,Hz control, in milliseconds. The last two rows are the control: the two
+  onsets must coincide, and they do at every amplitude. Amplitude-invariance is
+  what distinguishes a transport delay from a threshold effect.}
+  \label{tab:eval:delay}
+  \begin{tabular}{lcccc}
+    \toprule
+    & \multicolumn{4}{c}{excitation amplitude} \\
+    \cmidrule(lr){2-5}
+    Link & $0.05$ & $0.15$ & $0.35$ & $0.70$ \\
+    \midrule
+    command $\rightarrow$ \dpress{}        & $117$ & $117$ & $117$ & $150$ \\
+    \dpress{} $\rightarrow$ \cylvel{}      & $150$ & $150$ & $133$ & $133$ \\
+    command $\rightarrow$ \cylvel{}        & $183$ & $167$ & $133$ & $117$ \\
+    \midrule
+    command $\rightarrow$ \cylext{}        & $117$ & $117$ & $100$ & $100$ \\
+    command $\rightarrow$ \jointpos{}      & $117$ & $117$ & $100$ & $100$ \\
+    \midrule
+    linkage contribution                   & $0$ & $0$ & $0$ & $0$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The dominant term is the command-to-pressure lag of $117$\,ms, stable across
+three of the four amplitude tiers. The kinematic control is exact: the
+command-to-extension and command-to-joint onsets agree to within $0.0$ control
+steps at every amplitude, so the linkage contributes nothing and the estimator
+is not manufacturing lag.
+
+The medians do not compose -- the first two links sum to $16$ control steps
+while the direct measurement gives $7$ to $11$ -- because the per-edge
+distributions are wide and the median of a sum is not the sum of medians. Each
+link is supported individually; the chain decomposition is not.
+
+This matters for the architecture rather than merely describing the plant. A
+dead time of $117$\,ms is $2.3$ model ticks at the $20$\,Hz estimator rate and
+roughly a tenth of the \AAM{}'s one-second observation window. A controller
+reading only the instantaneous state cannot compensate for it, because the
+information required is not present in a single slice; this is the standard
+argument for history-based estimation~\cite{ljung1999system}, and it holds here
+on measured rather than assumed grounds.
+
+\subsection{The Chain Compared Across the Three Stacks}
+\label{sec:eval:delay-stacks}
+
+The measurement above characterises one plant on open-loop excitation. The three
+control stacks reach that plant through different actuator paths, and whether
+those paths differ in latency is a question about the architectures rather than
+about the hydraulics. It is answered by recording the same chain during a
+closed-loop drive on each stack.
+
+One methodological difference must be stated before the numbers, because it
+prevents a false comparison. A closed-loop command varies continuously and has
+no step edges, so onset detection cannot be used and the estimator is instead a
+cross-correlation lag, which conflates dead time with rise time. The values in
+Table~\ref{tab:eval:chain-stacks} are therefore valid for comparing stacks,
+where the bias is identical across the three, and are \emph{not} comparable with
+the open-loop dead times of Table~\ref{tab:eval:delay}. The two tables do not
+measure the same quantity.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Actuation-chain latency during a closed-loop drive, median
+  cross-correlation lag over four cylinders and sixteen environments. The last
+  row is the control: cylinder and joint are coupled by a static linkage, so it
+  must read the resolution floor of one control step, and it does so on every
+  stack. \ppoROM{} and \ppoIDFD{} are the matched pair and differ only in the actuator; \ppoAAMIDFD{} is separately trained and its position here is not attributed to the adaptation path (Section~\ref{sec:eval:hypotheses}).}
+  \label{tab:eval:chain-stacks}
+  \begin{tabular}{lccc}
+    \toprule
+    Link & \ppoROM{} & \ppoIDFD{} & \ppoAAMIDFD{} \\
+    \midrule
+    command $\rightarrow$ pressure          & $450.0$ & $166.7$ & $158.3$ \\
+    pressure $\rightarrow$ cyl.\ velocity   & $0.0$   & $166.7$ & $58.3$ \\
+    command $\rightarrow$ cyl.\ velocity    & $283.3$ & $283.3$ & $\mathbf{133.3}$ \\
+    \midrule
+    cyl.\ $\rightarrow$ joint velocity      & $16.7$  & $16.7$  & $16.7$ \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  \footnotesize All entries in milliseconds.
+\end{table}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=.92\textwidth]{images/ch7_chain_by_stack}
+  \caption{The same comparison drawn. The mechanical link at the bottom is the
+  control and reads one control step on all three stacks, which is the
+  resolution floor; the hydraulic links above it separate the architectures.}
+  \label{fig:eval:chain-stacks}
+\end{figure}
+
+Three readings follow. The adaptive stack reaches cylinder motion in less than
+half the time of the other two, $133$\,ms against $283$\,ms, and the difference
+is in the hydraulic half of the chain rather than the mechanical one. \ppoROM{}
+records no lag at all from pressure to cylinder velocity, which is a structural
+fact rather than a fast plant: the command reduced-order model predicts pressure
+and velocity together from one internal state, so there is no transport between
+them to measure, and its long apparent command-to-pressure lag of $450$\,ms
+should be read in the same light, since the valve signal on that path is
+produced inside the model rather than applied to it. The two stacks that drive
+the plant through the inverse and forward models, by contrast, show a genuine
+two-stage propagation with comparable lag in each stage.
+
+The mechanical end is identical everywhere, at one control step, which is the
+resolution floor: the architectures differ in how they drive the hydraulics and
+not in how motion propagates through the linkage.
+
+\subsection{Step Response to a Commanded Change}
+\label{sec:eval:step-response}
+
+The dead time measured so far belongs to the hydraulics and is the same for
+every stack. What differs is how each control stack copes with it, and that cannot be
+recovered from an ordinary drive: reference and achieved path are coherent only
+below about $0.3$\,Hz, where phase reflects the controller's own lag dynamics
+rather than transport, so no delay extracted there is a dead time
+(Section~\ref{sec:eval:validity}). The delay is therefore injected rather than
+inferred. A step of $100$\,mm is
+added to the \emph{commanded} line partway through the scored window, and each
+stack is scored on the same mesh, seed and speed. The step is applied at the
+single point where the tracking line is computed, so it reaches the policy's own
+preview of the path as well as the error term: a step visible to the metric but
+not to the controller would measure only the metric's discontinuity.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Response to a $100$\,mm step in the commanded line, median over
+  sixteen environments. The rise time is $10$ to $90\%$ of the step and settling
+  is the first time the error stays within $20$\,mm for half a second. The
+  underlying trajectory is subtracted before measurement, so the only content
+  left is the response to the step itself.}
+  \label{tab:eval:step}
+  \begin{tabular}{lcccc}
+    \toprule
+    Stack & dead time & rise & settled & overshoot \\
+    \midrule
+    \ppoROM{}      & $333$ & $617$ & $2633$ & $57\%$ \\
+    \ppoIDFD{}     & $350$ & $717$ & $\mathbf{2183}$ & $73\%$ \\
+    \ppoAAMIDFD{}  & $558$ & $625$ & $3233$ & $78\%$ \\
+    \midrule
+    plant dead time, open loop & $117$ & --- & --- & --- \\
+    command rate limit         & ---   & $417$ & --- & --- \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  \footnotesize All times in milliseconds.
+\end{table}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_ref_step}
+  \caption{(a) Median response of each stack to the commanded step, in units of
+  the step, with the interquartile band over environments; the shaded strip at
+  the origin is the $117$\,ms the hydraulics alone require. (b) The same
+  summarised, against two references: the plant's dead time and the
+  $417$\,ms floor the command rate limit imposes on a $100$\,mm step.}
+  \label{fig:eval:step}
+\end{figure}
+
+The result is that \textbf{the hydraulics are not what makes these stacks slow}.
+Every stack begins to answer the step three to five times later than the
+$117$\,ms the plant needs, and none settles inside two seconds. Part of that is
+a hard bound rather than a control deficiency: at a command rate limit of
+$0.004$\,m per control step the fastest possible completion of a $100$\,mm step
+is $417$\,ms, which already exceeds the hydraulic dead time by a factor of
+three. The remainder is control-side, and settling times of $2.2$ to $3.2$\,s
+are five to eight times that bound.
+
+Between the stacks the ordering is modest and not uniform. \ppoIDFD{} settles
+soonest at $2.18$\,s, \ppoAAMIDFD{} is slowest to begin at $558$\,ms and slowest
+to settle at $3.23$\,s, and \ppoROM{} overshoots least. The adaptive stack is
+therefore not faster to answer a change in the command, which is worth stating
+plainly alongside the finding of
+Section~\ref{sec:eval:delay-stacks} that it reaches cylinder motion in less than
+half the time of the others: a shorter path from command to actuator does not
+translate into a quicker response at the tool.
+
+The dead-time column compares when a response becomes \emph{detectable} rather
+than pure transport, because it is measured against each stack's own pre-step
+band and the stacks oscillate differently during normal tracking; the rise and
+settling columns carry the more trustworthy comparison.
+
+\subsection{The Latency Budget of the Closed Loop}
+\label{sec:eval:delay-synthesis}
+
+The three results are easy to misread in isolation, and together they say
+something the chapter needs later. The plant costs $117$\,ms from valve command
+to differential pressure, and that figure is amplitude-invariant with an exact
+kinematic control, so it is a property of the hydraulics rather than of any
+controller. The stacks differ in how quickly they traverse that chain, and the
+adaptive stack traverses it fastest, reaching cylinder motion in $133$\,ms
+against $283$\,ms for both others. Yet when the commanded line moves, the
+adaptive stack is the \emph{slowest} of the three to respond and to settle.
+
+A short path from command to actuator therefore does not produce a quick
+response at the tool, and the reason is that the dominant term is neither of the
+two. A $100$\,mm step cannot be completed faster than $417$\,ms at the command
+rate limit, which already exceeds the hydraulic dead time threefold, and the
+stacks settle in $2.2$ to $3.2$\,s, five to eight times that bound. The
+actuation chain is not the bottleneck; the commanded rate and the policy's own
+dynamics are.
+
+This bears directly on the adaptation question. An estimator that updates every
+$50$\,ms and a plant that answers in $117$\,ms are both fast relative to a loop
+that needs seconds to move the tool to a new line. Whatever the latent
+contributes, it contributes it to a controller whose response is set elsewhere,
+which is one candidate explanation for the gap between the model-level effect
+reported in Section~\ref{sec:eval:id-sufficiency} and the closely matched
+closed-loop arms of Section~\ref{sec:eval:tracking}. It is taken up as
+an explanation in Section~\ref{sec:eval:ceiling}, once the model-level effect
+itself has been established.
+
+\subsection{Control Effort and Command Chatter}
 \label{sec:eval:effort}
 
 Tracking error ranks outcomes but not costs, and two stacks with comparable
@@ -1095,7 +886,7 @@ per second the command reverses the direction of motion. The last is
 deliberately scale-free, because a stack can command little in total and still
 chatter, and chatter is what wears the machine.
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Control effort and the tracking it buys, on held-out mesh $1337$.
   Effort read without the error beside it would rank \ppoROM{} best, which is
@@ -1114,7 +905,7 @@ chatter, and chatter is what wears the machine.
   \footnotesize Lateral error in millimetres; command in normalised units.
 \end{table}
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_control_effort}
   \caption{(a) Effort against the error it buys; the lower left is better.
@@ -1147,14 +938,722 @@ policy through its variation: that claim concerns different latents supplied to
 without per-step traces. Measuring effort across those arms is the direct test
 and remains outstanding.
 
-\section{Response to a Mid-Episode Plant Change}
+\section{Generalisation and Robustness}
+\label{sec:eval:robustness}
+
+Before the sweep itself, it is worth stating what the evaluation protocol of
+this chapter has already established about generalisation, because it is spread
+across several sections and is easy to miss when each is read on its own. Every
+closed-loop number reported here is measured on material the policies were not
+trained on. The terrain meshes are held out, the eleven trajectory families are
+scored individually rather than pooled, and the plant is drawn from the sixteen
+reserved factor configurations whose keys are disjoint from the training and
+validation splits by construction
+(Section~\ref{sec:data:isaaclab}), so a scored run is a plant the stack has
+never seen rather than merely an episode it has not seen -- with the
+qualification, established in Section~\ref{sec:eval:delivered-stress}, that on
+the inverse/forward plant the unseen part of that draw is its mechanical half.
+On that material
+\ppoIDFD{} holds the lateral criterion in $32$ of $33$ (mesh, family) cells at
+a median of $\unit[0.0281]{m}$ (Table~\ref{tab:eval:family-lateral}). The
+learned actuator underneath it generalises across simulators on the same
+evidence: the frozen inverse model was identified on Simscape alone and scored
+on $64$ IsaacLab runs lying entirely outside its training distribution, where
+its accuracy is flat to a factor of $1.09$ between the best and worst domain
+(Section~\ref{sec:models:id-trust}). Generalisation across simulator, plant
+draw, terrain and trajectory is therefore demonstrated, and it is demonstrated
+without any online adaptation.
+
+The question in this section is the remaining one: how far the plant may be
+moved before that generalisation stops holding, which a pass or fail on a fixed
+factor set cannot answer. The magnitude of the deployment-factor randomisation
+was therefore swept. Each environment keeps the draw it would have received and
+that draw is stretched away from the nominal plant along the same line, so the
+requested stress is $0$ at the nominal machine, $1$ at the manifest as drawn and
+$2$ at twice every deviation. The intention was that only the magnitude should
+change and never which plants are visited, so that the curve would not be
+confounded with a change of population.
+
+That is what the sweep requested. Section~\ref{sec:eval:delivered-stress} reports
+what the plant received, and the two differ in a way that governs how the rest
+of this section may be read, so the audit is given before the result.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_e5_robustness}
+  \caption{Per-trajectory performance at each randomisation scale, over the
+  eleven trajectory families of one held-out mesh. Boxes give the interquartile
+  range and the line the median; points are families outside the whiskers.
+  The medians are flat across the sweep for all three stacks. How much of the
+  requested stress reached the plant is audited in
+  Section~\ref{sec:eval:delivered-stress}, and the flatness above scale $1$ must
+  be read against it. \ppoROM{} and \ppoIDFD{} are the matched pair; \ppoAAMIDFD{} is
+  separately trained, so its offset from them is not read as an effect of
+  adaptation. \ppoIDFD{}'s excursion at scale $1$ is one trajectory and not a shift
+  of the population, which a plot of means would have reported as a breakdown.
+  }
+  \label{fig:eval:robustness}
+\end{figure}
+
+
+
+\textbf{No stack's tracking moves with the requested stress.} Mean lateral error
+over the sweep goes from $0.1286$ to $0.1184$\,m for \ppoROM{}, from $0.0277$ to
+$0.0287$\,m for \ppoIDFD{} and from $0.0546$ to $0.0673$\,m for the adaptive
+stack, and ground contact stays within $2.2\%$ of nominal for \ppoROM{} and
+$2.7\%$ for the adaptive stack, while \ppoIDFD{} moves furthest at $5.5\%$. No
+point on the curve is a breakdown.
+
+That is a flat curve, and a flat curve admits two readings: the controllers
+absorb the stress, or the stress did not arrive. The audit below establishes
+that the second reading cannot be excluded, so the first is not asserted here.
+
+The one excursion is instructive precisely because it is not a trend.
+\ppoIDFD{} records $0.178$\,m at scale $1$ against roughly $0.03$\,m everywhere
+else, including at the \emph{more} extreme scales $1.5$ and $2$. Resolving it by
+family shows a single trajectory responsible: the double S-curve reaches
+$1.352$\,m, against $0.058$ and $0.059$\,m at the neighbouring scales. One
+combination of plant and path destabilises that stack, and the combination does
+not survive being exaggerated. It is a genuine failure on a real manifest draw
+and it is not a breakdown point, and the distinction matters: a curve summarised
+only by its worst value would report a breakdown at scale $1$ that the
+neighbouring points contradict.
+
+The sweep uses one mesh and eleven families per point, so it resolves a trend
+rather than a small difference between stacks, and its absolute values are not
+comparable with the three-mesh tables earlier in this chapter.
+
+\subsection{How Much of the Requested Stress Reached the Plant}
+\label{sec:eval:delivered-stress}
+
+Two properties of the perturbation path decide what a sweep point delivers, and
+neither was accounted for when the sweep was designed. They are stated in the
+order of their severity.
+
+\paragraph{Which factors reach which plant.}
+The six factors do not all act, and what acts differs by stack.
+Table~\ref{tab:eval:factor-reach} sets it out. The command reduced-order model
+takes the four hydraulic factors as an explicit input, so they act on \ppoROM{}.
+The inverse/forward plant does not: its step consumes the valve command, the
+cylinder state, the differential pressure and the load, and takes no factor
+argument at all. On \ppoIDFD{} and \ppoAAMIDFD{} the hydraulic factors therefore
+reach the privileged latent encoder and the logs, and nothing else. What varies
+across a held-out factor draw on those two stacks is tool mass and
+centre-of-mass height, applied through PhysX without a clamp.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Where each deployment factor acts. The inverse/forward plant takes
+  no factor input, so on the two stacks that use it the hydraulic factors are
+  inert and reach only the privileged encoder used by the oracle arm. This was
+  established by inspection of the runtime and is checked empirically by the
+  reachability control described in the text.}
+  \label{tab:eval:factor-reach}
+  \small
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Factor & \ppoROM{} (command ROM) & \ppoIDFD{}, \ppoAAMIDFD{} (ID/FD) \\
+    \midrule
+    flow, compliance, seal, pressure & acts, clamped to training range & inert \\
+    tool mass, centre-of-mass height & acts, unclamped & acts, unclamped \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{How far the factors that do act may travel.}
+The stretch applied to a factor draw is not validated against the audited factor
+ranges, because a scaled row is constructed directly rather than parsed. The
+plant enforces those ranges instead: the reduced-order hydraulic model pins
+every hydraulic factor back into the interval it was identified on --
+compliance to $[-0.25, 0.10]$, flow to $[-0.25, 0.25]$, supply pressure to
+$[-0.15, 0.15]$ and seal condition to $[0, 1]$ -- and then bounds the realised
+actuator response gain to $[0.35, 1.50]$.
+
+Table~\ref{tab:eval:delivered-stress} evaluates that clamping on the sixteen
+held-out factor rows the sweep visits. Two distinct quantities appear there and
+are worth separating, because conflating them overstates the finding. The
+\emph{delivered fraction} is the Euclidean norm of the applied hydraulic
+deviation from nominal divided by the norm of the requested one: it is a ratio
+in factor space and says how much of the requested stress survived clamping, not
+what it does to the machine. At the requested scale $1.5$, thirteen of the
+sixteen rows have at least one factor pinned; at scale $2$, all sixteen do, and
+$77.8\,\%$ of the requested deviation arrives. The label ``twice every
+deviation'' is therefore accurate for the mechanical factors and wrong for the
+hydraulic ones, which sit at the edge of the training envelope while the
+mechanical factors alone continue to grow.
+
+The \emph{response gain} is the separate quantity, and it is the one that
+concerns authority. It multiplies both the velocity and the extension increment
+the reduced-order model emits, so it scales the realised cylinder motion
+directly. Two bounds apply to it. The explicit limiter clamps it to
+$[0.35, 1.50]$, which alone permits a reduction of at most $65\,\%$. Within the
+clamped factor ranges the worst case the six factors can actually compose is
+$0.376$, so \textbf{the factor path cannot scale the reduced-order model's
+realised actuator motion below $0.376$ of nominal, a reduction of at most
+$62\,\%$}. That is a statement about this model's realised motion under this
+perturbation path, and not about hydraulic authority in general; on the
+inverse/forward plant the same factors scale nothing at all.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Requested against delivered stress over the sixteen held-out factor
+  rows. ``Delivered'' is the applied hydraulic deviation from nominal as a
+  fraction of the requested one -- a ratio in factor space, not a measure of
+  authority -- so $1.000$ means the sweep point reached the plant intact. The
+  last column is the separate quantity that does scale realised motion, the
+  reduced-order model's response gain. Above scale $1$ the hydraulic half of the
+  sweep is progressively pinned to the training envelope, while tool mass and
+  centre-of-mass height are never clamped.}
+  \label{tab:eval:delivered-stress}
+  \begin{tabular}{lccc}
+    \toprule
+    Requested scale & rows with a pinned factor & delivered & min.\ response gain \\
+    \midrule
+    $0.5$ & $0/16$  & $1.000$ & $0.671$ \\
+    $1.0$ & $0/16$  & $1.000$ & $0.472$ \\
+    $1.5$ & $13/16$ & $0.911$ & $0.402$ \\
+    $2.0$ & $16/16$ & $0.778$ & $0.376$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three consequences follow, and they replace the conclusion this experiment was
+originally read as supporting.
+
+The first is that for two of the three stacks the sweep did not vary the
+hydraulics at all. A flat curve for \ppoIDFD{} and \ppoAAMIDFD{} across a
+hydraulic randomisation is the expected reading of an inert input, not evidence
+that those stacks tolerate hydraulic variation. Their curves record tolerance to
+a doubling of tool mass and centre-of-mass offset, which is a narrower claim and
+is the one made here.
+
+The second is that the sweep axis is not an axis of increasing difficulty. Above
+scale $1$ it changes the \emph{kind} of plant rather than the amount of
+deviation, since the hydraulic factors stop moving while the mechanical ones
+continue. The single excursion described above is consistent with exactly that:
+\ppoIDFD{}'s failure occurs at scale $1$, the last point at which the full
+manifest draw is delivered intact, and disappears at $1.5$ and $2$, where the
+hydraulic part of that same draw is pinned back inside the envelope. A
+non-monotonic response is what a curve of this construction should be expected
+to produce, and it is not evidence that the plant became milder.
+
+The third is a bound on the instrument itself, on the one stack where the
+hydraulic factors do act. A knockout to zero authority is unreachable by this
+route: the realised motion cannot be scaled below $0.376$, whatever is
+requested. A robustness boundary is a statement about the point at which
+control authority becomes insufficient, and this experiment cannot reach that
+point by construction. The flat curve in
+Figure~\ref{fig:eval:robustness} is therefore a property of a bounded
+perturbation path as much as of the controllers, and the claim that these stacks
+are insensitive to plant variation is not supported by it.
+
+\subsection{What a Robustness Boundary Would Require}
+\label{sec:eval:boundary-design}
+
+The correct experiment is not this sweep extended to scale $3$, which
+Table~\ref{tab:eval:delivered-stress} shows would deliver less of what it
+requests, not more. It is a search for the physical point at which command
+authority becomes insufficient, and it needs three things this sweep lacks.
+
+It needs, first, a stress axis that \emph{reaches every stack and means the same
+thing on each}. The deployment factors are not one, for the two reasons above.
+The axis specified here instead scales the realised cylinder motion the actuator
+produced, immediately before that motion updates the physics target:
+\begin{equation}
+  \Delta x^{\text{applied}}_k = \alpha\,\Delta x^{\text{actuator}}_k ,
+  \qquad \alpha \in (0, 1],
+  \label{eq:eval:authority}
+\end{equation}
+where $\Delta x^{\text{actuator}}$ comes from the command reduced-order model on
+\ppoROM{} and from the inverse/forward pair on the other two. It bypasses the
+clamp, it is applied at the same point in all three stacks, and it is named for
+what it is: \emph{actuator-authority degradation} at the deployment interface,
+not seal, not flow, and not any hydraulic parameter. Its meaning is
+unambiguous -- the fraction of commanded actuator motion that is actually
+realised -- and unlike a factor distance it has an obvious endpoint, since at
+$\alpha \rightarrow 0$ the moving reference must become untrackable.
+
+That endpoint is what makes the \emph{positive control} exact. Running
+$\alpha = 1$ against $\alpha = 0.01$ and recording both $\Delta
+x^{\text{actuator}}$ and $\Delta x^{\text{applied}}$ allows the ratio to be
+checked numerically rather than inferred from a trajectory plot: it must equal
+$\alpha$. Only then is the second question asked, whether the cutter loses the
+line. A stack that still tracks at one per cent of its actuator authority is a
+finding about the harness, and the two failures are distinguishable because the
+ratio separates them.
+
+It needs \emph{one factor at a time} before any combination. A six-factor
+stretch permits one factor to compensate another, so the direction that makes
+the task harder has to be measured rather than assumed.
+
+It needs its \emph{thresholds declared in advance}. Two are used: degradation
+onset, the first stress at which median lateral error reaches one and a half
+times its own nominal value or ground contact falls by five percentage points;
+and functional breakdown, ground contact below $0.700$ or a safety termination
+rate above $0.080$.
+
+And it needs a \emph{selection rule that cannot favour the adaptive stack}. The
+degradation curve is measured on \ppoIDFD{} alone, the non-adaptive baseline;
+the stress levels are frozen from that curve; and only then are all three stacks
+scored at those levels. \ppoAAMIDFD{} is never inspected while the levels are
+chosen, so the condition cannot have been selected to flatter it.
+
+That experiment is specified and instrumented but not run: it requires the
+IsaacLab plant on GPU hardware, and its results are not part of this thesis.
+What this section establishes is narrower and is stated in place of the
+robustness claim it replaces. On \ppoROM{}, within a perturbation path that
+cannot remove more than $62\,\%$ of actuator authority and over a sweep whose
+upper half is progressively clamped, no degradation of task performance was
+observed. On \ppoIDFD{} and \ppoAAMIDFD{} the sweep varied tool mass and
+centre-of-mass height only, and neither degrades under a doubling of both. The
+boundary is not located on any stack, and \emph{the absence of an observed
+boundary is not evidence that one is distant}.
+
+\section{Identifiability of Plant Variation}
+\label{sec:eval:identifiability}
+
+Sections~\ref{sec:eval:tracking} to~\ref{sec:eval:robustness} answer RQ5 and
+leave RQ6 standing. Both representations support closed-loop control on
+held-out terrain, plants and trajectories, and neither degrades when the plant
+is moved as far as this work can move it -- all without any online adaptation.
+That is the setting in which adaptation has to earn its place, and the first
+question is not whether an estimator is accurate but whether there is anything
+in the data for it to recover. This section measures that, and then asks what
+kind of quantity the recovered latent actually is.
+
+\subsection{Excitation Design and the Identifiability Envelope}
+\label{sec:eval:excitation}
+
+What the data makes identifiable determines what any estimator can recover, so
+it is measured before any estimator is judged, and the headline is that
+excitation gathered under a task controller does not separate plants at all.
+
+The reason is structural. A task controller computes its command from the
+measured state, so command and response are close to redundant and little is
+left for a plant descriptor to explain; the input must be rich enough for the
+regressor to stay well conditioned~\cite{ljung1999system}, which makes
+excitation design a first-class decision~\cite{schoukens2019nonlinear}. The
+collection used throughout this chapter therefore removes the controller
+entirely and applies open-loop
+zero-mean square-wave excitation directly, at the cylinder-command interface
+because the command reduced-order model accepts cylinder extensions and not
+valve signals by design (Section~\ref{sec:models:rom}). This collection, \texttt{rom\_openloop\_v1}, comprises $118$ plant draws of
+$11\,040$ control steps each, split $82/20/16$ by run into
+training, validation and reserved test sets, and its Hankel matrix reaches full
+rank $40$ of $40$ at a condition number of $17.8$.
+
+The excitation sweeps four amplitude tiers. Table~\ref{tab:eval:identifiability}
+reports what each tier makes identifiable, decoding the six true plant factors
+from the per-tier mean latent estimate and scoring on held-out runs. The
+seal-condition factor is the positive control throughout, since it is the one
+factor the estimator is known to represent (Section~\ref{sec:models:aam-content});
+if it collapses, the decode is broken and no other entry in the row carries
+information.
+
+\begin{table}[tbp]
+  \centering
+  \caption{What each excitation tier makes identifiable, and why the higher
+  tiers do not. Decode $R^2$ is held out over $36$ reserved runs; drift is the
+  across-plant spread of cylinder extension at matched ticks, expressed as a
+  fraction of the stroke the probe itself produces. Plant identity survives the
+  first two tiers and is gone by the third, while command saturation never
+  exceeds ten per cent.}
+  \label{tab:eval:identifiability}
+  \begin{tabular}{lcccc}
+    \toprule
+    Amplitude & seal $R^2$ & mean $R^2$ & drift / stroke & command sat. \\
+    \midrule
+    $0.05$ & $0.703$  & $0.109$  & $0.18$ & $0.11\%$ \\
+    $0.15$ & $0.505$  & $0.099$  & $0.28$ & $0.35\%$ \\
+    $0.35$ & $-0.018$ & $-0.040$ & $0.39$ & $3.26\%$ \\
+    $0.70$ & $0.043$  & $-0.021$ & $0.50$ & $9.98\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=.62\textwidth]{images/ch7_identifiability}
+  \caption{The identifiability envelope. (a) Held-out decode $R^2$ for each of
+  the six plant factors at each excitation level. Only the seal condition is
+  recoverable, and only in the two lowest tiers. (b) The reason: operating-point
+  drift, as a fraction of the stroke the probe produces, rises steadily with
+  amplitude while command saturation stays low throughout and cannot account for
+  the collapse.}
+  \label{fig:eval:identifiability}
+\end{figure}
+
+The obvious explanation for the collapse is actuator saturation, and it is
+wrong. Saturation reaches only $9.98\%$ of steps even at the largest amplitude,
+which cannot account for a decode falling from $R^2 = 0.703$ to zero. The
+measurement that does account for it is operating-point drift. Every run
+executes an identical excitation schedule, so at a matched tick the only thing
+that differs between runs is the plant, and the across-run spread of cylinder
+extension is a direct reading of how far the plants have desynchronised in
+position. That spread grows from $1.5$\,mm at the start of the episode to
+$54.2$\,mm at the end, reaching half of the stroke the probe itself produces.
+Once runs are that far apart, a one-second observation window cannot separate a
+response that differs because the seal is leaking from one that differs because
+the cylinder is sitting five centimetres lower. The confound is an accumulated
+history effect, and it is not one the estimator can be blamed for.
+
+Two consequences follow, and both constrain later sections. First, all
+adaptation experiments in this chapter are run below amplitude $0.35$, inside
+the band where plant identity is present at all; an experiment run above it
+would be testing the estimator on data that contains no answer. Second, the
+excitation plan ramps amplitude monotonically across the episode, one tier per
+quarter. That schedule is deliberate: it sweeps the full amplitude range inside
+every run, so each plant draw contributes to all four tiers and the tiers are
+compared on identical plants rather than across separate collections. The
+consequence for interpretation follows from the design and is stated so that the
+collection is read correctly: amplitude and episode time are the same axis here,
+so this collection supports statements about amplitude and not about elapsed
+time within an episode. A pilot analysis that read decode quality as decaying
+over the episode was reading the amplitude sweep, and is recorded as such.
+
+\subsection{Closed-Loop Data Against Excitation Data}
+\label{sec:eval:closedloop-data}
+
+The envelope above is a statement about data rather than about estimators, and
+the sharpest demonstration of that is an architecture that changes sign when the
+data changes. The latent-conditioned state predictor of
+Section~\ref{sec:eval:id-sufficiency} lowers free-running error by a median of
+$22.3\,\%$ on the open-loop collection. On the earlier collection gathered under
+a task controller, the same architecture, the same objective and the same
+selection criterion put the latent \emph{behind} its no-latent baseline: the
+no-latent predictor scored $0.17278$, the end-to-end latent $0.17596$ and the
+privileged latent $0.18515$, so plant conditioning appeared worthless or worse.
+
+Nothing about the model changed between those two results. What changed was
+whether the data contained an answer, exactly as the envelope above predicts:
+under a task controller the command is computed from the state, so command and
+response are close to redundant and the plant has little left to explain. Two
+consequences follow for this chapter. Reporting only the closed-loop collection
+would have supported a confident negative conclusion about the architecture that
+the open-loop data contradicts, which is why every model-level experiment here
+uses \texttt{rom\_openloop\_v1}. And an identifiability check of this kind is
+cheap, requires no estimator, and belongs before rather than after the decision
+to build one.
+
+\subsection{Information Content of the Adaptive Latent}
+\label{sec:eval:latent-content}
+
+That the latent helps does not establish \emph{why}, and the two available
+explanations carry different consequences for the thesis. Under the first, the
+estimator recognises which plant it is operating on and the policy is
+conditioned on a plant identity. Under the second, the estimator tracks a
+time-varying operating condition and its value lies in the estimate moving.
+H2 separates them with a substitution experiment that changes nothing but the
+contents of the latent slot.
+
+One trained model is scored three ways on the same data. In the \emph{online}
+condition the latent is read from the observable history at every model tick,
+as in deployment. In the \emph{constant} condition it is replaced by that run's
+own mean estimate, which preserves the correct plant identity exactly and
+destroys all variation. In the \emph{shuffled} condition it is replaced by
+another run's mean, preserving the distribution of latent values while making
+the identity wrong. The gap between online and constant measures what the
+variation is worth; the gap between constant and shuffled measures what the
+identity is worth.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Where the latent's value lies, five seeds, one trained model each,
+  scored on the reserved validation runs. Freezing the estimate at its correct
+  per-episode value costs $13.6\%$; making that frozen value wrong costs a
+  further $0.43\%$. Both effects have the same sign in every seed.}
+  \label{tab:eval:latent-content}
+  \begin{tabular}{lccc}
+    \toprule
+    Latent supplied to the state model & mean error & vs.\ online & seeds \\
+    \midrule
+    online estimate $\latenthat(t)$        & $0.018842$ & ---        & --- \\
+    per-episode constant, correct identity & $0.021402$ & $+13.6\%$  & $5/5$ \\
+    per-episode constant, wrong identity   & $0.021492$ & $+14.1\%$  & $5/5$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The decomposition is unambiguous and tight across seeds
+(Figure~\ref{fig:eval:claims}b). Removing the variation costs $13.6\%$, with a
+per-seed range of $11.9$ to $14.3\%$. Removing the identity on top of that
+costs a further $0.43\%$, with a per-seed range of $0.32$ to $0.84\%$. The
+second effect is consistently signed in all five seeds and so is real rather
+than noise, but it is roughly thirty times smaller than the first. Essentially
+all of the latent's value lies in the estimate moving, and almost none of it in
+the estimate being correct about which plant this is. H2 is supported.
+
+This licenses one claim and forbids another. The claim it forbids is that the
+module identifies the plant it is operating on: at $0.43\%$, that reading is
+very nearly false, and the thesis does not make it. The claim it supports is
+that the module tracks a time-varying operating condition, and that the
+tracking is what earns the performance.
+
+This is the ordinary form of the claim rather than a weak one. The module
+estimates from a fixed one-second causal window and carries no state between
+ticks, so it re-estimates rather than accumulates: recursive estimation with a
+forgetting factor, the standard construction when the estimated parameters are
+themselves time-varying~\cite{astrom1995adaptive,ljung1999system}. A converging
+estimator would lock onto a past operating condition and stop
+responding~\cite{kumar2021rma}.
+
+Two boundaries are worth stating before the closed-loop chapters. The first is
+that this analysis concerns the jointly fine-tuned estimator trained on
+open-loop excitation, which is a different model on different data from the
+deployed estimator characterised in Section~\ref{sec:models:aam-content}; the
+two disagree about stability, and the disagreement is informative rather than
+contradictory. The deployed estimator, trained under a task controller, is
+static within a run, whereas this one varies within an episode by roughly nine
+times the spread between plants. Excitation decides which of the two behaviours
+the estimator exhibits. The second boundary is that everything here is measured
+on a dynamics model rather than in the control loop; H4 repeats the
+substitution experiment on the closed-loop stack in
+Section~\ref{sec:eval:oracle}, and only that result can carry the adaptation
+claim into the task.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_openloop_claims}
+  \caption{The model-level result as a single sequence, worst at the top. Each
+  point is one of the five seeds and the heavy bar is the mean. The
+  \emph{gaps} are the claim: making the constant latent correct about the plant
+  rather than wrong is worth $0.43\%$, while allowing that same estimate to vary
+  in time is worth $13.6\%$ -- a factor of thirty-two. The topmost row is a
+  separately trained no-latent model rather than an ablation of the three below
+  it, so the step down to it is not attributable to the latent alone and is
+  divided off.}
+  \label{fig:eval:claims}
+\end{figure}
+
+\section{Online Adaptation}
+\label{sec:eval:adaptation}
+
+Plant identity is present in the data when the excitation is right, and what the
+latent carries is a moving operating condition rather than a fixed label. This
+section asks what that buys. It proceeds outward from the model to the machine:
+first whether the latent improves a model that consumes it and whether the
+estimate is as good as the truth, then whether the estimate follows the plant
+when the plant moves, then whether either matters to the closed loop under a
+plant change and under an oracle that removes estimator error altogether.
+
+\subsection{The Model-Level Gain and the Frozen Inverse Model}
+\label{sec:eval:id-sufficiency}
+
+The inverse model is trained on randomised Simscape data and deployed against
+the IsaacLab reduced-order plant, and the architecture of
+Chapter~\ref{chap:control} depends on it staying frozen. H1 asks whether that
+is defensible. The direct measurement of inverse-model transfer error is
+reported in Section~\ref{sec:models:id-trust}; what is tested here is the
+weaker but more consequential proposition that whatever residual gap remains is
+learnable \emph{without touching the inverse model at all}.
+
+The test removes the inverse model from the loop entirely. A state predictor
+consumes the current state, the applied command and an estimated latent inferred
+end to end from $[\jointpos, \jointvel, \dpress, \valvecmd]$, and predicts the
+next state. The baseline is the same predictor with no latent input, retrained
+on the identical data, split and objective, at five matched seeds.
+Figure~\ref{fig:eval:sufficiency} reports the pairs.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_id_sufficiency}
+  \caption{Latent conditioning against a matched no-latent baseline, five seeds.
+  (a)~Each line is one seed. No pair crosses, which is the result; the mean is
+  not. (b)~The same data as paired changes, with the mean dashed. Seed $23$
+  carries the mean because its baseline is an outlier, so the median
+  $-22.3\,\%$ is the figure to quote.}
+  \label{fig:eval:sufficiency}
+\end{figure}
+
+\begin{table}[tbp]
+  \centering
+  \caption{Sufficiency of the frozen inverse model, five matched seeds. The
+  estimated latent lowers free-running state error in every seed. Seed
+  $20260823$ has an anomalously poor baseline and inflates the mean, so the
+  median of $-22.3\%$ is the representative figure.}
+  \label{tab:eval:id-sufficiency}
+  \begin{tabular}{lccc}
+    \toprule
+    Seed & no latent & estimated latent & change \\
+    \midrule
+    $20260820$ & $0.02438$ & $0.01893$ & $-22.3\%$ \\
+    $20260821$ & $0.02410$ & $0.01855$ & $-23.0\%$ \\
+    $20260822$ & $0.02328$ & $0.01945$ & $-16.5\%$ \\
+    $20260823$ & $0.03190$ & $0.01808$ & $-43.3\%$ \\
+    $20260824$ & $0.02359$ & $0.01920$ & $-18.6\%$ \\
+    \midrule
+    mean       & $0.02545$ & $0.01884$ & $-24.7\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The estimated latent improves on the no-latent baseline in $5$ of $5$ seeds,
+with a mean paired change of $-24.7\%$ and a paired bootstrap $95\%$ confidence
+interval of $[-34.2\%, -18.2\%]$ that excludes zero
+(Figure~\ref{fig:eval:claims}a). One qualification belongs with the number
+rather than in a footnote: seed $20260823$ produced an unusually poor baseline
+at $0.03190$ against roughly $0.024$ elsewhere, and its $-43.3\%$ is as much a
+statement about that baseline as about the latent. The median change of
+$-22.3\%$ is the figure to quote, and the sign, reproduced in every seed of a
+paired design, is what supports H1.
+
+That the same comparison reverses on controller-driven data is what makes the
+result interpretable, and it is reported with the identifiability evidence in
+Section~\ref{sec:eval:closedloop-data}.
+
+H1 is therefore supported, with its scope stated plainly. The experiment does
+not measure inverse-model error, and it is not evidence that the inverse model
+is accurate in any absolute sense. It shows that the residual mismatch between
+the Simscape training distribution and the deployment plant is recoverable by a
+latent-conditioned state model, which is what licenses the simpler architecture
+in which the inverse model is never fine-tuned online.
+
+\subsection{Estimated Against Privileged Latents}
+\label{sec:eval:predictive-utility}
+
+Section~\ref{sec:eval:latent-content} established that the latent's value is
+temporal and Section~\ref{sec:eval:id-sufficiency} that it lowers free-running
+error. Neither asked the question a controller cares about: is the \emph{estimated}
+latent as useful as the true one, and is it better than no plant information at
+all? That comparison is made here, on the frozen system-dynamics model, by
+supplying four different latents to one network and changing nothing else.
+
+The four arms are the privileged latent read from the true factors, the causal
+AAM estimate, an in-distribution mean carrying no plant information, and a
+shuffled latent with the right distribution and the wrong plant. All four are
+scored on the same $36$ held-out runs, on free-running rollouts at one, ten and
+twenty ticks, with the model integrating its own predictions.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Free-running rollout error under four latents, pooled over $36$
+  held-out runs. Lower is better. The estimate tracks the privileged latent at
+  every horizon, and both are clearly ahead of an uninformative or a wrong one.}
+  \label{tab:eval:four-latents}
+  \begin{tabular}{lcccc}
+    \toprule
+    Horizon & privileged $\bm{z}$ & estimated $\latenthat$ & mean & shuffled \\
+    \midrule
+    $1$ tick             & $2.961\times10^{5}$ & $2.966\times10^{5}$ & $3.388\times10^{5}$ & $3.499\times10^{5}$ \\
+    $10$ ($\unit[0.5]{s}$) & $1.820\times10^{6}$ & $1.826\times10^{6}$ & $1.952\times10^{6}$ & $1.998\times10^{6}$ \\
+    $20$ ($\unit[1.0]{s}$) & $2.961\times10^{6}$ & $2.977\times10^{6}$ & $3.196\times10^{6}$ & $3.256\times10^{6}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:eval:four-latents} gives the ordering, and the paired statistics
+give its standing. Against the privileged latent the estimate is
+indistinguishable: the paired difference at twenty ticks is
+$+1.60\times10^{4}$ with a $95\,\%$ interval of
+$[-1.35\times10^{4},\, +4.62\times10^{4}]$, and the estimate is ahead in $18$ of
+$36$ runs, which is exactly chance. Against the two uninformative controls it
+resolves: $-2.19\times10^{5}$ with the interval excluding zero and $33$ of $36$
+runs against the mean latent, and $-2.79\times10^{5}$ with $29$ of $36$ against
+the shuffled one. On the reserved test split the estimate is marginally ahead of
+the privileged latent, $2.837\times10^{6}$ against $2.850\times10^{6}$.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_four_latents}
+  \caption{Predictive utility of the estimated latent, $36$ held-out runs.
+  (a)~Free-running rollout error against horizon under the four latents. The
+  estimate tracks the privileged latent at every horizon while both stay clear
+  of an uninformative or a wrong one. (b)~Paired advantage of the estimate at
+  the $\unit[1.0]{s}$ horizon, per channel, as a percentage of the control arm's
+  own error, with $95\,\%$ paired bootstrap intervals. Extension and velocity
+  are the channels the deployed controller integrates, and both resolve.}
+  \label{fig:eval:four-latents}
+\end{figure}
+
+Two things follow. The AAM recovers essentially all of the information the
+privileged encoder carries, so the estimator is not the limiting component of
+the adaptation chain. And the advantage resolves on extension and velocity, not
+only on pressure: against the mean latent the extension difference is
+$-1.87\times10^{-4}$ with $32$ of $36$ runs and the velocity difference
+$-5.14\times10^{-4}$ with $31$ of $36$, both intervals excluding zero. This is a
+different comparison from the one in Section~\ref{sec:models:latent}, which
+contrasted a latent-conditioned model with a separately trained no-latent model
+and found the advantage confined to pressure. Substituting latents \emph{within}
+one model isolates the latent itself, and by that measure the channels the
+controller integrates do respond.
+
+\subsection{Response to a Change of Plant}
+\label{sec:eval:plant-switch}
+
+An estimator that identifies a fixed plant is not yet an adaptive one. What
+remains is whether the estimate follows the plant when the plant moves. No
+recorded run answers this, because each run holds one factor vector for its
+whole length. The trajectory is therefore \emph{constructed}: two held-out runs
+are spliced at a matched tick, which is admissible here because every run
+executes the identical eleven-segment schedule, so at a matched tick the
+commanded motion is the same and only the plant differs. The result is a
+constructed sequence rather than a recorded one and is reported as such.
+
+Eight pairs are used, chosen as the most separated in latent space among the
+sixteen reserved runs, and each is spliced at its midpoint. In all eight the
+estimate ends closer to the new plant than to the old one, and in all eight it
+moves away from the old plant after the splice. The median time to cross, that
+is for the estimate to become closer to the new plant than the old, is
+$\unit[0.18]{s}$, and the median time to cover ninety per cent of the distance
+between the two settled values is $\unit[0.70]{s}$. Both sit inside the
+$\unit[1.0]{s}$ observation window, which is the shortest interval in which a
+change can become fully visible to a causal estimator reading that window.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_plant_switch}
+  \caption{Latent response to a constructed plant switch, for the two
+  most separated held-out pairs. The distance from the estimate to the old
+  plant's latent rises and the distance to the new plant's falls, with the
+  crossing occurring inside the estimator's own $\unit[1.0]{s}$ observation
+  window, shaded. The dotted line marks the splice. The trajectory is
+  constructed by splicing two runs at a matched tick, not recorded.}
+  \label{fig:eval:plant-switch}
+\end{figure}
+
+The estimator therefore re-identifies rather than merely classifying: it does
+not carry a plant label fixed at the start of an episode but revises it from
+history when the evidence changes.
+
+\subsection{The Benefit Does Not Scale With Plant Deviation}
+\label{sec:eval:no-scaling}
+
+The natural expectation is that plant knowledge is worth more the further the
+plant sits from nominal, and it is the expectation under which an adaptive
+architecture is usually justified. It is not supported here. Ranking the $36$
+held-out runs by the magnitude of their factor deviation and measuring the
+latent's benefit as the paired gap between the mean-latent and estimated-latent
+arms, the milder half of the population returns a mean benefit of
+$2.53\times10^{5}$ and the more severe half $1.85\times10^{5}$, a ratio of
+$0.73$. The correlation between deviation magnitude and benefit is $-0.143$.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=.56\textwidth]{images/ch7_benefit_scaling}
+  \caption{Latent benefit against plant deviation over the $36$ held-out runs,
+  measured as the paired gap between the mean-latent and estimated-latent arms
+  at the $\unit[1.0]{s}$ horizon. The dashed line is a least-squares fit. The
+  benefit does not grow with deviation, which forecloses the reading that a
+  closed-loop effect exists but only at large mismatch.}
+  \label{fig:eval:benefit-scaling}
+\end{figure}
+
+The gain is therefore uniform across the plant family rather than concentrated
+where the plant is hardest. This is measured at model level, where the closed
+loop cannot absorb it, so it is a property of the latent rather than of the
+controller. It also forecloses one reading of the closed-loop result of
+Section~\ref{sec:eval:robustness}: the absence of a benefit under large plant
+deviation is not a case of the controller hiding an effect that grows with
+mismatch, because no such growth exists to hide.
+
+\subsection{Response to a Mid-Episode Plant Change}
 \label{sec:eval:ablations}
 
 This experiment measures the disturbance envelope of the deployed stack: how
 large a change in the plant it absorbs without loss of performance. The result
 is a specification, and it states when a fixed controller suffices.
 
-\subsection*{Design}
+\paragraph{Design.}
 
 The plant's valve effectiveness is scaled by $0.6$ at a known instant inside the
 scored window. All arms share the policy, the mesh, the seed and the schedule,
@@ -1175,9 +1674,9 @@ samples, so zero lies two to three standard deviations outside the distribution;
 it would be an out-of-distribution arm wearing the label of an ablation. The
 \emph{mean} arm does that job instead.
 
-\subsection*{Result}
+\paragraph{Result.}
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Response to a mid-episode plant change, over $33$ paired
   (mesh, family) cells. Every paired bootstrap interval straddles zero and no
@@ -1204,9 +1703,9 @@ The arms sit within a few per cent of one another on every metric, and the sham
 arm explains why: the perturbation they were meant to respond to left the task
 untouched.
 
-\subsection*{Effect of the Perturbation}
+\paragraph{Effect of the perturbation.}
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=.86\textwidth]{images/ch7_e3_sham}
   \caption{Both runs use the same policy, mesh and schedule; in one the valve
@@ -1233,12 +1732,78 @@ Three measurements settle it, and they must be read in order.
     not.
 \end{enumerate}
 
-\textbf{A $40\%$ reduction in valve effectiveness is absorbed.} Tracking, cut
-height and ground contact all hold through a change of that size. Within this
-envelope no adaptation is required, which is a statement about the deployed
-controller and not about the estimator.
+\textbf{A $40\,\%$ reduction in valve effectiveness moves neither the task nor
+the estimate.} Tracking, cut height and ground contact all hold through a change
+of that size. The tempting conclusion -- that no adaptation is required within
+this envelope -- is not the one the experiment supports, because two properties
+of the design bound what it could have shown.
 
-\subsection*{The Envelope Boundary}
+The first is the size of the perturbation. A perturbation that leaves the task
+within $2.9\,\%$ of its unperturbed value, in the wrong direction, has not
+created an error for adaptation to recover; measurement (2) above is a statement
+about the disturbance and not about the controller. A development measurement recorded in the evaluation harness puts a
+transport-delay step from $2$ to $8$ control steps at $+22\,\%$ in lateral error
+where this valve step costs a fraction of a per cent, so perturbations with a
+measurable effect on this stack do exist. Injected delay is not the right one:
+the $\unit[117]{ms}$ plant dead time is present throughout training, so a policy
+that already compensates for it is being tested on a novel disturbance rather
+than on adaptation (Section~\ref{sec:eval:delay-plant}). The point stands
+regardless of which knob is chosen -- the perturbation has to be sized against a
+measured degradation curve before an adaptation arm can recover anything.
+
+The second is the choice of factor. Valve effectiveness acts on flow, and the
+deployed estimator barely represents flow: linear decoding from the latent gives
+$R^2 = 0.114$ for flow against $0.956$ for seal condition
+(Section~\ref{sec:models:aam-content}). This experiment therefore asks an
+estimator that encodes seal condition to detect and compensate a sudden change
+in flow, which is not the strongest test of the adaptation path that the
+available factors permit.
+
+The obvious correction -- perturb seal instead -- is not available on this
+stack, and why not is itself a result. Seal enters the plant only as an input to
+the command reduced-order model, and \ppoAAMIDFD{} runs the inverse/forward
+pair, which takes no factor input at all
+(Table~\ref{tab:eval:factor-reach}). \emph{The factor the estimator identifies
+best cannot be perturbed where the controller runs, and the surface that can be
+perturbed there carries the factor it identifies worst.} That is a property of
+the architecture as built, not of the estimator, and it bounds what any
+mid-episode experiment on this stack could have shown.
+
+Two experiments follow from it, and they are specified in place of the single
+one this section reports. The first is \emph{native}: tool mass steps
+mid-episode, a property that genuinely exists in the deployed simulation and
+reaches every stack unclamped through the physics engine, with no emulation
+anywhere. The estimator may well not benefit, since mass is the factor it
+decodes worst, and that is a legitimate outcome rather than a failed
+experiment. The second is a \emph{positive control aligned with the estimator}:
+a seal-associated \emph{gain proxy}, reproducing the amplitude half of the
+reduced-order model's seal law as a scaling of realised actuator motion,
+$\alpha_{\mathrm{eq}}(w) = (1 + 0.625\,w)^{-2}$. It is deliberately not called
+seal degradation: it omits the leakage term and the longer valve time constant
+that accompany seal condition in the training domain, and reproduces only the
+amplitude effect. It answers the narrower question of whether the adaptation
+path can exploit a change along the direction the estimator demonstrably
+learned. Both draw their magnitude from the degradation curve of
+Section~\ref{sec:eval:boundary-design}, measured on the non-adaptive stack, so
+that the perturbation is sized to leave recovery headroom rather than chosen
+against the adaptive stack's own response. Neither is run here.
+
+What the experiment does establish stands: the perturbation was applied
+($0.893 \rightarrow 0.536$, exactly as configured), the sham arm shows the
+post-change rise in error occurs equally without any plant change, and no arm
+separates. That is a null with an identified cause, and the cause is the
+perturbation rather than the controller or the estimator.
+
+One methodological point generalises beyond this experiment. Whole-episode means
+cannot express recovery: an arm that recovers in two seconds and one that never
+recovers differ by a few per cent once averaged over a $23$-second window, which
+is what the arms above report. The replacement experiments are scored on the
+transient instead -- integrated absolute error over $[t_c, t_c+1]$,
+$[t_c+1, t_c+3]$ and $[t_c+3, t_c+5]$, peak error within three seconds, and the
+time to re-enter and hold a band around the pre-change level, with
+\emph{not recovered} reported as an outcome rather than a missing value.
+
+\paragraph{The envelope boundary.}
 
 A perturbation reveals the edge of the envelope only if it degrades performance.
 Transport delay does not qualify: the $117$\,ms dead time is present throughout
@@ -1247,7 +1812,7 @@ line produces a measurable response on every stack
 (Section~\ref{sec:eval:step-response}) and is the instrument for that
 measurement.
 
-\section{An Oracle Reference for Plant-Identity Conditioning}
+\subsection{An Oracle Reference for Plant-Identity Conditioning}
 \label{sec:eval:oracle}
 
 One question decides whether building an estimator will pay: would perfect
@@ -1257,6 +1822,17 @@ obtained without training an estimator. The result is an oracle reference
 \emph{within this encoder, adapter and policy}, not a universal bound on what
 plant knowledge could ever be worth: a different representation or a different
 downstream consumer could use the same information differently.
+
+One property of these arms should be read before their scores. They differ only
+in what occupies the two latent channels of the actor observation, and they
+differ measurably, which establishes that the deployed policy consumes the
+latent rather than ignoring it. That is worth stating because it is the
+precondition for everything else in this section: a null from an actor
+indifferent to $\latenthat$ would say nothing about plant knowledge, whereas a
+null from an actor demonstrably sensitive to it is a statement about the loop.
+It is also why the deployed estimate can finish \emph{worse} than an
+uninformative constant, since only an input that is used can do harm; that
+ordering is the subject of Section~\ref{sec:eval:ceiling}.
 
 The plant is drawn per episode from the held-out factor set and is not perturbed
 mid-episode, so plant identity is a real and stable property of each run. Four
@@ -1273,7 +1849,7 @@ the nominal plant, whereas every arm here faces a plant drawn from the held-out
 factor set. Held-out plants are harder, and the two tables should be read
 against their own rows rather than against each other.
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{Closed-loop performance under per-episode plant variation, over $33$
   paired (mesh, family) cells. The privileged arm reads the true factors, so it
@@ -1295,7 +1871,7 @@ against their own rows rather than against each other.
   \end{tabular}
 \end{table}
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_e4_oracle}
   \caption{What plant knowledge is worth in closed loop. Bars are means over
@@ -1306,7 +1882,7 @@ against their own rows rather than against each other.
   \label{fig:eval:oracle}
 \end{figure}
 
-\subsection*{The Oracle Result}
+\paragraph{The oracle result.}
 
 Knowing the plant exactly is worth $-3.4\%$ in lateral error and $-4.5\%$ in cut
 height, and neither survives its sign test: the oracle beats the
@@ -1322,7 +1898,77 @@ measurement redirects that effort. Whether it generalises to other
 latent-conditioned designs is a hypothesis this experiment cannot test, because
 it varies the latent inside one fixed encoder, adapter and policy.
 
-\subsection*{The Baseline Is Not Plant-Blind}
+\paragraph{Scope.}
+
+Three limits belong with these numbers, and the first is the most consequential.
+The privileged latent is read from all six true factors, but four of them --
+flow, compliance, seal condition and supply pressure -- do not act on the
+inverse/forward plant this stack runs on
+(Table~\ref{tab:eval:factor-reach}). What separates one held-out draw from
+another here is tool mass and centre-of-mass height, and those are the two
+factors the latent represents worst, at $R^2 = -0.008$ and $0.056$
+(Section~\ref{sec:models:aam-content}). The oracle arm therefore supplies exact
+knowledge of four quantities the plant ignores and a poor encoding of the two it
+does not. That is a bound on what this measurement could have shown: it is
+evidence that plant identity does not help \emph{through this latent, on this
+plant}, and it is not the general statement that perfect plant knowledge is
+worth nothing to this controller. Re-running it on a plant that consumes the
+hydraulic factors, or with a latent that encodes the mechanical ones, are both
+open.
+
+Two further limits belong with these numbers. The oracle arm necessarily differs from
+the others in the adapter as well as the latent, because an adapter must be
+trained for the latent it consumes and one trained on estimated latents refuses
+a privileged one; the $-3.4\%$ is therefore a comparison across two changes
+rather than one. And $33$ cells resolve only large effects, so the flat ceiling
+bounds the available benefit rather than proving it exactly zero. What the
+experiment establishes is that the benefit is not large enough to find with the
+sample this chapter uses, under conditions chosen to favour it.
+
+\section{Why the Model-Level Gain Does Not Reach the Controller}
+\label{sec:eval:ceiling}
+
+The evidence assembled so far contains a discrepancy that has to be accounted
+for rather than reported. At model level the latent is worth a median of
+$22.3\,\%$ in free-running state error, its time-variation alone is worth
+$13.6\,\%$, and the estimate is statistically indistinguishable from a
+privileged latent read off the true factors. In the closed loop none of that
+appears: the paired intervals against \ppoIDFD{} span zero
+(Section~\ref{sec:eval:tracking}), a mid-episode plant change is absorbed
+without any arm separating (Section~\ref{sec:eval:ablations}), and an oracle
+latent beats an uninformative one in $18$ of $33$ cells, which is chance
+(Section~\ref{sec:eval:oracle}).
+
+Four explanations are available and they are not equally supported. This
+section takes them in order of how directly they are measured: the ceiling
+itself, the plant information the baseline already receives, the two roles the
+architecture asks one latent to play, and the time constants of the loop that
+consumes it.
+
+\subsection{The Ceiling Bounds the Estimator Out of the Question}
+\label{sec:eval:ceiling-first}
+
+The first explanation is the one that removes an entire class of alternatives.
+A better estimator cannot recover the model-level gain, because the estimator is
+not what limits the closed loop: supplying the \emph{true} factors through the
+privileged encoder is worth $-3.4\,\%$ in lateral error and $-4.5\,\%$ in cut
+height, and neither survives its sign test
+(Section~\ref{sec:eval:oracle}). Whatever separates the model-level result from
+the closed-loop one therefore lies downstream of the latent's accuracy, in what
+the controller does with plant information rather than in how well that
+information is recovered.
+
+One qualification bounds how far that reading travels, and it is the reason this
+section reports four explanations rather than one. The oracle is flat in part
+because most of what it knows is inert on this plant: four of the six factors do
+not enter the inverse/forward dynamics at all, and the two that do are the two
+the latent encodes worst (Table~\ref{tab:eval:factor-reach}). A flat ceiling
+measured under those conditions bounds the benefit available \emph{here} without
+establishing that plant knowledge is generally worthless to a controller of this
+kind. The three explanations that follow concern the downstream path and are
+measured independently of that qualification.
+
+\subsection{The Baseline Is Not Plant-Blind}
 
 Part of the explanation precedes the estimator entirely. The robust stacks
 receive the observable consequence of plant variation through the twelve
@@ -1333,10 +1979,10 @@ latent therefore does not supply the first plant-dependent signal the controller
 has seen; it adds an identity label on top of a consequence the policy was
 already acting on. Where the consequence is already observable and the
 controller already responds to it, naming the plant that produced it has less
-left to contribute, which is consistent with the size of the oracle result
-above.
+left to contribute, which is consistent with the size of the oracle result in
+Table~\ref{tab:eval:oracle}.
 
-\subsection*{The Two Consumers of the Latent}
+\subsection{The Two Consumers of the Latent}
 
 The ranking of the four arms identifies a property of the architecture rather
 than a deficiency of the estimator. The deployed estimate is the worst of the
@@ -1344,7 +1990,7 @@ four, by $20.7\%$ on lateral error and $39.3\%$ on cut height against the mean
 latent: a genuine but imperfect estimate performs worse than a constant carrying
 no information, and worse than one that is actively wrong about the plant. That
 ordering is only explicable if what separates the arms is not their information
-content, and the measurement below establishes that it is not.
+content, and the paragraph below establishes that it is not.
 
 The mechanism follows from Section~\ref{sec:eval:latent-content}, and it is the
 same property seen from the other side. The estimate varies within an episode by
@@ -1355,7 +2001,7 @@ this evidence the second dominates: the policy is better served by a constant it
 can ignore than by a signal that moves under it.
 
 That is not a contradiction of the model-level result but its complement. In
-Section~\ref{sec:eval:id-sufficiency} the same time-variation was worth
+Section~\ref{sec:eval:latent-content} the same time-variation was worth
 $13.6\%$ to a one-step state predictor, which consumes the latent afresh at
 every tick and benefits from its responsiveness. The deployed actor is a
 memoryless MLP and does not integrate anything itself; what accumulates is the
@@ -1368,18 +2014,7 @@ in variability at once, so this reading is the mechanism the evidence favours
 rather than one this experiment isolates. Section~\ref{sec:eval:bandwidth}
 separates the two.
 
-\subsection*{Scope}
-
-Two limits belong with these numbers. The oracle arm necessarily differs from
-the others in the adapter as well as the latent, because an adapter must be
-trained for the latent it consumes and one trained on estimated latents refuses
-a privileged one; the $-3.4\%$ is therefore a comparison across two changes
-rather than one. And $33$ cells resolve only large effects, so the flat ceiling
-bounds the available benefit rather than proving it exactly zero. What the
-experiment establishes is that the benefit is not large enough to find with the
-sample this chapter uses, under conditions chosen to favour it.
-
-\section{Latent Bandwidth on the Policy Path}
+\subsection{Latent Bandwidth on the Policy Path}
 \label{sec:eval:bandwidth}
 
 The arms of Section~\ref{sec:eval:oracle} change what the latent knows and how
@@ -1390,7 +2025,7 @@ policy path alone; the inverse-model adapter keeps the full-rate estimate in
 every arm. The checkpoint, the plant draw and the $33$ cells are those of
 Section~\ref{sec:eval:oracle}, and no network is retrained.
 
-\begin{figure}[tb]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_e6_bandwidth}
   \caption{Task error against the policy-path time constant. (a)~Lateral and
@@ -1409,7 +2044,7 @@ best value at the same interior $\tau$, and both ends of the axis are worse, so
 the response has an optimum rather than a trend. Cut-height error falls
 monotonically across the five filter strengths below that optimum.
 
-\begin{table}[tb]
+\begin{table}[tbp]
   \centering
   \caption{The contrast that resolves. Both arms are filtered, so the comparison
   isolates bandwidth rather than filtering. Paired over $33$ cells.}
@@ -1432,7 +2067,7 @@ the mean, ahead in $22$ of $33$ cells at $p = 0.015$, on a metric fixed before
 the sweep was run. Lateral error moves the same way and does not resolve. The
 speed at which the latent is allowed to move therefore changes closed-loop
 tracking, at fixed content and with no network retrained, which is the
-prediction the mechanism of Section~\ref{sec:eval:oracle} makes.
+prediction the two-consumers reading makes.
 
 Three limits belong with that result. Against the \emph{unfiltered} arm every
 filtered arm improves the mean by $11$ to $46\,\%$ while the medians stay flat
@@ -1449,199 +2084,187 @@ What survives is narrow and is stated as such: on this checkpoint, the speed at
 which the latent is allowed to move changes cut-height tracking, and the best
 setting is neither the raw estimate nor a constant.
 
-\section{Generalisation and Robustness to Plant Variation}
-\label{sec:eval:robustness}
+\subsection{The Loop Is Slower Than Anything the Latent Changes}
+\label{sec:eval:timescales}
 
-Before the sweep itself, it is worth stating what the evaluation protocol of
-this chapter has already established about generalisation, because it is spread
-across several sections and is easy to miss when each is read on its own. Every
-closed-loop number reported here is measured on material the policies were not
-trained on. The terrain meshes are held out, the eleven trajectory families are
-scored individually rather than pooled, and the plant is drawn from the sixteen
-reserved factor configurations whose keys are disjoint from the training and
-validation splits by construction
-(Section~\ref{sec:data:isaaclab}), so a scored run is a plant the stack has
-never seen rather than merely an episode it has not seen. On that material
-\ppoIDFD{} holds the lateral criterion in $32$ of $33$ (mesh, family) cells at
-a median of $\unit[0.0281]{m}$ (Table~\ref{tab:eval:family-lateral}). The
-learned actuator underneath it generalises across simulators on the same
-evidence: the frozen inverse model was identified on Simscape alone and scored
-on $64$ IsaacLab runs lying entirely outside its training distribution, where
-its accuracy is flat to a factor of $1.09$ between the best and worst domain
-(Section~\ref{sec:models:id-trust}). Generalisation across simulator, plant
-draw, terrain and trajectory is therefore demonstrated, and it is demonstrated
-without any online adaptation.
+The last explanation is a matter of time constants, and it is the one that
+generalises beyond this architecture. The measurements of
+Section~\ref{sec:eval:delay} place four rates on the same axis. The estimator
+re-reads its window and issues a new latent every $\unit[50]{ms}$. The
+hydraulics answer a valve command in $\unit[117]{ms}$, amplitude-invariant and
+with an exact kinematic control. The command rate limit alone puts a
+$\unit[417]{ms}$ floor under a $\unit[100]{mm}$ step, three times the hydraulic
+dead time. And the stacks themselves settle such a step in $2.2$ to
+$\unit[3.2]{s}$, five to eight times that floor.
 
-The question in this section is the remaining one: how far the plant may be
-moved before that generalisation stops holding, which a pass or fail on a
-fixed factor set cannot answer. The magnitude of the deployment-factor
-randomisation is therefore swept: each environment keeps the draw it would have
-received and that draw is stretched away from the nominal plant along the same
-line, so scale $0$ is the nominal machine, $1$ reproduces the manifest and $2$
-doubles every deviation. Only the magnitude changes, never which plants are
-visited, so the curve is not confounded with a change of population.
+The latent therefore moves one to two orders of magnitude faster than the
+quantity it is trying to influence. Whatever it tells the actor about the plant,
+the actor's authority over the tool is exercised through a rate-limited command
+and a loop whose response is measured in seconds, so a plant change arrives, is
+observed through the model-error channels, and is corrected long before
+identifying \emph{which} plant produced it could shorten the correction. It also predicts that a slow disturbance
+will be rejected without identification, which is consistent with -- though not
+established by -- the unmoved task under a $40\,\%$ loss of valve effectiveness
+(Section~\ref{sec:eval:ablations}), a perturbation too small to separate the two
+explanations.
 
-\begin{figure}[tb]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_e5_robustness}
-  \caption{Per-trajectory performance at each randomisation scale, over the
-  eleven trajectory families of one held-out mesh. Boxes give the interquartile
-  range and the line the median; points are families outside the whiskers.
-  The medians are flat across the sweep for all three stacks, which is the
-  result. \ppoROM{} and \ppoIDFD{} are the matched pair; \ppoAAMIDFD{} is
-  separately trained, so its offset from them is not read as an effect of
-  adaptation. \ppoIDFD{}'s excursion at scale $1$ is one trajectory and not a shift
-  of the population, which a plot of means would have reported as a breakdown.
-  }
-  \label{fig:eval:robustness}
-\end{figure}
-
-
-
-\textbf{No stack degrades with the size of the plant deviation.} Mean lateral
-error over the sweep moves from $0.1286$ to $0.1184$\,m for \ppoROM{}, from
-$0.0277$ to $0.0287$\,m for \ppoIDFD{} and from $0.0546$ to $0.0673$\,m for the
-adaptive stack, and ground contact stays within $2.2\%$ of nominal for \ppoROM{} and $2.7\%$
-for the adaptive stack; \ppoIDFD{} moves furthest, by $5.5\%$. The experiment was designed to locate a
-breakdown point and finds none within twice the deployment range.
-
-That is the same conclusion Section~\ref{sec:eval:ablations} reached by a
-different route. A $40\%$ reduction in valve effectiveness did not move the
-task, and doubling the full six-factor deviation does not either. Taken
-together the two results bound the disturbance rather than the controllers: the
-plant variation this work can generate does not stress these stacks, and a
-robustness claim made against it would be a claim about a mild population of
-plants.
-
-The one excursion is instructive precisely because it is not a trend.
-\ppoIDFD{} records $0.178$\,m at scale $1$ against roughly $0.03$\,m everywhere
-else, including at the \emph{more} extreme scales $1.5$ and $2$. Resolving it by
-family shows a single trajectory responsible: the double S-curve reaches
-$1.352$\,m, against $0.058$ and $0.059$\,m at the neighbouring scales. One
-combination of plant and path destabilises that stack, and the combination does
-not survive being exaggerated. It is a genuine failure on a real manifest draw
-and it is not a breakdown point, and the distinction matters: a curve summarised
-only by its worst value would report a breakdown at scale $1$ that the
-neighbouring points contradict.
-
-The sweep uses one mesh and eleven families per point, so it resolves a trend
-rather than a small difference between stacks, and its absolute values are not
-comparable with the three-mesh tables earlier in this chapter.
-
-\section{Statistics and Reporting}
-\label{sec:eval:metrics}
-
-The protocol is declared once here and applied without exception. Primary
-metrics and seeds are fixed before each experiment is run. Every comparison is
-paired, and the sign count over the paired unit is reported alongside the mean,
-because a mean can be carried by a single outlying pair while a unanimous sign
-cannot. Uncertainty is quantified by a paired bootstrap rather than a parametric
-test, and intervals are reported as ranges rather than converted into a binary
-verdict. Model selection uses the validation split only, and reserved test runs
-are scored once.
-
-The unit of replication differs between the model-level and closed-loop
-experiments, and conflating them would misstate the evidence. Model-level
-experiments replicate over training seeds, which change network initialisation
-and batch order. The closed-loop evaluation is deterministic: terrain is fixed
-by the mesh identifier, the policy acts deterministically at evaluation time and
-initial conditions do not vary. Five evaluation seeds were run and returned
-bit-identical numbers to nine decimal places, so the seed is \emph{not} a unit of
-replication and quoting a sign count over seeds would report one observation
-five times. The closed-loop unit is therefore the (mesh, family) cell, and
-metrics that exist only per mesh are labelled $n=3$ so that the weaker evidence
-remains visible.
-
-Three reporting rules follow from failures encountered during this work. Numbers
-from different collections are never compared, even when they measure the same
-estimand, because the state distribution and the normaliser differ; a baseline
-is retrained instead. Every gate reports the measured floor of the quantity it
-constrains together with a positive control, because a threshold that no run
-could violate produces a passing verdict carrying no information. And every
-closed-loop result names its checkpoint and its scoring horizon, for the reason
-given in Section~\ref{sec:eval:horizon}.
-
+The four explanations are consistent with one another and with the data, and
+they differ in standing. The ceiling and the baseline's existing plant
+information are measured directly. The two-consumers reading is the mechanism
+the evidence favours, and the bandwidth sweep is its one direct test, which
+resolves on cut height and not on lateral error. The timescale argument is an
+account of why the ceiling is flat rather than an independent measurement, and
+it is the part of this explanation that would transfer to another machine as a
+prediction rather than as a result.
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
 
-This chapter establishes three things: the frozen inverse model is sufficient,
-the value of an inferred latent lies in its time-variation, and the closed-loop
-benefit of plant-identity conditioning on this task is bounded by what perfect
-plant knowledge achieves. The last is obtained before an estimator is built and
-is the more transferable result.
+The two research questions of this chapter are answered separately below,
+because the evidence behind them differs in kind: RQ5 rests on a controlled
+single-variable pair and RQ6 on within-checkpoint substitutions and a
+pre-estimator ceiling.
 
-\subsection*{Supported Findings}
+\subsection*{RQ5: What the Actuator Representation Changes}
 
-The policies generalise, and this is the broadest result the chapter carries.
-Every closed-loop figure reported here is measured on held-out terrain meshes,
-on eleven trajectory families scored individually, and on plants drawn from
-sixteen reserved factor configurations with keys disjoint from training and
-validation. \ppoIDFD{} holds the lateral criterion in $32$ of $33$ cells at a
-median of $\unit[0.0281]{m}$ under those conditions, and neither robust stack
-degrades when every deployment-factor deviation is doubled, moving by $+3.7\,\%$
-for \ppoIDFD{} and $-8.0\,\%$ for \ppoROM{} across the sweep. Underneath the
-policy the frozen inverse model generalises across simulators, having been
-identified on Simscape alone and scored flat to a factor of $1.09$ on $64$
-IsaacLab runs outside its training distribution. Generalisation across
-simulator, plant draw, terrain and trajectory is therefore established for the
-robust stacks, and established without online adaptation.
+\emph{How does the choice of actuator representation affect tracking, command
+behaviour, latency and robustness under plant variation?}
 
-The estimator works, and the excitation decides whether it can. On open-loop
-excitation an inferred latent lowers free-running prediction error by $24.7\%$
-in all five seeds; on data gathered under a task controller the same comparison
-puts it $1.8\%$ behind, because a controller computes its command from the
-state and leaves command and response nearly redundant
-(Sections~\ref{sec:eval:excitation} and~\ref{sec:eval:id-sufficiency}). This
-licenses H1: the gap between the training distribution and the deployment plant
-is recoverable by a latent-conditioned state model without touching the inverse
-model, which is what the frozen-inverse architecture requires.
+It changes the controller substantially, and the direction is not uniform across
+metrics. On the matched pair, driving the plant through the frozen inverse and
+forward models rather than the command reduced-order model lowers mean lateral
+error from $\unit[0.1026]{m}$ to $\unit[0.0703]{m}$ and cut-height error from
+$8.4$ to $\unit[6.3]{mm}$, and it holds the lateral criterion in $32$ of $33$
+(mesh, family) cells against $30$ of $33$
+(Section~\ref{sec:eval:tracking}). The command behaviour behind that is the more
+informative result. \ppoROM{} spends the \emph{least} actuation of the three and
+tracks worst, while reversing the direction of motion $40$ times a second
+against $10.6$ for \ppoIDFD{}, so its actuation is largely spent fighting itself
+(Section~\ref{sec:eval:effort}); that also accounts mechanically for its
+tool-acceleration and impact figures, which would otherwise read as unrelated
+observations. Representation therefore buys tracking by buying smoothness, not
+by buying effort.
 
-\subsection*{The Closed-Loop Bound and Its Determinants}
+Latency separates the representations in the hydraulic half of the chain and not
+the mechanical one, where all three stacks read the one-step resolution floor
+(Section~\ref{sec:eval:delay-stacks}). But the ordering there does not survive
+into the task: a shorter path from command to cylinder does not produce a
+quicker response at the tool, because the response to a commanded change is set
+by the command rate limit and the policy's own dynamics rather than by the
+actuation chain (Section~\ref{sec:eval:step-response}). This is the most
+transferable finding of the RQ5 strand, and it is the reason a faster actuator
+path is not by itself a design goal on a machine of this class.
 
-Three measurements delimit the closed-loop benefit, and they point the same way.
-Knowing the plant exactly is worth $3.4\%$ in lateral error
-(Section~\ref{sec:eval:oracle}), so estimator accuracy is not the constraint.
-The deployed controller already absorbs a $40\%$ reduction in valve
-effectiveness and a doubling of every deployment factor
-(Sections~\ref{sec:eval:ablations} and~\ref{sec:eval:robustness}), so plant
-variation of this size is not the constraint either. And the task response is
-set by the command rate limit rather than by the hydraulics
-(Section~\ref{sec:eval:step-response}), which places it downstream of anything
-the latent influences.
+Two findings belong beside that comparison even though they are not attributable
+to the representation. \ppoIDFD{} fails the head-alignment gate badly, at
+$0.2247$ with $-0.855$ on one mesh, which is the collapse under unconstrained
+fine-tuning seen against the acceptance contract; the adaptive stack is the only
+one of the three to hold alignment, at $0.9763$, and it pays for its ground
+contact in hard impacts and tool acceleration
+(Section~\ref{sec:eval:tracking}). And the lateral gate is exceeded by all three
+stacks on worst-family statistics, on a different family in each case, which
+makes that threshold a statement about the hardest trajectory in the library
+rather than a discriminator between architectures. No stack dominates the
+scorecard.
 
-\subsection*{The Underlying Mechanism}
+Robustness does not separate the representations at all, and both are robust in
+the strong sense. Every closed-loop figure in this chapter is measured on
+held-out meshes, on eleven trajectory families scored individually, and on
+plants drawn from sixteen reserved factor configurations disjoint from training
+by construction, of which the mechanical half reaches every stack and the
+hydraulic half only \ppoROM{} (Section~\ref{sec:eval:delivered-stress}); underneath the policy the frozen inverse model was identified
+on Simscape alone and scores flat to a factor of $1.09$ across domains on $64$
+IsaacLab runs outside its training distribution
+(Section~\ref{sec:models:id-trust}). Generalisation across simulator, plant draw, terrain and trajectory is
+therefore established for both representations, and established without online
+adaptation.
 
-The four latents rank in an order that identifies the mechanism. The deployed
-estimate is behind both a constant carrying no information and one that is wrong
-about the plant, and it varies within an episode by about nine times the spread
-between plants (Section~\ref{sec:eval:latent-content}) while the constant arms
-are perfectly smooth. The arms differ in information and in variability, and the
-second dominates.
+Robustness \emph{beyond} that held-out population is a weaker claim than this
+work can make, and weaker than an earlier reading of the sweep suggested. No
+stack's tracking moves across the randomisation sweep, but on \ppoIDFD{} and
+\ppoAAMIDFD{} that sweep did not vary the hydraulics at all -- the
+inverse/forward plant takes no factor input, so only tool mass and
+centre-of-mass height act -- and on \ppoROM{}, where they do act, the upper half
+of the sweep is progressively pinned to the training envelope and the path
+cannot remove more than $62\,\%$ of actuator authority in any case
+(Section~\ref{sec:eval:delivered-stress}). The correct reading is that no
+boundary was located within a bounded instrument, not that the stacks are
+insensitive to plant variation. Locating the boundary is specified in
+Section~\ref{sec:eval:boundary-design} and left to future work.
 
-This complements the model-level result. A one-step predictor consumes the
-latent afresh each tick and is rewarded for its responsiveness, which is the
-$13.6\%$ of Section~\ref{sec:eval:latent-content}. The deployed actor is a
-memoryless MLP and integrates nothing itself; what accumulates is the
-closed-loop trajectory, because a latent that moves under the actor changes its
-action from tick to tick and the plant carries the consequences forward. The
-same quantity is therefore plausibly informative to a predictor and disruptive
-to a feedback loop, and this architecture routes one latent to both roles. The design that follows is to hold
-or filter the latent on the policy path while leaving it responsive on the model
-path. It is specified here and not tested.
+\subsection*{RQ6: Whether Online Adaptation Pays}
 
-\subsection*{Comparison of the Three Stacks}
+\emph{Where plant variation survives that robustness, is it identifiable from
+recent observations, and does online adaptation by latent identification improve
+closed-loop performance?}
 
-Beneath the adaptation question, the three stacks differ in ways worth
-recording. \ppoIDFD{} tracks best and settles soonest, and fails the
-head-alignment gate, at $0.2247$ with $-0.855$ on one mesh
-(Section~\ref{sec:eval:tracking}). \ppoROM{} commands the least actuation,
-tracks worst, and reverses direction four times as often as either other stack,
-so its effort is largely spent fighting itself
-(Section~\ref{sec:eval:effort}). The adaptive stack is the only one to hold head
-alignment, has the smoothest command of the three, and pays for its ground
-contact in impacts and tool acceleration. No stack dominates, and the lateral
-gate is failed by all three, which makes that threshold a statement about the
-hardest trajectory family rather than a discriminator between architectures.
+The first half is answered yes, with a condition. Plant identity is recoverable
+from observable history, but only from data that excites the plant: on open-loop
+excitation a latent-conditioned predictor lowers free-running error by a median
+of $22.3\,\%$ in $5$ of $5$ seeds, while on data gathered under a task
+controller the identical architecture finishes behind its own no-latent baseline
+(Section~\ref{sec:eval:closedloop-data}). Even within the open-loop collection
+the recoverable band is narrow: the seal-condition decode falls from
+$R^2 = 0.703$ to zero between the second and third amplitude tier, and the cause
+is operating-point drift rather than saturation
+(Section~\ref{sec:eval:excitation}). Inside that band the estimator is not the
+weak link -- it is statistically indistinguishable from a privileged latent at
+every prediction horizon and re-identifies a constructed plant switch within its
+own observation window (Sections~\ref{sec:eval:predictive-utility}
+and~\ref{sec:eval:plant-switch}). What it recovers is a moving operating
+condition rather than a plant label: freezing the estimate at its own correct
+per-episode value costs $13.6\,\%$, and making that frozen value wrong costs a
+further $0.43\,\%$, a factor of thirty-two
+(Section~\ref{sec:eval:latent-content}).
+
+The second half is answered no, under the conditions tested, and the null is
+bounded rather than merely observed. Every paired closed-loop interval spans
+zero, and an oracle latent read from the true factors is worth $-3.4\,\%$ in
+lateral error at $18$ of $33$ cells, which is chance. The mid-episode plant
+change carries less weight than the other two: a $40\,\%$ reduction in valve
+effectiveness passes unnoticed by the task, by the estimator and by an
+unperturbed sham arm, but it perturbs a factor the estimator barely encodes and
+by an amount too small to create recoverable error, so it bounds the
+perturbation rather than the adaptation path
+(Section~\ref{sec:eval:ablations}). That last measurement is the load-bearing one, because it is
+obtained \emph{before} an estimator is built and shows that estimator accuracy
+was never the constraint (Section~\ref{sec:eval:oracle}).
+
+Three determinants explain the null and were separated in
+Section~\ref{sec:eval:ceiling}. The baseline is not plant-blind: the twelve
+model-error channels already carry the observable consequence of plant
+variation, so conditioning adds an identity label on top of a consequence the
+policy is already correcting. The architecture routes one latent to two
+consumers with opposite requirements -- a one-step predictor rewarded for
+responsiveness and a memoryless actor in a feedback loop that the same
+responsiveness disturbs -- and the bandwidth sweep, which holds content fixed
+and varies only speed, improves cut-height tracking by $14.5\,\%$ on the median
+at $p = 0.015$ with no network retrained. And the loop's own time constants
+leave adaptation little to do: a latent updating every $\unit[50]{ms}$ acts on a
+controller whose step response is floored at $\unit[417]{ms}$ by the command
+rate limit and settles in seconds.
+
+The design that follows is to hold or filter the latent on the policy path while
+leaving it responsive on the model path. It is specified here and not tested
+beyond the single sweep of Section~\ref{sec:eval:bandwidth}.
+
+\subsection*{Outcome of the Declared Hypotheses}
+
+H1 is supported: an estimated latent lowers free-running state error in $5$ of
+$5$ matched seeds, at a median of $-22.3\,\%$ with a paired interval excluding
+zero, so the residual gap between the Simscape training distribution and the
+deployment plant is recoverable without touching the inverse model, which is
+what the frozen-inverse architecture requires. H2 is supported: the estimate's
+time-variation is worth $13.6\,\%$ and its plant identity $0.43\,\%$, both
+consistently signed across seeds, so the latent is a time-varying operating
+condition and not a plant label. H3 returns an interval rather than a verdict,
+and the interval is informative on ground contact -- less than about $2.4$
+percentage points either way -- while on the two tracking errors it is
+comparable to or wider than the baseline mean itself, so the effect is bounded
+only loosely and equivalence is not established. H4 is supported in the sense
+that matters practically and refuted in the sense that was hoped for: the
+closed-loop effect \emph{was} boundable before an estimator was built, and the
+bound it returned was flat, since a privileged latent read from the true factors
+does not beat an uninformative one at better than chance.
 
 \subsection*{Relation to the Research Gap}
 
@@ -1656,7 +2279,7 @@ first and the oracle ceiling of Section~\ref{sec:eval:oracle} the second.
 Together they form a pre-deployment protocol, and that is the contribution of
 this chapter.
 
-A third condition follows from the results of this chapter taken together, and
+A third condition follows from the results taken together, and
 it reconciles the null reported here with the gains that motivate the method.
 Rapid motor adaptation and its descendants are demonstrated on legged robots,
 where the plant changes discontinuously at contact, the correction window is a
@@ -1682,7 +2305,6 @@ leaves unstated. It also predicts where this estimator would pay on the present
 machine, since Section~\ref{sec:eval:predictive-utility} shows the latent
 improving a model asked to predict before observing, which is the quantity a
 predictive controller consumes and a reactive one does not.
-
 \section{Threats to Validity}
 \label{sec:eval:validity}
 
@@ -1737,22 +2359,49 @@ evaluation is deterministic, so the replication unit is the cell and not the
 seed, and a sign count over evaluation seeds would report one observation
 several times.
 
-Two experiments bound their disturbance rather than the architecture. The
-mid-episode plant change left the task unmoved, and the robustness sweep found
-no breakdown within twice the deployment range. Neither licenses a robustness
-claim: they establish that the plant variation this work can generate is mild,
-and a stack that survives it has not been shown to survive more. The sweep also
-stretches the recorded factor draws rather than sampling new ones, so it says
-nothing about combinations the manifest never visited.
+Two experiments bound their disturbance rather than the architecture, and one of
+them bounds it more tightly than its design intended. The randomisation sweep
+found no breakdown, but the plant does not receive what the sweep requests. On
+the inverse/forward plant the four hydraulic factors are not consumed at all, so
+for two of the three stacks the sweep varied tool mass and centre-of-mass height
+only; on the command reduced-order plant they are consumed but clamped to the
+identified range above scale $1$, and no more than $62\,\%$ of actuator
+authority can be removed through that path
+(Section~\ref{sec:eval:delivered-stress}). This affects the oracle experiment as
+well as the sweep: the privileged latent supplies four factors the deployed
+plant ignores alongside the two it does not, which bounds what that measurement
+could have shown (Section~\ref{sec:eval:oracle}). The mid-episode plant
+change is a real perturbation but a small one, applied to a factor the
+estimator represents poorly. The replacement experiments are specified against a
+stress axis that reaches every stack -- Equation~\eqref{eq:eval:authority} --
+rather than against the factor set, and their results are not part of this
+thesis. Neither licenses a robustness claim, and
+neither licenses the converse claim that the plant cannot be degraded: what they
+establish is that the perturbations available in this work are mild and, in the
+sweep's case, partly bounded by the plant model itself. The sweep also stretches
+recorded factor draws rather than sampling new ones, so it says nothing about
+combinations the manifest never visited.
 
 \subsection*{Conditions Not Identical Across Stacks}
 
 The three stacks are matched at evaluation but not in training. \ppoROM{} and
-\ppoIDFD{} come from runs whose manifests agree on seed, stage, terrain seed,
-trajectory shape, speed and warm-up; the adaptive stack is a different run at an
-earlier iteration, chosen for the reason in
-Section~\ref{sec:eval:horizon}, and its manifest records neither speed nor
-trajectory shape. The oracle arm of Section~\ref{sec:eval:oracle} additionally
+\ppoIDFD{} come from runs whose manifests agree on every recorded field; the
+adaptive stack is a different run, chosen for the reason in
+Section~\ref{sec:eval:horizon}, and it differs from that pair in three recorded
+respects beyond the latent itself: a different seed ($41$, with terrain seed
+$41$), an actor learning rate two orders of magnitude lower
+($3\times10^{-6}$) and no frozen-actor warm-up at all ($0$ against $150$
+iterations). Those settings were not arbitrary. Each stack was trained under the
+best configuration found for it during development, and the adaptive stack's
+lower learning rate reflects a stability judgement specific to an actor that
+consumes a latent moving within the episode; that rationale is the author's
+engineering judgement, since the manifests store the settings and not the
+reasoning behind them. One field is missing where it would be most useful: the
+\ppoROM{} and \ppoIDFD{} manifests do not record the truck-speed schedule at
+all, while the adaptive run records $2$ to $\unit[7]{km/h}$ sampled per episode,
+so it is the reference pair rather than the adaptive run that is undocumented in
+this respect. Its absence does not differentiate the matched pair, whose other
+fields agree, and the evaluation speed is pinned identically for all three. The oracle arm of Section~\ref{sec:eval:oracle} additionally
 uses a different adapter checkpoint, because an adapter must be trained for the
 latent it consumes, so that contrast spans two changes rather than one.
 
@@ -1774,3 +2423,12 @@ amplitude rather than about elapsed time within an episode. All
 results are simulation-to-simulation; the Simscape-to-IsaacLab abstraction gap
 is characterised in Chapter~\ref{chap:models} but the simulation-to-reality gap
 is not addressed anywhere in this work.
+
+% Restore the document-wide float defaults.
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{1}
+\setcounter{totalnumber}{3}
+\renewcommand{\topfraction}{0.7}
+\renewcommand{\bottomfraction}{0.3}
+\renewcommand{\textfraction}{0.2}
+\renewcommand{\floatpagefraction}{0.5}

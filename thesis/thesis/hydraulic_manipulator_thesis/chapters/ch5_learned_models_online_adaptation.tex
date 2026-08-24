@@ -9,7 +9,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \chapter{Learned Models and Online Adaptation}
 \label{chap:models}
-\raggedbottom
 
 Chapter~\ref{chap:data} established how the datasets were generated and why
 both closed-loop operation and open-loop valve excitation were required. This
@@ -70,53 +69,35 @@ sample. Predictions carry a hat, and $\Delta(\cdot)_k = (\cdot)_{k+1} -
   \label{fig:models:overview}
 \end{figure}
 
-Figure~\ref{fig:models:overview} places the two actuator paths side by side. In
-\ppoIDFD, the ID network maps the hydraulic state and a desired increment to a
-valve command and the FD network maps a valve command and the state to the
-predicted increment, so their composition
-$f_{\mathrm{FD}} \circ f_{\mathrm{ID}}$ predicts what a commanded increment
-will do. In \ppoROM, one command-conditioned ROM replaces that composition: it
-receives the same $\bm{c}_k$, predicts the valve internally, and propagates
-pressure, velocity and extension through explicit physical updates. Both paths
-terminate in the same bounded PhysX cylinder target inside
-IsaacLab~\cite{mittal2023orbit} and are driven by the same policy under the
-same action contract~\cite{schulman2017proximal}.
+Figure~\ref{fig:models:overview} compares the actuator paths. In \ppoIDFD, the
+ID maps the state and desired increment to a valve command, and the FD predicts
+the resulting increment. In \ppoROM, one command-conditioned model predicts
+the valve internally and propagates pressure, velocity and extension. Both
+paths produce the same bounded PhysX cylinder target in
+IsaacLab~\cite{mittal2023orbit} under the same policy action
+contract~\cite{schulman2017proximal}.
 
-Three conventions apply to every model. All dynamic targets are within-run
-increments rather than absolute states, which removes the dominant static
-component and makes the persistence solution $\Delta\hat{\bm{x}} = \bm{0}$ an
-explicit, testable baseline rather than a hidden local minimum. Every
-checkpoint stores and applies the normalisation statistics of its own training
-data, never those of another checkpoint, because mixing them silently
-invalidates any comparison. And inputs at step $k$ contain only quantities
-available at step $k$, including the previously applied command, with targets
-the measured transition to step $k+1$.
+Three conventions apply throughout. Dynamic targets are within-run increments,
+with $\Delta\hat{\bm{x}}=\bm{0}$ as the persistence baseline. Each checkpoint
+uses its own training-set normalisation. Inputs at step $k$ are causal, and
+targets are measured transitions to step $k+1$.
 
-One point about the toolchain applies to every model in this chapter. Simscape
-is a \emph{data source} and nothing else: it generates the identification
-campaigns of Chapter~\ref{chap:data}, which are exported, audited and frozen as
-plain arrays. Every learned model reported here is implemented and trained in
-PyTorch~\cite{paszke2019pytorch} outside the MATLAB environment, against those
-exported datasets. No model is fitted inside Simscape, no optimisation runs
-through the Simscape solver, and no Simscape component is present at deployment,
-where the actuator is one of the learned models of this chapter driving PhysX.
+Simscape supplies the identification data described in Chapter~\ref{chap:data}.
+The exported arrays are audited, frozen and used to train the models in
+PyTorch~\cite{paszke2019pytorch}; Simscape is not part of training or
+deployment.
 
-Two dataset families from Chapter~\ref{chap:data} are consumed. The
-\emph{closed-loop} family is the aligned Simscape
-export~\cite{mathworks2024simscape} used for supervised ID and FD training and,
-after exact alignment, for the command-ROM dataset: $452\,400$ transitions at
-$T=\unit[0.05]{s}$ from $1\,040$ runs, split by complete runs into $936$
-training, $52$ validation and $52$ test runs. The \emph{open-loop} family is
-the strict valve-excitation export used to repair the FD model: four $64$-s
-runs at $\unit[0.01]{s}$ in which the same rank-4 multi-input excitation is
-applied to four distinct plant draws.
+The closed-loop Simscape export~\cite{mathworks2024simscape} contains
+$452\,400$ transitions at $T=\unit[0.05]{s}$ from $1\,040$ runs, split by run
+into $936/52/52$ training, validation and test runs. It supplies the supervised
+ID, FD and command-ROM data. The FD repair uses four open-loop $64$-s runs at
+$\unit[0.01]{s}$ with rank-4 valve excitation on four plant draws.
 
 \section{Inverse Dynamics Model}
 \label{sec:models:id}
 
-The ID network answers the question the low-level controller asks: given the
-current hydraulic state, which valve command realises a desired cylinder
-increment? Its contract is
+The ID network maps the current hydraulic state and desired cylinder increment
+to a valve-command change:
 %
 \begin{equation}
   \label{eq:models:id-contract}
@@ -126,26 +107,19 @@ increment? Its contract is
   \in \mathbb{R}^4 ,
 \end{equation}
 %
-a 28-dimensional input mapped to a valve-command \emph{change}. The deployed
-command is the accumulated
+a 28-dimensional input. The deployed command is
 $\bm{u}_k = \operatorname{clip}(\bm{u}_{k-1} + \Delta\bm{u}_k,\,
 -\bm{u}_{\max},\, \bm{u}_{\max})$ with per-axis limits
 $\bm{u}_{\max} = [0.95,\, 0.95,\, 0.8,\, 0.8]$ stored in the checkpoint.
-Predicting the change rather than the absolute command conditions the problem
-on the previous operating point of the valve, which matters because
-proportional valves are direction- and history-dependent around their dead zone
-(Section~\ref{sec:fund:actuation-chain}). The desired increments in the
-training data are the \emph{achieved} transitions of the logged runs, used as a
-proxy because no independent cylinder-space reference was logged.
+The change formulation retains the previous valve operating point near the
+direction-dependent dead zone (Section~\ref{sec:fund:actuation-chain}). Logged
+achieved transitions serve as desired increments because no independent
+cylinder-space reference was recorded.
 
-The network is a multilayer perceptron with an input projection to width 512
-followed by four residual blocks~\cite{he2016deep} with SiLU
-activations~\cite{elfwing2018sigmoid}, layer normalisation~\cite{ba2016layer}
-and dropout~\cite{srivastava2014dropout}, implemented in
-PyTorch~\cite{paszke2019pytorch}. Training
-minimised the smooth-$L_1$ loss~\cite{huber1964robust} on normalised targets
-using Adam~\cite{kingma2015adam}, with samples in valve saturation up-weighted
-so the rare saturated regime is not ignored.
+The 512-wide residual MLP~\cite{he2016deep} uses SiLU activations, layer
+normalisation and dropout~\cite{elfwing2018sigmoid,ba2016layer,srivastava2014dropout}.
+Adam minimises a smooth-$L_1$ loss on normalised targets, with saturated samples
+up-weighted~\cite{kingma2015adam,huber1964robust}.
 
 Figure~\ref{fig:models:id-architecture} separates the three input groups and
 shows the four residual blocks explicitly. The network predicts a four-axis
@@ -161,22 +135,16 @@ valve-command increment, which is accumulated and clipped before use.
   \label{fig:models:id-architecture}
 \end{figure}
 
-The supervised result was, on its face, excellent: per-valve validation $R^2$
-between $0.9973$ and $0.9996$. That number means the network reproduces the
-logged valve commands from the logged states and achieved transitions. It does
-not mean the composite map has authority over the plant, because the achieved
-transitions in closed-loop data are themselves produced by the logged commands,
-so a model can score highly by exploiting that correlation without ever being
-asked to \emph{cause} a transition absent from the data
-(Section~\ref{sec:fund:identifiability}).
+Per-valve validation $R^2$ is $0.9973$--$0.9996$. This shows reproduction of
+logged commands, not plant authority: in closed-loop data, achieved transitions
+and logged commands are correlated (Section~\ref{sec:fund:identifiability}).
 
 \subsection{Paired Control Fine-Tuning}
 \label{sec:models:id-paired}
 
-The deficiency became measurable when the two networks were composed. For
-control, the relevant object is the \emph{paired differential response}, the
-difference between what the FD predicts under the ID's command for the actual
-target and under its command for a zero target,
+The composite is assessed by the \emph{paired differential response}: the FD
+prediction under the ID command for the requested target minus the prediction
+under its command for a zero target,
 %
 \begin{align}
   \bm{u}^{\mathrm{tgt}}_k &= f_{\mathrm{ID}}(\cdot,\, \bm{c}_k,\, \bm{u}_{k-1}),
@@ -188,23 +156,17 @@ target and under its command for a zero target,
   \label{eq:models:paired}
 \end{align}
 %
-Before fine-tuning this quantity did not track the requested increment at all:
-the normalised control error of the composite was $1.00$, exactly the score of
-predicting nothing, with per-axis regression slopes of at most $0.004$
-(Table~\ref{tab:models:paired}). Both networks were therefore fine-tuned
-jointly on
+Before fine-tuning, the composite normalised control error was $1.00$, equal to
+the zero-response baseline, and all regression slopes were below $0.004$
+(Table~\ref{tab:models:paired}). The networks were fine-tuned jointly on
 $\mathcal{L}_{\mathrm{ctl}} = \| \Delta\hat{\bm{x}}^{\mathrm{pair}}
 - \Delta\bm{x}^{*} \|^2_{\mathrm{norm}}
 + \lambda_{\mathrm{ID}}\mathcal{L}_{\mathrm{ID}}
 + \lambda_{\mathrm{FD}}\mathcal{L}_{\mathrm{FD}}$,
-retaining the supervised terms to limit regression from the original data
-contracts. Crucially, the target blocks were shuffled across valid states
-during this stage, so the networks could no longer succeed by reconstructing
-the logged trajectory and had to respond to targets the logged controller never
-issued in that state. After 30 epochs the composite control error fell to
-$0.109$ and all four axes reached slopes above $0.8$ and correlations above
-$0.92$. The resulting checkpoint is the ID model deployed, frozen, in every
-\ppoIDFD{} and \ppoAAMIDFD{} experiment.
+with the supervised terms retained. Target blocks were shuffled across valid
+states to break the logged state--target pairing. After 30 epochs, control
+error fell to $0.109$; all slopes exceeded $0.8$ and all correlations exceeded
+$0.92$. This frozen checkpoint is used in \ppoIDFD{} and \ppoAAMIDFD{}.
 
 \begin{table}[H]
   \centering
@@ -232,32 +194,17 @@ $0.92$. The resulting checkpoint is the ID model deployed, frozen, in every
 \subsection{Transfer of the Frozen Inverse Model}
 \label{sec:models:id-trust}
 
-The adaptation architecture of Sections~\ref{sec:models:aam}
-and~\ref{sec:models:adapter} freezes this model and places a small correction
-around it. That design is only defensible if the frozen model is itself robust
-across the plant family, so the question was tested directly rather than
-assumed. The frozen ID was evaluated on a separate $64$-run IsaacLab collection, made
-through the same deployment plant and spanning the same factor manifest
-(Section~\ref{sec:data:factors}): $2$ nominal, $16$ hydraulic-only, $12$
-mechanical-only and $34$ combined, the last being that collection's own $14$
-training, $4$ validation and $16$ unseen runs. It is not a subset of the
-$118$-run adaptation collection and shares no run with it. All $64$ are held
-out in the strict sense, because the ID is trained on Simscape exports alone
-and has never seen an IsaacLab transition, so the entire collection lies
-outside its training distribution by construction; the internal split is named
-only to show the result does not rest on one part of it. Runs were
-teacher-forced at each ROM tick and scored on the quantity the model actually
-produces, the valve command.
+Because the adapter corrects a frozen ID, its transfer was checked on a separate
+$64$-run IsaacLab collection: $2$ nominal, $16$ hydraulic-only, $12$
+mechanical-only and $34$ combined runs. These runs do not overlap the $118$-run
+adaptation collection. They are also outside the ID training distribution,
+which contains only Simscape data. Evaluation was teacher-forced at each ROM
+tick and scored on the predicted valve command.
 
-Table~\ref{tab:models:id-trust} reports the outcome. Against a recorded valve
-signal of root-mean-square magnitude $0.4350$, the ID reproduces the command
-with an error of $0.1739$, so it accounts for roughly $84\,\%$ of the
-valve-command variance. More importantly for the architecture, that accuracy is
-almost flat across domains: the spread between the best and worst domain mean
-is a factor of $1.09$, and the ordering does not follow plant severity, since
-the randomised-hydraulics domain scores better than the nominal one. Robustness
-here rests on all $64$ runs rather than on a ratio to the nominal domain, which
-contributes only two runs and is far too thin to anchor one.
+The recorded valve RMS is $0.4350$ and the ID error is $0.1739$, corresponding
+to about $84\,\%$ explained command variance. Domain-mean error varies by only
+a factor of $1.09$ (Table~\ref{tab:models:id-trust}); the nominal domain is not
+the easiest.
 
 \begin{table}[tb]
   \centering
@@ -279,23 +226,14 @@ contributes only two runs and is far too thin to anchor one.
   \end{tabular}
 \end{table}
 
-Three limitations qualify that conclusion and are carried forward rather than
-buried. First, judged as a one-step state predictor rather than as an inverse
-model, the ID is only marginally better than a trivial baseline: the mean
-extension error of $\unit[1.002]{mm}$ compares with $\unit[1.143]{mm}$ for a
-zero-order hold over the same $\unit[50]{ms}$ step, an improvement of $12\,\%$,
-and on velocity the zero-order hold is in fact $8\,\%$ better. This is not a
-contradiction but a statement about which metric is meaningful for an inverse
-model, and both are reported so the reader can judge. Second, recursive
-open-loop rollout of the composite is unstable in $48$ of the $64$ runs.
-Divergence is bimodal and is discriminated by valve saturation, whose mean
-occupancy is $0.989$ in diverging runs against $0.223$ in stable ones, and not
-by domain; it is a property of open-loop integration into the stroke limit and
-does not bear on the one-step, closed-loop use the controller makes of the
-model. Third, supplying the measured pressure difference instead of the
-training mean makes the model \emph{worse}, $\unit[1.907]{mm}$ against
-$\unit[1.311]{mm}$, so the mean-pressure deployment contract is a deliberate
-choice rather than an omission.
+Three limitations remain. As a one-step state predictor, the ID gives
+$\unit[1.002]{mm}$ extension error versus $\unit[1.143]{mm}$ for zero-order
+hold, while zero-order hold is $8\,\%$ better on velocity. Recursive composite
+rollout diverges in $48$ of $64$ runs; mean valve-saturation occupancy is
+$0.989$ in diverging runs and $0.223$ in stable runs. This does not affect the
+one-step closed-loop use. Finally, measured pressure input increases extension
+error from $\unit[1.311]{mm}$ to $\unit[1.907]{mm}$, so deployment uses the
+training-mean pressure.
 
 \section{Forward Dynamics Model}
 \label{sec:models:fd}
@@ -333,33 +271,18 @@ the shared residual trunk.
 \subsection{Assessment of the Supervised Score}
 \label{sec:models:fd-identifiability}
 
-That score was misleading in a way worth stating precisely, because it is the
-clearest instance of the chapter's organising caution. A model intended to give
-a policy gradient information about actuation must respond to the \emph{valve},
-not merely to the state history. Zeroing the valve input of the pretrained FD
-barely changed its long-horizon rollout error, a valve-zero error ratio of
-about $0.94$ at a $\unit[0.5]{s}$ horizon: removing the input the model exists
-to explain made it very slightly \emph{better}. The network had learned to
-extrapolate the smooth kinematics of closed-loop operation, in effect a
-sophisticated persistence model, because in feedback data the controller makes
-command and state history nearly redundant. Ablations on the source exports
-confirmed that the valve was not causally identifiable from the closed-loop
-distribution at all, so no amount of retraining on that distribution could
-repair it. The data had to change.
+The supervised score did not establish valve sensitivity. At a
+$\unit[0.5]{s}$ horizon, zeroing the valve input changed the rollout-error
+ratio to only $0.94$. The FD had mainly extrapolated the smooth closed-loop
+kinematics because command and state history were nearly redundant. Closed-loop
+ablation confirmed that the valve was not identifiable, so repair required new
+data.
 
-The repair dataset is the strict open-loop excitation export. All four valves
-receive a rank-4 multi-input sequence of long, full-authority plateaus, exciting
-one cylinder at a time in the first four segments and all four simultaneously in
-the last, applied to four distinct plant draws. Validation established the
-properties the closed-loop export lacked: all four state trajectories are
-distinct, valve history alone predicts the pressure response with $R^2 \approx
-0.80$--$0.85$, the valve regressors have variance-inflation factors of only
-$7$--$10$, and pressure-relief saturation occupies $9$--$22\,\%$ of samples, so
-the saturated regime is represented but not dominant. An earlier excitation
-export was rejected outright because half its runs duplicated state
-trajectories and the valve was again not identifiable, a reminder that
-excitation data must itself be audited rather than assumed
-informative~\cite{isermann2011identification}.
+The repair dataset applies rank-4 open-loop valve plateaus to four plant draws.
+Its trajectories are distinct, valve history predicts pressure with
+$R^2\approx0.80$--$0.85$, valve-regressor variance-inflation factors are
+$7$--$10$, and relief saturation occupies $9$--$22\,\%$ of samples. A previous
+export with duplicated trajectories was rejected~\cite{isermann2011identification}.
 
 Starting from the paired-control checkpoint, strict retraining minimised
 %
@@ -382,59 +305,32 @@ consistency term enforcing the trapezoidal identity
   + \tfrac{1}{2}\, T\, \Delta\dot{\bm{x}}_k ,
 \end{equation}
 %
-which holds in the measured strict data with $R^2 = 0.994$--$0.9997$ and ties
-the predicted extension and velocity increments to each other. One initially
-attractive regulariser was evaluated and rejected: anchoring the model to a
-constant valve Jacobian. Measured valve authority varies by a factor of
-$15$--$75$ across pressure quartiles and can change sign, so pinning a single
-global gain produced a pleasing mean response while collapsing one-step
-accuracy. This is consistent with the strongly operating-point-dependent
-valve--flow--pressure characteristics of hydraulic servo
-systems~\cite{merritt1967hydraulic} and motivates the pressure-dependent
-structure adopted in the ROM.
+which holds in the strict data with $R^2=0.994$--$0.9997$. A constant valve
+Jacobian was rejected because measured authority varies by a factor of
+$15$--$75$ across pressure quartiles and can change sign. This operating-point
+dependence motivates the ROM structure~\cite{merritt1967hydraulic}.
 
-Strict retraining reduces the $\unit[0.5]{s}$ extension rollout RMSE from
-$\unit[75.2]{mm}$ to
-$\unit[12.4]{mm}$ and the $\unit[1.0]{s}$ RMSE from $\unit[157.9]{mm}$ to
-$\unit[27.3]{mm}$, and, decisively, raises the valve-zero error ratio from
-$0.94$ to $1.81$: removing the valve input now roughly doubles the rollout
-error, which is the sensitivity a control-relevant forward model must exhibit.
-Per-axis one-step extension $R^2$ improved from the range $[-5.7,\,0.60]$ to
-$[0.76,\,0.98]$. Two limitations remain. At horizons below
-$\unit[0.25]{s}$ the zero-order hold is still competitive, simply because
-extension does not move far in $\unit[50]{ms}$; the learned model earns its
-value at the horizons over which a target must be committed. And the
-velocity-increment outputs remain poorly predicted on two axes, dominated by
-relief transients a memoryless $\unit[50]{ms}$ model cannot resolve. The
-deployed controller therefore integrates only $\Delta\hat{\bm{x}}$, the
-accurately modelled and directly validated quantity, and treats the velocity
-output as diagnostic. That restriction becomes important again in
-Section~\ref{sec:models:latent}.
+Strict retraining reduces extension rollout RMSE from $\unit[75.2]{mm}$ to
+$\unit[12.4]{mm}$ at $\unit[0.5]{s}$ and from $\unit[157.9]{mm}$ to
+$\unit[27.3]{mm}$ at $\unit[1.0]{s}$. The valve-zero error ratio rises from
+$0.94$ to $1.81$, and per-axis one-step extension $R^2$ improves from
+$[-5.7,\,0.60]$ to $[0.76,\,0.98]$. Zero-order hold remains competitive below
+$\unit[0.25]{s}$, and velocity increments remain weak on two axes. Deployment
+therefore integrates only $\Delta\hat{\bm{x}}$ and retains velocity as a
+diagnostic output.
 
 \section{Reduced-Order Model}
 \label{sec:models:rom}
 
-The \ppoIDFD{} path needed three repair stages before its composition had
-authority. The \ppoROM{} path instead replaces the composition with a single
-command-conditioned reduced-order model trained end to end on the quantity the
-controller consumes. Two decisions distinguish it from a generic sequence
-model. It is \emph{grey-box}: pressure, force, velocity and extension are
-propagated through explicit physical updates with trainable effective
-parameters, and neural components supply only what the physics cannot, namely
-the valve realisation, the unmodelled load and bounded
-residuals~\cite{karniadakis2021physics,lutter2019deep}. Encoding the
-orifice-flow and continuity structure~\cite{merritt1967hydraulic} makes the
-pressure dependence of valve authority architectural rather than something to
-be rediscovered from data. It is also \emph{recurrent}: a GRU
-encoder~\cite{cho2014learning} over $\unit[0.25]{s}$ of history replaces the
-memoryless state input of the FD, in the spirit of learned actuator
-networks~\cite{hwangbo2019learning}, because hydraulic response depends on
-recent pressure and command history that a single sample cannot represent. The
-model consumes six samples of a 24-dimensional vector comprising the cylinder
-state, the \emph{previously predicted} valve command fed back as recurrent
-state, and the current desired command; the actual valve appears only as a
-training target for the internal valve head, and at runtime no valve signal
-enters the model.
+The \ppoROM{} path uses one command-conditioned grey-box model instead of the
+ID--FD composition. Physical equations propagate pressure, force, velocity and
+extension. Neural heads estimate valve realisation, load and bounded
+residuals~\cite{karniadakis2021physics,lutter2019deep}. Valve authority is
+pressure dependent by construction through the orifice-flow and continuity
+equations~\cite{merritt1967hydraulic}. A GRU~\cite{cho2014learning} reads six
+samples ($\unit[0.25]{s}$) of cylinder state, previous predicted valve command
+and desired command. The measured valve is only an internal-head training
+target~\cite{hwangbo2019learning}.
 
 \begin{figure}[H]
   \centering
@@ -446,15 +342,9 @@ enters the model.
   \label{fig:models:rom-structure}
 \end{figure}
 
-Figure~\ref{fig:models:rom-structure} shows the computation. The encoder latent
-and the command feed an actuation head whose output passes through a learnable
-smooth dead-zone element with per-cylinder trainable width and asymmetric
-gains, reflecting the dead band and direction-dependent gain of proportional
-valves. Model-based designs treat the same nonlinearity by inverting an
-identified dead band analytically~\cite{yang2026stateconstrained}; training its
-parameters per cylinder instead removes the need for a separate identification
-experiment. The resulting internal actuation $\hat{a}_i \in [-1,1]$ drives an
-orifice-flow and continuity update per cylinder,
+The actuation head uses a learnable smooth dead zone with per-cylinder width
+and asymmetric gains~\cite{yang2026stateconstrained}. Its output
+$\hat{a}_i\in[-1,1]$ drives the orifice-flow and continuity update
 %
 \begin{align}
   q_i &= \hat{a}_i\, k_{q,i}\,
@@ -467,11 +357,9 @@ orifice-flow and continuity update per cylinder,
   \label{eq:models:rom-pressure}
 \end{align}
 %
-with effective bulk modulus $\beta_i$, supply pressure $p_{s,i}$, flow gain
-$k_{q,i}$, leakage coefficient $k_{\ell,i}$, piston area $A_i$ and
-extension-dependent chamber volume $V_i(x_i)$; the smoothed pressure margin
-$(\cdot)_+$ keeps the square root differentiable near the supply limit.
-Pressure then produces force and force produces motion,
+where $\beta_i$, $p_{s,i}$, $k_{q,i}$, $k_{\ell,i}$, $A_i$ and $V_i(x_i)$ are
+the effective bulk modulus, supply pressure, flow gain, leakage, piston area
+and chamber volume. Pressure then produces force and motion:
 %
 \begin{align}
   \hat{F}_i &= \Delta\hat{p}_{i,k+1} A_i + r_{F,i}, \qquad
@@ -485,44 +373,27 @@ Pressure then produces force and force produces motion,
   \label{eq:models:rom-motion}
 \end{align}
 %
-where $c_{v,i}$ is a viscous friction coefficient, $m_i$ an effective modal mass
-and $\ell_i(\bm{h}_k)$ a neural load head capturing the configuration-dependent
-gravitational and coupling load. All physical parameters are trained in
-log-space with hard clamps to plausible ranges, so they adapt to the data
-without leaving their meaning behind. The neural residuals are $\tanh$-bounded
-to $10\,\%$ of the pressure step limit, $10\,\%$ of the velocity step limit and
-$\unit[1]{cm}$ respectively: large enough to absorb model error, too small to
-let the network bypass the physics. This bounded-residual layering is the
-central robustness argument of the grey-box design, because even a badly
-trained residual cannot produce an unphysical state jump.
+Here $c_{v,i}$ is viscous friction, $m_i$ is effective modal mass and
+$\ell_i(\bm{h}_k)$ is the learned configuration-dependent load. Physical
+parameters are trained in log-space and clamped to plausible ranges. Pressure
+and velocity residuals are bounded to $10\,\%$ of their step limits, and the
+position residual to $\unit[1]{cm}$, preventing the neural heads from bypassing
+the physical update.
 
-Training follows a four-stage rollout curriculum with horizons
-$H \in \{1, 5, 20, 50\}$, each stage optimising weighted one-step losses plus a
-recursive rollout loss at its horizon, with scheduled sampling ramping from
-teacher-forced to $75\,\%$ self-fed~\cite{bengio2015scheduled}. The residual
-heads are penalised explicitly so that explanatory burden stays on the physical
-terms, and the logged force channel receives zero supervised weight. Excluding
-it is a design choice: at deployment the PhysX plant generates rod force
-internally, so the actuator model is not required to reproduce it. The logged
-channel also fails a piston-area consistency audit on this export, and
-supervising a head on a label that violates the model's own structure would
-corrupt the pressure chain.
+Training uses rollout horizons $H\in\{1,5,20,50\}$ and scheduled sampling up to
+$75\,\%$ self-fed~\cite{bengio2015scheduled}. Residual penalties retain the
+physical structure. Logged rod force has zero supervised weight because PhysX
+generates it at deployment and the export fails the piston-area consistency
+check.
 
-Three findings from the offline acceptance report
-(Figure~\ref{fig:models:rom-validation}) matter for the control experiments.
-The model has \emph{command authority}: with the true command, mean one-step
-$R^2$ is $0.998$ for the internal valve, $0.64$ for velocity and $0.97$ for
-extension, while zeroing or shuffling the command collapses the velocity score
-below zero and extension to about $0.5$; the $4\times4$ Jacobian of predicted
-extension increment with respect to the commanded increment is diagonally
-dominant with condition number $2.14$. It is \emph{stable} in rollout, with
-terminal extension $R^2$ of $0.998$, $0.998$, $0.84$ and $0.91$ per cylinder at
-$\unit[5]{s}$, so \ppoROM{} training rollouts do not ride on a diverging model.
-The pressure channel is the exception: one-step pressure-increment $R^2$ is only
-$0.06$--$0.09$, so the internal pressure state is best understood as a latent
-that supports the velocity chain rather than as a calibrated pressure
-estimator. That property recurs in Section~\ref{sec:models:latent} and turns
-out to matter there.
+With the true command, mean one-step $R^2$ is $0.998$ for the internal valve,
+$0.64$ for velocity and $0.97$ for extension. Zeroing or shuffling the command
+reduces velocity $R^2$ below zero and extension to about $0.5$; the extension
+Jacobian is diagonally dominant with condition number $2.14$. At
+$\unit[5]{s}$, terminal extension $R^2$ is $0.998$, $0.998$, $0.84$ and $0.91$
+across the cylinders. Pressure-increment $R^2$ is only $0.06$--$0.09$, so the
+internal pressure is a dynamic state, not a calibrated pressure estimate
+(Figure~\ref{fig:models:rom-validation}).
 
 \begin{figure}[H]
   \centering
@@ -540,13 +411,8 @@ out to matter there.
 \subsection{Closed-Loop Calibration Against the Deployment Plant}
 \label{sec:models:rom-calibration}
 
-Everything above identifies the ROM against Simscape, but at runtime the model
-does not drive Simscape. It drives a PhysX articulation whose contact
-behaviour, solver and effective compliance are its own, and a small systematic
-difference between the extension the ROM commits to and the extension PhysX
-realises is invisible from Simscape data by construction. The promoted
-checkpoint therefore adds a bounded, command-gated correction to the extension
-update,
+The Simscape-trained ROM has a systematic extension offset when driving PhysX.
+The promoted checkpoint adds a bounded, command-gated correction:
 %
 \begin{equation}
   \label{eq:models:rom-correction}
@@ -555,45 +421,42 @@ update,
   \qquad \delta_i\big|_{\bm{c}_k = \bm{0}} = 0,
 \end{equation}
 %
-trained on $4\,084$ closed-loop transitions collected in IsaacLab on the five
-plant-reachable reference shapes, with the Simscape dataset retained as a
-replay term. Every other parameter, the whole flow, continuity, force and
-integrator chain, is frozen during this stage, so the identified hydraulics are
-preserved and only a deployment offset is placed on top of them. The gating
-keeps the stationary hold contract intact: at zero command the correction is
-exactly zero, so a commanded hold remains a hold.
+It is trained on $4\,084$ IsaacLab transitions from five reachable reference
+shapes, with Simscape replay. All hydraulic and integration parameters remain
+frozen. The gate sets the correction to zero for a commanded hold.
 
-This is why the command ROM, and not the ID--FD pair, serves as the deployment
-plant of Section~\ref{sec:sys:rom-is-plant}. It is also a genuine asymmetry
-between the two actuator paths, since the ROM is the one model that has seen
-the plant it is deployed in, and it must be restated whenever their tracking
-numbers are compared in Chapter~\ref{chap:evaluation}. The command ROM is
-frozen for the final comparison and conditioned on no latent; the adaptation
-mechanism below acts on the inverse model of the \ppoIDFD{} path and leaves
-this model untouched.
+The calibrated command ROM serves as the deployment plant in
+Section~\ref{sec:sys:rom-is-plant}. Unlike the ID--FD path, it has seen PhysX
+data. It is frozen and has no latent input; adaptation modifies only the inverse
+path.
 
 \section{The Privileged Latent and Its Limits}
 \label{sec:models:latent}
 
-The three actuator models above are alternatives for the same job. The
-system-dynamics model is not: it is an \emph{instrument}, a learned
-approximation of the deployment plant itself, the command ROM followed by
-PhysX, trained from scratch on the IsaacLab collection of
-Section~\ref{sec:data:isaaclab} and never used as the actuator of any stack.
-Its purpose is to answer whether a compact factor-dependent context exists at
-all. If it does not, there is nothing for an online estimator to recover and
-the adaptation argument stops.
+The system-dynamics model is an analysis model, not an actuator. It approximates
+the command-ROM--PhysX plant and tests whether a compact factor-dependent
+context improves prediction. It is trained from scratch on the IsaacLab data
+of Section~\ref{sec:data:isaaclab}.
 
-The contract is a $\unit[50]{ms}$ transition. From the observable state, the
-applied action and a causal history the model predicts the next increment of
-the twelve-dimensional hydraulic state, with joint position and velocity as
-context. The action is the pair of consecutive valve commands
-$[\bm{u}_{k-1}, \bm{u}_k]$, which is what the command ROM itself consumes at a
-tick, so the model is asked the same question the plant is. It carries a belief
-module over a six-tick history, because a single sample cannot summarise the
-pressure state that drives the next transition, and it is trained with a
-five-transition unroll so that it is optimised for recursive use. The matched
-control $SD_0$ is identical except that no latent is supplied.
+At each $\unit[50]{ms}$ step, the model predicts the next 12-dimensional
+hydraulic-state increment from the observable state, joint context, consecutive
+commands $[\bm{u}_{k-1},\bm{u}_k]$ and a six-tick causal belief. Training uses a
+five-transition unroll. The matched control $SD_0$ has the same structure but
+no latent input.
+
+The privileged encoder $\bm{z}=\mu(\bm{e})$ maps the six physical factors to two
+dimensions and is trained jointly with $SD_z$. At a 20-tick horizon, the true
+latent is compared with zero, shuffled, random, mean and nominal controls using
+paired bootstrap intervals on validation and reserved-test runs.
+
+The true latent reduces pooled rollout error by $7.20\times10^{5}$ on 20
+validation runs ($95\,\%$ interval
+$[-1.03\times10^{6},-4.30\times10^{5}]$) and by $4.41\times10^{5}$ on 16 test
+runs ($[-7.61\times10^{5},-1.74\times10^{5}]$).
+
+The per-channel result is narrower (Table~\ref{tab:models:latent-channels}).
+The significant gain is confined to pressure; extension and velocity intervals
+cross zero on both pools. These are the channels used by the controller.
 
 Figure~\ref{fig:models:sd-architecture} shows the two conditioning paths and
 the transition model. The privileged factor encoder is used during training;
@@ -609,34 +472,6 @@ the belief GRU uses only causal state-action history.
   a five-step unroll.}
   \label{fig:models:sd-architecture}
 \end{figure}
-
-The privileged encoder $\bm{z} = \mu(\bm{e})$ compresses the six-dimensional
-physical factor vector of Section~\ref{sec:data:factors} into a two-dimensional
-latent. It is trained \emph{jointly} with the latent-conditioned model $SD_z$,
-so the representation is shaped by what helps predict rollout rather than by a
-reconstruction objective. At a horizon of $20$ ticks, one second of plant time,
-$SD_z$ is evaluated with the true latent against five controls constructed from
-the training pool alone: zero, shuffled, random, the mean encoded latent, and
-the nominal factor setting. The test is paired per run and reported with
-bootstrap confidence intervals on validation and on the sixteen reserved test
-runs separately.
-
-On the pooled state error the true latent wins on both pools. Validation
-rollout error falls by $7.20\times10^{5}$ with a $95\,\%$ interval of
-$[-1.03\times10^{6},\, -4.30\times10^{5}]$ over $20$ runs, and the reserved
-test runs fall by $4.41\times10^{5}$, interval
-$[-7.61\times10^{5},\, -1.74\times10^{5}]$ over $16$ runs. Neither interval
-crosses zero.
-
-That result, taken alone, would overstate the case, and the per-channel
-decomposition in Table~\ref{tab:models:latent-channels} is the reason. The
-pooled statistic weights extension, velocity and pressure equally in normalised
-units, but the raw pressure magnitudes are around six orders larger, so the
-pooled figure is effectively a pressure statistic. Decomposed by channel, the
-advantage of the true latent lives entirely in pressure. On extension and
-velocity, the two channels the deployed controller actually integrates
-(Section~\ref{sec:models:fd}), the paired intervals straddle zero on both
-pools, and the velocity mean difference even favours the no-latent control.
 
 \begin{table}[H]
   \centering
@@ -658,67 +493,72 @@ pools, and the velocity mean difference even favours the no-latent control.
   \end{tabular}
 \end{table}
 
-What this establishes must therefore be stated narrowly, and the narrowness is
-specific to the comparison. A two-dimensional privileged context does carry
-information about held-out hydraulic rollout that the state and action do not,
-which justifies freezing the representation and attempting online inference. The
-confinement to pressure is a property of \emph{this} contrast, between a
-latent-conditioned model and a separately trained no-latent one, which differ in
-their weights as well as in their input. Substituting latents within a single
-model isolates the latent alone, and under that comparison extension and
-velocity do respond (Section~\ref{sec:eval:predictive-utility}). Both readings
-are reported because they answer different questions. It is not evidence that the AAM works, because it
-uses the true $\bm{z}$ rather than an estimate, and it is not evidence of any
-control improvement. Most importantly, the information it carries is about the
-channel the ROM already predicts worst and the controller deliberately does not
-integrate. Section~\ref{sec:models:adapter} returns to this, because it is the
-best available explanation for what the closed-loop experiments later find.
+Thus the two-dimensional context contains held-out hydraulic information, but
+this test does not establish AAM accuracy or control improvement. It compares
+separately trained models; the within-model latent substitution in
+Section~\ref{sec:eval:predictive-utility} isolates latent input and also finds
+extension and velocity sensitivity. The main limitation is that the strongest
+signal lies in pressure, which the controller does not integrate.
 
-The representation is then frozen. The encoder, $SD_z$, the belief module, the
-normalisers, the input mask, the split and the rollout protocol are written to
-a frozen store with a recorded protocol stamp, and everything downstream reads
-that copy.
+The encoder, $SD_z$, belief module, normalisers, input mask, split and rollout
+protocol are then frozen for downstream use.
 
 \section{Arm Adaptation Module}
 \label{sec:models:aam}
 
-The AAM estimates the latent from history that exists at deployment,
-$\hat{\bm{z}} = \mathrm{AAM}(\bm{H}_t)$. Its input row is eighteen-dimensional,
-comprising five joint positions, five joint velocities, four cylinder pressure
-differences and the four previous valve commands. Twenty consecutive
-$\unit[50]{ms}$ rows form the window, so the estimator reads $\unit[1.0]{s}$ of
-past and $360$ inputs in total, and the promoted architecture is a causal
-one-dimensional convolutional network of width $64$ and depth $4$ over that
-window.
+The AAM estimates $\hat{\bm{z}}=\mathrm{AAM}(\bm{H}_t)$ from deployment
+history. Each row contains five joint positions, five joint velocities, four
+cylinder pressure differences and four previous valve commands. A four-layer,
+width-64 causal convolution processes 20 rows ($\unit[1.0]{s}$, 360 values).
 
-The pressure entry deserves a precise description, because it carries most of
-the hydraulic factor information and it is not a measurement. The four pressure
-differences are the learned actuator's own recursive pressure state, produced by
-the command ROM in \ppoROM{} and by the frozen forward model in \ppoAAMIDFD,
-and they are available at every deployment step because the actuator model that
-generates them runs inside the deployed loop. Nothing privileged enters: the
-factor vector, the true latent, the desired reference, future rows and the
-model's hidden recurrent state are excluded by construction, and the previous
-rather than the current valve command is used so that the row is causal at the
-instant the estimate is needed. History length was selected from a predeclared
-set of $5$, $10$, $20$ and $40$ ticks on validation runs only, taking the
-shortest history that remains statistically comparable with the best downstream
-rollout. The selected checkpoint has a validation latent RMSE of $0.802$ and a
-reserved-test RMSE of $0.734$, a substantial reduction against a
-constant-prediction baseline on runs the estimator never saw.
+The pressure values are recursive actuator-model states, not measurements:
+they come from the command ROM in \ppoROM{} and the frozen FD in
+\ppoAAMIDFD{}. The factor vector, true latent, reference, future rows and hidden
+state are excluded. Using the previous valve command keeps each row causal.
+Validation selected the shortest competitive history from $5$, $10$, $20$ and
+$40$ ticks. Latent RMSE is $0.802$ on validation and $0.734$ on reserved test.
 
-Deployment behaviour is fixed by the online runtime. Inference runs every three
-control steps, placing it on the $\unit[20]{Hz}$ model-tick grid inside a
-$\unit[60]{Hz}$ control loop, and the first valid estimate appears only after
-twenty complete rows have accumulated; until then the adapter is bypassed and
-the frozen inverse model's action is returned unchanged. A past-only rolling
-mean over five predictions smooths the output, adding $\unit[250]{ms}$ of lag.
-That smoother is causal by construction, unlike an earlier variant that scored
-the estimator using a full-run mean of held-out predictions, which is not a
-deployable estimator because it uses the whole run to predict any instant
-within it. Every number reported here comes from the corrected causal score,
-and keeping the superseded verdict visible and labelled is deliberate: the
-failure mode is easy to reintroduce.
+Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop. The
+adapter is bypassed until 20 rows are available. A causal five-prediction rolling
+mean adds $\unit[250]{ms}$ lag. Reported results use this online smoother, not
+the earlier non-causal full-run average.
+
+\subsection{Information Content of the Estimated Latent}
+\label{sec:models:aam-content}
+
+Linear decoding from the per-run mean estimate gives $R^2=0.956$ for seal
+condition, $0.448$ for compliance, $0.114$ for flow, $0.081$ for supply
+pressure, $0.056$ for centre-of-mass offset and $-0.008$ for mass. The latent
+therefore represents mainly seal condition. It is stable within a run but does
+not refine over time.
+
+Low-dimensional adapters can lose information when factors act through
+different channels~\cite{liu2025frma}. This differs from the rapid-motor-
+adaptation assumption that only task-relevant factor directions need to be
+retained~\cite{kumar2021rma}: here the dominant seal-condition direction acts
+through pressure, which the controller does not integrate. Estimating named
+physical quantities would improve interpretation but requires an explicit
+plant model~\cite{hu2026bayesian}.
+
+\section{Latent-Conditioned Inverse-Model Adapter}
+\label{sec:models:adapter}
+
+The frozen ID produces $\bm{u}_{\mathrm{base}}=\mathrm{ID}(\bm{s},\bm{r})$.
+The adapter adds a bounded latent-conditioned residual:
+%
+\begin{equation}
+  \label{eq:models:adapter}
+  \bm{u} = \operatorname{clip}\bigl(
+    \bm{u}_{\mathrm{base}} + g_\psi(\bm{s}, \bm{r}, \bm{u}_{\mathrm{base}},
+    \hat{\bm{z}})\bigr).
+\end{equation}
+%
+Training minimises valve-command MSE at the exact ROM tick, with the residual
+bounded to $0.15$. The ID, FD and policy are frozen during adapter training.
+The \ppoAAMIDFD{} policy is separately latent-conditioned, so disabling the
+residual restores the baseline actuator path but not the baseline actor. This
+provides the single-variable adapter ablation used in
+Chapter~\ref{chap:evaluation}.
 
 Figure~\ref{fig:models:aam-architecture} shows the causal convolutional stack
 and the bounded adapter that consumes its estimate. The upper part is the AAM;
@@ -734,178 +574,65 @@ the lower part shows where adaptation enters the frozen inverse-model path.
   \label{fig:models:aam-architecture}
 \end{figure}
 
-\subsection{Information Content of the Estimated Latent}
-\label{sec:models:aam-content}
-
-A two-dimensional latent cannot represent a six-dimensional factor vector, and
-it is worth measuring what it does represent rather than assuming a distributed
-code. Linearly decoding the six physical factors from the per-run mean estimate
-gives $R^2 = 0.956$ for the seal-condition factor and little else: $0.448$ for
-compliance, $0.114$ for flow, $0.081$ for supply pressure, $0.056$ for the
-centre-of-mass offset and $-0.008$ for the mass scale. The deployed estimator is,
-to a good approximation, a seal-condition fingerprint. It is also
-\emph{static}: the estimate is stable within a run, which the temporal
-consistency term encourages, but it does not refine as evidence accumulates.
-
-Two consequences follow. The first is that no latent dimension is named after a
-physical parameter anywhere in this thesis on the basis of a scatter plot; the
-one relationship asserted here is the one that was measured. The second is that
-this is a recognised failure mode rather than an idiosyncrasy of this system:
-history-based adapters that compress many factors into a single low-dimensional
-latent are known to lose robustness precisely where the factors act through
-different channels~\cite{liu2025frma}. The original rapid-motor-adaptation
-argument treats the low-dimensional projection as a virtue, on the grounds that
-parameters which covary with identical effects on observables need not be
-separated and perfect system identification is not
-required~\cite{kumar2021rma}. That defence holds only when the surviving
-direction is the one the controller needs. Here the surviving direction is seal
-condition, which acts through pressure, and Section~\ref{sec:models:latent} has
-already shown that pressure is the channel the controller does not integrate.
-Work that instead estimates named physical quantities in a belief filter,
-including seal leakage and valve gain degradation, retains that interpretability
-by construction and pays for it with an explicit plant
-model~\cite{hu2026bayesian}.
-
-\section{Latent-Conditioned Inverse-Model Adapter}
-\label{sec:models:adapter}
-
-The adapter is where adaptation reaches the plant. The frozen inverse model
-produces a base command $\bm{u}_{\mathrm{base}} = \mathrm{ID}(\bm{s},\bm{r})$
-and the adapter adds a small bounded residual conditioned on the estimated
-latent,
-%
-\begin{equation}
-  \label{eq:models:adapter}
-  \bm{u} = \operatorname{clip}\bigl(
-    \bm{u}_{\mathrm{base}} + g_\psi(\bm{s}, \bm{r}, \bm{u}_{\mathrm{base}},
-    \hat{\bm{z}})\bigr).
-\end{equation}
-%
-The adapter is trained on the recorded valve command: its objective is the
-mean squared error between the clipped sum $\bm{u}_{\mathrm{base}} +
-g_\psi(\cdot)$ and the valve command recorded at the exact ROM tick, with the
-residual bounded to $0.15$. The inverse model, the forward model and the policy
-stay frozen \emph{while the adapter is trained}. The deployed policy of \ppoAAMIDFD{} is itself conditioned on the estimated latent and is trained separately, so the stack does not reduce to \ppoIDFD{} when the residual is disabled. The residual is
-bounded by construction and scaled by a declared factor, so a warm-up period or
-an invalid latent zeroes the correction and restores the robust actuator
-path rather than producing a third, untested behaviour. The latent-conditioned
-policy is unchanged by that fallback, so the resulting system is \ppoIDFD{} in
-its actuator path but not in its actor; recovering \ppoIDFD{} exactly requires
-switching in the $66$-input baseline policy as well. What the fallback buys is a
-single-variable ablation \emph{within} the adaptive checkpoint, which is the
-controlled comparison used in Chapter~\ref{chap:evaluation}.
-
 \subsection{Open-Loop Evidence}
 
-One property of the adapter bounds every number in this subsection and is
-stated before them. The residual is capped at $0.15$ and is added to a frozen
-inverse model that already reproduces roughly $84\,\%$ of the valve-command
-variance (Section~\ref{sec:models:id-trust}). The room available to the latent
-on this path is therefore small by construction, and effects of a few tenths of
-a per cent are what the design permits rather than what the latent is worth. The
-predictive comparison of Section~\ref{sec:eval:predictive-utility}, where the
-latent conditions a model with no such ceiling, is the better measure of its
-information content.
+The residual cap is $0.15$, and the frozen ID already explains about $84\,\%$
+of valve-command variance (Section~\ref{sec:models:id-trust}). The adapter can
+therefore make only small corrections. Section~\ref{sec:eval:predictive-utility}
+tests latent information without this ceiling.
 
-Isolated from the control loop, the adapter does benefit from the latent, and
-the effect is small but consistent. Three information-matched arms were trained
-under identical conditions, differing only in what occupies the latent input:
-zeroed, the AAM estimate, and the privileged true latent. Across five seeds the
-privileged latent improves validation loss over the zeroed arm in $5$ of $5$
-seeds, with a mean paired improvement of $0.0037$, and the AAM estimate does so
-in $5$ of $5$ seeds with a mean paired improvement of $0.0118$. The differences
-amount to a few tenths of a percent, so the sign, reproduced across every seed
-in a paired design, is the result rather than the magnitude.
+Three matched adapter arms use a zeroed, estimated or privileged latent. Across
+five seeds, both latent arms improve validation loss over the zeroed arm in
+$5/5$ cases. Mean paired improvements are $0.0037$ for the privileged latent
+and $0.0118$ for the AAM estimate. The effect is consistent but small.
 
-A companion experiment tested the natural hypothesis that the latent should
-help more once the observation is made insufficient, by masking the pressure and
-force features so that plant identity can no longer be read off the input
-directly. It did not survive reseeding: under masking the privileged latent
-helps in only $2$ of $5$ seeds and the seed-to-seed spread grows by roughly an
-order of magnitude. A single-seed pilot had shown a clean reversal of the
-ordering, and it is recorded here as noise rather than as a finding, because the
-paired five-seed design does not reproduce it.
+Masking pressure and force does not strengthen the result: the privileged
+latent helps in only $2/5$ seeds and variance increases by about one order of
+magnitude. The earlier single-seed improvement is not reproducible.
 
 \subsection{Closed-Loop Evidence and Its Bound}
 \label{sec:models:adapter-null}
 
-Inside the control loop the picture changes. Evaluation-time ablations on one
-trained checkpoint compared the full stack against a zeroed latent, a shuffled
-latent, a frozen latent, an in-distribution mean latent and a sham plant change,
-which together separate whether any effect is due to the latent's presence, its
-content, or its online updating. No contrast produced a consistent improvement:
-the differences in lateral error, cut-height error and impact counts are small
-relative to run-to-run variation and change sign across the comparisons.
+Closed-loop ablations compare the full stack with zeroed, shuffled, frozen and
+mean latents, plus a sham plant change. None consistently improves lateral
+error, cut-height error or impacts.
 
-The explanation is a property of the plant rather than of the estimator, and it
-was found by measuring before drawing a conclusion. Across the scored window the
-first cylinder's valve command is pinned at its limit for roughly $92\,\%$ of the
-episode, the second for $67$--$82\,\%$ and the fourth for $50$--$57\,\%$, each
-measured against its own per-axis limit rather than a common one. Control-effort
-ratios before and after the scheduled plant change lie between $1.005$ and
-$1.009$, confirming that no headroom is released. A bounded additive correction
-cannot express itself through an actuator that is already at its limit, so the
-experiment as posed could not have detected adaptation regardless of the quality
-of $\hat{\bm{z}}$. This is the classical interaction between adaptation and
-input saturation, in which an adaptive law loses the authority it needs exactly
-when the plant most requires it and dedicated anti-windup compensation becomes
-necessary~\cite{sofrony2024antiwindup}.
+Valve saturation limits the test: cylinder 1 is saturated for about $92\,\%$ of
+the scored window, cylinder 2 for $67$--$82\,\%$, and cylinder 4 for
+$50$--$57\,\%$. Control-effort ratios before and after the plant change are
+$1.005$--$1.009$. A bounded additive correction has little authority under
+these conditions~\cite{sofrony2024antiwindup}.
 
-One further measurement shows that the saturation is not an artefact of a poor
-setting. Reducing the lead cap to relieve the windup does lower the first
-cylinder's saturation from $0.91$ to $0.14$, but degrades cut height by a factor
-of three: the actuator is pinned because the task sits close to the plant's
-capability limit (Section~\ref{sec:sys:capability}), not because a gain was
-chosen badly.
+Reducing the lead cap lowers cylinder-1 saturation from $0.91$ to $0.14$ but
+triples cut-height error. The task is therefore close to the plant capability
+limit (Section~\ref{sec:sys:capability}).
 
 \subsection{Propagation of the Latent Advantage}
 \label{sec:models:chain}
 
-The chain gate asks whether the deployable estimate retains a worthwhile share
-of the advantage the true latent buys, by comparing
+The chain gate compares
 $SD_0(\bm{s},\bm{u})$, $SD_z(\bm{s},\bm{u},\bm{z})$ and
 $SD_z(\bm{s},\bm{u},\hat{\bm{z}})$ under the frozen protocol with paired
-bootstrap intervals. The chain does not carry the advantage to the controller,
-and the measurement locates where it stops. On extension and velocity neither the
-true latent nor the estimate beats the no-latent control with an interval
-excluding zero, on either pool. The estimate is not worse than the true latent,
-and the retained fraction of the true advantage is positive on both channels, so
-the failure is not that the AAM estimates badly; the AAM recovers the latent
-about as well as the latent can be used. The failure is upstream, and
-Table~\ref{tab:models:latent-channels} located it: the advantage the estimator
-faithfully recovers is a pressure-channel advantage.
+bootstrap intervals. Neither the true nor estimated latent improves extension
+or velocity over $SD_0$ with an interval excluding zero. The estimate is not
+worse than the true latent, so estimation is not the limiting stage. The
+measurable advantage remains in pressure (Table~\ref{tab:models:latent-channels}).
 
-Taken together, the three subsections above describe a chain that is sound
-component by component, with the end-to-end loss localised to a single channel.
-That verdict is narrowed by Section~\ref{sec:eval:predictive-utility}, which
-finds the estimate indistinguishable from the privileged latent and ahead of an
-uninformative one on extension and velocity when the two are compared inside one
-model. The estimator is not where the chain loses the advantage.
-The inverse model is robust
-across the plant family (Section~\ref{sec:models:id-trust}); the latent is
-recoverable from causal history alone; the adapter uses it when it is trained in
-isolation. What is missing is a demonstrated path from a pressure-channel latent
-to the extension the controller integrates, through an actuator with enough
-headroom to act on it. Chapter~\ref{chap:evaluation} reports the deployment
-measurements in full, and Chapter~\ref{chap:conclusion} takes up what would have
-to change for the question to be answered rather than deferred.
+Section~\ref{sec:eval:predictive-utility} finds the estimate comparable with the
+privileged latent within one model, confirming that the AAM is not the main
+loss. The missing link is a path from pressure information to the integrated
+extension command with sufficient actuator headroom. Chapters~\ref{chap:evaluation}
+and~\ref{chap:conclusion} examine this limit.
 
 \section{Training and Model-Selection Protocol}
 \label{sec:models:training}
 
-All adaptation-chain models share one split. Runs are divided $82$ / $20$ / $16$
-into training, validation and reserved test, by complete run \emph{and} by
-factor configuration, so no factor key appears on both sides of a boundary, and
-windows never cross run boundaries. The sixteen reserved runs entered no decision at any stage: they are recorded
-as unused in the adapter's manifest, and no history length, checkpoint or
-hyperparameter was selected on them. They are scored, once, after each model is
-fixed, so every reserved-test number in this chapter is reported next to its
-validation counterpart rather than instead of it
-(Section~\ref{sec:data:isaaclab}). Selection is by held-out criterion rather than
-training loss throughout: $SD_z$ and $SD_0$ on validation rollout, the AAM on
-downstream rollout quality rather than on latent error alone, and the adapter on
-validation command error. Table~\ref{tab:models:frozen} records the resulting
-checkpoint provenance.
+Adaptation data are split $82/20/16$ into training, validation and reserved
+test by complete run and factor configuration; windows do not cross run
+boundaries. The 16 test runs are not used for model or hyperparameter selection.
+$SD_z$ and $SD_0$ are selected on validation rollout, the AAM on downstream
+rollout, and the adapter on validation command error. Table~\ref{tab:models:frozen}
+records the selected checkpoints.
 
 \begin{table}[H]
   \centering
@@ -928,18 +655,6 @@ checkpoint provenance.
   \end{tabular}
 \end{table}
 
-One selection hazard is worth recording because it cost a false conclusion
-during development. An earlier adapter variant minimised next-state error
-through the frozen forward model, while the stage-level promotion gate scored
-the predicted valve command. The two objectives disagree, and scoring that
-variant on the gate's objective produced a uniformly negative verdict which said
-nothing about the goal it had actually been trained for. The deployed adapter of
-Section~\ref{sec:models:adapter} was subsequently trained directly on the
-recorded valve command, so for that checkpoint the training objective and the
-promotion criterion coincide and the hazard does not arise. The general rule it
-produced is retained: each model is scored on the objective it was trained for,
-and Table~\ref{tab:models:frozen} states for every component whether it is
-frozen or trained from scratch, since the comparison of
-Chapter~\ref{chap:evaluation} depends on that answer being unambiguous.
-
-\flushbottom
+The deployed adapter is trained and selected on recorded valve-command error.
+This avoids the objective mismatch of an earlier next-state-loss variant. Each
+component is evaluated on its stated training contract.
