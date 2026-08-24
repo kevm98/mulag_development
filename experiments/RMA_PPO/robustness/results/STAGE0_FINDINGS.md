@@ -107,3 +107,59 @@ python3.11 factor_admission.py     # F1 / F4 screens -> stage0_factor_admission.
 Both run in about 5 s on CPU. `run_sweeps.py` remains valid *code* but its published
 results are superseded; re-running it on this surrogate cannot produce a defensible
 degradation envelope for the reason in Defect 2.
+
+---
+
+# Analytic action separation (added 2026-08-25)
+
+`action_separation.py`, 4096 recorded rows, no plant model and no policy rollout.
+Full output: `results/action_separation.json`.
+
+Every stress mechanism sits between the commanded and the applied valve, so a
+controller that knows the plant can hold the nominal response by commanding the
+preimage `g_p^-1(u)`. The gap `du = g_p^-1(u) - u`, mapped through the frozen ID
+Jacobian into action units, is a **lower bound on the action separation the §8.2
+oracle gate requires**. It also yields analytic saturation — the fraction of rows
+where the required command exceeds the ID's `command_limits` — with no surrogate.
+
+## Nominal clipping floor
+
+**5.6% of recorded rows overall, and 21.2% on cylinder 1**, at zero stress. C1's
+recorded median |u| is 0.77 against a 0.95 limit: it sits near its command ceiling
+before anything is perturbed. All costs below are quoted as excess over this floor.
+
+## Result
+
+| Axis | Separation (frac. of action span) | Extra C1 clipping | Class |
+|---|---|---|---|
+| **delay** | 0.036 (1 tick) → 0.117 (20) | **+0.2 pp — none** | ANTICIPATION |
+| **deadband** | 0.058 (0.01) → 1.13 (0.2) | +1.0 → +29.3 pp | SEPARATION |
+| **lag** | 0.044 (0.1 s) → 0.241 (1.0 s) | +7.1 → +22.6 pp | SEPARATION |
+| **authority** | 0.073 (0.9) → 0.222 (0.5) | **+11.9 → +69.4 pp** | SEPARATION, costly |
+| **rate_limit** | 0.000 at every severity | +0.0 pp | NEGLIGIBLE (static) |
+
+## What this decides
+
+1. **Delay is the axis to run first.** It is the only one that demands a real
+   action change while requiring *no additional command authority* — C1 clipping is
+   flat to within 0.4 pp across the whole grid. Context has something to buy and the
+   actuator is not asked for more, which is exactly the §12 "adaptation-limited"
+   region the protocol wants.
+2. **Authority stress buys its separation with headroom the machine does not have.**
+   A 10% cut already pushes C1 to 33% required-clipping — past the §6.3 30% rule —
+   and 0.5 pushes it to 91%. This is the legacy AIF condition (C1 saturated ~92% of
+   the scored window) reproduced analytically, before any GPU time. Treat authority
+   as §16-B territory: degradation there will be contaminated by saturation.
+3. **Deadband is the cheapest strong separation.** d = 0.05 yields 28% of the action
+   span for +6.3 pp of C1 clipping. It deserves promotion from "alternate" to a
+   primary candidate alongside delay.
+4. **Rate limit offers no static separation** — knowing the plant has a rate limit
+   does not let you command around it. See the LIMITATIONS note in the module: this
+   does not rule out anticipation-type benefit, which the static preimage cannot test.
+
+## Caveat
+
+This is a lower bound on *required* separation, not a prediction of *achieved*
+benefit. It establishes that an oracle policy has something distinct to do (a
+necessary condition for §8) and where the actuator cannot deliver it. Whether the
+task metric actually improves remains gate F2/G1 and remains a PhysX question.
