@@ -258,6 +258,53 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--actuator_authority_alpha",
+    type=float,
+    default=None,
+    help=(
+        "fraction of the realised cylinder motion that reaches the PhysX "
+        "target, applied identically on every stack after the actuator model. "
+        "This is the common stress axis: the deployment factors are inert on "
+        "the ID/FD plant and clamped on the ROM, so they do not provide one. "
+        "1.0 is unperturbed; alpha -> 0 must make the reference untrackable."
+    ),
+)
+p.add_argument(
+    "--actuator_authority_alpha_after",
+    type=float,
+    default=None,
+    help="authority factor from --actuator_authority_step_time_s onwards",
+)
+p.add_argument(
+    "--actuator_authority_step_time_s",
+    type=float,
+    default=None,
+    help=(
+        "episode time at which the authority factor steps. A sham arm sets "
+        "--actuator_authority_alpha_after equal to --actuator_authority_alpha "
+        "so the schedule fires and the plant does not change."
+    ),
+)
+p.add_argument(
+    "--deployment_mass_step_time_s",
+    type=float,
+    default=None,
+    help=(
+        "episode time at which the tool mass steps. The mechanical factors are "
+        "the only deployment factors that reach every stack unclamped, so this "
+        "is the NATIVE mid-episode plant change -- no emulator, no proxy."
+    ),
+)
+p.add_argument(
+    "--deployment_mass_step_scale",
+    type=float,
+    default=None,
+    help=(
+        "tool mass after the step, as a multiple of its baseline. A sham arm "
+        "sets this to 1.0 so the schedule fires and the plant is left alone."
+    ),
+)
+p.add_argument(
     "--rom_factor_perturbation",
     default=None,
     metavar="FACTOR=LO:HI[,FACTOR=LO:HI...]",
@@ -1373,6 +1420,12 @@ def main() -> None:
                 env_cfg, "online_aam_latent_freeze_tick",
                 int(a.online_aam_latent_freeze_tick),
             )
+        for name in ("actuator_authority_alpha", "actuator_authority_alpha_after",
+                     "actuator_authority_step_time_s",
+                     "deployment_mass_step_time_s", "deployment_mass_step_scale"):
+            value = getattr(a, name, None)
+            if value is not None:
+                override_cfg(env_cfg, name, float(value))
         if a.rom_factor_perturbation is not None:
             ranges = {}
             for part in str(a.rom_factor_perturbation).split(","):

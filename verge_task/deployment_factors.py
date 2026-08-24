@@ -72,6 +72,47 @@ def nominal_factor(run_id: int = 0) -> DeploymentFactor:
     )
 
 
+def _inline_factor(key: str) -> DeploymentFactor | None:
+    """Parse an inline stress specification such as ``mass_scale=1.75``.
+
+    Accepts ``name=value`` pairs separated by commas; unnamed factors keep
+    their nominal value.  This exists for the robustness-envelope experiment,
+    which has to place the plant at a stated point rather than at a manifest
+    draw, and deliberately admits values OUTSIDE the audited ranges so that a
+    degradation boundary can be searched for.  Two limits apply and are not
+    removed here: ``HydraulicROM.forward`` clamps the hydraulic channels back
+    to its identified ranges, and the ID/FD plant consumes no factors at all,
+    so only ``mass_scale`` and ``com_z`` reach every stack.  Use
+    ``AAM_module/tools/audit_factor_clamping.py`` to see what a given request
+    delivers.
+    """
+    text = str(key).strip()
+    if "=" not in text:
+        return None
+    values = dict(zip(DIM_ORDER, nominal_factor().values))
+    for part in text.split(","):
+        name, separator, raw = part.partition("=")
+        name = name.strip().lower()
+        if not separator or name not in values:
+            raise KeyError(
+                f"inline factor spec {part!r} is not NAME=VALUE with NAME in {DIM_ORDER}"
+            )
+        try:
+            number = float(raw)
+        except ValueError as error:
+            raise KeyError(f"inline factor spec {part!r} has a non-numeric value") from error
+        if not math.isfinite(number):
+            raise KeyError(f"inline factor spec {part!r} is not finite")
+        values[name] = number
+    return DeploymentFactor(
+        run_id=-1,
+        domain="hydraulic",
+        split="train",
+        values=tuple(values[name] for name in DIM_ORDER),
+        label=text,
+    )
+
+
 def _builtin_factor(key: str) -> DeploymentFactor | None:
     """Return explicit boundary anchors used by the Gate-1 sweep."""
     anchors = {
@@ -154,7 +195,7 @@ def select_factors(
     """
     if int(num_envs) <= 0:
         raise ValueError("num_envs must be positive")
-    explicit = _builtin_factor(key) if key else None
+    explicit = (_inline_factor(key) or _builtin_factor(key)) if key else None
     rows = load_manifest(manifest)
     if explicit is None and key:
         key_text = str(key).strip().lower()

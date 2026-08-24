@@ -1333,6 +1333,43 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 flush=True,
             )
 
+    def _actuator_authority_alpha(self, step_dt: float):
+        """Per-env actuator-authority factor, or None when unperturbed.
+
+        ``actuator_authority_alpha`` applies from the start of the episode.
+        ``actuator_authority_alpha_after`` replaces it from
+        ``actuator_authority_step_time_s`` onwards, which is the mid-episode
+        change used by E3; the pre-step value stays in force until then, so a
+        sham arm is the same configuration with the two values equal.
+
+        Returns a tensor broadcastable over the cylinder axis so the caller can
+        multiply the realised motion directly.
+        """
+        base = float(getattr(self.cfg, "actuator_authority_alpha", 1.0))
+        after = getattr(self.cfg, "actuator_authority_alpha_after", None)
+        step_time = getattr(self.cfg, "actuator_authority_step_time_s", None)
+        if base == 1.0 and after is None:
+            return None
+        if not 0.0 <= base <= 10.0:
+            raise ValueError(
+                f"actuator_authority_alpha={base} outside the sane range [0, 10]"
+            )
+        # Own clock, advanced once per call and reset with the episode, so it
+        # does not depend on which buffers a given task keeps.
+        if getattr(self, "_authority_elapsed_s", None) is None:
+            self._authority_elapsed_s = torch.zeros(self.num_envs, device=self.device)
+        alpha = torch.full((self.num_envs,), base, device=self.device)
+        if after is not None and step_time is not None:
+            after = float(after)
+            if not 0.0 <= after <= 10.0:
+                raise ValueError(
+                    f"actuator_authority_alpha_after={after} outside [0, 10]"
+                )
+            stepped = self._authority_elapsed_s >= float(step_time)
+            alpha = torch.where(stepped, torch.full_like(alpha, after), alpha)
+        self._authority_elapsed_s = self._authority_elapsed_s + float(step_dt)
+        return alpha.unsqueeze(-1)
+
     def _setup_rom_factor_perturbation(self) -> None:
         """Attach the optional ROM-side hydraulic factor perturbation.
 
@@ -2917,6 +2954,33 @@ class MulagUpperLevelEnv(DirectRLEnv):
             self._predicted_extension_velocity[neutral_hold_mask] = reference.xdot_current[neutral_hold_mask]
             self._dP[neutral_hold_mask] = dP_before[neutral_hold_mask]
 
+        # --- actuator-authority degradation -------------------------------
+        # ONE stress axis applied at a semantically identical location on every
+        # stack: the realised cylinder motion the actuator produced, scaled
+        # immediately before it updates the PhysX target.
+        #
+        #     R      : delta_x from the command ROM  -> alpha * delta_x -> target
+        #     IF/AIF : delta_x from ID->FD           -> alpha * delta_x -> target
+        #
+        # This exists because the deployment factors do NOT provide a common
+        # stress axis. The FD plant consumes no factor input at all, so the four
+        # hydraulic factors are inert on IF and AIF, and on R the ROM clamps them
+        # back to its identified range and bounds its own response gain to
+        # [0.35, 1.50]. Alpha bypasses both limits and means the same thing on
+        # all three stacks: the fraction of commanded actuator motion that is
+        # actually realised. alpha -> 0 must make the moving reference
+        # untrackable; if it does not, the harness is wrong, which is what the
+        # Stage 0 positive control checks.
+        #
+        # This is actuator-authority loss at the deployment interface. It is NOT
+        # named after any physical factor: it is not seal condition, not flow,
+        # and not a hydraulic parameter.
+        alpha_now = self._actuator_authority_alpha(step_dt)
+        self._actuator_delta_raw = delta_extension.detach().clone()
+        if alpha_now is not None:
+            delta_extension = delta_extension * alpha_now
+        self._actuator_delta_applied = delta_extension.detach().clone()
+
         clip_field = "cylinder_fd_delta_clip_m" if dynamics_model == "fd" else "cylinder_rom_delta_clip_m"
         delta_clip = float(getattr(self.cfg, clip_field, 0.0))
         if delta_clip > 0.0:
@@ -3690,6 +3754,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._id_input_tensor[env_ids] = 0.0
         self._apply_hydraulic_feature_mode(env_ids)
         self._predicted_extension_velocity[env_ids] = 0.0
+        # Actuator-authority clock: reset with the episode so a mid-episode step
+        # fires at the same episode time in every environment and every arm.
+        if getattr(self, "_authority_elapsed_s", None) is not None:
+            self._authority_elapsed_s[env_ids] = 0.0
         self._raw_delta_extension[env_ids] = 0.0
         self._raw_delta_extension_velocity[env_ids] = 0.0
         self._raw_delta_dP[env_ids] = 0.0

@@ -113,6 +113,18 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     plant_perturbation_step_alpha_scale = 1.0
     plant_perturbation_step_delay_steps = None
     plant_perturbation_seed = 20260816
+
+    # Actuator-authority degradation: the fraction of the realised cylinder
+    # motion that reaches the PhysX target. Applied at the same point on every
+    # stack (after the actuator model, before the target update), so it is the
+    # one stress axis that means the same thing for the command ROM and for
+    # ID->FD. 1.0 is unperturbed. See _actuator_authority_alpha().
+    actuator_authority_alpha = 1.0
+    # Mid-episode change: from actuator_authority_step_time_s onwards the factor
+    # becomes actuator_authority_alpha_after. None disables the step, and a sham
+    # arm sets the two values equal so the schedule fires without a plant change.
+    actuator_authority_alpha_after = None
+    actuator_authority_step_time_s = None
     # ROM-side plant perturbation. The command ROM produces the valve rather
     # than consuming it, so valve effectiveness does not apply; its per-env
     # plant channel is system_factors (num_envs, 7) ordered

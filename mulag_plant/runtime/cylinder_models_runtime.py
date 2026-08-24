@@ -89,7 +89,7 @@ class CylinderIDRuntime:
             self.device = torch.device("cuda:0")
         self.num_envs = int(num_envs)
 
-        id_dir = self.models_root / "id_cylinder_space "
+        id_dir = self.models_root / "id_cylinder_space"
         common = _import_from_dir(id_dir, "id_cylinder_common")
         ckpt = common.load_checkpoint(self.checkpoint_path, map_location="cpu")
         model_config = dict(ckpt["model_config"])
@@ -293,7 +293,7 @@ class CylinderFDRuntime:
         if self.device.type == "cuda" and self.device.index is None:
             self.device = torch.device("cuda:0")
 
-        fd_dir = self.models_root / "fd_cylinder_space "
+        fd_dir = self.models_root / "fd_cylinder_space"
         common = _import_from_dir(fd_dir, "fd_cylinder_common")
         self.model, self.checkpoint, self.normalizers = common.load_model_from_checkpoint(
             self.checkpoint_path,

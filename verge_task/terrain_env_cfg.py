@@ -621,6 +621,11 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # draw is fixed, so a sweep over this is not confounded with visiting
     # different plants.
     deployment_factor_scale: float = 1.0
+    # Mid-episode tool-mass step: the native plant change for E3. None disables
+    # it. The tool body becomes baseline * deployment_mass_step_scale from
+    # deployment_mass_step_time_s onwards.
+    deployment_mass_step_time_s: float | None = None
+    deployment_mass_step_scale: float = 1.0
     tracking_reference_step_m: float = 0.0
     tracking_reference_step_time_s: float = 0.0
     tracking_path_family_schedule: tuple = ()

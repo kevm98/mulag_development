@@ -77,6 +77,14 @@ LEAD_ARGS=()
 [ -n "${PLANT_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--plant_step_time_s "$PLANT_STEP_TIME_S")
 [ -n "${PLANT_STEP_ALPHA_SCALE:-}" ] && LEAD_ARGS+=(--plant_step_alpha_scale "$PLANT_STEP_ALPHA_SCALE")
 [ -n "${PLANT_STEP_DELAY_STEPS:-}" ] && LEAD_ARGS+=(--plant_step_delay_steps "$PLANT_STEP_DELAY_STEPS")
+# Actuator-authority degradation. The ONE stress axis that reaches every stack:
+# the deployment factors are inert on the ID/FD plant and clamped on the ROM.
+[ -n "${AUTHORITY_ALPHA:-}" ] && LEAD_ARGS+=(--actuator_authority_alpha "$AUTHORITY_ALPHA")
+[ -n "${AUTHORITY_ALPHA_AFTER:-}" ] && LEAD_ARGS+=(--actuator_authority_alpha_after "$AUTHORITY_ALPHA_AFTER")
+[ -n "${AUTHORITY_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--actuator_authority_step_time_s "$AUTHORITY_STEP_TIME_S")
+# Native mid-episode plant change: mass reaches every stack unclamped.
+[ -n "${MASS_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--deployment_mass_step_time_s "$MASS_STEP_TIME_S")
+[ -n "${MASS_STEP_SCALE:-}" ] && LEAD_ARGS+=(--deployment_mass_step_scale "$MASS_STEP_SCALE")
 [ -n "${ROM_FACTOR_PERTURBATION:-}" ] && LEAD_ARGS+=(--rom_factor_perturbation "$ROM_FACTOR_PERTURBATION")
 [ -n "${ROM_FACTOR_STEP:-}" ] && LEAD_ARGS+=(--rom_factor_step "$ROM_FACTOR_STEP")
 # Commanded-line step: changes the REFERENCE rather than the plant, so the

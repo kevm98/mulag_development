@@ -218,6 +218,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             device=self.device,
         )
         self._deployment_factor_values[:, 4] = 1.0
+        # Mid-episode tool-mass step (E3 native perturbation). Off unless
+        # deployment_mass_step_time_s is set.
+        self._mass_step_elapsed_s = torch.zeros(self.num_envs, device=self.device)
+        self._mass_step_applied = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._mass_step_scale_now = torch.ones(self.num_envs, device=self.device)
         self._deployment_factor_manifest = str(
             getattr(self.cfg, "deployment_factor_manifest", DEFAULT_DEPLOYMENT_FACTOR_MANIFEST)
         )
@@ -297,8 +304,53 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ).detach().clone()
 
     @torch.no_grad()
+    def _apply_mid_episode_mass_step(self) -> None:
+        """Step the tool mass part-way through the episode.
+
+        The one plant property that reaches every stack unclamped is the
+        mechanical one: mass and centre of mass go to PhysX directly, while the
+        hydraulic factors are inert on the ID/FD plant and clamped on the ROM
+        (see AAM_module/tools/audit_factor_clamping.py). This is therefore the
+        NATIVE mid-episode plant change -- no emulator, no proxy, a property
+        that genuinely exists in the deployed simulation.
+
+        The step sets the tool body to ``baseline * deployment_mass_step_scale``
+        from ``deployment_mass_step_time_s`` onwards, overriding any latched
+        mass factor from that instant; E3 runs it on the nominal factor row so
+        the two cannot conflict. A sham arm sets the scale to the pre-step value,
+        which fires the schedule and leaves the plant alone.
+        """
+        step_time = getattr(self.cfg, "deployment_mass_step_time_s", None)
+        if step_time is None:
+            return
+        scale = float(getattr(self.cfg, "deployment_mass_step_scale", 1.0))
+        dt = max(
+            float(getattr(self, "step_dt",
+                          float(self.cfg.sim.dt) * float(self.cfg.decimation))),
+            1.0e-6,
+        )
+        due = (self._mass_step_elapsed_s >= float(step_time)) & (~self._mass_step_applied)
+        self._mass_step_elapsed_s = self._mass_step_elapsed_s + dt
+        if not bool(due.any()):
+            return
+        env_ids = torch.nonzero(due, as_tuple=False).flatten()
+        body = int(self._deployment_factor_body_id)
+        masses = self._deployment_factor_baseline_masses.clone()
+        mass_ids = env_ids.to(masses.device)
+        masses[mass_ids, body] = (
+            self._deployment_factor_baseline_masses[mass_ids, body] * scale
+        )
+        self.robot.root_physx_view.set_masses(masses, env_ids.detach().cpu())
+        self._mass_step_applied[due] = True
+        self._mass_step_scale_now[due] = scale
+
+    @torch.no_grad()
     def _latch_deployment_factors(self, env_ids: torch.Tensor) -> None:
         """Latch one audited factor row per reset environment."""
+        # The mass-step clock is per episode, so it resets with the factors.
+        self._mass_step_elapsed_s[env_ids] = 0.0
+        self._mass_step_applied[env_ids] = False
+        self._mass_step_scale_now[env_ids] = 1.0
         if not bool(getattr(self.cfg, "deployment_factor_enabled", False)):
             self._deployment_factor_values[env_ids] = 0.0
             self._deployment_factor_values[env_ids, 4] = 1.0
@@ -3567,6 +3619,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # dead for every task in this chain -- the trace silently recorded
         # nothing while the run reported success. _get_dones is not overridden
         # below this class and runs exactly once per step.
+        self._apply_mid_episode_mass_step()
         self._record_adaptation_trace()
         return terminated, truncated
 
@@ -4697,6 +4750,17 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if arm_ids is not None:
             row["chain_joint_pos"] = self.robot.data.joint_pos[:, arm_ids]
             row["chain_joint_vel"] = self.robot.data.joint_vel[:, arm_ids]
+
+        # Realised actuator motion before and after the authority factor. The
+        # Stage 0 positive control checks |applied| / |raw| numerically rather
+        # than inferring from the cutter path that the perturbation was applied.
+        row["theta_mass_scale"] = self._mass_step_scale_now
+
+        authority_raw = getattr(self, "_actuator_delta_raw", None)
+        authority_applied = getattr(self, "_actuator_delta_applied", None)
+        if authority_raw is not None and authority_applied is not None:
+            row["actuator_delta_raw"] = authority_raw
+            row["actuator_delta_applied"] = authority_applied
 
         perturbation = getattr(self, "_plant_perturbation", None)
         if perturbation is not None:
