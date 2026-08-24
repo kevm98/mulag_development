@@ -19,7 +19,7 @@ from robustness_env import RobustnessEnv, MAX_DELAY_STEPS, DT_S
 from stress import Stress
 import protocol as P
 
-OUT = Path("/tmp/rrlab_scratch/results")
+OUT = Path(__file__).resolve().parent / "results"
 OUT.mkdir(parents=True, exist_ok=True)
 
 actor = load_frozen_actor()

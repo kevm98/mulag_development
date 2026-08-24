@@ -22,6 +22,17 @@ N_EPISODES = 64              # matched episodes, identical at every stress level
 EPISODE_SEED = 20260825      # frozen
 SUPPORT_Z = 3.0              # frozen PPO training-support gate on extensions
 
+# A tracking task the plant can satisfy without moving is not a tracking task.
+# The first episode set drew from the static bulk of the dataset: its median
+# cylinder excursion over the whole 2.4 s horizon was 0.03 mm, so a do-nothing
+# null controller beat the frozen PPO and every stress ratio measured surrogate
+# drift instead of control.  Both screens below use ONLY recorded data and the
+# frozen normalizer, so they remain independent of stress level and of any
+# measured closed-loop performance.
+MIN_MOTION_M = 0.005         # >= 5 mm recorded peak excursion inside the window
+MAX_DRIFT_FRACTION = 0.25    # open-loop replay error at the horizon must stay
+                             # below this fraction of the recorded excursion
+
 # ---------------------------------------------------------------------------
 # Pre-declared degradation / breakdown criteria (section 11 and 12)
 # ---------------------------------------------------------------------------
@@ -32,8 +43,10 @@ BREAKDOWN_SATURATION = 0.90  # or >= 90% of steps with a saturated action
 ROBUST_RATIO = 1.1           # below this the plant change is not meaningful
 
 
-def frozen_episode_set(actor_obs_mean: torch.Tensor, actor_obs_std: torch.Tensor) -> list[Episode]:
-    """Sample matched episodes whose whole horizon lies in the PPO's support.
+def frozen_episode_set(actor_obs_mean: torch.Tensor, actor_obs_std: torch.Tensor,
+                       *, min_motion_m: float = MIN_MOTION_M,
+                       n_episodes: int = N_EPISODES) -> list[Episode]:
+    """Sample matched episodes that lie in the PPO's support AND actually move.
 
     Selection uses ONLY the frozen policy's observation-normalizer statistics
     and the frozen dataset.  It is independent of any stress level and of any
@@ -56,10 +69,14 @@ def frozen_episode_set(actor_obs_mean: torch.Tensor, actor_obs_std: torch.Tensor
         inside = (np.abs((x - mu) / sd).max(1) <= SUPPORT_Z)
         first = HISTORY_LAG - 1
         for start in range(first, n - HORIZON - 1):
-            if inside[start:start + HORIZON + 1].all():
-                candidates.append(Episode(run_id=rid, start=start))
-    if len(candidates) < N_EPISODES:
-        raise RuntimeError(f"only {len(candidates)} in-support windows; need {N_EPISODES}")
+            if not inside[start:start + HORIZON + 1].all():
+                continue
+            window = x[start:start + HORIZON + 1]
+            if float(np.abs(window - window[0]).max()) < min_motion_m:
+                continue
+            candidates.append(Episode(run_id=rid, start=start))
+    if len(candidates) < n_episodes:
+        raise RuntimeError(f"only {len(candidates)} in-support moving windows; need {n_episodes}")
 
     # Spread the draw across runs so no single trajectory dominates.
     rng = np.random.default_rng(EPISODE_SEED)
@@ -70,11 +87,11 @@ def frozen_episode_set(actor_obs_mean: torch.Tensor, actor_obs_std: torch.Tensor
     rng.shuffle(runs)
     chosen: list[Episode] = []
     cursor = 0
-    while len(chosen) < N_EPISODES:
+    while len(chosen) < n_episodes:
         pool = by_run[runs[cursor % len(runs)]]
         chosen.append(pool[int(rng.integers(0, len(pool)))])
         cursor += 1
-    return chosen[:N_EPISODES]
+    return chosen[:n_episodes]
 
 
 @dataclass(frozen=True)
