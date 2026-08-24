@@ -126,9 +126,11 @@ as the primary questions, and treats online adaptation as the last of them
 rather than the first. The research statement of the thesis is as follows:
 
 \paragraph{Comparison notation.}
-For readability, the three policy--actuator stacks are denoted by short labels
-throughout this thesis: \emph{R} is PPO--ROM, \emph{IF} is PPO--ID--FD, and
-\emph{AIF} is PPO--(AAM)--ID--FD. R uses the command-conditioned reduced-order
+For readability, the three policy--actuator stacks carry both a short label and
+a full name, and the two are used interchangeably throughout this thesis:
+\emph{R} is \ppoROM, \emph{IF} is \ppoIDFD, and \emph{AIF} is \ppoAAMIDFD.
+The short labels are preferred where several stacks appear in one sentence and
+the full names where the actuator path itself is the subject. R uses the command-conditioned reduced-order
 model; IF uses the frozen inverse/forward pair; and AIF augments IF with online
 adaptation. The labels name the complete stacks, not just their actuator
 models.
@@ -157,8 +159,8 @@ remains for adaptation once the first four are settled. The six questions are:
   \item How does the choice of actuator representation affect tracking, command
     behaviour, latency and robustness under plant variation?
   \item Where plant variation survives that robustness, is it identifiable from
-    recent observations, and does conditioning the controller on it improve
-    closed-loop performance?
+    recent observations, and does online adaptation by latent identification
+    improve closed-loop performance?
 \end{enumerate}
 
 The first is answered in Chapters~\ref{chap:data} and~\ref{chap:models}, the
@@ -214,15 +216,18 @@ controller. Both representations support closed-loop terrain following in this
 configuration, although two learned models placed in series could have
 compounded their errors.
 
-\textbf{Robustness and the Limits of Adaptation:} A matched evaluation protocol
-that scores the resulting stacks on tracking, control effort, latency,
+\textbf{A Decision Procedure for Online Adaptation:} A matched evaluation
+protocol that scores the resulting stacks on tracking, control effort, latency,
 disturbance rejection and sensitivity to the magnitude of plant variation,
 together with a procedure that decides in advance whether online plant
 conditioning will repay the effort. The first of its two measurements
 establishes whether plant identity is present in the data the machine produces.
 The second supplies the true plant parameters through a privileged encoder and
 measures what the closed loop does with them. Both precede estimator training,
-and either can end the effort before it is incurred.
+and either can end the effort before it is incurred. This converts an
+open-ended engineering effort into a measurement, and it is the contribution of
+this thesis most likely to transfer to other machines and other
+latent-conditioned designs.
 
 The components on which these contributions rest, namely the causal plant
 estimator, the bounded adaptation path and the eight-gate evaluation harness,
@@ -303,7 +308,9 @@ variation.
 \textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
 the work establishes and what it does not, states the design implications that
 follow from the measured results, records the limitations of the evidence, and
-identifies the measurements that should be taken next.
+sets out the future work, which centres on transferring the learned actuator
+models and the distilled policy to the physical machine and fine-tuning them on
+data collected from it.
 
 \textbf{Appendix~\ref{app:system-parameters}} provides the system parameters and
 the coordinate mappings between task space, joint space and cylinder space

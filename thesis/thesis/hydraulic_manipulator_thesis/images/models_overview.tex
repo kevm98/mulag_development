@@ -1,0 +1,97 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage[paperwidth=18cm,paperheight=10.2cm,margin=0cm,noheadfoot]{geometry}
+\usetikzlibrary{arrows.meta}
+\setlength{\parindent}{0pt}
+\pagestyle{empty}
+
+\definecolor{diagramnavy}{HTML}{244A68}
+\definecolor{diagramink}{HTML}{29323A}
+\definecolor{diagrammuted}{HTML}{66717A}
+\definecolor{diagramlight}{HTML}{F3F5F6}
+\definecolor{diagramline}{HTML}{9EABB5}
+
+\begin{document}\noindent
+\begin{tikzpicture}[
+  remember picture,
+  overlay,
+  x=1cm,
+  y=1cm,
+  font=\sffamily,
+  signal/.style={draw=diagramink, line width=1.15pt,
+                 -{Latex[length=2.7mm,width=1.8mm]}},
+  wire/.style={draw=diagramink, line width=1.15pt},
+  block/.style={draw=diagramink, fill=white, line width=1.05pt,
+                rounded corners=1.5pt, align=center,
+                minimum height=1.45cm, inner sep=5pt},
+  model/.style={block, fill=diagramlight},
+  group/.style={draw=diagramline, fill=white, line width=1.05pt,
+                rounded corners=2.5pt}
+]
+\begin{scope}[shift={(current page.south west)}]
+  \node[anchor=west, font=\bfseries\fontsize{16}{19}\selectfont,
+        text=diagramink] at (0.20,9.62)
+        {Common actuator-model interface};
+
+  % One shared signal contract keeps the comparison visually simple.
+  \node[block, text width=2.45cm, minimum width=2.85cm,
+        minimum height=2.35cm] (inputs) at (1.72,5.48)
+        {\bfseries\fontsize{13.5}{16}\selectfont Shared inputs\\[4pt]
+         \color{diagrammuted}\fontsize{11.8}{14}\selectfont
+         command $\boldsymbol{c}_k$\\[2pt]
+         state $\boldsymbol{s}_k$};
+  \coordinate (inputbranch) at (3.45,5.48);
+  \draw[wire] (inputs.east) -- (inputbranch);
+  \fill[diagramink] (inputbranch) circle (2.2pt);
+
+  % IF lane.
+  \draw[group] (4.05,6.05) rectangle (11.72,9.02);
+  \node[anchor=west, text=diagramnavy,
+        font=\bfseries\fontsize{13.2}{16}\selectfont] at (4.38,8.63)
+        {IF path: ID + FD};
+  \node[model, minimum width=2.35cm] (inverse) at (5.55,7.35)
+        {\bfseries\fontsize{14}{17}\selectfont Inverse\\model\\[-1pt]
+         \color{diagrammuted}\fontsize{10.8}{13}\selectfont ID};
+  \node[model, minimum width=2.35cm] (forward) at (10.02,7.35)
+        {\bfseries\fontsize{14}{17}\selectfont Forward\\model\\[-1pt]
+         \color{diagrammuted}\fontsize{10.8}{13}\selectfont FD};
+  \draw[signal] (inverse.east) -- node[above, yshift=1pt,
+        font=\fontsize{11.5}{14}\selectfont] {valve $\boldsymbol{u}_k$}
+        (forward.west);
+
+  % R lane.
+  \draw[group] (4.05,1.92) rectangle (11.72,4.89);
+  \node[anchor=west, text=diagramnavy,
+        font=\bfseries\fontsize{13.2}{16}\selectfont] at (4.38,4.50)
+        {R path: command ROM};
+  \node[model, minimum width=5.15cm, minimum height=1.55cm] (rom)
+        at (7.89,3.20)
+        {\bfseries\fontsize{14}{17}\selectfont Reduced-order model\\[-1pt]
+         \color{diagrammuted}\fontsize{11.3}{14}\selectfont
+         internal valve and hydraulic update};
+
+  % Shared inputs branch cleanly into the two alternatives.
+  \draw[signal] (inputbranch) |- (inverse.west);
+  \draw[signal] (inputbranch) |- (rom.west);
+
+  % The alternatives merge into one deployment interface.
+  \coordinate (merge) at (12.22,5.48);
+  \draw[wire] (forward.east) -| (merge);
+  \draw[wire] (rom.east) -| (merge);
+  \fill[diagramink] (merge) circle (2.2pt);
+
+  \node[block, minimum width=2.15cm, minimum height=1.65cm] (bounded)
+        at (13.65,5.48)
+        {\bfseries\fontsize{13.5}{16}\selectfont Bounded\\target\\[-1pt]
+         \color{diagrammuted}\fontsize{10.6}{13}\selectfont stroke limits};
+  \node[block, minimum width=1.90cm, minimum height=1.65cm] (plant)
+        at (16.40,5.48)
+        {\bfseries\fontsize{14}{17}\selectfont PhysX\\[-1pt]
+         \color{diagrammuted}\fontsize{11}{13}\selectfont cylinders};
+  \draw[signal] (merge) -- (bounded.west);
+  \draw[signal] (bounded.east) -- (plant.west);
+
+\end{scope}
+\end{tikzpicture}
+\end{document}

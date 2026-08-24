@@ -924,10 +924,22 @@ Task, terrain families, meshes, observation contract, action chain, reward,
 gates and the PPO update are inherited unchanged, so the actuator
 representation is the only free variable between the two stacks.
 
-The stack matters to the argument twice over. It is the non-adaptive learned
+The stack matters to the argument twice over. It is the robust learned
 baseline against which \ppoAAMIDFD{} must be measured, since the two differ only
 by the AAM and the adapter, and it is the honest control for \ppoROM, whose
 actuator coincides with the deployment plant.
+
+\emph{Robust} is used here in the sense of
+Section~\ref{sec:fund:domain-randomization}: the stack was trained across the
+randomised plant family and applies one fixed response to whichever member of
+that family it meets, performing no online estimation of plant characteristics
+and conditioning on no plant identity. It does not mean the policy is blind to
+plant variation. The twelve model-error channels of
+Section~\ref{sec:ctrl:ppo} carry the actuator's standing residual, and that
+residual is itself plant-dependent: under a given plant the actuator misses its
+commanded increment by a characteristic amount, and the policy acts on that
+miss. What the stack lacks is not information about the consequences of plant
+variation but any representation of \emph{which} plant produced them.
 
 Two properties of the composed path shape its behaviour, and both were
 established offline. The valve command is accumulated rather than issued
@@ -1106,14 +1118,16 @@ ablation rather than by assumption: the zeroed, shuffled, frozen and mean-latent
 arms of Section~\ref{sec:models:adapter} all keep the architecture fixed and
 change only what occupies those channels.
 
-\paragraph{The Training Runs Are Not Matched}
-The rule above governs the design; the runs that produced the three deployed
-checkpoints do not satisfy it, and the deviation is recorded in
-Section~\ref{sec:eval:hypotheses} from the run manifests rather than inferred.
-\ppoROM{} and \ppoIDFD{} agree on every recorded training field, but the adaptive
-run differs in three: seed ($41$ against $17$), actor learning rate
-($3\times10^{-6}$ against $3\times10^{-4}$) and frozen-actor warm-up ($0$ against
-$150$ iterations). The truck-speed schedule of the two reference runs is not
+\paragraph{Only Two of the Three Runs Are Matched}
+The rule above is satisfied by \ppoROM{} and \ppoIDFD, which agree on every
+recorded training field and differ only in the actuator path, so that pair is a
+controlled single-variable comparison and carries the representation claim. It
+is not satisfied by the adaptive run, which differs in three recorded respects:
+seed ($41$ against $17$), actor learning rate ($3\times10^{-6}$ against
+$3\times10^{-4}$) and frozen-actor warm-up ($0$ against $150$ iterations). That
+stack is therefore reported as a third condition rather than a ranked
+competitor, and the deviation is recorded in
+Section~\ref{sec:eval:hypotheses} from the run manifests rather than inferred. The truck-speed schedule of the two reference runs is not
 recorded at all. Only one PPO training run exists per stack, so training variance
 is not estimated and the $33$ evaluation cells measure scenario variation rather
 than optimiser variability. The across-stack result is therefore conditional on

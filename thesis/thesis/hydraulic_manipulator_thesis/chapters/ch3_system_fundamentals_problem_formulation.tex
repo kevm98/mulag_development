@@ -501,9 +501,10 @@ falls from about $\unit[0.85]{s}$ to $\unit[0.65]{s}$, the system delay index
 from $\unit[0.45]{s}$ to $\unit[0.35]{s}$, and task-space tracking error by
 about 11\,\%. The improvement saturates beyond $\unit[1.5]{GPa}$.
 
-The model represents one machine, omits thermal dynamics, and treats the logged
-rod-force channel as unreliable after the piston-area consistency audit
-(Section~\ref{sec:models:rom}). Chapter~\ref{chap:data} introduces variation
+The model represents one machine and omits thermal dynamics. The logged
+rod-force channel is not carried into the learned actuator models: force is
+generated internally by the PhysX plant at deployment, and the logged channel
+also fails the piston-area consistency audit (Section~\ref{sec:models:rom}). Chapter~\ref{chap:data} introduces variation
 through parameter randomization.
 
 \section{IsaacLab Environment}
@@ -692,15 +693,26 @@ the scored part of each episode and are kept in physical units where possible.
 This makes a failed gate traceable to a specific limitation rather than to a
 single combined reward value.
 
-\subsection{Eight-Gate Acceptance Contract}
+\subsection{The Eight-Gate Promotion Criterion}
 \label{sec:sys:gates}
 
-Table~\ref{tab:sys:gates} defines the system-level acceptance contract.
+Table~\ref{tab:sys:gates} defines the eight physical gates used throughout this
+thesis. Their role is to supply a criterion that is \emph{not} the reward. A
+policy is optimised against the scalar return of
+Section~\ref{sec:ctrl:optimization}, but it is selected and promoted against
+this vector of physical quantities, and Section~\ref{sec:ctrl:finding} shows
+that the two point in measurably different directions. The gates are therefore
+an instrument for checkpoint selection and for the block-ratchet promotion of
+Section~\ref{sec:ctrl:anchored}, and that is how every result in this thesis
+uses them. They are used to rank and to promote candidates, not to certify a
+stack as accepted, and no claim of certified acceptance is made anywhere in
+this work.
 
 All controller stacks are evaluated with the same path, terrain, and
-randomization conditions. A stack passes only when it satisfies every gate;
-strong mean tracking cannot compensate for loss of contact, inadequate
-cylinder headroom, excessive impacts, or safety terminations. Worst-case
+randomization conditions. A candidate is preferred when it satisfies more of
+the gates at a wider margin; strong mean tracking does not compensate for loss
+of contact, inadequate cylinder headroom, excessive impacts, or safety
+terminations. Worst-case
 aggregation prevents easy terrain or path cases from masking a local failure.
 Mean absolute errors quantify sustained tracking performance, while the lower
 and upper percentiles capture short alignment, clearance, or acceleration

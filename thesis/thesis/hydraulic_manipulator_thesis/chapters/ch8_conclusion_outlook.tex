@@ -1,9 +1,9 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 8 — Conclusion and Outlook
+%% Chapter 8 — Conclusion and Future Work
 %% Summarize what was established, answer the research questions,
 %% identify next steps. No new experimental evidence.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\chapter{Conclusion and Outlook}
+\chapter{Conclusion and Future Work}
 \label{chap:conclusion}
 
 This thesis asked how hydraulic actuator dynamics learned from high-fidelity
@@ -14,7 +14,7 @@ models already provide. The six research questions of
 Section~\ref{sec:intro:contributions} are answered in the order they were
 asked, which is also the order in which the answers depend on one another.
 
-\section{What Was Established}
+\section{Summary of Findings}
 
 The findings are stated below in the order of the research questions. The first
 four concern how hydraulic actuation is learned, transferred and controlled. The
@@ -55,9 +55,22 @@ inverse--forward chain composes two separately learned models in series, which
 could have compounded their errors and did not. The two representations differ
 in the control strategy they induce from the same policy interface. \ppoROM{}
 spends the least command and reverses about $40$ times per second, against
-$10.68$ for \ppoIDFD, which converts greater actuator effort into lower lateral
+$10.6$ for \ppoIDFD, which converts greater actuator effort into lower lateral
 error. The choice of representation therefore affects the resulting controller
 and is not an implementation detail.
+
+The standing of that comparison is stated here because it governs how the three
+stacks are read throughout. \ppoROM{} and \ppoIDFD{} agree on every recorded
+training field and differ only in the actuator path, so the contrast between
+them is controlled and the difference above \emph{is} attributable to the
+representation. \ppoAAMIDFD{} is a separately trained run at a different seed,
+a lower actor learning rate and no frozen-actor warm-up
+(Section~\ref{sec:ctrl:constraints}); it is reported as a deployed controller
+demonstrating the adaptive stack end to end, not as a ranked competitor, and no
+claim here rests on its position relative to the other two. Only one training
+run exists per stack, so seed variance is not estimated even for the matched
+pair. Claims about the adaptation path are carried by within-checkpoint
+ablations in which one input is substituted and everything else is held fixed.
 
 \textbf{A learned policy can replace the classical controller at runtime
 (RQ4).} The damped-least-squares controller supplies privileged demonstrations
@@ -72,7 +85,19 @@ failure is therefore one of objective mismatch rather than of optimisation, and
 it is the reason the deployed policies are anchored to the demonstrated
 behaviour.
 
-\textbf{The non-adaptive closed loop already absorbs the plant variation this
+\textbf{The robust stacks generalise across simulator, plant, terrain and
+trajectory without online adaptation (RQ2, RQ5).} Every closed-loop result is
+measured on held-out meshes, on eleven trajectory families scored individually,
+and on plants drawn from sixteen reserved factor configurations whose keys are
+disjoint from training and validation by construction, so a scored run is an
+unseen plant rather than an unseen episode. Under those conditions \ppoIDFD{}
+holds the lateral criterion in $32$ of $33$ cells at a median of
+$\unit[0.0281]{m}$, and the frozen inverse model beneath it, identified on
+Simscape alone, scores flat to a factor of $1.09$ across $64$ IsaacLab runs
+outside its training distribution. This is the broadest claim the work
+supports, and it requires no plant estimation of any kind.
+
+\textbf{The robust closed loop already absorbs the plant variation this
 work can generate (RQ5).} Doubling every deployment-factor deviation moves no
 stack's median, and a $40\,\%$ reduction in valve effectiveness does not move
 the task either. The sweep was built to locate a breakdown point and finds none
@@ -113,58 +138,157 @@ possible.
 identity it encodes.} Substituting a per-episode constant for the estimate costs
 $13.6\%$; substituting a constant that is wrong about the plant costs $0.43\%$,
 a factor of about thirty-two between the two (H2,
-Section~\ref{sec:eval:latent-anatomy}). The estimate carries little plant
+Section~\ref{sec:eval:latent-content}). The estimate carries little plant
 identity that the consumer uses, and what it does carry is temporal. Whether the
 same holds for other architectures that infer a plant code is untested here, but
 it is a cheap thing to check and it is not what such architectures are usually
 designed around.
 
-\textbf{No closed-loop benefit of plant knowledge was resolved.} A privileged
+\textbf{The estimator recovers what the privileged latent carries, and
+re-identifies when the plant changes (RQ6).} Supplied to the frozen dynamics
+model, the causal estimate is indistinguishable from a latent read off the true
+factors, ahead in $18$ of $36$ held-out runs, while both are clearly ahead of an
+uninformative latent, $33$ of $36$, and of a wrong one, $29$ of $36$, with
+paired intervals excluding zero on extension and velocity as well as pressure
+(Section~\ref{sec:eval:predictive-utility}). On a constructed plant switch the
+estimate moves to the new plant in all eight pairs tested, crossing in
+$\unit[0.18]{s}$ and settling in $\unit[0.70]{s}$, both inside its own
+one-second window. The estimator is therefore not the limiting component. One
+expectation it does not meet is that the benefit should grow with the size of
+the plant deviation: it does not, with a correlation of $-0.143$ and a ratio of
+$0.73$ between severe and mild plants, so the gain is uniform across the family
+rather than concentrated where the plant is hardest.
+
+\textbf{The closed-loop benefit of plant knowledge is bounded by what perfect
+plant knowledge achieves.} A privileged
 latent read from the true factors, which is the most an estimator could supply
 \emph{through this encoder, adapter and policy}, improves lateral error by
 $3.4\%$ and cut-height error by $4.5\%$, ahead in $18$ and $19$ of $33$ cells
 (H4, Section~\ref{sec:eval:oracle}), which is indistinguishable from chance.
-H3 failed
-on its own criterion: every paired interval on the three tracking metrics spans
-zero, so the sign of the deployed estimator's effect is unresolved. That is not
-equivalence, and it is stated as a failure to resolve rather than as a bound:
-only ground contact is constrained usefully, to within about $2.4$ percentage
-points, while the tracking intervals are as wide as the baseline means
-themselves. Two contrasts do exclude zero, and both go against the adaptive
+The deployed estimator's effect is
+smaller than the protocol resolves: every paired interval on the three tracking
+metrics spans zero. What the measurement returns is the size of the effect
+rather than its sign, and the bound it supplies is uneven. Ground contact is
+constrained usefully, to within about $2.4$ percentage points; the tracking
+intervals are as wide as the baseline means themselves and bound the effect
+only loosely. Neither is an equivalence claim, and the tracking interval width
+is the sample-size specification a later equivalence test would start from. Two contrasts do exclude zero, and both go against the adaptive
 stack: hard impacts and $p_{95}$ tool acceleration are worse by $33\%$ and
 $32\%$. Both aggregate per mesh, so they rest on three units and indicate a sign
 rather than a bound.
 
-\section{What This Means for Design}
+\section{Design Implications}
 
-The four results combine into one design statement, and it is the second
-contribution of the thesis.
+The results carry design consequences for each of the three parts of this work:
+how a hydraulic actuator is identified and transferred, how a policy is trained
+to act through it, and how plant adaptation is fitted around both. They are
+stated below in that order, because that is the order in which they constrain a
+successor design. Several were established by a measured failure rather than by
+a successful result, and are stronger for it.
 
-\textbf{The evidence points at the latent's temporal variability, not at its
-accuracy, as the dominant limitation in this architecture.} A one-step predictor
-consumes the latent afresh at every tick and is rewarded for its movement. The
-deployed actor is a memoryless MLP, so it integrates nothing itself; the
-closed-loop trajectory is what accumulates the consequences of an action that
-changes as the latent moves under it. This reading reconciles the model-level
-gain with the closed-loop result, and it matches the ranking of the four latent
-conditions: the deployed estimate finishes behind both a constant carrying no
-plant information and a constant that is wrong about the plant, while varying
-within an episode by about nine times the spread between plants. Those arms differ in information and
-in variability at once, so a bandwidth sweep was run to separate them
-(Section~\ref{sec:eval:bandwidth}). Filtering the latent on the policy path
-alone, at fixed content, produces an optimum at $\tau = \unit[0.796]{s}$ on all
-three metrics, and slowing the latent from $\unit[0.032]{s}$ to that value
-improves cut-height tracking by $14.5\%$ on the median in $22$ of $33$ cells
-($p = 0.015$). Lateral error moves the same way and does not resolve.
+\subsection*{Identification and Transfer}
 
-The design suggested by that reading is to split the two paths: hold or filter
-the latent where a feedback policy consumes it, and leave it responsive where a
-one-step model consumes it. The sweep supports it on one metric and one
-checkpoint, which is the weakest form of support that is still evidence. Two
-things it does not establish should be carried with it. The temporal variance of
-the latent as the actor reads it does not order with $\tau$, so the proposed
-cause is not the measured one, and the optimum may belong to a policy trained on
-the unfiltered signal rather than to the architecture.
+\textbf{Design the excitation for identifiability, and accept the model on an
+ablation rather than on a score.} A task controller computes its command from
+the state, so the two are nearly redundant and the valve is not causally
+identifiable from the resulting data however varied the control effort looks:
+the closed-loop batch spends a quarter of its time saturated and half at
+mid-authority, and is still uninformative. A forward model trained on it reached
+one-step $R^2 \approx 0.999$ while ignoring the valve entirely, and no
+validation loss computed on that distribution could have revealed it. Zeroing the
+command did, and open-loop excitation repaired it, at which point removing the
+valve cost a factor of $1.81$. The implication is that a learned actuator
+intended for control needs a dedicated excitation campaign and an input-ablation
+acceptance test, and that predictive accuracy should never be the criterion on
+which such a model is promoted.
+
+\textbf{Embed the physics that is known and bound what is learned.} The
+reduced-order model propagates pressure, force, velocity and extension through
+explicit updates with trainable effective parameters, and confines the neural
+terms to valve realisation, configuration load and residuals bounded to
+$10\,\%$ of the pressure and velocity step limits and $\unit[1]{cm}$ on
+position. That bound is what makes the model safe to place inside a training
+loop: even a badly fitted residual cannot produce an unphysical state jump. The
+structure also earns its keep at identification time, since encoding the
+orifice and continuity relations makes the pressure dependence of valve
+authority architectural rather than something to be rediscovered. Pinning a
+single global valve gain instead was tried and rejected, because measured
+authority varies by a factor of $15$--$75$ across pressure quartiles and can
+change sign.
+
+\textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
+The inverse model transferred across the deployment plant family with a spread
+of only a factor of $1.09$ between the best and worst domain, and an ordering
+that does not follow plant severity, so it was deployed frozen everywhere
+downstream. Where a deployment offset did have to be absorbed, it was absorbed
+by a correction capped at $\unit[3]{mm}$ and gated to vanish at zero command,
+with every hydraulic parameter frozen and the original data retained as replay.
+That construction preserves the identified physics, keeps a commanded hold a
+hold, and confines the deployment-specific part of the model to a component
+whose authority is bounded by construction.
+
+\subsection*{Control Methodology}
+
+\textbf{When the acceptance criterion is not the reward, bound the ascent
+rather than repair the reward.} Unconstrained PPO from a distilled checkpoint
+raised total return while degrading the primary tracking objective by up to a
+factor of $12.9$, with critic explained variance healthy in the $0.85$--$0.95$
+band throughout. That is the optimizer working correctly on the wrong
+functional: the reward is a proxy, acceptance is a vector of physical gates, and
+the proxy's optimum lies outside the feasible set while the distilled policy
+lies inside it. The remedy adopted here constrains the update instead of
+rewriting the objective. A forward-KL anchor to a frozen reference penalises the
+\emph{abandonment} of reference behaviour, where the reverse direction would
+permit collapse onto a convenient subset of it; the exploration scale is held
+fixed so that entropy collapse cannot shrink the divergence while the commanded
+action drifts; and the anchor advances only through checkpoints that have passed
+the gates. The general form is that a competent teacher plus a proxy objective
+calls for a trust region referred to a verified policy, not for more reward
+engineering.
+
+\textbf{Price what is gated, and log every term by name.} A quantity that is
+gated but not priced is traded away by the optimizer: the only adaptive
+checkpoint to clear the ground-contact gate over the full path was the one whose
+reward priced cylinder headroom explicitly. The same lesson appears in the
+reward's own history, where an inherited formulation of $53$ weighted fields
+carried three terms working against the task for thirteen training campaigns,
+undetected because logging reported an aggregate and omitted the two largest
+lateral terms. Shaping must also retain a far-field gradient, since the Gaussian
+form previously used is effectively flat beyond about two scale lengths and was
+measured to be a factor of $520$ weaker at $\unit[0.5]{m}$ of error where the
+failing trajectory families live.
+
+\textbf{Where no baseline is inherited, the action contract is the safety
+argument.} The deployed policy is not a residual: a zero action leaves the arm
+stationary, and nothing is summed with the policy output at runtime. Authority
+is therefore bounded by the chain the action passes through rather than by
+proximity to a nominal controller, with a rate limit, a filter, a shield that
+fades authority as travel headroom is consumed, a command scale, and an
+anti-windup cap on how far the integrated target may lead the measured
+extension. That last cap is load-bearing and axis-dependent: relaxing it from
+$\unit[18]{mm}$ to $\unit[50]{mm}$ halved lateral error on the families needing a
+sustained standing offset, while the same relaxation on the head-pivot cylinder
+drove alignment from $0.9507$ to $0.4636$.
+
+\subsection*{Plant Adaptation}
+
+\textbf{Route a plant latent to the consumer whose objective rewards its
+responsiveness.} The value of the estimated latent lies in its variation over
+time rather than in the plant identity it carries, by a factor of about
+thirty-two, and the two consumers in this architecture want opposite things from
+that variation. A one-step predictor reads the latent afresh at each tick and
+gains $13.6\,\%$ from its movement; the deployed actor is a memoryless MLP that
+integrates nothing, so a latent moving under it changes the action from tick to
+tick and the closed-loop trajectory accumulates the consequence. Since one
+signal is routed to both, the design that follows is to split the paths: hold or
+filter the latent where a feedback policy consumes it and leave it responsive
+where a one-step model consumes it. Filtering on the policy path alone, at fixed
+content, improves cut-height tracking by $14.5\,\%$ on the median in $22$ of
+$33$ cells with an interior optimum at $\tau = \unit[0.796]{s}$. Two
+qualifications belong with that: the temporal variance of the latent as the
+actor reads it does not order with $\tau$, so the proposed cause is not the
+measured one, and the optimum may belong to a policy trained on the unfiltered
+signal rather than to the architecture.
 
 \textbf{Run the two pre-deployment measurements first.} The identifiability
 envelope establishes whether plant identity is present in the data the machine
@@ -174,9 +298,8 @@ training, and either can end the effort before it is incurred. On this task the
 second alone would have shown that no estimator feeding this conditioning
 architecture, however accurate, recovers a resolvable improvement, and it would
 have shown it before the estimator, the adapter and the conditioned policy were
-built. This is the thesis's
-principal contribution: a decision procedure that converts an open-ended
-engineering effort into a measurement.
+built. It converts an open-ended engineering effort into a measurement, and it
+is the design contribution this thesis most expects to transfer.
 
 \section{Contributions}
 
@@ -195,9 +318,9 @@ authority and the identifiability audit that established the excitation envelope
 including the mechanism behind the upper amplitude limit.
 
 The \textbf{reduced-order actuator model} is delivered and carries everything
-downstream, being accurate enough to serve as the deployment plant and roughly
-thirty times faster than the high-fidelity model it replaces in the training
-loop. The qualification stated throughout stands. It was calibrated against
+downstream, being accurate enough to serve as the deployment plant and cheap
+enough to evaluate inside GPU-parallel training, which the stiff implicit solver
+of the high-fidelity model it replaces cannot support. The qualification stated throughout stands. It was calibrated against
 IsaacLab and is therefore the reference condition rather than an independent
 competitor to the inverse and forward pair.
 
@@ -211,19 +334,19 @@ window covering $8.9$ of $26$\,m certifies a third of an episode, and that a
 quantity which is gated but not priced is traded away by the optimizer. The
 causal plant estimator and the bounded adaptation path behave as specified, with
 no privileged access, no future information, bounded output, and reversion to
-the non-adaptive actuator path on invalid input. They remain enablers of this
+the robust actuator path on invalid input. They remain enablers of this
 contribution rather than claims in their own right.
 
-One element is graded down. The \textbf{eight-gate acceptance contract} was
-intended as a system-level specification and does not yet function as one. Under
-the protocol of Chapter~\ref{chap:evaluation} no stack passes all eight gates,
-because all three fail the lateral gate on the hardest of eleven trajectory
-families, and the hard-impact gate is passed comfortably by a do-nothing policy
-(Section~\ref{sec:sys:gates}). Six of the eight discriminate, and the
-comparative claims of this work rest on those six. Repairing the other two is
-specification work rather than control work.
+The \textbf{eight-gate promotion criterion} is delivered as the non-reward
+criterion the training loop and the checkpoint selection both use, which is the
+role it was built for and the role every result here gives it. One property is
+recorded for reuse: five of the eight gates separate these three stacks and
+carry the comparative claims, while lateral, hard impacts and tool acceleration
+do not (Section~\ref{sec:sys:gates}). Re-deriving those three against the
+widened trajectory library is specification work rather than control work.
 
 \section{Limitations}
+\label{sec:conclusion:limitations}
 
 The evidence is simulation-to-simulation, and the deployment plant is itself a
 learned model. No claim here is a claim about hardware.
@@ -253,29 +376,32 @@ influences. That is close to the least favourable case for adaptation of this
 kind. The finding generalises through the mechanism rather than through the
 number.
 
-\section{Outlook}
+\section{Future Work}
 
-Four directions follow, ordered by how directly the evidence supports them.
+The evidence in this thesis is simulation-to-simulation, and the step that would
+extend it furthest is the one it does not take: placing the learned actuator
+models and the distilled policy on the machine they were built for.
 
-The split-path latent design is first. It is a contained architectural change,
-it follows from a measured mechanism, and it is testable with instruments
-already built: the four-way latent substitution isolates it, and the two
-consumers are already separate in the implementation. If the mechanism is
-correct, filtering the latent on the policy path should move the deployed
-estimate ahead of the uninformative constant while leaving the $13.6\%$
-model-level result intact.
+That step begins with instrumentation, because the FME~500 as delivered carries
+no cylinder-chamber pressure transducers, and the differential pressure the
+models propagate exists here only as an actuator-model state. Fitting pressure
+transducers, extension sensing and a rod load pin converts three modelled
+quantities into measured ones. The collection instrument is already designed and
+validated: the open-loop excitation schedule of Chapter~\ref{chap:data} was built
+to make the valve causally identifiable, and the identifiability audit of
+Section~\ref{sec:eval:excitation} applies to machine data unchanged.
 
-The second is to move the task rather than the plant. Every perturbation applied
-here left the controller inside its envelope, so the disturbance results bound
-the interior and not the edge. A perturbation the commanded line cannot absorb
-would locate the boundary at which adaptation begins to pay, and that boundary
-determines whether the architecture is worth carrying on a machine.
-
-The third is pressure instrumentation, without which the one channel carrying
-hydraulic information stays a model output. The stricter no-pressure contract
-can be quantified in simulation first, by retraining the estimator on that row.
-
-The fourth is the acceptance contract. The lateral threshold needs re-deriving
-against the widened trajectory library, and the hard-impact gate needs replacing
-with a manufacturer damage specification. Until both are done, no comparison on
-this task can be certified, including a favourable one.
+Fine-tuning on that data is then a well-posed problem rather than an open-ended
+one. The inverse model transferred across the deployment plant family with a
+spread of only a factor of $1.09$, so the gap to a real machine is plausibly a
+bounded offset rather than a different function, and the mechanism for absorbing
+such an offset has already been validated once: a correction capped at
+$\unit[3]{mm}$ and gated to vanish at zero command, with every hydraulic
+parameter frozen and the original data retained as replay. The input-ablation
+test of Section~\ref{sec:models:fd-identifiability} decides whether that
+suffices, since a correction obliged to carry command authority is no longer a
+correction. For the policy, the reference-anchored construction of
+Section~\ref{sec:ctrl:anchored} transfers with its guarantee intact, and that
+guarantee is worth more on a machine than in simulation: it holds the policy
+within a bounded divergence of a checkpoint verified against physical acceptance
+and restores it atomically when an update violates that bound.

@@ -734,42 +734,69 @@ def control_architecture():
 
 
 def models_overview():
-    W, H = 1550, 860
-    b: list[str] = []
-    b += [text(45, 45, "Two learned actuator representations around one common plant contract",
-               27, INK, "bold", "start")]
-    cuboid(b, 55, 330, 250, 150, 18, VIOLET_L, "#D8CBEA", VIOLET,
-           "Desired motion", "same policy action")
+    """Standard block diagram for the two alternative actuator models."""
+    W, H = 1700, 820
+    NAVY = "#244A68"
+    DARK = "#30363C"
+    LIGHT = "#F2F4F5"
+    b: list[str] = [
+        text(40, 44, "Alternative learned actuator models with a shared plant interface",
+             29, INK, "bold", "start"),
 
-    b += [rect(365, 85, 690, 290, "white", BLUE, 2.5, 9),
-          text(400, 125, "PPO–ID–FD", 21, BLUE, "bold", "start")]
-    cuboid(b, 430, 185, 235, 115, 18, BLUE_L, "#C7DDF3", BLUE,
-           "Inverse dynamics", "motion → valve")
-    cuboid(b, 760, 185, 235, 115, 18, BLUE_L, "#C7DDF3", BLUE,
-           "Forward dynamics", "valve + state → increment")
-    b += [line(680, 242, 748, 242, LINE, 3, arrow=True)]
+        # Common reference input and branch.
+        rect(45, 315, 235, 110, "white", DARK, 2.7, 5),
+        text(162, 354, "Desired command", 24, INK, "bold"),
+        text(162, 393, "cₖ = [Δx*, Δẋ*]", 21, MUTED),
+        line(280, 370, 330, 370, DARK, 3.0),
+        circle(335, 370, 7, DARK, DARK, 1),
 
-    b += [rect(365, 465, 690, 270, "white", TEAL, 2.5, 9),
-          text(400, 505, "PPO–ROM", 21, TEAL, "bold", "start")]
-    # Stacked input and recurrent slabs make the model visibly three-dimensional.
-    for i, (lab, col, side) in enumerate([("history",VIOLET_L,"#D8CBEA"),
-                                          ("GRU",BLUE_L,"#C7DDF3"),
-                                          ("physics",TEAL_L,"#BFE8DF")]):
-        cuboid(b, 450+i*190, 565, 135, 100, 20, col, side,
-               [VIOLET,BLUE,TEAL][i], lab, ["6×24","2×128","bounded update"][i], 19, 14)
-        if i:
-            b += [line(405+i*190, 615, 438+i*190, 615, LINE, 2.5, arrow=True)]
+        # Upper alternative: inverse and forward dynamics in series.
+        rect(390, 105, 660, 245, "white", NAVY, 2.6, 6),
+        text(420, 143, "IF  -  inverse and forward dynamics", 23, NAVY,
+             "bold", "start"),
+        rect(440, 185, 240, 105, LIGHT, DARK, 2.4, 4),
+        text(560, 225, "Inverse model", 25, INK, "bold"),
+        text(560, 263, "command to valve", 19, MUTED),
+        line(680, 237, 758, 237, DARK, 3.0, arrow=True),
+        text(720, 218, "uₖ", 19, DARK, "bold"),
+        rect(770, 185, 230, 105, LIGHT, DARK, 2.4, 4),
+        text(885, 225, "Forward model", 25, INK, "bold"),
+        text(885, 263, "valve + state to motion", 19, MUTED),
 
-    b += [line(305, 372, 420, 242, LINE, 3, arrow=True),
-          line(305, 440, 438, 615, LINE, 3, arrow=True)]
-    image_panel(b, IMG / "unimog_mulag_iso.png", 1130, 190, 370, 360, TEAL,
-                "shared USD / PhysX plant")
-    cuboid(b, 1150, 610, 320, 100, 16, RED_L, "#F0C5C2", RED,
-           "Bounded position target", "identical plant interface")
-    b += [line(995, 242, 1120, 330, LINE, 3, arrow=True),
-          line(965, 615, 1138, 660, LINE, 3, arrow=True),
-          path("M 1310 550 L 1310 805 L 180 805 L 180 480", VIOLET, 2.2, "10 7", True),
-          text(760, 835, "measured state and pressure feedback", 18, VIOLET)]
+        # Lower alternative: one command-conditioned ROM.
+        rect(390, 425, 660, 205, "white", NAVY, 2.6, 6),
+        text(420, 463, "R  -  reduced-order model", 23, NAVY,
+             "bold", "start"),
+        rect(505, 505, 430, 82, LIGHT, DARK, 2.4, 4),
+        text(720, 538, "Command-conditioned ROM", 25, INK, "bold"),
+        text(720, 570, "internal valve and physical update", 18, MUTED),
+
+        # Reference branch to both alternatives.
+        path("M 335 370 L 335 237 L 428 237", DARK, 3.0, None, True),
+        path("M 335 370 L 335 546 L 493 546", DARK, 3.0, None, True),
+
+        # Merge the alternative outputs into the common deployment interface.
+        path("M 1000 237 L 1090 237 L 1090 370", DARK, 3.0),
+        path("M 935 546 L 1090 546 L 1090 370", DARK, 3.0),
+        circle(1090, 370, 7, DARK, DARK, 1),
+        line(1097, 370, 1160, 370, DARK, 3.0, arrow=True),
+        text(1125, 346, "Δx̂ₖ", 20, DARK, "bold"),
+        rect(1172, 315, 230, 110, "white", DARK, 2.7, 5),
+        text(1287, 354, "Bounded target", 24, INK, "bold"),
+        text(1287, 393, "stroke limits", 19, MUTED),
+        line(1402, 370, 1450, 370, DARK, 3.0, arrow=True),
+        rect(1462, 315, 195, 110, "white", DARK, 2.7, 5),
+        text(1559, 354, "PhysX plant", 24, INK, "bold"),
+        text(1559, 393, "cylinders", 19, MUTED),
+
+        # Shared measured state. The feedback bus stays below all model blocks.
+        path("M 1657 370 L 1680 370 L 1680 730 L 365 730 L 365 270",
+             DARK, 2.7),
+        text(1120, 763, "Measured state  sₖ = [x, ẋ, Δp, F]", 22, DARK,
+             "bold"),
+        line(365, 270, 428, 270, DARK, 2.7, arrow=True),
+        line(365, 565, 493, 565, DARK, 2.7, arrow=True),
+    ]
     save("models_overview", W, H, b)
 
 

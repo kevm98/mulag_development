@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import h5py
+try:
+    import h5py
+except ModuleNotFoundError:  # Optional when regenerating JSON-only figures.
+    h5py = None
 import matplotlib as mpl
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
@@ -126,6 +129,8 @@ def add_image(ax, path: Path, xy, zoom: float, zorder=3) -> None:
 
 def load_curriculum():
     """Load all scalar hydraulic descriptors, run 601, and a 120-run pool."""
+    if h5py is None:
+        raise RuntimeError("h5py is required to regenerate the Chapter 4 data figures")
     params = {k: np.empty(1000) for k in
               ("Cd_actual", "prv_Pset", "beta_eff", "eps_air", "eps_vol")}
     pool = [[] for _ in range(4)]
@@ -639,10 +644,11 @@ def figure_5_8_rom_validation() -> None:
     full = grouped_mean(rep["r2_by_output"])
     zero = grouped_mean(rep["zeroed_command_r2_by_output"])
     shuffled = grouped_mean(rep["shuffled_command_r2_by_output"])
-    fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(FULLW, 3.35),
-        gridspec_kw=dict(width_ratios=[1.12, 1.0], wspace=0.30,
-                         left=0.095, right=0.985, top=0.77, bottom=0.18))
+    fig = plt.figure(figsize=(FULLW, 5.75))
+    gs = fig.add_gridspec(
+        3, 1, height_ratios=[1.0, 0.13, 1.55], hspace=0.30,
+        left=0.105, right=0.985, top=0.94, bottom=0.105)
+    ax1 = fig.add_subplot(gs[0])
     x = np.arange(4)
     w = 0.24
     ax1.bar(x - w, full, w, color=BLUE, label="full command")
@@ -653,27 +659,50 @@ def figure_5_8_rom_validation() -> None:
     ax1.set_ylim(-0.70, 1.05)
     ax1.set_ylabel(r"one-step $R^2$ · mean over cylinders")
     ax1.grid(True, axis="y")
-    handles, labels = ax1.get_legend_handles_labels()
-    fig.legend(handles, labels, ncol=3, loc="upper left",
-               bbox_to_anchor=(0.09, 0.985), fontsize=8.0,
-               columnspacing=1.15, handlelength=1.5)
+    ax1.legend(ncol=3, loc="lower left", fontsize=8.2,
+               columnspacing=1.05, handlelength=1.35)
     panel_title(ax1, "Command ablation")
     panel_badge(ax1, "a", BLUE)
 
+    title_ax = fig.add_subplot(gs[1])
+    title_ax.axis("off")
+    title_ax.text(
+        -0.055, 0.50, "b", ha="center", va="center", color="white",
+        fontsize=9.2, fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.26", facecolor=TEAL,
+                  edgecolor="none"))
+    title_ax.text(0.0, 0.50, "Held-out rollout accuracy by cylinder",
+                  ha="left", va="center", color=INK, fontsize=10.5,
+                  fontweight="semibold")
+
     horizons = sorted(int(h) for h in rep["rollout_metrics"])
     time = np.asarray(horizons) * 0.05
+    sub = gs[2].subgridspec(2, 2, hspace=0.38, wspace=0.24)
+    rollout_axes = [fig.add_subplot(sub[r, c]) for r in range(2) for c in range(2)]
+    markers = ["o", "s", "^", "D"]
     for c in range(4):
         vals = [rep["rollout_metrics"][str(h)]["terminal_r2_by_output"][12 + c]
                 for h in horizons]
-        ax2.plot(time, vals, color=CYL[c], marker="o", ms=4.3,
-                 label=f"cylinder {c + 1}")
-    ax2.set_ylim(0, 1.05)
-    ax2.set_xlabel("recursive rollout horizon [s]")
-    ax2.set_ylabel(r"terminal extension $R^2$")
-    ax2.grid(True, axis="y")
-    ax2.legend(loc="lower right", fontsize=7.7)
-    panel_title(ax2, "Held-out rollout accuracy")
-    panel_badge(ax2, "b", TEAL)
+        ax = rollout_axes[c]
+        ax.plot(time, vals, color=CYL[c], marker=markers[c], ms=5.0,
+                lw=2.0, markeredgecolor="white", markeredgewidth=0.65)
+        ax.set_title(f"Cylinder {c + 1}", loc="left", color=CYL[c],
+                     fontsize=9.2, pad=3)
+        ax.set_xlim(time[0], time[-1])
+        ax.set_ylim(0.55, 1.01)
+        ax.set_xticks([time[0], time[2], time[3], time[4]])
+        ax.grid(True, axis="y")
+        ax.text(0.97, 0.10, f"$R^2={vals[-1]:.3f}$",
+                transform=ax.transAxes, ha="right", va="bottom",
+                fontsize=8.2, color=CYL[c], fontweight="semibold")
+        if c < 2:
+            ax.tick_params(labelbottom=False)
+        if c % 2 == 1:
+            ax.tick_params(labelleft=False)
+    fig.text(0.54, 0.030, "recursive rollout horizon [s]",
+             ha="center", va="center", fontsize=9.5)
+    fig.text(0.025, 0.285, r"terminal extension $R^2$",
+             ha="center", va="center", rotation=90, fontsize=9.5)
     save(fig, "ch5_rom_validation.pdf")
 
 
