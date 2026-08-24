@@ -172,8 +172,9 @@ def make_run_samples(
     # ``window_end_tick`` in the AAM dataset), not by the local ROM-row index.
     # Using ``k`` here silently paired almost every L20 sample with a missing
     # latent and, for legacy maps, could pair it with the wrong transition.
-    z = np.asarray([latent_by_tick.get(int(tick), np.full(2, np.nan)) for tick in ticks], dtype=np.float64)
-    if z.shape != (k.size, 2) or not np.isfinite(z).all():
+    latent_dim = int(np.asarray(next(iter(latent_by_tick.values()))).size) if latent_by_tick else 2
+    z = np.asarray([latent_by_tick.get(int(tick), np.full(latent_dim, np.nan)) for tick in ticks], dtype=np.float64)
+    if z.shape != (k.size, latent_dim) or not np.isfinite(z).all():
         missing = int(np.sum(~np.isfinite(z).all(axis=1)))
         raise ValueError(f"run {run_id}: latent map missing {missing} samples at L{lag}")
     # Match the deployment controller's causal rolling latent filter.  The
@@ -189,7 +190,7 @@ def make_run_samples(
         z = smoothed
     features = np.concatenate((x, v, dp, force, target_x - x, target_v - v, u_base, z), axis=1)
     target = np.concatenate((next_x - x, next_v - v), axis=1)
-    if features.shape[1] != 30 or target.shape[1] != 8:
+    if features.shape[1] != 28 + latent_dim or target.shape[1] != 8:
         raise AssertionError((features.shape, target.shape))
     return features, target, u_base
 
@@ -286,7 +287,7 @@ def train_one(
                                 torch.full_like(x_mean, 1.0e-3))
     x_std = torch.maximum(x_std, scale_floor)
     target_std = train_y.std(dim=0, keepdim=True).clamp_min(1.0e-5)
-    model = ResidualAdapter(30, hidden, depth).to(device)
+    model = ResidualAdapter(train_features.shape[1], hidden, depth).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1.0e-4)
     limits = fd.normalizers["x_mean"].new_tensor([0.95, 0.95, 0.8, 0.8]).to(device).reshape(1, 4)
     bound = torch.full((1, 4), residual_bound, dtype=torch.float32, device=device)
@@ -330,7 +331,7 @@ def train_one(
                 "format": "stage29_latent_conditioned_residual_adapter_v1",
                 "adapter_name": name,
                 "model_state": model.state_dict(),
-                "model_config": {"in_dim": 30, "hidden": hidden, "depth": depth, "out_dim": 4},
+                "model_config": {"in_dim": train_features.shape[1], "hidden": hidden, "depth": depth, "out_dim": 4},
                 "feature_mean": x_mean.detach().cpu(),
                 "feature_std": x_std.detach().cpu(),
                 "target_std": target_std.detach().cpu(),

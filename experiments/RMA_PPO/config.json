@@ -1,0 +1,64 @@
+{
+  "contract": {
+    "source_checkpoint": "logs/rsl_rl/ppo4_1_sole/speed_range_2_7_pathfix_v2_idfd/model_promoted_2_7kmh.pt",
+    "phase1_initialization": "experiments/RMA_PPO/phase1_privileged_init.pt",
+    "base_observation_dim": 66,
+    "privileged_observation_dim": 70,
+    "action_dim": 4,
+    "context_names": [
+      "actuator_authority_alpha",
+      "hydraulic_response_time_tau",
+      "actuator_delay_steps",
+      "mass_scale"
+    ],
+    "context_is_normalized": true,
+    "controller": "PPO",
+    "adaptation_outputs_context_only": true
+  },
+  "phase1": {
+    "enabled": false,
+    "mode": "PRIVILEGED",
+    "stages": ["nominal", "authority", "lag", "delay", "mass", "combined"],
+    "authority_alpha": [0.25, 1.0],
+    "tau_s": [0.0, 0.12],
+    "delay_steps": [0, 3],
+    "mass_scale": [0.85, 1.15]
+  },
+  "phase2": {
+    "enabled": false,
+    "source": "ppo_on_policy_histories_only",
+    "history_ticks": 20,
+    "causal_features": ["obs_t", "action_t", "obs_tp1_minus_obs_t"],
+    "train_on_classical_dataset": false,
+    "hidden_dim": 64
+  },
+  "phase3": {
+    "enabled": false,
+    "mode": "AAM_ESTIMATED_FINETUNED",
+    "freeze_aam_before_finetune": true,
+    "privileged_gate_required": true,
+    "mid_episode_switch_eval_required": true
+  },
+  "runtime_modes": [
+    "BASELINE",
+    "PRIVILEGED",
+    "MEAN_CONTEXT",
+    "SHUFFLED_CONTEXT",
+    "AAM_ESTIMATED",
+    "AAM_FROZEN",
+    "AAM_ESTIMATED_FINETUNED"
+  ],
+  "native_physx": {
+    "mass_field": "articulation.data.default_mass",
+    "com_field": "articulation.data.default_com_pos_b",
+    "surrogate_observation_mass_forbidden": true,
+    "surrogate_observation_com_forbidden": true
+  },
+  "execution_policy": {
+    "cpu_preparation_only": true,
+    "run_simulation_now": false,
+    "collect_data_now": false,
+    "train_ppo_now": false,
+    "run_gpu_now": false
+  }
+}
