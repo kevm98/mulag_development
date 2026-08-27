@@ -181,7 +181,8 @@ def delivered(key: str, value: torch.Tensor) -> torch.Tensor:
     return value.clamp(lo, hi)
 
 
-def rollout(runtime, command: torch.Tensor, limits: torch.Tensor, *, guard: bool, tap=None) -> dict[str, torch.Tensor]:
+def rollout(runtime, command: torch.Tensor, limits: torch.Tensor, *, guard: bool, tap=None,
+            system_factors: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
     """Deployment-faithful rollout: ROM -> guard -> perfect-follower plant."""
     device = runtime.device
     dt = runtime.sample_time_s
@@ -207,6 +208,7 @@ def rollout(runtime, command: torch.Tensor, limits: torch.Tensor, *, guard: bool
             extension=x,
             extension_velocity=velocity,
             dP=dP,
+            system_factors=system_factors,
         )
         delta_raw = out.delta_extension.clone()
         delta = delta_raw

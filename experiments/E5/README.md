@@ -293,3 +293,46 @@ Nothing produced a non-finite rollout at any grid point.
 Open-loop probe, perfect-follower surrogate, one trajectory, one checkpoint,
 one-factor-at-a-time. Compound stress is Stage 3 — the reordering above already
 shows the factors do not compose additively.
+
+## Stage 1b — the factor-channel ranking survives the probe fix (CPU, run)
+
+`code/rom_factor_channel_sensitivity.py` → `results/rom_factor_channel_sensitivity.json`
+
+Stage 0b found that `AAM_module/tools/rom_sensitivity.py` measures on a
+single-axis probe that the direction guard suppresses, *and* on a free-running
+rollout that starts at -0.5 m — outside every cylinder limit — and diverges to
+291 mm of travel on ±1 mm commands. Its flow/compliance/seal/pressure ranking
+fed the Stage 4/5 factor selection and the AAM's factor ranges, so it had to be
+rechecked on the corrected harness before anything downstream could be trusted.
+
+Each channel swept to its own audited endpoints (`verge_task/deployment_factors.py`),
+deployed bridge, all-axes probe, guard on, nominal travel 37.60 mm:
+
+| channel | audited range | rel ext | err mm | rel dP |
+|---|---|---|---|---|
+| seal | [0.0, 1.0] | 25.9% | 8.99 | 66.1% |
+| flow | [-0.25, 0.25] | 21.8% | 7.58 | 38.0% |
+| compliance | [-0.25, 0.10] | 17.4% | 6.03 | 15.6% |
+| pressure | [-0.15, 0.15] | 6.3% | 2.18 | 12.6% |
+
+**The order is unchanged.** `seal > flow > compliance > pressure` over the
+audited ranges, identical to what `rom_sensitivity.py` reported, and identical
+again per unit severity (`flow > pressure > compliance > seal`). The Stage 4/5
+factor selection and the AAM ranges do not inherit the probe defect. Only the
+magnitudes move.
+
+### What does change: which metric you rank by
+
+The two metrics disagree, and they disagreed in the legacy screen too:
+
+- **over the audited range** (`rel_extension`) — seal first
+- **per unit severity** (`S_j = mean|Δy| / range width`) — flow first, seal last
+
+`S_j` divides by the range width, so seal — whose audited range is 1.0 against
+pressure's 0.30 — is penalised more than three-fold for being a wide axis. For
+choosing what to randomize, the effect *over the range actually drawn* is the
+relevant quantity, so seal leads. Ranking by `S_j` inverts that and puts the
+strongest channel last.
+
+This matters more than the probe defect did, and it is a property of the metric,
+not of the harness.
