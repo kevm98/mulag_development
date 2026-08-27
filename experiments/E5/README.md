@@ -131,7 +131,7 @@ the 0.700 line), and α → error relative to nominal, each with R, IF and AIF.
 - Sequential audits in one process have fabricated failures; reproduce any
   failure in a fresh process before believing it.
 
-## Stage 0b — effective bulk modulus as a candidate stress axis (CPU, run)
+## Stage 0b — effective bulk modulus as a stress axis (CPU, run)
 
 `code/rom_bulk_modulus_sweep.py` → `results/rom_bulk_modulus_sweep.json`
 
@@ -143,65 +143,72 @@ alone, through the deployed bridge `CommandCylinderROMRuntime` — the same clas
 `system_factors`.** The compliance channel pins e_comp to [-0.25, 0.10], so it
 can only deliver 0.779x..1.105x of nominal beta — it cannot express 0x or 2x at
 all. That is the same clamp that hollowed out the superseded sweep above.
+Delivered fraction is 1.000 at every point; the only point the model's own
+`[0.01, 3.0]` GPa clamp touches is beta=0, which becomes 0.01 GPa — a 19.6x
+softening, not a true zero.
 
 Nominal learned beta is per-cylinder [0.231, 0.280, 0.149, 0.121] GPa, so the
 grid read as absolute GPa is a *stiffening* sweep; both readings are reported.
 
-### The stress is delivered, and it acts
+### The probe trajectory decides the answer — read this before the numbers
 
-Delivered fraction is 1.000 at every point — the only point the model's own
-`[0.01, 3.0]` GPa clamp touches is beta=0, which becomes 0.01 GPa, i.e. a 19.6x
-softening rather than a true zero. Peak dP deviation runs 30–178% of the nominal
-dP range. **This is the positive control the withdrawn sweep never had:** the
-perturbation demonstrably reaches the hydraulics.
+`command_rom_direction_guard` sets its limit proportional to `|command|`, so an
+axis sitting at zero command has its learned response forced to exactly zero.
+The runtime's own source flags this (`mulag_upper_level_env.py`): a single-axis
+probe reaches 0.073 of its travel against 0.827 for direct drive. A trajectory
+that drives one cylinder at a time therefore holds 3 of 4 axes in that dead
+state and **suppresses the measured sensitivity to every hydraulic parameter**.
 
-### It still does not reach the plant
+Both probes are run. `all_axes` — phase-shifted sinusoids, every cylinder
+commanded every tick — is the deployment-like one and is the result. `staggered`
+is kept only to quantify the artifact.
 
-Deployment configuration (`command_rom_direction_guard=True`, as
-`mulag_plant/policy/env_cfg.py:45` and `verge_task/env_cfg.py:70` set it),
-80 ticks, staggered ±1 mm trapezoid, nominal travel 23.75 mm:
+| probe | guard veto | authority kept | residual share of Δx | beta=0 ext err |
+|---|---|---|---|---|
+| all_axes | 15.9% | 72.5% | 31.1% | **51.50 mm** |
+| staggered | 87.5% | 27.4% | 70.9% | 0.42 mm |
+
+Same model, same grid, same guard: a 122x difference in apparent degradation.
+**Any hydraulic-factor null measured on a single-axis probe is uninterpretable.**
+
+### Result (all_axes, guard on — the deployment configuration)
+
+80 ticks, nominal travel 37.60 mm:
 
 | beta | delivered | rel dP | rel vel | rel ext | peak ext err |
 |---|---|---|---|---|---|
-| 0x (→0.01 GPa) | 1.000 | 177.6% | 14.1% | 1.8% | 0.422 mm |
-| 0.5x | 1.000 | 39.4% | 4.5% | 0.6% | 0.134 mm |
+| 0x (→0.01 GPa) | 1.000 | 528.3% | 64.6% | **148.3%** | 51.50 mm |
+| 0.5x | 1.000 | 88.5% | 39.2% | 54.8% | 19.02 mm |
 | 1x | — | — | — | — | 0 |
-| 1.5x | 1.000 | 30.3% | 2.2% | 0.3% | 0.066 mm |
-| 2x | 1.000 | 47.5% | 3.5% | 0.4% | 0.105 mm |
+| 1.5x | 1.000 | 28.9% | 16.4% | 24.5% | 8.49 mm |
+| 2x | 1.000 | 42.8% | 23.8% | 39.7% | 13.78 mm |
 
-**A total collapse of the bulk modulus costs 0.42 mm of realised displacement on
-23.75 mm of travel.** Nothing in the grid comes near the declared degradation
-onset, let alone functional breakdown.
+**Effective bulk modulus is a live degradation axis.** It is fully delivered, it
+acts on the hydraulics, and it reaches the plant: softening to 0.5x already
+displaces the realised extension by 19 mm on 37.6 mm of nominal travel, and
+collapsing beta exceeds the nominal signal range outright.
 
-### Why — two absorbers in series, both measured
+Softening degrades far more than stiffening (0.5x → 19.0 mm vs 1.5x → 8.5 mm),
+consistent with pressure rate ∝ beta. Stiffening saturates hard: 0.5 → 2.0 GPa
+absolute, a 4x change, moves the error only 17.4 → 20.4 mm.
 
-- **The direction guard.** It vetoes 87.5% of channel-ticks and passes 27.4% of
-  the raw ROM displacement. It is proportional to `|command|`, so it re-imposes
-  the commanded motion regardless of what the hydraulics did.
-- **The learned residual path.** 70.9% of the extension increment comes from the
-  residual heads, which are GRU-driven and carry no dependence on beta at all.
-  Pressure is beta-sensitive; displacement is mostly not made of pressure.
+### Where the absorbers still sit
 
-Guard-off rows are in the JSON for attribution only — they are **not** a
-deployment condition. With the guard off the raw ROM free-runs to 170 mm on ~8 mm
-of commanded motion, which is why the deployment configs enable it.
-
-### Shape of the curve
-
-Softening degrades more than stiffening (0.5x → 0.134 mm vs 1.5x → 0.066 mm),
-monotone in |log beta| on each side, consistent with pressure rate ∝ beta.
-Stiffening saturates: 0.5 → 2.0 GPa absolute, a 4x change, buys 0.163 → 0.224 mm.
+Guard-on and guard-off differ, so both are reported. Under `all_axes` the guard
+still passes 72.5% of raw displacement and vetoes only 15.9% of channel-ticks,
+and the beta-independent residual heads supply 31.1% of the extension increment
+(against 70.9% on the suppressed probe). The physics path dominates here, which
+is why beta bites.
 
 ### Verdict
 
-Effective bulk modulus is a **better-behaved** axis than the six-factor draw —
-fully delivered, monotone, with a working positive control — but it is **not a
-degradation axis** for this stack. It cannot reach functional breakdown; across
-the whole grid it moves plant-side displacement by under 2%. This strengthens
-rather than weakens the case for `actuator_authority_alpha`: the failure is not
-that hydraulic factors are clamped, it is that this ROM's realised displacement
-is only weakly a function of its hydraulic state.
+Effective bulk modulus is a **usable** stress axis for the ROM stack — delivered,
+monotone in |log beta| on each side, with a working positive control. It is not
+a substitute for `actuator_authority_alpha`, which still has the guaranteed
+alpha→0 endpoint this axis lacks (the `[0.01, 3.0]` GPa clamp bounds beta from
+below), but the earlier claim that hydraulic factors cannot reach this plant does
+not survive an all-axes probe.
 
-**Scope.** Open-loop probe, perfect-follower plant surrogate, one trajectory, one
-checkpoint (`plant_reachable_v1_finetune_blend25`). It bounds the open-loop
-effect; a closed PPO loop could still amplify a small plant change.
+**Scope.** Open-loop probe, perfect-follower plant surrogate, two trajectories,
+one checkpoint (`plant_reachable_v1_finetune_blend25`). It bounds the open-loop
+effect; a closed PPO loop could amplify or absorb it.

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -128,6 +129,33 @@ class OutputTap:
         share_dp = (dp_res.abs().mean() / dp.abs().mean().clamp_min(1e-12)).item()
         share_dx = ((dx - dx_phys).abs().mean() / dx.abs().mean().clamp_min(1e-18)).item()
         return share_dp, share_dx
+
+
+def all_axes_trajectory(ticks: int, device: torch.device) -> torch.Tensor:
+    """Phase-shifted sinusoids, all four cylinders commanded on every tick.
+
+    This is the probe that matters.  `command_rom_direction_guard` sets its
+    limit proportional to |command|, so an axis sitting at zero command has its
+    learned response forced to exactly zero -- the runtime's own source calls
+    this out as the reason a single-axis probe under-reads (0.073 of travel
+    against 0.827 for direct drive).  `safe_trajectory` drives one cylinder at
+    a time and therefore holds 3 of 4 axes in that dead state, which suppresses
+    the guard-on response and, with it, any apparent sensitivity to beta.
+    In deployment all four axes carry a command.
+    """
+    command = torch.zeros(ticks, 1, 8, device=device)
+    for c in range(4):
+        for t in range(ticks):
+            value = 1.0e-3 * math.sin(2.0 * math.pi * (t / 20.0) + c * math.pi / 4.0)
+            command[t, 0, c] = value
+            command[t, 0, 4 + c] = value / 0.05
+    return command
+
+
+TRAJECTORIES = {
+    "all_axes": all_axes_trajectory,   # deployment-like: every axis commanded
+    "staggered": safe_trajectory,      # single-axis probe; guard-suppressed
+}
 
 
 def rollout(runtime, command: torch.Tensor, limits: torch.Tensor, *, guard: bool, tap=None) -> dict[str, torch.Tensor]:
@@ -253,6 +281,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default=str(ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"))
     p.add_argument("--ticks", type=int, default=80)
+    p.add_argument("--trajectory", choices=(*TRAJECTORIES, "both"), default="both")
     p.add_argument("--device", default="cpu")
     p.add_argument("--out", default=str(ROOT / "experiments/E5/results/rom_bulk_modulus_sweep.json"))
     args = p.parse_args()
@@ -268,7 +297,7 @@ def main() -> None:
     model = runtime.model
     model.eval()
     limits = runtime.checkpoint["cylinder_limits"].to(device)
-    command = safe_trajectory(args.ticks, device)
+    selected = tuple(TRAJECTORIES) if args.trajectory == "both" else (args.trajectory,)
 
     tap = OutputTap(model)
     beta_nom = model.state_dict()["log_bulk_modulus"].exp().clone()
@@ -289,53 +318,59 @@ def main() -> None:
         "beta_nominal_gpa": (beta_nom / 1e9).tolist(),
         "beta_clamp_gpa": [BETA_FLOOR_PA / 1e9, BETA_CEIL_PA / 1e9],
         "cylinder_limits_m": limits.tolist(),
-        "trajectory": "staggered +-1 mm trapezoid, one cylinder at a time",
+        "trajectories": {
+            "all_axes": "phase-shifted +-1 mm sinusoids, all four cylinders every tick",
+            "staggered": "+-1 mm trapezoid, one cylinder at a time (guard-suppressed probe)",
+        },
         "plant_surrogate": "perfect follower; measured velocity differentiated from measured extension",
-        "guard_modes": {},
+        "results": {},
     }
 
-    for guard in (True, False):
-        guard_key = "guard_on" if guard else "guard_off"
-        set_beta(model, beta_nom)
-        nominal_run = rollout(runtime, command, limits, guard=guard, tap=tap)
-        grids = {}
-        for grid_name, axis_values, beta_of in (
-            ("scale", DEFAULT_SCALES, lambda s: beta_nom * s),
-            ("absolute_gpa", DEFAULT_ABSOLUTE_GPA, lambda g: torch.full_like(beta_nom, g * 1e9)),
-        ):
-            rows = []
-            for value in axis_values:
-                beta_req = beta_of(value)
-                set_beta(model, beta_req)
-                run = rollout(runtime, command, limits, guard=guard, tap=tap)
-                beta_del = delivered_beta(beta_req)
-                rows.append({
-                    "axis": f"{value:g}",
-                    "beta_requested_gpa": (beta_req.mean() / 1e9).item(),
-                    "beta_delivered_gpa": (beta_del.mean() / 1e9).item(),
-                    "delivered_fraction": (beta_del.mean() / beta_req.mean().clamp_min(1e-12)).clamp(max=1.0).item(),
-                    "beta_delivered_per_cylinder_gpa": (beta_del / 1e9).tolist(),
-                    **metrics(nominal_run, run),
-                })
-            grids[grid_name] = rows
-            label = "multiples of the learned beta" if grid_name == "scale" else "absolute beta in GPa"
-            report(
-                f"[{guard_key}] {label} (E5 0/0.5/1/1.5/2 grid)",
-                "scale" if grid_name == "scale" else "GPa",
-                rows,
-            )
-        nom_metrics = metrics(nominal_run, nominal_run)
-        grids["nominal"] = nom_metrics
-        payload["guard_modes"][guard_key] = grids
-        print(
-            f"  nominal @ {guard_key}: travel {nom_metrics['travel_mm']:.3f} mm, "
-            f"authority kept {nom_metrics['authority_kept']*100:.1f}%, "
-            f"guard veto {nom_metrics['guard_veto_rate']*100:.1f}%, "
-            f"limit clip {nom_metrics['limit_clip_rate']*100:.1f}%, "
-            f"dP/limit {nom_metrics['dP_saturation']*100:.1f}%, "
-            f"residual share dP {nom_metrics['residual_share_dP']*100:.1f}% / "
-            f"ext {nom_metrics['residual_share_extension']*100:.1f}%"
-        )
+    for traj_name in selected:
+      command = TRAJECTORIES[traj_name](args.ticks, device)
+      payload["results"][traj_name] = {}
+      for guard in (True, False):
+          guard_key = "guard_on" if guard else "guard_off"
+          set_beta(model, beta_nom)
+          nominal_run = rollout(runtime, command, limits, guard=guard, tap=tap)
+          grids = {}
+          for grid_name, axis_values, beta_of in (
+              ("scale", DEFAULT_SCALES, lambda s: beta_nom * s),
+              ("absolute_gpa", DEFAULT_ABSOLUTE_GPA, lambda g: torch.full_like(beta_nom, g * 1e9)),
+          ):
+              rows = []
+              for value in axis_values:
+                  beta_req = beta_of(value)
+                  set_beta(model, beta_req)
+                  run = rollout(runtime, command, limits, guard=guard, tap=tap)
+                  beta_del = delivered_beta(beta_req)
+                  rows.append({
+                      "axis": f"{value:g}",
+                      "beta_requested_gpa": (beta_req.mean() / 1e9).item(),
+                      "beta_delivered_gpa": (beta_del.mean() / 1e9).item(),
+                      "delivered_fraction": (beta_del.mean() / beta_req.mean().clamp_min(1e-12)).clamp(max=1.0).item(),
+                      "beta_delivered_per_cylinder_gpa": (beta_del / 1e9).tolist(),
+                      **metrics(nominal_run, run),
+                  })
+              grids[grid_name] = rows
+              label = "multiples of the learned beta" if grid_name == "scale" else "absolute beta in GPa"
+              report(
+                  f"[{traj_name} | {guard_key}] {label} (E5 0/0.5/1/1.5/2 grid)",
+                  "scale" if grid_name == "scale" else "GPa",
+                  rows,
+              )
+          nom_metrics = metrics(nominal_run, nominal_run)
+          grids["nominal"] = nom_metrics
+          payload["results"][traj_name][guard_key] = grids
+          print(
+              f"  nominal @ {guard_key}: travel {nom_metrics['travel_mm']:.3f} mm, "
+              f"authority kept {nom_metrics['authority_kept']*100:.1f}%, "
+              f"guard veto {nom_metrics['guard_veto_rate']*100:.1f}%, "
+              f"limit clip {nom_metrics['limit_clip_rate']*100:.1f}%, "
+              f"dP/limit {nom_metrics['dP_saturation']*100:.1f}%, "
+              f"residual share dP {nom_metrics['residual_share_dP']*100:.1f}% / "
+              f"ext {nom_metrics['residual_share_extension']*100:.1f}%"
+          )
 
     print("\nrel  = peak |y(beta) - y(nominal)| / nominal signal range")
     print("deliv= delivered beta / requested beta after the model's [0.01, 3.0] GPa clamp")
