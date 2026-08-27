@@ -95,9 +95,10 @@ untrackable.
   mass and COM nominal in both (the inline factor spec leaves unnamed factors at
   nominal, so nothing else varies). `flow=-0.10` is the control for the control:
   inside the range, so it must differ.
-- `STAGE_E5=A` **degradation discovery**, **IF only**, 3 families, ~17 episodes.
-  α over {1.0 … 0.01} plus a native mass scan. `summarise_authority.py` applies
-  the predeclared thresholds, locates the knee and **freezes** the levels to
+- `STAGE_E5=A` **degradation discovery**, **IF only**, 3 families. Four ladders,
+  **delay first** — see *Axis order* below — then lag, then deadband, then α
+  last, plus a native mass scan. `summarise_authority.py` applies the
+  predeclared thresholds, locates the knee and **freezes** the levels to
   `results/stress_levels.json`.
 - `STAGE_E5=B` **frozen-level evaluation**, all three stacks, 11 families.
   Refuses to run without the frozen levels and does not re-select.
@@ -400,3 +401,110 @@ act **indirectly**: they change dP, dP enters the GRU history, and the residual
 heads respond to the latent. Stage 1's rankings are real and reproducible, but
 they are the learned model's response to a changed pressure signal, not physical
 sensitivities. Do not describe them as identified hydraulics in the thesis.
+
+
+## Current protocol
+
+Stages 0b–2 changed both the stress axis and the order the stages run in. This
+section is the operative description; the stage list above is the harness.
+
+### The stress axis is displacement-domain, and shared
+
+`mulag_plant/runtime/actuator_stress.py` applies
+
+    deadband -> authority -> lag -> FIFO delay -> rate limit
+
+to the realised cylinder increment, at the same boundary as
+`actuator_authority_alpha`:
+
+    R      : Δx from the command ROM → [ chain ] → target
+    IF/AIF : Δx from ID→FD          → [ chain ] → target
+
+That boundary is the only actuator interface all three stacks share. The
+hydraulic factor draw reaches the command ROM alone (`CylinderFD.step` takes no
+factor argument) and `PlantPerturbation` reaches the ID→FD valve alone (the ROM
+emits a valve rather than consuming one), so neither can carry a common axis.
+
+Off by default. At nominal the chain is a **bit-for-bit identity**, so enabling
+it cannot move an unstressed run, and an enabled-but-all-nominal config is
+rejected rather than silently installing an identity chain. Covered by
+`mulag_plant/tests/test_actuator_stress.py` (16 tests, CPU).
+
+**Units.** This is the Δx domain: `deadband_m` and `rate_limit_m` are metres.
+Valve-domain severities do **not** transfer. `lag_tau_s` and `delay_steps` are
+time-domain and carry over unchanged.
+
+Set per arm through the environment: `STRESS_DELAY_STEPS`, `STRESS_LAG_TAU_S`,
+`STRESS_DEADBAND_M`, `STRESS_RATE_LIMIT_M`, plus `AUTHORITY_ALPHA` as before.
+
+### Axis order: delay first, authority last
+
+`experiments/RMA_PPO/robustness/analytic_breaking_point.py` bisects each axis
+for the severity at which the command a plant-aware controller must issue
+leaves the ID's own `command_limits`. Past that point no controller can hold the
+nominal response, so it lower-bounds breakdown.
+
+| axis | breaking point | consequence |
+|---|---|---|
+| authority | **α = 0.925** | a 7.5% cut already puts 30% of rows past the limits |
+| deadband | 0.071 (valve units) | separation, costly in headroom |
+| lag | 0.11 s | separation |
+| delay | **none** | shifting a command in time leaves its magnitude unchanged |
+
+The machine starts with 21.5% of rows already clipping, so the whole headroom
+budget is 8.5 percentage points. An α sweep from 1.00 downward therefore finds
+its knee almost entirely inside the analytically infeasible regime, where it
+measures cylinder-1 command saturation — the §12 confound — rather than
+controller robustness.
+
+**Delay is the only axis that degrades the response without ever making the
+command unreachable**, which is what an online-adaptation claim needs. It runs
+first and the levels are frozen on it. Authority still runs, last, as the axis
+that *defines* breakdown: it is the only one with a guaranteed endpoint at
+α → 0. Its rows must always be read with the clipping fraction beside them.
+
+### Delivered-stress check
+
+`code/check_stress_applied.py` replays the requested stress on the recorded raw
+increments and compares against the recorded applied ones — an exact check, not
+a ratio. Delay is also estimated by cross-correlation and compared against the
+same estimator run on the replay, because the lag contributes its own group
+delay and comparing to the bare requested FIFO depth false-flags any run that
+also carries lag. Self-tested against one honest and two tampered traces.
+
+Pass `STRESS_SPEC="delay=3,lag=0.10,deadband=0.0005"` and Stage 0 runs it.
+
+## What to do next
+
+**Before any stressed arm is trusted** — on the Legion box, in this order:
+
+1. **Nominal-identity smoke.** With `actuator_stress_enabled=False`, the result
+   must be byte-identical to a current run. The env wiring was written on a
+   machine without IsaacLab and has never executed.
+2. **Stage 0** with `STRESS_SPEC` set. `check_stress_applied.py` must report OK
+   for every trace before any curve is read.
+3. Then Stage C, Stage A (delay first, freeze), Stage B.
+
+**Outstanding on CPU**, in value order:
+
+- **Calibrate the Δx-domain deadband.** The `stress_vector.py` design maps
+  deadband in *valve* units, and Stage A's metre grid is bracketed around
+  "nominal travel ≈ 0.5 mm/tick" rather than derived. Inserting the chain into
+  the CPU ROM harness at the same point the env applies it would give a measured
+  ceiling, and would exercise the integration path end-to-end short of PhysX.
+- **Update `stress_vector.py`** to the Δx boundary once that ceiling exists.
+- **Stage 3** — trajectory battery and compound worst case. Worth less than it
+  was: Stage 2 showed the ROM's factors act through the encoder, so this is a
+  search over learned response rather than physics. Still the only route to a
+  defensible worst case rather than four independent edges.
+- **dP-clamp audit.** The pressure state pins at 100% of
+  `command_rom_dp_abs_limit_pa` at leakage 0.1× and 0.01×. Mapping where that
+  clamp starts binding across all factors would stop a future sweep reporting
+  clamp behaviour as plant behaviour — the same class of error as the guard and
+  the command limits.
+
+**Not decidable anywhere but the Legion box:** the curve itself, and anything
+scored on lateral error, ground contact or safety terminations.
+`experiments/RMA_PPO/robustness/gate_stage0.py` still returns STOP on the SD
+surrogate (drift 7.1 mm against 10.2 mm of motion, 37/256 passing of 64
+required), so there is no CPU substitute.
