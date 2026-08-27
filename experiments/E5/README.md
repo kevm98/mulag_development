@@ -336,3 +336,67 @@ strongest channel last.
 
 This matters more than the probe defect did, and it is a property of the metric,
 not of the harness.
+
+## Stage 2 — the two absorbers, and what the ROM's motion is actually made of
+
+`code/rom_absorber_axes.py` → `results/rom_absorber_axes.json`
+
+Stage 1's rankings are all conditional on two constants nobody had swept: the
+direction guard's ratio, and the learned residual heads running in parallel with
+the physics. This makes both into axes and measures **transmission** — how much
+of a fixed plant perturbation (leakage x0.5, Stage 1's strongest axis taken
+inside its clean region) survives to the realised extension.
+
+### Axis 1 — the direction guard removes ~80% of the plant change
+
+| guard ratio | nominal travel | authority kept | transmitted | err mm |
+|---|---|---|---|---|
+| 0.00 | 0.000 mm | 0.0% | 0.0% | 0.000 |
+| 1.00 | 11.83 mm | 40.6% | 4.4% | 0.474 |
+| 2.00 | 26.13 mm | 61.6% | 51.9% | 12.52 |
+| **3.00 (deployment)** | 37.60 mm | 72.5% | 54.9% | **19.07** |
+| 6.00 | 52.78 mm | 81.1% | 39.3% | 19.63 |
+| 12.00 | 53.56 mm | 83.9% | 73.0% | 37.01 |
+| off | 42.77 mm | 100.0% | 233.6% | **93.16** |
+
+The same leakage change costs 19.07 mm at the deployment setting and 93.16 mm
+with the guard off. **Every R-stack robustness number is roughly a fifth of the
+underlying plant change**, and the ratio is a configuration constant, not a
+property of the plant. Quote it alongside any R result.
+
+### Axis 2 — the prediction was wrong, and the reason matters
+
+Predicted: as the residual gain falls the ROM becomes pure grey-box, so the same
+hydraulic stress should bite *harder*. The opposite happened.
+
+| residual gain | nominal travel | residual share of dx | transmitted | err mm |
+|---|---|---|---|---|
+| 0.00 | **0.000 mm** | 0.0% | 0.0% | 0.000 |
+| 0.25 | 47.43 mm | 19.6% | 2.7% | 1.26 |
+| 0.50 | 47.03 mm | 23.8% | 17.4% | 7.91 |
+| 0.75 | 41.52 mm | 28.0% | 34.4% | 13.51 |
+| 1.00 | 37.60 mm | 31.1% | 54.9% | 19.07 |
+
+**With the residual heads off the ROM does not move at all.** Peak |Δv| falls
+from 3.40e-2 to 3.44e-8 m/s and travel is exactly 0.000 mm.
+
+The cause is Stage 1's rail audit. `effective_mass` and `viscous_friction` are
+both pinned at their 1e7 ceilings and `effective_area` at its 1e-4 floor, so at
+0.1 m/s the friction force is 1.00e6 N against a pressure force of 9.98e3 N at
+dP = 1e8 Pa. The physical actuator is outmatched by its own friction term by two
+orders of magnitude and cannot produce motion.
+
+### What this means for every earlier number
+
+The 31% "residual share" metric understated the case badly: it separates the
+position residual from the velocity-integration term, but that velocity is
+itself produced by the velocity residual. Traced back, **100% of the ROM's
+displacement originates in the learned heads.**
+
+So the ROM is not a grey-box model in any operative sense. Training drove the
+physics path to its rails and put the motion in the neural residual. Hydraulic
+parameters still move the plant — leakage is worth 63 mm in Stage 1 — but they
+act **indirectly**: they change dP, dP enters the GRU history, and the residual
+heads respond to the latent. Stage 1's rankings are real and reproducible, but
+they are the learned model's response to a changed pressure signal, not physical
+sensitivities. Do not describe them as identified hydraulics in the thesis.

@@ -182,12 +182,14 @@ def delivered(key: str, value: torch.Tensor) -> torch.Tensor:
 
 
 def rollout(runtime, command: torch.Tensor, limits: torch.Tensor, *, guard: bool, tap=None,
-            system_factors: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+            system_factors: torch.Tensor | None = None,
+            guard_ratio: float | None = None) -> dict[str, torch.Tensor]:
     """Deployment-faithful rollout: ROM -> guard -> perfect-follower plant."""
     device = runtime.device
     dt = runtime.sample_time_s
     lower, upper = limits[:, 0].unsqueeze(0), limits[:, 1].unsqueeze(0)
-    ratio = COMMAND_MAX_RATIO / float(max(runtime.steps_per_tick, 1))
+    base_ratio = COMMAND_MAX_RATIO if guard_ratio is None else float(guard_ratio)
+    ratio = base_ratio / float(max(runtime.steps_per_tick, 1))
 
     runtime.reset()
     if tap is not None:
