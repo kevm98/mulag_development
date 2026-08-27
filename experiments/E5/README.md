@@ -130,3 +130,78 @@ the 0.700 line), and α → error relative to nominal, each with R, IF and AIF.
   stress never arrived. Stage 0 exists to tell them apart.
 - Sequential audits in one process have fabricated failures; reproduce any
   failure in a fresh process before believing it.
+
+## Stage 0b — effective bulk modulus as a candidate stress axis (CPU, run)
+
+`code/rom_bulk_modulus_sweep.py` → `results/rom_bulk_modulus_sweep.json`
+
+Runs E5's own 0 / 0.5 / 1 / 1.5 / 2 grid on the effective bulk modulus beta
+alone, through the deployed bridge `CommandCylinderROMRuntime` — the same class
+`mulag_upper_level_env` uses in its `command_rom` branch. CPU only, no Isaac.
+
+**The grid is written into `log_bulk_modulus` directly, not through
+`system_factors`.** The compliance channel pins e_comp to [-0.25, 0.10], so it
+can only deliver 0.779x..1.105x of nominal beta — it cannot express 0x or 2x at
+all. That is the same clamp that hollowed out the superseded sweep above.
+
+Nominal learned beta is per-cylinder [0.231, 0.280, 0.149, 0.121] GPa, so the
+grid read as absolute GPa is a *stiffening* sweep; both readings are reported.
+
+### The stress is delivered, and it acts
+
+Delivered fraction is 1.000 at every point — the only point the model's own
+`[0.01, 3.0]` GPa clamp touches is beta=0, which becomes 0.01 GPa, i.e. a 19.6x
+softening rather than a true zero. Peak dP deviation runs 30–178% of the nominal
+dP range. **This is the positive control the withdrawn sweep never had:** the
+perturbation demonstrably reaches the hydraulics.
+
+### It still does not reach the plant
+
+Deployment configuration (`command_rom_direction_guard=True`, as
+`mulag_plant/policy/env_cfg.py:45` and `verge_task/env_cfg.py:70` set it),
+80 ticks, staggered ±1 mm trapezoid, nominal travel 23.75 mm:
+
+| beta | delivered | rel dP | rel vel | rel ext | peak ext err |
+|---|---|---|---|---|---|
+| 0x (→0.01 GPa) | 1.000 | 177.6% | 14.1% | 1.8% | 0.422 mm |
+| 0.5x | 1.000 | 39.4% | 4.5% | 0.6% | 0.134 mm |
+| 1x | — | — | — | — | 0 |
+| 1.5x | 1.000 | 30.3% | 2.2% | 0.3% | 0.066 mm |
+| 2x | 1.000 | 47.5% | 3.5% | 0.4% | 0.105 mm |
+
+**A total collapse of the bulk modulus costs 0.42 mm of realised displacement on
+23.75 mm of travel.** Nothing in the grid comes near the declared degradation
+onset, let alone functional breakdown.
+
+### Why — two absorbers in series, both measured
+
+- **The direction guard.** It vetoes 87.5% of channel-ticks and passes 27.4% of
+  the raw ROM displacement. It is proportional to `|command|`, so it re-imposes
+  the commanded motion regardless of what the hydraulics did.
+- **The learned residual path.** 70.9% of the extension increment comes from the
+  residual heads, which are GRU-driven and carry no dependence on beta at all.
+  Pressure is beta-sensitive; displacement is mostly not made of pressure.
+
+Guard-off rows are in the JSON for attribution only — they are **not** a
+deployment condition. With the guard off the raw ROM free-runs to 170 mm on ~8 mm
+of commanded motion, which is why the deployment configs enable it.
+
+### Shape of the curve
+
+Softening degrades more than stiffening (0.5x → 0.134 mm vs 1.5x → 0.066 mm),
+monotone in |log beta| on each side, consistent with pressure rate ∝ beta.
+Stiffening saturates: 0.5 → 2.0 GPa absolute, a 4x change, buys 0.163 → 0.224 mm.
+
+### Verdict
+
+Effective bulk modulus is a **better-behaved** axis than the six-factor draw —
+fully delivered, monotone, with a working positive control — but it is **not a
+degradation axis** for this stack. It cannot reach functional breakdown; across
+the whole grid it moves plant-side displacement by under 2%. This strengthens
+rather than weakens the case for `actuator_authority_alpha`: the failure is not
+that hydraulic factors are clamped, it is that this ROM's realised displacement
+is only weakly a function of its hydraulic state.
+
+**Scope.** Open-loop probe, perfect-follower plant surrogate, one trajectory, one
+checkpoint (`plant_reachable_v1_finetune_blend25`). It bounds the open-loop
+effect; a closed PPO loop could still amplify a small plant change.
