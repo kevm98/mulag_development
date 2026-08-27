@@ -322,10 +322,10 @@ diagnostic output.
 \section{Reduced-Order Model}
 \label{sec:models:rom}
 
-The \ppoROM{} path uses one command-conditioned grey-box model instead of the
-ID--FD composition. Physical equations propagate pressure, force, velocity and
-extension. Neural heads estimate valve realisation, load and bounded
-residuals~\cite{karniadakis2021physics,lutter2019deep}. Valve authority is
+The \ppoROM{} path uses one command-conditioned model instead of the ID--FD
+composition. Its structure is grey-box: physical equations propagate pressure,
+force, velocity and extension. Neural heads estimate valve realisation, load
+and bounded residuals~\cite{karniadakis2021physics,lutter2019deep}. Valve authority is
 pressure dependent by construction through the orifice-flow and continuity
 equations~\cite{merritt1967hydraulic}. A GRU~\cite{cho2014learning} reads six
 samples ($\unit[0.25]{s}$) of cylinder state, previous predicted valve command
@@ -375,10 +375,32 @@ and chamber volume. Pressure then produces force and motion:
 %
 Here $c_{v,i}$ is viscous friction, $m_i$ is effective modal mass and
 $\ell_i(\bm{h}_k)$ is the learned configuration-dependent load. Physical
-parameters are trained in log-space and clamped to plausible ranges. Pressure
-and velocity residuals are bounded to $10\,\%$ of their step limits, and the
-position residual to $\unit[1]{cm}$, preventing the neural heads from bypassing
-the physical update.
+parameters are trained in log-space inside fixed clamps. Several settle on a
+clamp bound and are therefore fitting coefficients rather than measured
+constants: modal mass and viscous friction both reach their upper clamp of
+$10^{7}$ (in kilograms and in newton-seconds per metre respectively), the
+piston area reaches its lower clamp of $\unit[1]{cm^2}$ against a
+$\unit[64]{cm^2}$ initialisation, and the supply pressure separates onto both
+clamps, with two cylinders at $\unit[1]{MPa}$ and two at $\unit[50]{MPa}$. The
+same values appear in every checkpoint of this family. Pressure and velocity
+residuals are bounded to $10\,\%$ of their step limits, and the position
+residual to $\unit[1]{cm}$, capping the magnitude each head may add per step.
+
+The explicit chain and the neural heads contribute to the transition in very
+different proportions. With the residual heads inactive the explicit chain
+alone produces no net travel, its velocity increments falling six orders of
+magnitude below their nominal values: at the fitted parameters the friction
+term $c_{v,i}\dot{x}_i$ reaches $\unit[1.0]{MN}$ at $\unit[0.1]{m/s}$, against
+a pressure force $\Delta\hat{p}_{i}A_i$ of about $\unit[10]{kN}$ at
+$\unit[100]{MPa}$. Realised displacement is produced by the residual heads.
+The pressure equation nonetheless remains active and responsive to its own
+parameters: with the heads inactive, halving $k_{\ell,i}$ still moves
+$\Delta p$ by $63\,\%$ of its range. Hydraulic parameters therefore reach the
+predicted motion indirectly, through the pressure state entering the recurrent
+encoder, rather than through the force balance. The model is grey-box in
+structure---the equations fix the functional form of the transition and keep it
+differentiable in named hydraulic quantities---rather than an identification of
+the machine's physical constants.
 
 Training uses rollout horizons $H\in\{1,5,20,50\}$ and scheduled sampling up to
 $75\,\%$ self-fed~\cite{bengio2015scheduled}. Residual penalties retain the
