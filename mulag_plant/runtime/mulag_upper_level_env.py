@@ -1209,6 +1209,9 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     "cylinder_dynamics_model must be 'command_rom', 'base_rom', 'rom', 'fd', or 'direct_valve', "
                     f"got {self.cfg.cylinder_dynamics_model!r}."
                 )
+        # Shares the actuator_authority_alpha boundary, so it is set up for
+        # every dynamics model rather than inside one branch of the dispatch.
+        self._setup_actuator_stress()
         self._configure_id_feature_ranges()
         self._action_to_cylinder_target_adapter = PPOActionToCylinderTargetAdapter(
             mapping=mapping if bool(getattr(self.cfg, "enable_cylinder_space_scaling", True)) else None,
@@ -1332,6 +1335,45 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 f"{self._plant_perturbation.diagnostics()}",
                 flush=True,
             )
+
+    def _setup_actuator_stress(self) -> None:
+        """Build the displacement-domain stress chain, if the config asks for it.
+
+        Applied at the same boundary as ``actuator_authority_alpha``, so it acts
+        identically on the command ROM and on ID->FD. Disabled by default, and
+        an all-nominal configuration is rejected rather than silently installing
+        an identity chain, so an enabled-but-unset run cannot be mistaken for a
+        stressed one.
+        """
+        if not bool(getattr(self.cfg, "actuator_stress_enabled", False)):
+            self._actuator_stress = None
+            return
+        from mulag_plant.runtime.actuator_stress import ActuatorStress, ActuatorStressChain
+
+        rate_limit = getattr(self.cfg, "actuator_stress_rate_limit_m", None)
+        stress = ActuatorStress(
+            authority=1.0,   # authority stays on actuator_authority_alpha
+            lag_tau_s=float(getattr(self.cfg, "actuator_stress_lag_tau_s", 0.0)),
+            delay_steps=int(getattr(self.cfg, "actuator_stress_delay_steps", 0)),
+            deadband_m=float(getattr(self.cfg, "actuator_stress_deadband_m", 0.0)),
+            rate_limit_m=float("inf") if rate_limit is None else float(rate_limit),
+        )
+        if stress.is_nominal:
+            raise ValueError(
+                "actuator_stress_enabled=True but every axis is at its nominal "
+                "value; set at least one of deadband/lag/delay/rate limit, or "
+                "leave the feature disabled."
+            )
+        max_delay = int(getattr(self.cfg, "actuator_stress_max_delay_steps", 8))
+        self._actuator_stress = ActuatorStressChain(
+            stress, dt_s=float(self.step_dt), num_envs=self.num_envs,
+            num_cylinders=4, max_delay_steps=max_delay, device=self.device,
+        )
+        print(
+            f"[env] actuator stress ENABLED at the delta_x boundary: "
+            f"{self._actuator_stress.diagnostics()['label']}",
+            flush=True,
+        )
 
     def _actuator_authority_alpha(self, step_dt: float):
         """Per-env actuator-authority factor, or None when unperturbed.
@@ -2979,6 +3021,12 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._actuator_delta_raw = delta_extension.detach().clone()
         if alpha_now is not None:
             delta_extension = delta_extension * alpha_now
+        # Displacement-domain stress shares this boundary, so it reaches every
+        # stack and lands inside the raw/applied pair the Stage 0 positive
+        # control reads. At nominal the chain is a bit-for-bit identity.
+        stress_chain = getattr(self, "_actuator_stress", None)
+        if stress_chain is not None:
+            delta_extension = stress_chain.step(delta_extension)
         self._actuator_delta_applied = delta_extension.detach().clone()
 
         clip_field = "cylinder_fd_delta_clip_m" if dynamics_model == "fd" else "cylinder_rom_delta_clip_m"
@@ -3816,6 +3864,10 @@ class MulagUpperLevelEnv(DirectRLEnv):
         rom_perturbation = getattr(self, "_rom_factor_perturbation", None)
         if rom_perturbation is not None:
             rom_perturbation.reset(env_ids)
+        stress_chain = getattr(self, "_actuator_stress", None)
+        if stress_chain is not None:
+            # clears the lag state and the delay FIFO for the reset envs
+            stress_chain.reset(env_ids)
         if self._cylinder_rom is not None:
             self._cylinder_rom.reset(env_ids)
         if self._base_cylinder_rom is not None:

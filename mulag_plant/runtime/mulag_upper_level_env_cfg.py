@@ -125,6 +125,18 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     # arm sets the two values equal so the schedule fires without a plant change.
     actuator_authority_alpha_after = None
     actuator_authority_step_time_s = None
+    # Displacement-domain actuator stress, applied at the SAME boundary as
+    # actuator_authority_alpha and therefore on every stack. Off by default;
+    # at these defaults the chain is a bit-for-bit identity, so enabling the
+    # feature cannot move an unstressed run. deadband/rate limit are METRES --
+    # this is the delta_x domain, not the valve domain, so severities
+    # calibrated on the valve do not transfer. See runtime/actuator_stress.py.
+    actuator_stress_enabled = False
+    actuator_stress_deadband_m = 0.0
+    actuator_stress_lag_tau_s = 0.0
+    actuator_stress_delay_steps = 0
+    actuator_stress_rate_limit_m = None      # None -> unlimited
+    actuator_stress_max_delay_steps = 8
     # ROM-side plant perturbation. The command ROM produces the valve rather
     # than consuming it, so valve effectiveness does not apply; its per-env
     # plant channel is system_factors (num_envs, 7) ordered

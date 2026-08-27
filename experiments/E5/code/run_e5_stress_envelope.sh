@@ -30,6 +30,15 @@ set -uo pipefail
 #   untrackable, or the harness is wrong.
 #
 # STAGES
+#   Stress axes are set per-arm through the environment:
+#     AUTHORITY_ALPHA      realised-motion authority (all stacks)
+#     STRESS_DELAY_STEPS   transport delay on the realised increment, ticks
+#     STRESS_LAG_TAU_S     first-order lag on the realised increment, seconds
+#     STRESS_DEADBAND_M    increment deadband, METRES (delta_x domain)
+#     STRESS_RATE_LIMIT_M  max increment change per tick, metres
+#     STRESS_SPEC          same values for the Stage 0 delivery replay, e.g.
+#                          "delay=3,lag=0.10,deadband=0.0005"
+#
 #   STAGE_E5=0  authority knockout positive control   R, IF, AIF   ~6 episodes
 #   STAGE_E5=C  clamp sentinel (audit figure)         R only       2 episodes
 #   STAGE_E5=A  degradation discovery                 IF ONLY      ~11 episodes
@@ -104,6 +113,15 @@ case "$STAGE_E5" in
   say "instrumentation check -- |delta_applied| / |delta_raw| must equal alpha:"
   python3 experiments/E5/code/check_authority_applied.py \
       --trace-dir "$TRACES" --mesh "$MESHES" --report-dir "$OUT" | tee -a "$LOG"
+  # Same boundary, whole chain: replays the requested stress on the recorded
+  # raw increments and compares against the recorded applied ones. Delay is
+  # also estimated by cross-correlation, independently of what was requested.
+  if [ -n "${STRESS_SPEC:-}" ]; then
+    say ""
+    say "chain delivery check -- replay of $STRESS_SPEC against the trace:"
+    python3 experiments/E5/code/check_stress_applied.py \
+        --trace-dir "$TRACES" --stress "$STRESS_SPEC" --report-dir "$OUT" | tee -a "$LOG"
+  fi
   ;;
 
 C)
@@ -128,11 +146,57 @@ C)
 
 A)
   # ---- Stage A: degradation discovery, IF ONLY ----------------------------
-  # Coarse scan first. Bisect around the knee only if the coarse grid brackets
-  # it too loosely; each point is one episode per family, so the grid is cheap.
-  say "STAGE A -- authority degradation curve, IF only, 3 families"
+  # ORDER MATTERS, and it is delay first.
+  #
+  # analytic_breaking_point.py (experiments/RMA_PPO/robustness) bisects each
+  # axis for the severity at which the command a plant-aware controller must
+  # issue leaves the ID's own command_limits. Past that point NO controller can
+  # hold the nominal response, so it lower-bounds breakdown.
+  #
+  #   axis        breaking point      note
+  #   authority   alpha = 0.925       a 7.5% cut already puts 30% of rows past
+  #                                   the limits; the machine starts with 21.5%
+  #                                   of rows clipping, so the whole headroom
+  #                                   budget is 8.5 percentage points
+  #   deadband    0.071 (valve units) SEPARATION, costly in headroom
+  #   lag         0.11 s              SEPARATION
+  #   delay       NONE                shifting a command in time leaves its
+  #                                   magnitude unchanged, so saturation never
+  #                                   leaves its floor
+  #
+  # So an alpha sweep from 1.00 down finds its "knee" almost entirely inside
+  # the analytically infeasible regime: that knee is cylinder-1 command
+  # saturation, the section-12 confound, not controller robustness. Delay is
+  # the only axis that degrades the response without ever making the command
+  # unreachable, which is what an online-adaptation claim needs. It runs first
+  # and it is the axis the levels are frozen on.
+  #
+  # Authority is still swept, last, as the axis that DEFINES breakdown -- it is
+  # the only one with a guaranteed endpoint at alpha -> 0. Its rows must be
+  # read with the clipping fraction beside them, never alone.
+  say "STAGE A -- degradation curves, IF only, 3 families"
   export TRAJECTORY_SHAPES=${TRAJECTORY_SHAPES:-"straight,double_s_curve,lane_change_hold"}
-  for alpha in ${ALPHAS:-1.00 0.90 0.80 0.70 0.60 0.50 0.40 0.30 0.20 0.10 0.01}; do
+
+  say "A.1 delay -- the clean axis, no saturation confound"
+  for k in ${DELAYS:-0 1 2 3 4 5 6 8}; do
+    STRESS_DELAY_STEPS="$k" score "if_delay_${k}" "$IF_CKPT" "$IF_TASK"
+  done
+
+  say "A.2 lag -- second axis, stop at the analytic breaking point of 0.11 s"
+  for tau in ${LAGS:-0.00 0.02 0.04 0.06 0.08 0.10}; do
+    STRESS_LAG_TAU_S="$tau" score "if_lag_${tau}" "$IF_CKPT" "$IF_TASK"
+  done
+
+  # Deadband here is DISPLACEMENT-domain and in metres; the 0.071 breaking
+  # point above is in valve units and does NOT transfer. Nominal travel is
+  # about 0.5 mm per tick, so this grid brackets from a tenth of that to twice.
+  say "A.3 deadband -- displacement domain, metres, needs its own calibration"
+  for d in ${DEADBANDS:-0.0 0.00005 0.0001 0.00025 0.0005 0.001}; do
+    STRESS_DEADBAND_M="$d" score "if_deadband_${d}" "$IF_CKPT" "$IF_TASK"
+  done
+
+  say "A.4 authority -- LAST, and confounded below alpha 0.93; report clipping"
+  for alpha in ${ALPHAS:-1.00 0.95 0.90 0.80 0.60 0.40 0.20 0.01}; do
     AUTHORITY_ALPHA="$alpha" score "if_alpha_${alpha}" "$IF_CKPT" "$IF_TASK"
   done
   # Native mechanical stress, the one deployment factor that does reach every

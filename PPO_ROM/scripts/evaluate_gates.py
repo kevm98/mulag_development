@@ -286,6 +286,39 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--actuator_stress_deadband_m",
+    type=float,
+    default=None,
+    help=(
+        "displacement-domain deadband in METRES, applied at the same boundary "
+        "as --actuator_authority_alpha and therefore on every stack. This is "
+        "the delta_x domain, so valve-domain severities do not transfer."
+    ),
+)
+p.add_argument(
+    "--actuator_stress_lag_tau_s",
+    type=float,
+    default=None,
+    help="first-order lag on the realised cylinder increment, seconds",
+)
+p.add_argument(
+    "--actuator_stress_delay_steps",
+    type=int,
+    default=None,
+    help=(
+        "pure transport delay on the realised cylinder increment, in control "
+        "ticks. This is the only stress axis with no analytic breaking point: "
+        "shifting a command in time leaves its magnitude unchanged, so it "
+        "never drives the required command past the actuator limits."
+    ),
+)
+p.add_argument(
+    "--actuator_stress_rate_limit_m",
+    type=float,
+    default=None,
+    help="max change in the realised cylinder increment per tick, metres",
+)
+p.add_argument(
     "--deployment_mass_step_time_s",
     type=float,
     default=None,
@@ -1426,6 +1459,23 @@ def main() -> None:
             value = getattr(a, name, None)
             if value is not None:
                 override_cfg(env_cfg, name, float(value))
+        # Displacement-domain stress. The chain is only installed when at least
+        # one axis is set, and it is a bit-for-bit identity at nominal, so an
+        # unstressed run is byte-identical whether or not these flags exist.
+        stress_axes = {
+            "actuator_stress_deadband_m": float,
+            "actuator_stress_lag_tau_s": float,
+            "actuator_stress_delay_steps": int,
+            "actuator_stress_rate_limit_m": float,
+        }
+        stress_set = False
+        for name, cast in stress_axes.items():
+            value = getattr(a, name, None)
+            if value is not None:
+                override_cfg(env_cfg, name, cast(value))
+                stress_set = stress_set or cast(value) != cast(0)
+        if stress_set:
+            override_cfg(env_cfg, "actuator_stress_enabled", True)
         if a.rom_factor_perturbation is not None:
             ranges = {}
             for part in str(a.rom_factor_perturbation).split(","):

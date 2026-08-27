@@ -82,6 +82,12 @@ LEAD_ARGS=()
 [ -n "${AUTHORITY_ALPHA:-}" ] && LEAD_ARGS+=(--actuator_authority_alpha "$AUTHORITY_ALPHA")
 [ -n "${AUTHORITY_ALPHA_AFTER:-}" ] && LEAD_ARGS+=(--actuator_authority_alpha_after "$AUTHORITY_ALPHA_AFTER")
 [ -n "${AUTHORITY_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--actuator_authority_step_time_s "$AUTHORITY_STEP_TIME_S")
+# Displacement-domain actuator stress, same boundary as AUTHORITY_ALPHA and so
+# reaching every stack. Deadband and rate limit are METRES, not valve units.
+[ -n "${STRESS_DEADBAND_M:-}" ] && LEAD_ARGS+=(--actuator_stress_deadband_m "$STRESS_DEADBAND_M")
+[ -n "${STRESS_LAG_TAU_S:-}" ] && LEAD_ARGS+=(--actuator_stress_lag_tau_s "$STRESS_LAG_TAU_S")
+[ -n "${STRESS_DELAY_STEPS:-}" ] && LEAD_ARGS+=(--actuator_stress_delay_steps "$STRESS_DELAY_STEPS")
+[ -n "${STRESS_RATE_LIMIT_M:-}" ] && LEAD_ARGS+=(--actuator_stress_rate_limit_m "$STRESS_RATE_LIMIT_M")
 # Native mid-episode plant change: mass reaches every stack unclamped.
 [ -n "${MASS_STEP_TIME_S:-}" ] && LEAD_ARGS+=(--deployment_mass_step_time_s "$MASS_STEP_TIME_S")
 [ -n "${MASS_STEP_SCALE:-}" ] && LEAD_ARGS+=(--deployment_mass_step_scale "$MASS_STEP_SCALE")
