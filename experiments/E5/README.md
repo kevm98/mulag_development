@@ -212,3 +212,84 @@ not survive an all-axes probe.
 **Scope.** Open-loop probe, perfect-follower plant surrogate, two trajectories,
 one checkpoint (`plant_reachable_v1_finetune_blend25`). It bounds the open-loop
 effect; a closed PPO loop could amplify or absorb it.
+
+## Stage 1 — which physical parameters can degrade the ROM at all (CPU, run)
+
+`code/rom_factor_dependence.py` → `results/rom_factor_dependence.json`
+(shared machinery in `code/rom_stress_lib.py`)
+
+Sweeps every physical parameter in `HydraulicROM` one at a time over a log grid
+spanning 0.01x..100x, on the all-axes probe, through the deployed bridge. Stage
+0b showed beta is a live axis; this asks which axes exist.
+
+### First result: the grey-box parameters are on their rails
+
+`forward` clamps each physical parameter. Training drove five of the eight to a
+bound:
+
+| parameter | learned (min..max) | clamp | rail |
+|---|---|---|---|
+| bulk_modulus | 1.21e8 .. 2.80e8 | [1e7, 3e9] | — |
+| nominal_volume | 8.82e-3 .. 2.18e-2 | [1e-4, 5e-2] | — |
+| leakage | 8.74e-12 .. 8.39e-11 | [1e-15, 1e-7] | — |
+| flow_gain | 9.98e-10 .. 5.22e-9 | [1e-9, 1e-3] | **floor** |
+| effective_area | 9.98e-5 .. 9.98e-5 | [1e-4, 5e-2] | **floor** |
+| effective_mass | 1.002e7 (all four) | [10, 1e7] | **ceiling** |
+| viscous_friction | 1.001e7 .. 1.003e7 | [1, 1e7] | **ceiling** |
+| supply_pressure | 9.98e5 .. 5.03e7 | [1e6, 5e7] | **both** — c2/c4 floor, c1/c3 ceiling |
+
+A rail-pinned parameter cannot be perturbed *toward* its rail at all, so every
+row reports the delivered scale computed against the **clamped** nominal.
+`supply_pressure` splitting across both rails, with two cylinders at 1 MPa and
+two at 50 MPa, is not a plausible identification — it is a parameter the fit
+never constrained.
+
+### Ranking (all_axes probe, guard on — the deployment configuration)
+
+Nominal travel 37.60 mm. `max rel ext` is peak |Δx vs nominal| over the nominal
+extension range; `inert` counts grid points the clamp delivered nothing at.
+
+| factor | max rel ext | err mm | reach down / up | inert | max rel dP |
+|---|---|---|---|---|---|
+| **leakage** | **182.5%** | 63.36 | 0.01x / 100x | 0/9 | 528.3% |
+| bulk_modulus | 157.8% | 54.80 | 0.054x / 16.2x | 0/9 | 528.3% |
+| nominal_volume | 155.1% | 53.86 | 0.010x / 3.68x | 0/9 | 301.5% |
+| effective_mass | 96.6% | 33.52 | 0.01x / **1.0x** | 4/9 | 103.1% |
+| deadzone.raw_width | 81.5% | 28.31 | -3 / +3 | 0/5 | 57.6% |
+| effective_area | 73.2% | 25.41 | **1.0x** / 99.8x | 4/9 | 112.2% |
+| flow_gain | 11.5% | 4.00 | 0.66x / 99.9x | 0/9 | 37.2% |
+| viscous_friction | 1.0% | 0.35 | 0.01x / **1.0x** | 4/9 | 2.2% |
+| supply_pressure | 0.1% | 0.05 | 0.14x / 7.07x | 0/9 | 0.7% |
+| extension_reference | 0.0% | 0.01 | ±0.05 m | 0/5 | 0.0% |
+
+Nothing produced a non-finite rollout at any grid point.
+
+### What this says
+
+- **Leakage is the strongest axis, and the only strong one with full reach.**
+  It is interior to its clamp in both directions and spans four orders of
+  magnitude. It is also the physically realistic wear mode, which makes it the
+  natural plant-degradation axis for the thesis — better grounded than beta.
+- **bulk_modulus and nominal_volume are the same axis.** `forward` uses them
+  only as the ratio 4*beta/V. Verified directly: beta x0.5 gives 54.80% /
+  19.03 mm against volume x2.0 at 54.26% / 18.84 mm, and beta x2.0 gives 39.69%
+  against volume x0.5 at 39.17% — agreement within 1%, the residue being the
+  `area*(x - extension_reference)` volume modulation term. Treat them as one
+  hydraulic-stiffness knob; sweeping both is double-counting.
+- **flow_gain has 100x of reach and almost no effect** (11.5%). Reach is not
+  authority; a screen that reported only delivered fraction would rank it as a
+  usable axis when it is nearly inert.
+- **Three parameters are effectively dead**: supply_pressure (0.1% despite
+  reaching 0.14x..7x), viscous_friction (1.0%), extension_reference (0.0%).
+  The last is explained by effective_area sitting on its floor, which makes the
+  volume modulation term negligible against volume0.
+- **The guard reorders the ranking, it does not just attenuate it.** Guard-off
+  puts effective_mass first at 660%; guard-on puts leakage first and drops mass
+  to fourth. So the direction guard cannot be modelled as a uniform gain, and
+  Stage 2 has to treat it as an axis in its own right rather than a constant.
+
+### Scope
+
+Open-loop probe, perfect-follower surrogate, one trajectory, one checkpoint,
+one-factor-at-a-time. Compound stress is Stage 3 — the reordering above already
+shows the factors do not compose additively.
