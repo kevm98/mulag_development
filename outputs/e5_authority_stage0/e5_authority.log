@@ -1,0 +1,46 @@
+[09:34:15] STAGE 0 -- authority knockout (stacks: rom)
+[09:34:15] start ppo_rom_a1.00
+[SCORE] mesh 1337 -> /workspace/projects/rrlab_mulag/outputs/e5_authority_stage0/ppo_rom_a1.00_m1337.json
+[SCORE] mesh 1337 ok
+[SCORE] merging
+Traceback (most recent call last):
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/scripts/merge_gates.py", line 159, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/scripts/merge_gates.py", line 115, in main
+    result = check_gates(per_mesh)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/gates.py", line 83, in check_gates
+    raise ValueError(
+ValueError: acceptance needs >= 3 distinct terrain meshes, got 1. Vary the mesh with --eval_terrain_seed; varying --seed alone returns bit-identical numbers.
+There was an error running python
+[09:38:35] nonzero exit for ppo_rom_a1.00
+[09:38:35] done  ppo_rom_a1.00 in 260s
+[09:38:35] start ppo_rom_a0.01
+[SCORE] mesh 1337 -> /workspace/projects/rrlab_mulag/outputs/e5_authority_stage0/ppo_rom_a0.01_m1337.json
+[SCORE] mesh 1337 ok
+[SCORE] merging
+Traceback (most recent call last):
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/scripts/merge_gates.py", line 159, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/scripts/merge_gates.py", line 115, in main
+    result = check_gates(per_mesh)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/projects/rrlab_mulag/PPO_ROM/gates.py", line 83, in check_gates
+    raise ValueError(
+ValueError: acceptance needs >= 3 distinct terrain meshes, got 1. Vary the mesh with --eval_terrain_seed; varying --seed alone returns bit-identical numbers.
+There was an error running python
+[09:42:54] nonzero exit for ppo_rom_a0.01
+[09:42:54] done  ppo_rom_a0.01 in 259s
+[09:42:54] 
+[09:42:54] instrumentation check -- |delta_applied| / |delta_raw| must equal alpha:
+             stack   alpha  applied/raw  mean|raw| (m)  worst lateral
+  -------------------------------------------------------------------
+           ppo_rom    0.01       0.0100       0.001119         0.1322
+           ppo_rom    1.00       1.0000       0.000778         0.4608
+
+           ppo_rom: lateral error x   0.3 from alpha=1.00 to 0.01  -- STILL TRACKING -- harness fault, investigate before interpreting any sweep
+
+All arms applied the authority factor as configured.
+[09:42:54] reports in /workspace/projects/rrlab_mulag/outputs/e5_authority_stage0
