@@ -90,3 +90,40 @@ Investigate the STILL TRACKING flag, as Stage 0 asked:
 3. Only then decide whether the lateral criterion is genuinely inapplicable or
    whether the metric is measuring stillness. If it is stillness, say so in the
    thesis and name the replacement metric before re-reading the curve.
+
+## The ladder ran on the nominal plant, not on combined_test
+
+Established 2026-08-28 while auditing the VM for the AAM repair plan. Every
+ladder result file records:
+
+```
+deployment_factor_enabled = False
+factor_domain             = 'nominal'
+factor_key                = ''
+```
+
+The cause is mechanical, not a choice made at the console:
+`AAM_module/datasets/rom_deployment_stage31_v1_frozen/raw/manifest.csv` — the
+7.9 KB file carrying the factor draws, read by
+`verge_task/deployment_factors.py:30` — was never pushed to the VM. Passing
+`--factor_domain` at all sets `deployment_factor_enabled=True` and crashes
+without it, so `run_rom_authority_ladder.sh:42` defaults `FACTOR_DOMAIN` to
+empty and says so in a comment.
+
+**This does not invalidate the curve, but it renames it.** Holding the plant
+fixed and varying authority alone is the cleaner design for an authority axis,
+and the script's comment argues exactly that. What the ladder measures is
+therefore an **actuator-authority axis on a fixed nominal plant** — not a
+plant-variation axis. E5's chapter framing is "plant robustness envelope"; this
+curve does not defend that framing on its own, and must not be captioned as
+though it varied the plant.
+
+It also means the alpha-1.00 row is a nominal-plant baseline, so the 11.0 pp
+across-mesh contact spread at nominal is terrain variation alone, with no
+factor draw contributing.
+
+The manifest has since been pushed and sha256-verified on the VM, so a
+combined_test re-run is now possible. Whether to re-run the ladder under
+combined_test, or to keep it as a declared authority-only axis and add a
+separate plant axis, is a design decision for the user — it changes what E5
+claims.

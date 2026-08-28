@@ -285,17 +285,37 @@ The E5 handover pushed the ROM and ID/AIF checkpoints, `id_fd_model/`,
 excludes all of them (`outputs/`, `logs/`, `datasets/`, `*.pt`):
 
 ```
-outputs/stage31_rom/aam_cnn/L20_d64/aam.pt                          AAM
-outputs/stage31_rom/id_adapter_cnn_l20_s5/zhat_adapter.pt           estimated adapter
-outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt      true-latent adapter (Gate 1)
-sd_model/stage31_frozen/z2_rom/                                     frozen encoder + protocol
+outputs/stage31_rom/aam_cnn/L20_d64/aam.pt          + metrics.json   AAM
+outputs/stage31_rom/id_adapter_cnn_l20_s5/zhat_adapter.pt
+                                                   + manifest.json  estimated adapter
+outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt
+                                                   + manifest.json  true adapter (Gate 1)
+AAM_module/datasets/rom_deployment_stage31_v1_frozen/raw/manifest.csv
+                                                   7.9 KB, factor draws
+sd_model/stage31_frozen/z2_rom/                                     frozen encoder
 logs/rsl_rl/ppo_id_aam_fd/headroom_priced_v1/model_299.pt           Gate 0 subject
 ```
 
-That is roughly 40 MB and goes over the same Mac-side push as the E5
-checkpoints (`COPYFILE_DISABLE=1 tar -czf - <paths> | ssh ... 'tar -xzf -'`).
-The 2.3 GB `rom_deployment_stage31_v1_frozen` dataset is **not** needed —
-Gate 3 collects its own on-policy data on the VM.
+**Pushed and sha256-verified on the VM 2026-08-28.** The last two were already
+there from the E5 push; the rest were not, and Gate 0 cannot start without
+them: `env_cfg.py:45` and `:35` name the AAM and adapter as defaults, so the
+env does not build, and with no adapter there is no residual and no
+`fallback_active`, which makes 0a's residual half and the whole of 0b
+unmeasurable.
+
+The `.pt` files each need their sidecar `metrics.json` / `manifest.json` — the
+loaders read the normalisation statistics and the `latent_source` field from
+them, and `online_runtime.py:198` refuses a mismatched source.
+
+**`manifest.csv` is the correction to an error in the first version of this
+plan**, which said the Stage-31 dataset was not needed. The 2.3 GB of runs are
+not, but `raw/manifest.csv` is: it is 7.9 KB, it is the file
+`verge_task/deployment_factors.py:30` and `terrain_env_cfg.py:269` read, and it
+carries the only copy of the factor draws — 16 combined/test rows, 48
+combined/train, 40 hydraulic, 12 mechanical, 2 nominal. Without it, passing
+`--factor_domain` at all sets `deployment_factor_enabled=True` and the run
+crashes. `FACTOR_DOMAIN=combined_test` is mandatory for every Gate, and under
+`nominal` the plant does not vary and every arm collapses to the same thing.
 
 Still blocking from the E5 handover and equally blocking here: the hardcoded
 `ROOT` / `PY` Legion paths in `score_per_mesh.sh` and the shebangs of
