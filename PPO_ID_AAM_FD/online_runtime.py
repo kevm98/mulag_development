@@ -269,6 +269,19 @@ class OnlineAAMIDFDController:
         self._fallback_count = torch.zeros((), dtype=torch.long, device=self.device)
         self._invalid_input_count = torch.zeros((), dtype=torch.long, device=self.device)
         self.reset_count = 0
+        # Gate 0 instrumentation.  These answer "is the adaptation site alive?"
+        # -- the question stage 28 raised on Simscape-era data and never
+        # measured in this loop.  Always on: a few reductions on a 4-wide
+        # tensor per control tick, and the plan requires the fallback rate to
+        # be reported beside every latent result.  Cumulative over the process,
+        # deliberately not cleared by reset(), so they describe a whole run.
+        self._instr_elements = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_base_at_limit = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_clamp_bound = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_residual_dead = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_env_ticks = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_fallback_env_ticks = torch.zeros((), dtype=torch.long, device=self.device)
+        self._instr_applied_env_ticks = torch.zeros((), dtype=torch.long, device=self.device)
 
     @property
     def aam_update_count(self) -> int:
@@ -520,7 +533,25 @@ class OnlineAAMIDFDController:
         self.fallback_active |= fallback
         self.aam_ready &= ~fallback
         self._fallback_count += fallback.sum(dtype=torch.long)
-        final = torch.clamp(base + residual, -self.command_limits, self.command_limits)
+        unclamped = base + residual
+        final = torch.clamp(unclamped, -self.command_limits, self.command_limits)
+
+        # Gate 0a/0b accumulation.  Three separate failures are distinguished:
+        # the anchor is already on its stops (base_at_limit), the residual was
+        # computed and then clipped away (clamp_bound), and the residual
+        # arrived but moved nothing (residual_dead).  A dead site can look
+        # identical to a robust one from the outside, which is the E4 trap.
+        limit_tol = self.command_limits * (1.0 - 1.0e-6)
+        # A zero bound means the residual cannot move anything, so the epsilon
+        # floor makes that count as dead rather than as a live channel.
+        dead_threshold = (0.01 * self.residual_bound).clamp_min(1.0e-12)
+        self._instr_elements += base.numel()
+        self._instr_base_at_limit += (base.abs() >= limit_tol).sum(dtype=torch.long)
+        self._instr_clamp_bound += (unclamped.abs() > self.command_limits).sum(dtype=torch.long)
+        self._instr_residual_dead += ((final - base).abs() <= dead_threshold).sum(dtype=torch.long)
+        self._instr_env_ticks += base.shape[0]
+        self._instr_fallback_env_ticks += self.fallback_active.sum(dtype=torch.long)
+        self._instr_applied_env_ticks += usable.sum(dtype=torch.long)
         return final, residual
 
 
@@ -554,10 +585,44 @@ class OnlineAAMIDFDController:
             return torch.where(self.z_frozen_valid.reshape(-1, 1), self.z_frozen, z)
         raise ValueError(f"unhandled latent_mode {mode!r}")
 
+    def gate0_instrumentation(self) -> dict[str, Any]:
+        """Gate 0 readout: is the adaptation site alive, and did z_hat reach it?
+
+        ``base_at_limit_fraction`` is the in-loop analogue of stage 28's 89%
+        preclip figure, which was measured on Simscape-era data and has never
+        been checked here.  ``residual_dead_fraction`` is the sharper number:
+        it counts elements the residual failed to move for any reason, clipping
+        included, so a bounded residual on a saturated anchor shows up even
+        when the anchor itself is not quite on its stops.
+        """
+        elements = int(self._instr_elements.detach().cpu())
+        env_ticks = int(self._instr_env_ticks.detach().cpu())
+        frac = lambda n, d: (float(n) / float(d)) if d else None  # noqa: E731
+        base_at_limit = int(self._instr_base_at_limit.detach().cpu())
+        clamp_bound = int(self._instr_clamp_bound.detach().cpu())
+        residual_dead = int(self._instr_residual_dead.detach().cpu())
+        fallback_ticks = int(self._instr_fallback_env_ticks.detach().cpu())
+        applied_ticks = int(self._instr_applied_env_ticks.detach().cpu())
+        return {
+            "valve_elements": elements,
+            "env_ticks": env_ticks,
+            "base_at_limit": base_at_limit,
+            "base_at_limit_fraction": frac(base_at_limit, elements),
+            "clamp_bound": clamp_bound,
+            "clamp_bound_fraction": frac(clamp_bound, elements),
+            "residual_dead": residual_dead,
+            "residual_dead_fraction": frac(residual_dead, elements),
+            "fallback_env_ticks": fallback_ticks,
+            "fallback_env_tick_fraction": frac(fallback_ticks, env_ticks),
+            "adapter_applied_env_ticks": applied_ticks,
+            "adapter_applied_env_tick_fraction": frac(applied_ticks, env_ticks),
+        }
+
     def diagnostics(self) -> dict[str, Any]:
         if self.device.type == "cuda":
             self._consume_cuda_latency(block=True)
         return {
+            "gate0": self.gate0_instrumentation(),
             "enabled": self.enabled,
             "history_lag": self.history_lag,
             "aam_architecture": self.aam_architecture,
