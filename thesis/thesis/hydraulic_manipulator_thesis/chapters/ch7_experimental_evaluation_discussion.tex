@@ -1198,16 +1198,203 @@ the stress levels are frozen from that curve; and only then are all three stacks
 scored at those levels. \ppoAAMIDFD{} is never inspected while the levels are
 chosen, so the condition cannot have been selected to flatter it.
 
-That experiment is specified and instrumented but not run: it requires the
-IsaacLab plant on GPU hardware, and its results are not part of this thesis.
-What this section establishes is narrower and is stated in place of the
-robustness claim it replaces. On \ppoROM{}, within a perturbation path that
-cannot remove more than $62\,\%$ of actuator authority and over a sweep whose
-upper half is progressively clamped, no degradation of task performance was
-observed. On \ppoIDFD{} and \ppoAAMIDFD{} the sweep varied tool mass and
-centre-of-mass height only, and neither degrades under a doubling of both. The
-boundary is not located on any stack, and \emph{the absence of an observed
-boundary is not evidence that one is distant}.
+That experiment has since been run on the command reduced-order model, on
+IsaacLab and GPU hardware. It is reported in
+Section~\ref{sec:eval:authority-ladder}. It was not run on the other two
+stacks, so the cross-stack freeze described in the preceding paragraph was not
+exercised and no comparison between stacks is drawn from it.
+
+What the \emph{original} sweep establishes is narrower and is stated in place
+of the robustness claim it replaces. On \ppoROM{}, within a perturbation path
+that cannot remove more than $62\,\%$ of actuator authority and over a sweep
+whose upper half is progressively clamped, no degradation of task performance
+was observed. On \ppoIDFD{} and \ppoAAMIDFD{} the sweep varied tool mass and
+centre-of-mass height only, and neither degrades under a doubling of both.
+That sweep locates no boundary on any stack, and \emph{the absence of an
+observed boundary is not evidence that one is distant}.
+
+\subsection{The Factors, and What They Represent}
+\label{sec:eval:factor-meaning}
+
+Before the replacement curve, the perturbation vector itself is worth setting
+out in physical terms, because two of the six factors carry most of the
+interpretive weight in this chapter and their names do not make their meaning
+obvious. Table~\ref{tab:eval:factor-meaning} gives the six, the quantity each
+scales, the audited interval it is drawn from, and the effect each produces in
+isolation on the reduced-order model.
+
+The last column deserves care in reading. It reports the relative change in
+cylinder extension when that factor alone is swept across its full audited
+range, holding the other five at nominal, measured open-loop on the
+reduced-order model. It ranks \emph{reach} within the identified envelope, and
+it is not a statement about which factor a deployed controller is most
+sensitive to, because the closed loop has absorbers the open-loop probe does
+not (Section~\ref{sec:eval:authority-ladder}). Seal condition leads at
+$25.9\,\%$ and supply pressure trails at $6.3\,\%$, a factor of four between
+the strongest and weakest hydraulic channel.
+
+\begin{table}[tbp]
+  \centering
+  \caption{The six deployment factors, their physical meaning, the audited
+  range each is drawn from, and the relative change in cylinder extension when
+  each is swept alone across that range on the command reduced-order model.
+  The final column ranks reach within the identified envelope and not
+  closed-loop importance. The two mechanical factors act through PhysX on every
+  stack and are never clamped; the four hydraulic factors act only on
+  \ppoROM{}, and are pinned to the interval shown.}
+  \label{tab:eval:factor-meaning}
+  \small
+  \begin{tabular}{@{}llcc@{}}
+    \toprule
+    Factor & Physical quantity & Audited range & Rel.\ extension \\
+    \midrule
+    \multicolumn{4}{@{}l}{\emph{Hydraulic --- act on \ppoROM{} only, clamped}}\\
+    seal        & seal condition / internal leakage & $[0, 1]$        & $25.9\,\%$ \\
+    flow        & valve flow gain                   & $[-0.25, 0.25]$ & $21.8\,\%$ \\
+    compliance  & fluid and hose compliance         & $[-0.25, 0.10]$ & $17.4\,\%$ \\
+    pressure    & supply pressure                   & $[-0.15, 0.15]$ & $6.3\,\%$  \\
+    \midrule
+    \multicolumn{4}{@{}l}{\emph{Mechanical --- act on all three stacks, unclamped}}\\
+    mass scale  & cutter tool mass multiplier       & $[0.8, 1.5]$    & --- \\
+    COM-$z$     & cutter centre-of-mass height      & $[-0.10, 0.05]$ & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two channels that a hydraulics reader would expect to find here are absent from
+the closed loop, and the omission is structural rather than an oversight.
+Internal leakage and bulk modulus are parameters \emph{inside} the
+reduced-order model; the only hydraulic route from the environment into it is a
+seven-element system-factor vector carrying compliance, flow, pressure and a
+four-fold seal term. Leakage and bulk modulus can be swept on the model
+directly, and are in the open-loop audits, but there is no plumbing that lets a
+deployed episode vary them. Any closed-loop statement in this chapter is
+therefore about the four channels in the upper block of
+Table~\ref{tab:eval:factor-meaning} and about the two mechanical ones, and not
+about hydraulic parameters in general.
+
+\subsection{The Authority Ladder on the Deployment Plant}
+\label{sec:eval:authority-ladder}
+
+The axis of Equation~\eqref{eq:eval:authority} was run on \ppoROM{} over
+fifteen levels of $\alpha$ from $1.00$ to $0$, on the three held-out meshes,
+with two repeats per level. Figure~\ref{fig:eval:authority-ladder} gives the
+curve and Table~\ref{tab:eval:authority-ladder} the levels that decide it.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_e5_rom_authority}
+  \caption{Ground contact against retained actuator authority $\alpha$ on
+  \ppoROM{}, three held-out meshes, two repeats per level. The curve is
+  non-monotonic: contact \emph{rises} as authority is removed, peaking near
+  $\alpha = 0.2$, and falls below the predeclared breakdown floor only at
+  $\alpha \leq 0.01$. The plant is held at nominal throughout, so this axis
+  varies actuator authority alone.}
+  \label{fig:eval:authority-ladder}
+\end{figure}
+
+\begin{table}[tbp]
+  \centering
+  \caption{Selected levels of the authority ladder on \ppoROM{}, pooled over
+  three meshes. Ground contact is the primary metric. The predeclared onset
+  criteria were a fall of five percentage points in contact or a median lateral
+  error at one and a half times nominal; breakdown was contact below $0.700$ or
+  a safety termination rate above $0.080$.}
+  \label{tab:eval:authority-ladder}
+  \begin{tabular}{lcccl}
+    \toprule
+    $\alpha$ & contact & $\Delta$ contact (pp) & lateral (m) & verdict \\
+    \midrule
+    $1.00$  & $0.7913$ & $0.00$   & $0.1110$ & nominal \\
+    $0.90$  & $0.8320$ & $-4.07$  & $0.0985$ & --- \\
+    $0.20$  & $0.9535$ & $-16.22$ & $0.0653$ & best observed \\
+    $0.05$  & $0.8772$ & $-8.58$  & $0.0928$ & --- \\
+    $0.03$  & $0.8115$ & $-2.02$  & $0.0971$ & --- \\
+    $0.01$  & $0.7085$ & $8.28$   & $0.1085$ & breakdown \\
+    $0.005$ & $0.6513$ & $14.00$  & $0.1158$ & onset, breakdown \\
+    $0.00$  & $0.6148$ & $17.65$  & $0.1268$ & onset, breakdown \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{The lateral criterion does not survive this axis.}
+One of the two predeclared onset criteria had to be set aside, and the reason
+is physical rather than convenient. Removing actuator authority makes the arm
+\emph{stiller}: it commands less motion, so it deviates less, and every
+deviation metric improves as the stress increases. The lateral column of
+Table~\ref{tab:eval:authority-ladder} is lowest at $\alpha = 0.2$, where the
+cutter is least able to follow the line. A criterion that fires on growing
+deviation cannot detect a failure that manifests as absence of motion. Ground
+contact, which falls when the cutter stops reaching the ground, does detect it,
+and it is used as the primary metric for that reason. This is a post-hoc
+narrowing of a predeclared pair and is reported as one; the onset and breakdown
+levels below are contact-only.
+
+\paragraph{The curve is non-monotonic, and that is the result.}
+Contact does not fall as authority is removed. It rises, from $0.7913$ at
+nominal to $0.9535$ at $\alpha = 0.2$, and only then declines, crossing the
+breakdown floor at $\alpha \leq 0.01$. Contact-only degradation onset is
+$\alpha = 0.005$. Read literally, \ppoROM{} tolerates the removal of roughly
+$97\,\%$ of its actuator authority without measured degradation, and performs
+\emph{better} at a fifth of nominal authority than at nominal.
+
+The second half of that sentence is the informative half, and it is not a
+robustness result. A controller that improves when its actuator is attenuated
+is over-commanding at nominal: the policy is requesting more cylinder motion
+than the task needs, and the attenuation is acting as a gain correction the
+tuning did not apply. This is consistent with the excess control effort
+reported in Section~\ref{sec:eval:effort} and it is a finding about the
+deployed policy rather than about the plant's envelope.
+
+\paragraph{Two absorbers sit between the factors and the machine.}
+The reason a plant perturbation is hard to see at the task level on this stack
+is measurable, and it is not that the plant is insensitive. Two mechanisms
+absorb it. The direction guard, at its deployment setting, reduces the
+extension error a reference hydraulic stress produces from $\unit[93.16]{mm}$
+with the guard off to $\unit[19.07]{mm}$ with it on, removing $79.5\,\%$ of the
+plant change; and it reorders the factor ranking rather than merely attenuating
+it, so a ranking measured with the guard off does not describe the deployed
+system. Separately, with the learned residual heads disabled the reduced-order
+model does not move at all --- zero travel and zero extension error at every
+stress --- because training pinned effective mass and viscous friction at their
+ceilings and effective area at its floor. The realised displacement of this
+plant originates entirely in the learned heads.
+
+That second observation carries a constraint on how the open-loop rankings may
+be described. The ordering in Table~\ref{tab:eval:factor-meaning} is a property
+of a learned model whose physical parameters are at their bounds. It is not an
+identified hydraulic sensitivity of the FME~500 and is not presented as one.
+
+\paragraph{What this says about the deployment plant.}
+Three statements are supported, and a fourth is explicitly not.
+
+First, the axis reaches the plant. The instrumentation check records
+$|\Delta x^{\text{applied}}| / |\Delta x^{\text{raw}}|$ equal to $1.0000$ at
+$\alpha = 1$ and $0.0100$ at $\alpha = 0.01$, to four decimals, so the flatness
+of the upper curve is not the delivery failure that invalidated the earlier
+sweep. The endpoint behaves as predicted: at $\alpha \rightarrow 0$ contact
+collapses to $0.6148$.
+
+Second, the deployment plant is not authority-limited over any range a
+plausible hydraulic fault would produce. A fault severe enough to remove
+$97\,\%$ of realised actuator motion is not a degraded seal or a weak pump; it
+is a disconnected actuator. Within the range the factor path can reach --- a
+reduction of at most $62\,\%$, established above --- the ladder shows no
+degradation whatever.
+
+Third, the earlier flat curve is now explained rather than merely qualified.
+Its flatness is consistent with a plant whose task-level response to authority
+loss is genuinely flat until authority is nearly gone, combined with the two
+absorbers above and the clamping of the hydraulic half of the sweep.
+
+What is \emph{not} supported is a plant-robustness envelope. The plant was held
+at nominal for every point of this ladder: the factor manifest was not supplied
+to the run, so \verb|deployment_factor_enabled| was false throughout and the
+sixteen held-out draws were never visited. This curve varies actuator authority
+on a fixed plant. It is an actuator-authority axis and is captioned as one. The
+envelope over plant variation --- the same ladder under the held-out combined
+draws, and on the other two stacks --- remains unmeasured, and the boundary is
+still not located.
 
 \section{Identifiability of Plant Variation}
 \label{sec:eval:identifiability}
