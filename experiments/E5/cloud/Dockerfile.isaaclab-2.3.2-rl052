@@ -1,0 +1,19 @@
+# Isaac Lab 2.3.2 (Isaac Sim 5.1.0, PhysX, Python 3.11) with the isaaclab_rl
+# extension advanced to the main-branch 0.5.2 revision.
+#
+# Why: the rrlab_mulag code imports RslRlMLPModelCfg and the ppo3_1_sole
+# checkpoints are saved in the rsl-rl >= 5.0 layout (separate actor/critic
+# state dicts, per-network obs_normalizer, distribution.std_param). Those
+# arrived in isaaclab_rl 0.5.0, which the published :2.3.2 image predates
+# (it ships 0.4.7 built from the v2.3.2 tag). IsaacLab main carries 0.5.2 at
+# the same VERSION 2.3.2 and keeps SimulationCfg.physx, which the repo also
+# relies on -- so this reproduces a main-branch checkout of that era.
+FROM nvcr.io/nvidia/isaac-lab:2.3.2
+
+# isaaclab_rl is an editable install pointing at this path, so replacing the
+# source tree is enough for the new config classes to take effect.
+COPY source/isaaclab_rl /workspace/isaaclab/source/isaaclab_rl
+
+# isaaclab_rl 0.5.2 targets rsl-rl-lib 5.0.1; the base image ships 3.1.2.
+RUN /isaac-sim/python.sh -m pip install --no-cache-dir "rsl-rl-lib==5.0.1" \
+ && /isaac-sim/python.sh -m pip install --no-cache-dir -e /workspace/isaaclab/source/isaaclab_rl

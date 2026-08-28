@@ -5,7 +5,18 @@ from pathlib import Path
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import SimulationCfg, PhysxCfg
+from isaaclab.sim import SimulationCfg
+try:
+    from isaaclab.sim import PhysxCfg
+except ImportError:
+    # Isaac Lab moved PhysxCfg into isaaclab_physx.physics on some builds
+    # (e.g. 3.0.0-beta2); same fields, same defaults.
+    from isaaclab_physx.physics import PhysxCfg
+
+# Restores cfg.sim.physx on builds that renamed the field to .physics, so the
+# repo's existing physx accesses keep working. See physx_compat for why this is
+# still the same PhysX backend either way.
+from mulag_plant.runtime.physx_compat import PHYSX_FIELD as _PHYSX_FIELD
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 from mulag_plant.runtime.sim_memory import apply_kevin_sim_memory_optimizations
@@ -59,15 +70,17 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 120,
         render_interval=2,
-        physx=PhysxCfg(
-            min_position_iteration_count=16,  # Increased from default 1 for better contact
-            max_position_iteration_count=32,  # Increased from default 255 (effective max)
-            min_velocity_iteration_count=2,   # Increased from default 0 for stability
-            max_velocity_iteration_count=2,   # Keep same as min
-            bounce_threshold_velocity=0.2,    # Threshold for bounce
-            friction_offset_threshold=0.04,   # Friction offset
-            friction_correlation_distance=0.025, # Friction correlation
-        )
+        **{
+            _PHYSX_FIELD: PhysxCfg(
+                min_position_iteration_count=16,  # Increased from default 1 for better contact
+                max_position_iteration_count=32,  # Increased from default 255 (effective max)
+                min_velocity_iteration_count=2,   # Increased from default 0 for stability
+                max_velocity_iteration_count=2,   # Keep same as min
+                bounce_threshold_velocity=0.2,    # Threshold for bounce
+                friction_offset_threshold=0.04,   # Friction offset
+                friction_correlation_distance=0.025, # Friction correlation
+            )
+        }
     )
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=169, env_spacing=20.0, replicate_physics=False)
     robot_cfg: ArticulationCfg = MULAG_CFG.replace(prim_path="/World/envs/env_.*/Robot")

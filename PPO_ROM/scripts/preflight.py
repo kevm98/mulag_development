@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Build and stress-check the final task before a long training run."""
 
 from __future__ import annotations

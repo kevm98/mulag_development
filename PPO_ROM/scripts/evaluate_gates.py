@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Evaluate a PPO-ROM checkpoint on held-out terrain and eight gates."""
 
 from __future__ import annotations

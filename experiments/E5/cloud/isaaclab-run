@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+image="${IMAGE:-nvcr.io/nvidia/isaac-lab:2.0.0}"
+root="${HOME}/isaaclab-cloud"
+
+docker_args=(
+  run --rm --init -i
+  --entrypoint bash
+  --user 0:0
+  --gpus all
+  --runtime=nvidia
+  -e ACCEPT_EULA=Y
+  -e PRIVACY_CONSENT=Y
+  -e OMNI_ENV_PRIVACY_CONSENT=Y
+  -e PYTHONPATH=/workspace/projects/rrlab_mulag/extensions/rrlab_assets
+  --network=host
+  -v "${root}/cache/kit:/isaac-sim/kit/cache:rw"
+  -v "${root}/cache/ov:/root/.cache/ov:rw"
+  -v "${root}/cache/pip:/root/.cache/pip:rw"
+  -v "${root}/cache/glcache:/root/.cache/nvidia/GLCache:rw"
+  -v "${root}/cache/computecache:/root/.nv/ComputeCache:rw"
+  -v "${root}/logs:/root/.nvidia-omniverse/logs:rw"
+  -v "${root}/results:/root/Documents:rw"
+  -v "${HOME}/projects:/workspace/projects:rw"
+  -v "${HOME}/checkpoints:/workspace/checkpoints:rw"
+  -v "${HOME}/logs:/workspace/isaaclab/logs:rw"
+  "${image}"
+)
+
+if [[ $# -eq 0 ]]; then
+  if [[ -t 0 ]]; then
+    docker_args+=( -t )
+  fi
+  exec docker "${docker_args[@]}" -l
+fi
+
+# The image carries the pinned Isaac Sim 4.5 runtime and Isaac Lab 2.0 source
+# at /workspace/isaaclab. Keep the working directory stable for VS Code users.
+exec docker "${docker_args[@]}" -lc 'cd /workspace/isaaclab && exec "$@"' -- "$@"

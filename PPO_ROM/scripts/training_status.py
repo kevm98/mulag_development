@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Summarize a PPO-ROM TensorBoard run without starting Isaac Sim."""
 
 from __future__ import annotations

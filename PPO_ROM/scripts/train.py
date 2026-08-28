@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Train or continue the final sole-controller PPO-ROM policy."""
 
 from __future__ import annotations

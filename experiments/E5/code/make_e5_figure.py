@@ -12,8 +12,11 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
-ROOT = Path("/home/rrlab/rrlab_mulag/outputs/e5_robustness")
+import os
+
+REPO_ROOT = Path(os.environ.get("ROOT", "/home/rrlab/rrlab_mulag"))
+OUT = REPO_ROOT / "thesis/thesis/hydraulic_manipulator_thesis/images"
+ROOT = REPO_ROOT / "outputs/e5_robustness"
 STACKS = [("ppo_rom", "PPO-ROM", "#D31F26"),
           ("ppo_id_fd", "PPO-ID-FD", "#C8860D"),
           ("ppo_aam_id_fd", "PPO-(AAM)-ID-FD", "#0F8A3C")]

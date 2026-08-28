@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
+PY=${PY:-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python}
 RUN=${1:?usage: select_checkpoint.sh <run-dir> <name> [iters...]}
 NAME=${2:?}
 shift 2

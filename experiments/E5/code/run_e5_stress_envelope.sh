@@ -66,7 +66,11 @@ export SPEED_KMH=${SPEED_KMH:-4.0}
 export STALL=${STALL:-420}
 export STAGE=6                      # pipeline stage, not this script's stage
 export REPORT_ROOT="$OUT"
-export FACTOR_DOMAIN=${FACTOR_DOMAIN:-combined_test}
+# Note the '-' rather than ':-': an explicitly empty FACTOR_DOMAIN must survive.
+# Passing --factor_domain at all sets deployment_factor_enabled=True, which
+# requires AAM_module/datasets/.../manifest.csv; leaving it empty runs the
+# nominal plant with no manifest.
+export FACTOR_DOMAIN=${FACTOR_DOMAIN-combined_test}
 ENVS=${ENVS:-16}
 STEPS=${STEPS:-2808}
 mkdir -p "$OUT" "$TRACES" "$(dirname "$LEVELS")"
@@ -79,6 +83,19 @@ R_CKPT=logs/rsl_rl/ppo3_1_sole/rom_s6_aligned/model_598.pt
 R_TASK=""
 AIF_CKPT=logs/rsl_rl/ppo_id_aam_fd/headroom_priced_v1/model_299.pt
 AIF_TASK=RRLAB-Mulag-Verge-ID-AAM-FD-v0
+
+# Which stacks the multi-stack stages iterate over. Defaults to all three, as
+# the protocol was written. Set STACKS=rom for a ROM-only campaign: every extra
+# stack is GPU time, and scoring IF/AIF only to discard them is pure cost.
+STACKS=${STACKS:-all}
+rows_for_stacks() {
+  case "$STACKS" in
+    rom) printf '%s\n' "ppo_rom|$R_CKPT|$R_TASK" ;;
+    all) printf '%s\n' "ppo_rom|$R_CKPT|$R_TASK" "ppo_id_fd|$IF_CKPT|$IF_TASK" \
+                       "ppo_aam_id_fd|$AIF_CKPT|$AIF_TASK" ;;
+    *)   echo "unknown STACKS=$STACKS (want: rom|all)" >&2; exit 2 ;;
+  esac
+}
 
 score() {
   local tag=$1 ckpt=$2 task=$3
@@ -99,19 +116,17 @@ case "$STAGE_E5" in
   # questions, in order: does the factor reach the realised motion (checked
   # numerically from the trace, not inferred from the path), and does the
   # cutter then lose the reference?
-  say "STAGE 0 -- authority knockout on all three stacks"
+  say "STAGE 0 -- authority knockout (stacks: $STACKS)"
   export TRACE_DIR="$TRACES"
   export TRAJECTORY_SHAPES=${TRAJECTORY_SHAPES:-"straight,double_s_curve"}
-  for row in "ppo_rom|$R_CKPT|$R_TASK" "ppo_id_fd|$IF_CKPT|$IF_TASK" \
-             "ppo_aam_id_fd|$AIF_CKPT|$AIF_TASK"; do
-    IFS='|' read -r name ckpt task <<<"$row"
+  while IFS='|' read -r name ckpt task; do
     for alpha in 1.00 0.01; do
       AUTHORITY_ALPHA="$alpha" score "${name}_a${alpha}" "$ckpt" "$task"
     done
-  done
+  done < <(rows_for_stacks)
   say ""
   say "instrumentation check -- |delta_applied| / |delta_raw| must equal alpha:"
-  python3 experiments/E5/code/check_authority_applied.py \
+  "${PY:-python3}" experiments/E5/code/check_authority_applied.py \
       --trace-dir "$TRACES" --mesh "$MESHES" --report-dir "$OUT" | tee -a "$LOG"
   # Same boundary, whole chain: replays the requested stress on the recorded
   # raw increments and compares against the recorded applied ones. Delay is
@@ -119,7 +134,7 @@ case "$STAGE_E5" in
   if [ -n "${STRESS_SPEC:-}" ]; then
     say ""
     say "chain delivery check -- replay of $STRESS_SPEC against the trace:"
-    python3 experiments/E5/code/check_stress_applied.py \
+    "${PY:-python3}" experiments/E5/code/check_stress_applied.py \
         --trace-dir "$TRACES" --stress "$STRESS_SPEC" --report-dir "$OUT" | tee -a "$LOG"
   fi
   ;;
@@ -206,7 +221,7 @@ A)
   done
   say ""
   say "locating the knee and freezing the levels:"
-  python3 experiments/E5/code/summarise_authority.py \
+  "${PY:-python3}" experiments/E5/code/summarise_authority.py \
       --report-dir "$OUT" --mesh "$MESHES" --stack if --write-levels "$LEVELS" \
       | tee -a "$LOG"
   say ""
@@ -219,20 +234,18 @@ B)
   [ -s "$LEVELS" ] || { say "no frozen levels at $LEVELS -- run STAGE_E5=A first"; exit 3; }
   say "STAGE B -- evaluating R, IF and AIF at levels frozen by Stage A (IF only)"
   export TRAJECTORY_SHAPES=""      # all eleven families
-  ALPHA_LIST=$(python3 -c "
+  ALPHA_LIST=$("${PY:-python3}" -c "
 import json,sys
 levels = json.load(open('$LEVELS'))
 print(' '.join(f'{a:.3f}' for a in levels['alpha_levels']))")
   say "frozen alphas: $ALPHA_LIST"
   for alpha in $ALPHA_LIST; do
-    for row in "ppo_rom|$R_CKPT|$R_TASK" "ppo_id_fd|$IF_CKPT|$IF_TASK" \
-               "ppo_aam_id_fd|$AIF_CKPT|$AIF_TASK"; do
-      IFS='|' read -r name ckpt task <<<"$row"
+    while IFS='|' read -r name ckpt task; do
       AUTHORITY_ALPHA="$alpha" score "${name}_a${alpha}" "$ckpt" "$task"
-    done
+    done < <(rows_for_stacks)
   done
   say ""
-  python3 experiments/E5/code/summarise_authority.py \
+  "${PY:-python3}" experiments/E5/code/summarise_authority.py \
       --report-dir "$OUT" --mesh "$MESHES" --stack all | tee -a "$LOG"
   ;;
 
