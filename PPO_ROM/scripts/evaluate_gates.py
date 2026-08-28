@@ -655,6 +655,9 @@ def safety_component_masks(raw) -> dict[str, torch.Tensor]:
 
 
 _Z_HAT_LIVE: dict = {}
+# Gate 0 adaptation-site counters, stashed before env.close() tears down the
+# CUDA tensors they live on, and read back when the report is assembled.
+_GATE0_READOUT: dict = {}
 # Policy-side latent statistics and command-reversal rate. The controller-side
 # z_hat above is identical in every policy-latent arm by construction, so it
 # cannot serve as the mechanism variable for a bandwidth comparison.
@@ -1694,6 +1697,15 @@ def main() -> None:
                     "the recorder never armed (is the task one that records?)"
                 )
             print(f"[PPO3-1-GATES] wrote adaptation trace {saved}", flush=True)
+        # Read the Gate 0 counters while the runtime is still alive: they are
+        # CUDA tensors, and env.close() tears the simulation down underneath
+        # them. Cumulative over the process, so this is the whole mesh.
+        _aam_rt = getattr(raw, "_online_aam", None)
+        if _aam_rt is not None and hasattr(_aam_rt, "gate0_instrumentation"):
+            try:
+                _GATE0_READOUT["gate0"] = _aam_rt.gate0_instrumentation()
+            except Exception as exc:  # instrumentation must never kill a run
+                _GATE0_READOUT["gate0"] = {"error": repr(exc)}
         env.close()
 
     if len(per_mesh) >= 3:
@@ -1709,8 +1721,16 @@ def main() -> None:
             "thin_margins": [],
             "note": "fewer than 3 meshes; per-mesh metrics saved, gates not evaluated",
         }
+    # Gate 0 readout. The counters live on the online-AAM runtime and are
+    # cumulative over the process, so this is the whole run for this mesh.
+    # Recorded unconditionally: the repair plan requires the fallback rate to
+    # be reported beside every latent result, and a result whose fallback rate
+    # was never looked at cannot be interpreted afterwards.
+    gate0_readout = _GATE0_READOUT.get("gate0")
+
     report = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "gate0_adaptation_site": gate0_readout,
         "subject": (
             "dls_teacher"
             if a.teacher
