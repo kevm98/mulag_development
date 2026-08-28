@@ -144,9 +144,26 @@ Configuration, each item a deliberate reversal of what the deployed run did:
 | latent mode | `estimated` | `true` |
 
 `online_aam_latent_mode` already accepts `true`, and
-`online_runtime.py:198` requires an adapter whose `latent_source` matches. The
-true-latent adapter already exists — `outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt`
-— so no adapter retraining is needed to start this gate.
+`online_runtime.py:198` requires an adapter whose `latent_source` matches. Both
+adapters exist and were verified 2026-08-28 by reading the checkpoint payloads:
+`id_adapter_cnn_l20_s5/zhat_adapter.pt` declares `latent_source="zhat"` and
+`id_adapter_cnn_l20_s5_true/true_adapter.pt` declares `"true"`. No adapter
+retraining is needed to start this gate.
+
+**Gate 1 must override the adapter path.** `env_cfg.py:33` defaults
+`ADAPTER_MODEL` to the *zhat* adapter, so `latent_mode='true'` with the default
+raises `latent_mode='true' requires an adapter trained with
+latent_source='true'`. Set it explicitly:
+
+```bash
+export MULAG_AAM_ADAPTER_MODEL=outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt
+```
+
+Note that `TRUE_LATENT_MODEL` (`sd_model/stage31_frozen/z2_rom`) is a different
+artifact — the frozen encoder that computes `z` from `e`, needing `encoder.pt`
+and `metrics.json` in that directory. Both are present on the VM. The adapter
+and the encoder are both required for `latent_mode='true'`; supplying one is
+not enough.
 
 Add `||dec(z) - e||^2` as an auxiliary loss so the two axes acquire physical
 meaning. Without it `d_z=2` stays unstructured and Gate 3's per-axis checks
@@ -296,7 +313,12 @@ sd_model/stage31_frozen/z2_rom/                                     frozen encod
 logs/rsl_rl/ppo_id_aam_fd/headroom_priced_v1/model_299.pt           Gate 0 subject
 ```
 
-**Pushed and sha256-verified on the VM 2026-08-28.** The last two were already
+**Pushed and sha256-verified on the VM 2026-08-28**, and the container
+was then confirmed to register `RRLAB-Mulag-Verge-ID-AAM-FD-v0` and resolve
+`DEFAULT_MANIFEST`. `rrlab_assets` needs no work: `~/bin/isaaclab-run` already
+puts `extensions/rrlab_assets` on `PYTHONPATH`. The working image is
+`isaac-lab:2.3.2-rl052`, not the wrapper's `:2.0.0` default, so every Gate must
+be invoked with `IMAGE=isaac-lab:2.3.2-rl052`. The last two were already
 there from the E5 push; the rest were not, and Gate 0 cannot start without
 them: `env_cfg.py:45` and `:35` name the AAM and adapter as defaults, so the
 env does not build, and with no adapter there is no residual and no
