@@ -9,7 +9,7 @@ import math, sys
 import torch
 
 sys.path.insert(0, "/Volumes/DATA/rrlab_mulag")
-from PPO_ID_AAM_FD.rma_adaptation.core import ActuationConfig, DeploymentActuation
+from PPO_AAM_FD.rma_adaptation.core import ActuationConfig, DeploymentActuation
 from stress import Stress, StressedActuation
 
 DT = 0.05

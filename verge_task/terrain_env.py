@@ -33,6 +33,7 @@ the limit shield and the reward core are untouched.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -89,6 +90,7 @@ from verge_task.terrain import (
 )
 from verge_task.deployment_factors import (
     DIM_ORDER as DEPLOYMENT_FACTOR_DIMS,
+    RANGES as FACTOR_RANGES,
     DEFAULT_MANIFEST as DEFAULT_DEPLOYMENT_FACTOR_MANIFEST,
     select_factors,
     validate_factor_isolation,
@@ -207,6 +209,16 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
     def _setup_deployment_factor_contract(self) -> None:
         """Initialize privileged factor metadata without widening inputs."""
         self._deployment_factor_dims = tuple(DEPLOYMENT_FACTOR_DIMS)
+        # Per-channel bounds for the privileged-e policy route, in DIM_ORDER.
+        # Kept as tensors so the normalisation in the observation path costs
+        # nothing per step.
+        _rng = [FACTOR_RANGES[name] for name in DEPLOYMENT_FACTOR_DIMS]
+        self._privileged_factor_lo = torch.tensor(
+            [lo for lo, _ in _rng], dtype=torch.float32, device=self.device
+        ).reshape(1, -1)
+        self._privileged_factor_hi = torch.tensor(
+            [hi for _, hi in _rng], dtype=torch.float32, device=self.device
+        ).reshape(1, -1)
         self._deployment_factor_reset_index = 0
         self._deployment_factor_keys = ["nominal:0"] * self.num_envs
         self._deployment_factor_run_ids = torch.zeros(
@@ -244,6 +256,14 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         )
         self._deployment_factor_baseline_coms = (
             self.robot.root_physx_view.get_coms().detach().clone()
+        )
+        # Cylinder joint damping. Measured 2026-08-29 on the first run of
+        # mech_sensitivity_gate.py, damping x3 moves the open-loop response
+        # 15.0% at the joint and 11.3% at the EE -- as strong as cutter mass
+        # x1.5 and far stronger than com_z. It is NOT a column of the factor
+        # manifest, so nothing randomized it and no context observed it.
+        self._baseline_cylinder_damping = (
+            self.robot.data.joint_damping[:, self._cylinder_joint_ids].detach().clone()
         )
         expected_width = int(self._expected_observation_dim())
         aam_dim = (
@@ -324,12 +344,36 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         if step_time is None:
             return
         scale = float(getattr(self.cfg, "deployment_mass_step_scale", 1.0))
+        # PER-ENV step time. A step that always fires at the same instant can be
+        # compensated on a timer -- the policy learns "something changes at t=20"
+        # without sensing anything, which lets a NON-adaptive arm score as well
+        # as an adaptive one and hides exactly the effect under test. Jittering
+        # the instant per environment forces the change to be detected rather
+        # than anticipated.
+        #
+        # Drawn once from the env index, like the payload, damping and
+        # alpha/delay draws, so it is a stable property of the environment and
+        # reproducible across runs.
+        jitter = float(getattr(self.cfg, "deployment_mass_step_jitter_s", 0.0))
+        per_env_step_time = getattr(self, "_mass_step_time_per_env", None)
+        if per_env_step_time is None:
+            if jitter > 0.0:
+                generator = torch.Generator(device="cpu").manual_seed(
+                    int(getattr(self.cfg, "deployment_mass_step_seed", 20260829))
+                )
+                draw = (torch.rand(self.num_envs, generator=generator) * 2.0 - 1.0) * jitter
+                per_env_step_time = (float(step_time) + draw).clamp_min(0.0).to(self.device)
+            else:
+                per_env_step_time = torch.full(
+                    (self.num_envs,), float(step_time), device=self.device
+                )
+            self._mass_step_time_per_env = per_env_step_time
         dt = max(
             float(getattr(self, "step_dt",
                           float(self.cfg.sim.dt) * float(self.cfg.decimation))),
             1.0e-6,
         )
-        due = (self._mass_step_elapsed_s >= float(step_time)) & (~self._mass_step_applied)
+        due = (self._mass_step_elapsed_s >= per_env_step_time) & (~self._mass_step_applied)
         self._mass_step_elapsed_s = self._mass_step_elapsed_s + dt
         if not bool(due.any()):
             return
@@ -337,12 +381,99 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         body = int(self._deployment_factor_body_id)
         masses = self._deployment_factor_baseline_masses.clone()
         mass_ids = env_ids.to(masses.device)
+
+        # BIMODAL FLIP. With two well-separated modes and a mid-episode switch,
+        # a single non-adaptive policy has to compromise and is wrong in BOTH
+        # halves of every episode, while a policy that senses the change can
+        # track it. A continuous range does not do this: one compromise profile
+        # is decent across a narrow continuum, so the value of sensing is small
+        # by construction and the experiment understates adaptation.
+        #
+        # Half the environments run light -> heavy and half heavy -> light, so
+        # the direction of the change cannot be assumed either.
+        bimodal = getattr(self.cfg, "deployment_mass_bimodal", None)
+        if bimodal is not None:
+            lo, hi = float(bimodal[0]), float(bimodal[1])
+            start = getattr(self, "_mass_bimodal_start", None)
+            if start is None:
+                index = torch.arange(self.num_envs, device=self.device)
+                start = torch.where(
+                    index % 2 == 0,
+                    torch.full((self.num_envs,), lo, device=self.device),
+                    torch.full((self.num_envs,), hi, device=self.device),
+                )
+                self._mass_bimodal_start = start
+            # after the step each environment holds the OTHER mode
+            target = torch.where(start > (lo + hi) * 0.5,
+                                 torch.full_like(start, lo),
+                                 torch.full_like(start, hi))
+            per_env_scale = target[env_ids]
+        else:
+            per_env_scale = torch.full((env_ids.numel(),), scale, device=self.device)
+
         masses[mass_ids, body] = (
-            self._deployment_factor_baseline_masses[mass_ids, body] * scale
+            self._deployment_factor_baseline_masses[mass_ids, body]
+            * per_env_scale.to(masses.device)
         )
         self.robot.root_physx_view.set_masses(masses, env_ids.detach().cpu())
         self._mass_step_applied[due] = True
-        self._mass_step_scale_now[due] = scale
+        self._mass_step_scale_now[due] = per_env_scale
+
+    @torch.no_grad()
+    def _cylinder_damping_scale_per_env(self) -> torch.Tensor | None:
+        """Deterministic per-environment cylinder damping scale, or None.
+
+        Drawn once from the env INDEX (not per episode) so the damping is a
+        stable property of the environment, matching RMA's assumption that the
+        environment vector is fixed for the episode.
+
+        ``damping_scale_pair_period`` tiles the draw so that env j and env
+        j+period get the SAME damping. The block-44 paired arm design puts those
+        two envs on identical terrain so they differ only by arm -- but only if
+        they also get the same plant, otherwise the "paired" difference carries a
+        plant difference too.
+        """
+        rng = getattr(self.cfg, "damping_scale_range", None)
+        if rng is None:
+            return None
+        lo, hi = float(rng[0]), float(rng[1])
+        if not (0.0 < lo <= hi):
+            raise ValueError(f"damping_scale_range must satisfy 0 < lo <= hi, got {rng}")
+        cached = getattr(self, "_cylinder_damping_scale_cache", None)
+        if cached is not None:
+            return cached
+        period = getattr(self.cfg, "damping_scale_pair_period", None)
+        if period is not None:
+            period = int(period)
+            if period <= 0 or self.num_envs % period:
+                raise ValueError(
+                    f"damping_scale_pair_period={period} must be positive and "
+                    f"divide num_envs={self.num_envs}"
+                )
+            n_draw = period
+        else:
+            n_draw = self.num_envs
+        gen = torch.Generator(device="cpu").manual_seed(
+            int(getattr(self.cfg, "damping_scale_seed", 20260829))
+        )
+        draw = torch.rand(n_draw, generator=gen) * (hi - lo) + lo
+        if period is not None:
+            draw = draw.repeat(self.num_envs // period)
+        cached = draw.to(self.device)
+        self._cylinder_damping_scale_cache = cached
+        return cached
+
+    @torch.no_grad()
+    def _apply_cylinder_damping(self, env_ids: torch.Tensor) -> None:
+        """Write the per-env cylinder damping for the reset environments."""
+        scale = self._cylinder_damping_scale_per_env()
+        if scale is None:
+            return
+        base = self._baseline_cylinder_damping
+        values = base[env_ids] * scale[env_ids].unsqueeze(-1)
+        self.robot.write_joint_damping_to_sim(
+            values, joint_ids=self._cylinder_joint_ids, env_ids=env_ids
+        )
 
     @torch.no_grad()
     def _latch_deployment_factors(self, env_ids: torch.Tensor) -> None:
@@ -351,6 +482,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         self._mass_step_elapsed_s[env_ids] = 0.0
         self._mass_step_applied[env_ids] = False
         self._mass_step_scale_now[env_ids] = 1.0
+        self._apply_cylinder_damping(env_ids)
         if not bool(getattr(self.cfg, "deployment_factor_enabled", False)):
             self._deployment_factor_values[env_ids] = 0.0
             self._deployment_factor_values[env_ids, 4] = 1.0
@@ -401,6 +533,75 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 (self.num_envs, 7), dtype=torch.float32, device=self.device
             )
         self._command_rom_system_factors[env_ids] = all_system[env_ids]
+
+        # Wide payload randomisation. The manifest draws mass_scale in 0.8-1.5
+        # (1.9x), which is far too narrow to matter: over that range a fixed
+        # policy loses nothing measurable. Measured paired on cut-height,
+        # payload 2-5x costs it +24% to +59% (all CIs excluding zero, peak
+        # +58.8% at 3x) -- the first perturbation in this project to clear the
+        # >=25% G1 gate, and therefore the headroom an estimator can recover.
+        #
+        # deployment_factor_scale cannot be used for this: it stretches every
+        # draw away from nominal, so reaching 4x on the high side drives the
+        # low side negative. This replaces the mass_scale COLUMN only, so the
+        # privileged/AAM context still reads it from the same place.
+        payload_range = getattr(self.cfg, "payload_scale_range", None)
+        if payload_range is not None:
+            lo, hi = float(payload_range[0]), float(payload_range[1])
+            # Seed WITHOUT the reset index by default, so the payload is a fixed
+            # property of the environment -- the same convention PlantPerturbation
+            # (alpha/delay) and the damping draw already use, and the one RMA
+            # assumes when it treats e as constant for an episode.
+            #
+            # Keying on `_deployment_factor_reset_index` made the draw depend on
+            # how many resets had happened, which differs between runs whose reset
+            # patterns differ. Measured consequence: the SAME arm, policy, seed and
+            # environments scored 7.44 mm in one run and 3.56 mm in another. Paired
+            # comparisons WITHIN a run were unaffected, but no absolute number was
+            # comparable across runs, which is an easy trap to read as a real
+            # effect.
+            resample = bool(
+                getattr(self.cfg, "payload_scale_resample_per_episode", False)
+            )
+            generator = torch.Generator(device="cpu").manual_seed(
+                int(getattr(self.cfg, "payload_scale_seed", 20260829))
+                + (int(self._deployment_factor_reset_index) if resample else 0)
+            )
+            # Draw for ALL environments and index by env id, never
+            # `torch.rand(len(env_ids))`: that makes an environment's payload
+            # depend on its POSITION in the reset batch rather than on its
+            # index, so the same env draws differently depending on who else
+            # happens to reset with it. Nothing paired can survive that.
+            full = torch.rand(self.num_envs, generator=generator) * (hi - lo) + lo
+            period = getattr(self.cfg, "payload_scale_pair_period", None)
+            if period is not None:
+                period = int(period)
+                if period <= 0 or self.num_envs % period:
+                    raise ValueError(
+                        f"payload_scale_pair_period={period} must be positive and "
+                        f"divide num_envs={self.num_envs}"
+                    )
+                # env j and env j+period share a payload, so block-44 paired arms
+                # compare the same plant instead of two different ones.
+                full = full[:period].repeat(self.num_envs // period)
+            self._deployment_factor_values[env_ids, 4] = (
+                full.to(self.device)[env_ids]
+            )
+
+        # Bimodal start: each environment begins in one of the two modes and
+        # flips to the other mid-episode (see _apply_mass_step). Set here so the
+        # PRE-step mass matches the mode the flip will move away from.
+        bimodal = getattr(self.cfg, "deployment_mass_bimodal", None)
+        if bimodal is not None:
+            lo, hi = float(bimodal[0]), float(bimodal[1])
+            index = torch.arange(self.num_envs, device=self.device)
+            start = torch.where(
+                index % 2 == 0,
+                torch.full((self.num_envs,), lo, device=self.device),
+                torch.full((self.num_envs,), hi, device=self.device),
+            )
+            self._mass_bimodal_start = start
+            self._deployment_factor_values[env_ids, 4] = start[env_ids]
 
         body = int(self._deployment_factor_body_id)
         factor_rows = self._deployment_factor_values[env_ids]
@@ -1540,6 +1741,12 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         strip_cfg = self._mow_strip_cfg()
         origins = self.scene.env_origins.detach().cpu().numpy()
         vary_seed = bool(getattr(self.cfg, "randomize_terrain_per_env", True))
+        # Paired per-env arms need every env on the SAME terrain: with
+        # per-env seeds each arm scores a different set of terrains, which is
+        # an unpaired comparison whose spread (3.6 mm between arms that are
+        # identical by construction) swamps the ~1 mm effects under test.
+        if os.environ.get("MULAG_SHARED_TERRAIN") == "1":
+            vary_seed = False
         seed_stride = int(getattr(self.cfg, "terrain_seed_stride", 7919))
         unprofiled_cfg = self._mow_strip_cfg_unprofiled()
         relief_profile = str(getattr(self.cfg, "terrain_relief_profile", "gentle"))
@@ -4658,16 +4865,32 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # level environment appends z_hat in ``_flatten_observations``; the
         # terrain task has its own observation builder, so it must preserve
         # that same contract explicitly.  Without this append the configured
-        # 68-D PPO_ID_AAM_FD task silently emitted the legacy 66-D terrain
+        # 68-D PPO_AAM_FD task silently emitted the legacy 66-D terrain
         # observation and trained an actor that never saw the latent it was
         # supposed to condition on.
         if self._online_aam is not None and bool(
             getattr(self.cfg, "online_aam_policy_observation", False)
         ):
-            obs = torch.cat((obs, self._policy_latent_observation()), dim=-1)
+            # THREE mutually exclusive context routes share this slot and they
+            # are not the same width. Hardcoding the 2-D latent here is the
+            # same failure the comment above records, one level down: the
+            # privileged-e route set observation_space=72, both width
+            # derivations agreed, and this line still appended 2 -- so the run
+            # died on "lost its z_hat append: got 68, expected 72" and the
+            # upper-bound experiment could never start. Route selection must
+            # match _expected_observation_dim exactly.
+            if bool(getattr(self.cfg, "online_aam_policy_privileged_e", False)):
+                context = self._privileged_factor_observation()
+            elif bool(getattr(self.cfg, "online_aam_policy_rma_context", False)):
+                context = self._rma_context_observation()
+            elif bool(getattr(self.cfg, "online_aam_policy_rif_context", False)):
+                context = self._rif_context_observation()
+            else:
+                context = self._policy_latent_observation()
+            obs = torch.cat((obs, context), dim=-1)
             if obs.shape[-1] != int(self._expected_observation_dim()):
                 raise RuntimeError(
-                    "PPO_ID_AAM_FD terrain observation lost its z_hat append: "
+                    "PPO_AAM_FD terrain observation lost its z_hat append: "
                     f"got {obs.shape[-1]}, expected {self._expected_observation_dim()}"
                 )
         return {"policy": obs}
@@ -4688,7 +4911,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             return
         recorder = getattr(self, "_adaptation_trace", None)
         if recorder is None:
-            from PPO_ID_AAM_FD.trace_recorder import TraceRecorder
+            from PPO_AAM_FD.trace_recorder import TraceRecorder
 
             recorder = TraceRecorder(
                 num_envs=self.num_envs,
@@ -4755,6 +4978,20 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # Stage 0 positive control checks |applied| / |raw| numerically rather
         # than inferring from the cutter path that the perturbation was applied.
         row["theta_mass_scale"] = self._mass_step_scale_now
+
+        # The 6-D deployment factor draw, per env, per step. Phase 2 has to
+        # regress e from history, so the target has to be IN the trace; without
+        # it the recorder captures the estimate and the errors but not the
+        # thing being estimated, and the trace cannot train an estimator at
+        # all. Recorded for analysis/supervision only -- never routed into the
+        # policy, the ID model or the AAM input, exactly like theta_* above.
+        factors = getattr(self, "_deployment_factor_values", None)
+        if factors is not None:
+            from verge_task.deployment_factors import DIM_ORDER as _E_DIMS
+
+            for _i, _name in enumerate(_E_DIMS):
+                if _i < factors.shape[-1]:
+                    row[f"theta_e_{_name}"] = factors[:, _i]
 
         authority_raw = getattr(self, "_actuator_delta_raw", None)
         authority_applied = getattr(self, "_actuator_delta_applied", None)

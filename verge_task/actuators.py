@@ -55,8 +55,8 @@ def resolve_actuator(name: str):
 
         return package.TERRAIN_TASK_ID, Ppo41IDFDPPORunnerCfg, ACTUATOR_LABELS[key]
     if key == "id_aam_fd":
-        import PPO_ID_AAM_FD as package
-        from PPO_ID_AAM_FD.env_cfg import PpoIDAAMFDPPORunnerCfg
+        import PPO_AAM_FD as package
+        from PPO_AAM_FD.env_cfg import PpoIDAAMFDPPORunnerCfg
 
         return package.TERRAIN_TASK_ID, PpoIDAAMFDPPORunnerCfg, ACTUATOR_LABELS[key]
     raise ValueError(f"--actuator must be one of {ACTUATORS}, got {name!r}")

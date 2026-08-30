@@ -10,7 +10,7 @@ report paths were renamed.
 | PPO-ROM | `PPO_ROM/` | `ppo_rom` | `rom` |
 | PPO-ID-FD | `PPO_ID_FD/` | `ppo_id_fd` | `idfd` |
 | PPO-ID-FD + integrator | `PPO_ID_FD/` | `ppo_id_fd_integrator` | `idfd_integrator` |
-| PPO-ID(AAM)-FD | `PPO_ID_AAM_FD/` | `ppo_id_aam_fd` | `id_aam_fd` |
+| PPO-ID(AAM)-FD | `PPO_AAM_FD/` | `ppo_id_aam_fd` | `id_aam_fd` |
 
 The integrator is a runtime correction arm over the frozen ID-FD pipeline, not
 a fourth implementation folder. Its manifest should carry an explicit
@@ -30,7 +30,7 @@ Every final paired-evaluation manifest should record:
 {
   "arm": "PPO-ID(AAM)-FD",
   "experiment_key": "ppo_id_aam_fd",
-  "folder": "PPO_ID_AAM_FD",
+  "folder": "PPO_AAM_FD",
   "actuator": "id_aam_fd",
   "integrator_enabled": false,
   "policy_checkpoint_sha256": "...",

@@ -18,7 +18,7 @@ ID/FD as its safety fallback.
 |---|---|---|---|
 | **[PPO_ROM](PPO_ROM/)** | ROM-A | policy → command ROM → PhysX | **CERTIFIED — all 8 gates, 6 meshes, no thin margins** |
 | **[PPO_ID_FD](PPO_ID_FD/)** | ID→FD | policy → ID (target→valve) → FD (valve→Δx) → PhysX | **PROMOTED — six-mesh selection pipeline** |
-| **[PPO_ID_AAM_FD](PPO_ID_AAM_FD/)** | causal AAM + ID adapter + FD | policy → AAM context → ID adapter → FD → PhysX | interface verified; nonzero adapter in safe shadow mode |
+| **[PPO_AAM_FD](PPO_AAM_FD/)** | causal AAM + ID adapter + FD | policy → AAM context → ID adapter → FD → PhysX | interface verified; nonzero adapter in safe shadow mode |
 
 Start with each pipeline's own README — they carry the results, the commands and
 the reasoning.
@@ -60,7 +60,7 @@ distilled student; fine-tune only if contact matters more than tracking.
 
     PPO_ROM/         ROM-A pipeline. The certified one.
     PPO_ID_FD/       current ID/FD pipeline.
-    PPO_ID_AAM_FD/   causal online AAM + ID adapter + FD pipeline.
+    PPO_AAM_FD/   causal online AAM + ID adapter + FD pipeline.
 
 ### Shared libraries (imported by the pipelines — not pipelines themselves)
 
@@ -79,12 +79,12 @@ because they are *shared*, not because they are old.
     rom_model/      ROM-A command ROM   -> PPO_ROM
       ROM_pipeline/                        model DEFINITIONS (put on sys.path)
       plant_reachable_v1_finetune_blend25/best_rom.pt   the deployed ROM
-    id_fd_model/    ID and FD models    -> PPO_ID_FD and PPO_ID_AAM_FD
+    id_fd_model/    ID and FD models    -> PPO_ID_FD and PPO_AAM_FD
       vendor_models/                       model DEFINITIONS (imported)
       best_id_cylinder_control.pt          ID: target -> valve
       best_fd_cylinder_strict.pt           FD: valve -> delta x  (STRICT, not control)
 
-    outputs/        AAM and latent-adapter checkpoints used by PPO_ID_AAM_FD
+    outputs/        AAM and latent-adapter checkpoints used by PPO_AAM_FD
 
 Each folder holds **both** the weights and the model definitions, because the
 runtimes import the definitions from beside the weights. Each has its own README
@@ -119,7 +119,7 @@ PPO_ROM/visualize.sh
 # preflight before committing GPU hours (10 checks)
 PPO_ROM/scripts/preflight.py --num_envs 32 --steps 120
 PPO_ID_FD/scripts/preflight.py --num_envs 32 --steps 120
-PPO_ID_AAM_FD/scripts/preflight.py --num-envs 4 --device cpu
+PPO_AAM_FD/scripts/preflight.py --num-envs 4 --device cpu
 
 # score on the 8 gates (one process per mesh -- see the Isaac Sim note below)
 PPO_ROM/scripts/score_per_mesh.sh <name> <ckpt.pt> 480 32
@@ -128,7 +128,7 @@ MESHES="1337 17 909 4242 555 2024" \
 
 # training report and charts
 PPO_ROM/scripts/training_status.py --plot
-PPO_ID_AAM_FD/scripts/training_status.py --plot
+PPO_AAM_FD/scripts/training_status.py --plot
 ```
 
 ---

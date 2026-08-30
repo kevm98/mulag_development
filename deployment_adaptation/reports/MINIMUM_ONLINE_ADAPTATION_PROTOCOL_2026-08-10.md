@@ -65,21 +65,21 @@ cd /home/rrlab/rrlab_mulag
 PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
 
 # Minimum causal/safety/adaptation gate on the NVIDIA GPU.
-$PY PPO_ID_AAM_FD/scripts/minimum_online_adaptation_check.py \
+$PY PPO_AAM_FD/scripts/minimum_online_adaptation_check.py \
   --device cuda --num-envs 2 --ticks 72 \
   --out outputs/stage30_online_aam/minimum_online_adaptation_check_cuda.json
 
 # Artifact/runtime preflight on CUDA.
-$PY PPO_ID_AAM_FD/scripts/preflight.py \
+$PY PPO_AAM_FD/scripts/preflight.py \
   --num-envs 4 --device cuda \
   --out outputs/stage30_online_aam/preflight_cuda.json
 
 # Minimum PhysX integration smoke; this is execution-only with one mesh.
-$PY PPO_ID_AAM_FD/scripts/smoke.py \
+$PY PPO_AAM_FD/scripts/smoke.py \
   --meshes 1337 --num_envs 1 --steps 8
 
 # Existing paired held-out evaluation; no training is started.
-$PY PPO_ID_AAM_FD/scripts/evaluate_stage30.py \
+$PY PPO_AAM_FD/scripts/evaluate_stage30.py \
   --device cuda --residual-scale 0.75 \
   --out outputs/stage30_online_aam/evaluation_scale075
 ```

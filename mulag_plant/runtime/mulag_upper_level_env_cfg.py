@@ -126,6 +126,26 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     plant_perturbation_step_alpha_scale = 1.0
     plant_perturbation_step_delay_steps = None
     plant_perturbation_seed = 20260816
+    # Repeat the per-env plant draw with this period so paired arms (block-44
+    # per-env assignment) compare the SAME plant. None keeps independent draws.
+    plant_perturbation_pair_period = None
+    # RIF Stage 1 privileged context: expose the per-env (alpha, delay) draw to
+    # the policy in place of the 2-D AAM code. Training-only upper bound, never
+    # a deployable arm. Requires plant_perturbation_enabled.
+    online_aam_policy_rif_context = False
+    # Mixed-plant randomisation: randomise over the PLANT MODEL (command ROM vs
+    # ID->FD), not just its parameters. Every parameter axis measured in this
+    # repo -- flow/compliance/seal/pressure, delay to 16 steps, alpha to 0.25 --
+    # failed to degrade a fixed policy, so none of them created headroom for an
+    # estimator to recover. Switching plant model is a much larger change and
+    # is the candidate for a box that actually binds. One plant per episode.
+    # Wide payload randomisation for the mechanical adaptation axis. None keeps
+    # the manifest's own 0.8-1.5 mass_scale draw.
+    payload_scale_range = None
+    payload_scale_seed = 20260829
+    mixed_plant_enabled = False
+    mixed_plant_rom_fraction = 0.5
+    mixed_plant_seed = 20260829
 
     # Actuator-authority degradation: the fraction of the realised cylinder
     # motion that reaches the PhysX target. Applied at the same point on every

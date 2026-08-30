@@ -1,0 +1,1344 @@
+{
+  "timestamp": "2026-08-28T20:57:04",
+  "gate0_adaptation_site": {
+    "valve_elements": 76800,
+    "env_ticks": 19200,
+    "base_at_limit": 61218,
+    "base_at_limit_fraction": 0.797109375,
+    "clamp_bound": 22959,
+    "clamp_bound_fraction": 0.2989453125,
+    "residual_dead": 29730,
+    "residual_dead_fraction": 0.387109375,
+    "fallback_env_ticks": 0,
+    "fallback_env_tick_fraction": 0.0,
+    "adapter_applied_env_ticks": 17376,
+    "adapter_applied_env_tick_fraction": 0.905
+  },
+  "subject": "policy_checkpoint",
+  "sole_teacher_mode": "off",
+  "cylinder_target_max_lead_per_axis_m": [
+    0.03,
+    0.03,
+    0.03,
+    0.02
+  ],
+  "lead_cap_overridden": false,
+  "cylinder_target_integrates_from_previous_target": true,
+  "cylinder_target_lead_high_speed_per_axis_m": [],
+  "cylinder_target_lead_schedule_speed_kmh": 4.0,
+  "z_hat_is_live": true,
+  "z_hat_std_observed": 0.38370218873023987,
+  "z_hat_across_env_std_observed": 0.38370218873023987,
+  "z_hat_temporal_delta_observed": 3.2881617546081543,
+  "online_aam_latent_mode": "estimated",
+  "online_aam_controller_latent_mode": "estimated",
+  "online_aam_policy_latent_lpf_hz": 0.0,
+  "policy_latent_temporal_var": 0.49875155091285706,
+  "policy_latent_across_env_std": 0.38370218873023987,
+  "policy_latent_abs_max": 3.3486645221710205,
+  "command_reversals_per_s": 8.975229933110368,
+  "c3_physical_extension_reserve_m": 0.008,
+  "cylinder_target_leak": 0.0,
+  "dls_null_space_centering_gain": 0.0,
+  "cylinder_target_limit_inset_m": 0.0,
+  "vehicle_speed_min_kmh": 2.0,
+  "vehicle_speed_max_kmh": 7.0,
+  "factor_domain": "nominal",
+  "factor_key": "",
+  "online_aam_residual_scale": 0.25,
+  "online_aam_checkpoint": "/workspace/projects/rrlab_mulag/outputs/stage31_rom/aam_cnn/L20_d64",
+  "online_aam_adapter_checkpoint": "/workspace/projects/rrlab_mulag/outputs/stage31_rom/id_adapter_cnn_l20_s5/zhat_adapter.pt",
+  "online_aam_history_lag": 20,
+  "online_aam_smoother_window": 5,
+  "deployment_factor_enabled": false,
+  "action_scale": 0.004,
+  "cylinder_action_scale_per_axis_m": [
+    0.004,
+    0.004,
+    0.004,
+    0.004
+  ],
+  "deployment_factor_manifest": "/workspace/projects/rrlab_mulag/AAM_module/datasets/rom_deployment_stage31_v1_frozen/raw/manifest.csv",
+  "evaluation_seed": 17,
+  "checkpoint": "/workspace/projects/rrlab_mulag/logs/rsl_rl/ppo_id_aam_fd/headroom_priced_v1/model_299.pt",
+  "stage": 6,
+  "actuator": "id_aam_fd",
+  "action_width": 4,
+  "meshes": [
+    "1337"
+  ],
+  "per_mesh": {
+    "1337": {
+      "mesh": 1337,
+      "steps": 600,
+      "num_envs": 32,
+      "control_dt_s": 0.016666666666666666,
+      "episode_length_s": 47.3,
+      "mow_strip_start_x_m": -25.4,
+      "mow_strip_length_m": 26.0,
+      "tracking_reference_x_m": -25.4,
+      "tracking_active_length_m": 26.0,
+      "max_truck_travel_m": 19.120676040649414,
+      "cutter_x_min_m": -25.341266632080078,
+      "cutter_x_max_m": -6.234073638916016,
+      "scan_valid_fraction": 0.9969329237937927,
+      "episode_termination_rate": 0.0,
+      "episode_termination_fraction": 0.0,
+      "safety_component_rates": {
+        "cylinder_limit": 0.0,
+        "nonfinite": 0.0,
+        "truck_drift": 0.0,
+        "head_alignment": 0.012395833618938923,
+        "clearance": 0.0031770833302289248
+      },
+      "distance_results": [
+        {
+          "start_m": 0.0,
+          "end_m": 3.25,
+          "samples": 5412,
+          "mean_abs_cut_height_error_m": 0.01173438411206007,
+          "mean_abs_lateral_error_m": 0.046368785202503204,
+          "ground_contact_fraction": 0.8793421983718872,
+          "p01_head_alignment": 0.999039351940155,
+          "p01_cylinder_headroom_m": 0.042709991335868835,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.08130265772342682,
+            0.12829315662384033,
+            0.07676426321268082,
+            0.042709991335868835
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.26596519351005554,
+            0.12829315662384033,
+            0.07676426321268082,
+            0.042709991335868835
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.08130265772342682,
+            0.1762194186449051,
+            0.17934654653072357,
+            0.1108923852443695
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.761817991733551,
+            0.4141566753387451,
+            0.331075519323349,
+            0.3211754262447357
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.07799617946147919,
+            0.09839767962694168,
+            0.05215832218527794,
+            0.0422980971634388
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.005710582248866558,
+            0.03094899095594883,
+            0.029572412371635437,
+            0.020523499697446823
+          ],
+          "scan_valid_fraction": 0.989118754863739,
+          "ground_height_mean_m": 0.0017385425744578242,
+          "ground_height_min_m": -0.005788922309875488,
+          "ground_height_max_m": 0.09142327308654785,
+          "cutter_height_above_ground_mean_m": -0.2560390830039978,
+          "cutter_x_min_m": -25.341266632080078,
+          "cutter_x_max_m": -22.075439453125,
+          "hard_impact_event_fraction": 0.13008129596710205,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.1607963889837265,
+            0.9844673871994019,
+            0.6542607545852661,
+            0.36930051445961
+          ],
+          "action_saturation_fraction": 0.2174796760082245,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.00036954914685338736
+          },
+          "safety_violation_rate": 0.00036954914685338736
+        },
+        {
+          "start_m": 3.25,
+          "end_m": 6.5,
+          "samples": 5349,
+          "mean_abs_cut_height_error_m": 0.00024604308418929577,
+          "mean_abs_lateral_error_m": 0.030637379735708237,
+          "ground_contact_fraction": 0.9943914413452148,
+          "p01_head_alignment": 0.9940587282180786,
+          "p01_cylinder_headroom_m": 0.04087559133768082,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.0810166597366333,
+            0.1275639533996582,
+            0.07055897265672684,
+            0.04087559133768082
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.2665349543094635,
+            0.1275639533996582,
+            0.07055897265672684,
+            0.04087559133768082
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.0810166597366333,
+            0.15618786215782166,
+            0.15765763819217682,
+            0.10801423341035843
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.7624136805534363,
+            0.43168023228645325,
+            0.3387733995914459,
+            0.32068708539009094
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.07584156841039658,
+            0.09766961634159088,
+            0.05333307385444641,
+            0.03622433915734291
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.007333866320550442,
+            0.03139684721827507,
+            0.030171779915690422,
+            0.020544979721307755
+          ],
+          "scan_valid_fraction": 1.0,
+          "ground_height_mean_m": 0.05300414189696312,
+          "ground_height_min_m": -0.02924060821533203,
+          "ground_height_max_m": 0.28908538818359375,
+          "cutter_height_above_ground_mean_m": -0.250415176153183,
+          "cutter_x_min_m": -22.211868286132812,
+          "cutter_x_max_m": -18.827808380126953,
+          "hard_impact_event_fraction": 0.15423443913459778,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.16183869540691376,
+            0.9990569949150085,
+            0.6287819147109985,
+            0.44649121165275574
+          ],
+          "action_saturation_fraction": 0.24312955141067505,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0
+          },
+          "safety_violation_rate": 0.0
+        },
+        {
+          "start_m": 6.5,
+          "end_m": 9.75,
+          "samples": 4475,
+          "mean_abs_cut_height_error_m": 0.0008139592246152461,
+          "mean_abs_lateral_error_m": 0.04273214936256409,
+          "ground_contact_fraction": 0.9886033535003662,
+          "p01_head_alignment": 0.9816008806228638,
+          "p01_cylinder_headroom_m": 0.03921963647007942,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.08033958822488785,
+            0.12385715544223785,
+            0.06949200481176376,
+            0.03921963647007942
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.2621481120586395,
+            0.12385715544223785,
+            0.06949200481176376,
+            0.03921963647007942
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.08033958822488785,
+            0.1466057002544403,
+            0.14586366713047028,
+            0.10355963557958603
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.7618860602378845,
+            0.43455401062965393,
+            0.35854941606521606,
+            0.31861454248428345
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.07575708627700806,
+            0.09407851845026016,
+            0.041590478271245956,
+            0.036511603742837906
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.0077491034753620625,
+            0.031881462782621384,
+            0.03090815618634224,
+            0.02080570161342621
+          ],
+          "scan_valid_fraction": 1.0,
+          "ground_height_mean_m": 0.07182853668928146,
+          "ground_height_min_m": -0.0389401912689209,
+          "ground_height_max_m": 0.41776955127716064,
+          "cutter_height_above_ground_mean_m": -0.2449943870306015,
+          "cutter_x_min_m": -18.909103393554688,
+          "cutter_x_max_m": -15.558540344238281,
+          "hard_impact_event_fraction": 0.19843575358390808,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.2009754180908203,
+            0.9947380423545837,
+            0.6309056282043457,
+            0.49300554394721985
+          ],
+          "action_saturation_fraction": 0.23670391738414764,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.007374302018433809,
+            "clearance": 0.0
+          },
+          "safety_violation_rate": 0.007374302018433809
+        },
+        {
+          "start_m": 9.75,
+          "end_m": 13.0,
+          "samples": 2773,
+          "mean_abs_cut_height_error_m": 0.0013917323667556047,
+          "mean_abs_lateral_error_m": 0.08277774602174759,
+          "ground_contact_fraction": 0.9798052906990051,
+          "p01_head_alignment": 0.9677137732505798,
+          "p01_cylinder_headroom_m": 0.039403244853019714,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.0753101035952568,
+            0.11870546638965607,
+            0.06709621846675873,
+            0.03980882838368416
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.2500808835029602,
+            0.11870546638965607,
+            0.06726197153329849,
+            0.03980882838368416
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.0753101035952568,
+            0.156451016664505,
+            0.10943017154932022,
+            0.09961742907762527
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.7602202892303467,
+            0.4451674818992615,
+            0.3553169369697571,
+            0.3210541605949402
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.07058603316545486,
+            0.0925542563199997,
+            0.042232271283864975,
+            0.037442646920681
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.007869209162890911,
+            0.03169342875480652,
+            0.03247644379734993,
+            0.020830141380429268
+          ],
+          "scan_valid_fraction": 1.0,
+          "ground_height_mean_m": 0.10302626341581345,
+          "ground_height_min_m": -0.04217863082885742,
+          "ground_height_max_m": 0.4058791399002075,
+          "cutter_height_above_ground_mean_m": -0.24242153763771057,
+          "cutter_x_min_m": -15.798324584960938,
+          "cutter_x_max_m": -12.297416687011719,
+          "hard_impact_event_fraction": 0.17598268389701843,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.21436040103435516,
+            0.9528495073318481,
+            0.6540351510047913,
+            0.46536415815353394
+          ],
+          "action_saturation_fraction": 0.21988821029663086,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.052650559693574905,
+            "clearance": 0.0028849621303379536
+          },
+          "safety_violation_rate": 0.053011178970336914
+        },
+        {
+          "start_m": 13.0,
+          "end_m": 16.25,
+          "samples": 1019,
+          "mean_abs_cut_height_error_m": 0.02074815146625042,
+          "mean_abs_lateral_error_m": 0.15392649173736572,
+          "ground_contact_fraction": 0.9038273096084595,
+          "p01_head_alignment": 0.9600099325180054,
+          "p01_cylinder_headroom_m": 0.03513596951961517,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.08002985268831253,
+            0.09960059821605682,
+            0.03513596951961517,
+            0.04168260470032692
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.24631145596504211,
+            0.09960059821605682,
+            0.06668312847614288,
+            0.04168260470032692
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.08002985268831253,
+            0.15753066539764404,
+            0.03513596951961517,
+            0.0807121992111206
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.7564919590950012,
+            0.4291521906852722,
+            0.371141254901886,
+            0.3351562023162842
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.07749974727630615,
+            0.09730342775583267,
+            0.04660744592547417,
+            0.038743775337934494
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.01021571271121502,
+            0.03200125694274902,
+            0.030904646962881088,
+            0.021028630435466766
+          ],
+          "scan_valid_fraction": 1.0,
+          "ground_height_mean_m": 0.07471317797899246,
+          "ground_height_min_m": -0.03502345085144043,
+          "ground_height_max_m": 0.3193941116333008,
+          "cutter_height_above_ground_mean_m": -0.24448198080062866,
+          "cutter_x_min_m": -12.786605834960938,
+          "cutter_x_max_m": -9.139102935791016,
+          "hard_impact_event_fraction": 0.24631991982460022,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.22136300802230835,
+            0.9283624291419983,
+            0.6745542287826538,
+            0.5053207874298096
+          ],
+          "action_saturation_fraction": 0.20068694651126862,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.05789990350604057,
+            "clearance": 0.0500490665435791
+          },
+          "safety_violation_rate": 0.07948969304561615
+        },
+        {
+          "start_m": 16.25,
+          "end_m": 19.5,
+          "samples": 172,
+          "mean_abs_cut_height_error_m": 0.0,
+          "mean_abs_lateral_error_m": 0.040866389870643616,
+          "ground_contact_fraction": 0.9941860437393188,
+          "p01_head_alignment": 0.9996458888053894,
+          "p01_cylinder_headroom_m": 0.050762541592121124,
+          "p01_cylinder_headroom_per_cylinder_m": [
+            0.07921116799116135,
+            0.13161657750606537,
+            0.08935952186584473,
+            0.050762541592121124
+          ],
+          "p01_headroom_low_per_cylinder_m": [
+            0.26494795083999634,
+            0.13161657750606537,
+            0.08935952186584473,
+            0.050762541592121124
+          ],
+          "p01_headroom_high_per_cylinder_m": [
+            0.07921116799116135,
+            0.17348234355449677,
+            0.19032451510429382,
+            0.11185237765312195
+          ],
+          "mean_stroke_fraction_per_cylinder": [
+            0.7654985189437866,
+            0.4268507957458496,
+            0.32649651169776917,
+            0.3200337290763855
+          ],
+          "p01_target_headroom_per_cylinder_m": [
+            0.0767214298248291,
+            0.10174166411161423,
+            0.06429649889469147,
+            0.04212590679526329
+          ],
+          "p99_abs_target_overshoot_per_cylinder_m": [
+            0.006667351815849543,
+            0.03130379319190979,
+            0.02931438386440277,
+            0.020296430215239525
+          ],
+          "scan_valid_fraction": 1.0,
+          "ground_height_mean_m": 0.05386883020401001,
+          "ground_height_min_m": -1.895427703857422e-05,
+          "ground_height_max_m": 0.166498064994812,
+          "cutter_height_above_ground_mean_m": -0.2722448408603668,
+          "cutter_x_min_m": -9.105110168457031,
+          "cutter_x_max_m": -6.234073638916016,
+          "hard_impact_event_fraction": 0.29651162028312683,
+          "episode_termination_rate": 0.0,
+          "mean_abs_action": [
+            0.21245594322681427,
+            0.9844021201133728,
+            0.6170280575752258,
+            0.4524187445640564
+          ],
+          "action_saturation_fraction": 0.18023255467414856,
+          "safety_component_rates": {
+            "cylinder_limit": 0.0,
+            "nonfinite": 0.0,
+            "truck_drift": 0.0,
+            "head_alignment": 0.0,
+            "clearance": 0.0
+          },
+          "safety_violation_rate": 0.0
+        }
+      ],
+      "amplitude_results": [
+        {
+          "amplitude_scale": 0.75,
+          "environments": 8,
+          "mean_abs_lateral_error_m": 0.03223021328449249,
+          "mean_abs_cut_height_error_m": 0.0032076947391033173,
+          "ground_contact_fraction": 0.9658333659172058
+        },
+        {
+          "amplitude_scale": 1.2,
+          "environments": 8,
+          "mean_abs_lateral_error_m": 0.03413471207022667,
+          "mean_abs_cut_height_error_m": 0.0038408550899475813,
+          "ground_contact_fraction": 0.953125
+        },
+        {
+          "amplitude_scale": 1.7,
+          "environments": 8,
+          "mean_abs_lateral_error_m": 0.052421558648347855,
+          "mean_abs_cut_height_error_m": 0.006670134142041206,
+          "ground_contact_fraction": 0.9489583373069763
+        },
+        {
+          "amplitude_scale": 2.2,
+          "environments": 8,
+          "mean_abs_lateral_error_m": 0.08943776786327362,
+          "mean_abs_cut_height_error_m": 0.005753540433943272,
+          "ground_contact_fraction": 0.9468750357627869
+        }
+      ],
+      "mean_abs_cut_height_error_m": 0.004868056159466505,
+      "worst_family_mean_abs_lateral_error_m": 0.14016516506671906,
+      "worst_family_ground_contact_fraction": 0.9322222471237183,
+      "p01_head_alignment": 0.9783962368965149,
+      "hard_impact_step_fraction": 0.16703125,
+      "p95_tool_acceleration_mps2": 51.90515899658203,
+      "min_cylinder_headroom_m": 0.029577016830444336,
+      "p01_cylinder_headroom_m": 0.04005797207355499,
+      "headroom_diagnostic": {
+        "gate": 0.005,
+        "breach_steps": 0
+      },
+      "cylinder_names": [
+        "Drehzapfen_joint",
+        "Ausleger_I_joint",
+        "Ausleger_II_joint",
+        "Messerkopf_Schwenk_joint"
+      ],
+      "per_env_headroom": [
+        {
+          "env": 0,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.0806882381439209,
+            0.12654250860214233,
+            0.08281773328781128,
+            0.05152386426925659
+          ],
+          "min_headroom_m": 0.05152386426925659,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 1,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08138343691825867,
+            0.12797337770462036,
+            0.08282721042633057,
+            0.05197560787200928
+          ],
+          "min_headroom_m": 0.05197560787200928,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 2,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.0820467472076416,
+            0.1309279203414917,
+            0.06711980700492859,
+            0.03858137130737305
+          ],
+          "min_headroom_m": 0.03858137130737305,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 3,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07302847504615784,
+            0.12609386444091797,
+            0.06563436985015869,
+            0.03615826368331909
+          ],
+          "min_headroom_m": 0.03615826368331909,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 4,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08158963918685913,
+            0.12930196523666382,
+            0.07704514265060425,
+            0.04589509963989258
+          ],
+          "min_headroom_m": 0.04589509963989258,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 5,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.0820077657699585,
+            0.12518006563186646,
+            0.08282557129859924,
+            0.050921499729156494
+          ],
+          "min_headroom_m": 0.050921499729156494,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 6,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08002403378486633,
+            0.1303291916847229,
+            0.0658348798751831,
+            0.038959801197052
+          ],
+          "min_headroom_m": 0.038959801197052,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 7,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08034023642539978,
+            0.13056206703186035,
+            0.06925958395004272,
+            0.03853100538253784
+          ],
+          "min_headroom_m": 0.03853100538253784,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 8,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07847902178764343,
+            0.12393683195114136,
+            0.08282491564750671,
+            0.05099594593048096
+          ],
+          "min_headroom_m": 0.05099594593048096,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 9,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08105897903442383,
+            0.12632548809051514,
+            0.07955345511436462,
+            0.04507279396057129
+          ],
+          "min_headroom_m": 0.04507279396057129,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 10,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08195683360099792,
+            0.13021236658096313,
+            0.07022559642791748,
+            0.04079461097717285
+          ],
+          "min_headroom_m": 0.04079461097717285,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 11,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07969620823860168,
+            0.1277472972869873,
+            0.08188152313232422,
+            0.05073493719100952
+          ],
+          "min_headroom_m": 0.05073493719100952,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 12,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08114790916442871,
+            0.13051152229309082,
+            0.08283171057701111,
+            0.05153530836105347
+          ],
+          "min_headroom_m": 0.05153530836105347,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 13,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.0818810760974884,
+            0.13025182485580444,
+            0.07557547092437744,
+            0.04531329870223999
+          ],
+          "min_headroom_m": 0.04531329870223999,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 14,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07988327741622925,
+            0.12633895874023438,
+            0.0828302800655365,
+            0.04862034320831299
+          ],
+          "min_headroom_m": 0.04862034320831299,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 15,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07832282781600952,
+            0.12627971172332764,
+            0.08282694220542908,
+            0.05254858732223511
+          ],
+          "min_headroom_m": 0.05254858732223511,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 16,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08115038275718689,
+            0.12958687543869019,
+            0.08282369375228882,
+            0.05069530010223389
+          ],
+          "min_headroom_m": 0.05069530010223389,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 17,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08099618554115295,
+            0.13085699081420898,
+            0.0781172513961792,
+            0.0461958646774292
+          ],
+          "min_headroom_m": 0.0461958646774292,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 18,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07777857780456543,
+            0.12945634126663208,
+            0.07193109393119812,
+            0.04014599323272705
+          ],
+          "min_headroom_m": 0.04014599323272705,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 19,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08135467767715454,
+            0.12826263904571533,
+            0.08282738924026489,
+            0.05237233638763428
+          ],
+          "min_headroom_m": 0.05237233638763428,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 20,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08120644092559814,
+            0.1290518045425415,
+            0.08282729983329773,
+            0.0522344708442688
+          ],
+          "min_headroom_m": 0.0522344708442688,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 21,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.079657644033432,
+            0.12833601236343384,
+            0.07140064239501953,
+            0.044700026512145996
+          ],
+          "min_headroom_m": 0.044700026512145996,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 22,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08014816045761108,
+            0.13043034076690674,
+            0.08282902836799622,
+            0.050612032413482666
+          ],
+          "min_headroom_m": 0.050612032413482666,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 23,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08170261979103088,
+            0.12282490730285645,
+            0.08282634615898132,
+            0.051023244857788086
+          ],
+          "min_headroom_m": 0.051023244857788086,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 24,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08198970556259155,
+            0.1310359239578247,
+            0.08282577991485596,
+            0.04984194040298462
+          ],
+          "min_headroom_m": 0.04984194040298462,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 25,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.07916471362113953,
+            0.1263599991798401,
+            0.06612566113471985,
+            0.04946821928024292
+          ],
+          "min_headroom_m": 0.04946821928024292,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 26,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08151811361312866,
+            0.12898916006088257,
+            0.08282765746116638,
+            0.05039888620376587
+          ],
+          "min_headroom_m": 0.05039888620376587,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 27,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08132213354110718,
+            0.13038945198059082,
+            0.08282563090324402,
+            0.051617443561553955
+          ],
+          "min_headroom_m": 0.051617443561553955,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 28,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.0815272331237793,
+            0.12930887937545776,
+            0.08201837539672852,
+            0.04758656024932861
+          ],
+          "min_headroom_m": 0.04758656024932861,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 29,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08187520503997803,
+            0.12847483158111572,
+            0.07543200254440308,
+            0.04658317565917969
+          ],
+          "min_headroom_m": 0.04658317565917969,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 30,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08170610666275024,
+            0.0911417007446289,
+            0.029577016830444336,
+            0.05122661590576172
+          ],
+          "min_headroom_m": 0.029577016830444336,
+          "binding_cylinder": 2,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        },
+        {
+          "env": 31,
+          "factor_key": "nominal:0",
+          "min_headroom_per_cylinder_m": [
+            0.08139991760253906,
+            0.12003332376480103,
+            0.08282259106636047,
+            0.05078071355819702
+          ],
+          "min_headroom_m": 0.05078071355819702,
+          "binding_cylinder": 3,
+          "fraction_steps_below_gate": 0.0,
+          "factors": {
+            "flow": 0.0,
+            "compliance": 0.0,
+            "seal": 0.0,
+            "pressure": 0.0,
+            "mass_scale": 1.0,
+            "com_z": 0.0
+          }
+        }
+      ],
+      "cylinder_learned_min": [
+        0.06433501839637756,
+        0.41474205255508423,
+        0.37761399149894714,
+        0.5335039496421814
+      ],
+      "cylinder_learned_max": [
+        0.4192950129508972,
+        0.7386520504951477,
+        0.6779839992523193,
+        0.703313946723938
+      ],
+      "p01_cylinder_headroom_per_cylinder_m": [
+        0.08020876348018646,
+        0.12312132120132446,
+        0.06851043552160263,
+        0.04047058895230293
+      ],
+      "min_cylinder_headroom_per_cylinder_m": [
+        0.07302847504615784,
+        0.0911417007446289,
+        0.029577016830444336,
+        0.03615826368331909
+      ],
+      "safety_violation_rate": 0.013697916641831398,
+      "safety_termination_rate": 0.013697916641831398,
+      "path_family_results": [
+        {
+          "family": "boom_sweep",
+          "mean_abs_cut_height_error_m": 0.0017885372508317232,
+          "mean_abs_lateral_error_m": 0.03268693387508392,
+          "ground_contact_fraction": 0.9811111092567444
+        },
+        {
+          "family": "double_s_curve",
+          "mean_abs_cut_height_error_m": 0.0026937490329146385,
+          "mean_abs_lateral_error_m": 0.05102361738681793,
+          "ground_contact_fraction": 0.9655556082725525
+        },
+        {
+          "family": "fourier_meander",
+          "mean_abs_cut_height_error_m": 0.003941528964787722,
+          "mean_abs_lateral_error_m": 0.03672689199447632,
+          "ground_contact_fraction": 0.95250004529953
+        },
+        {
+          "family": "gaussian_slalom",
+          "mean_abs_cut_height_error_m": 0.007746874820441008,
+          "mean_abs_lateral_error_m": 0.14016516506671906,
+          "ground_contact_fraction": 0.9394444823265076
+        },
+        {
+          "family": "lane_change_hold",
+          "mean_abs_cut_height_error_m": 0.011653629131615162,
+          "mean_abs_lateral_error_m": 0.07428064197301865,
+          "ground_contact_fraction": 0.9322222471237183
+        },
+        {
+          "family": "lateral_chirp",
+          "mean_abs_cut_height_error_m": 0.0038516034837812185,
+          "mean_abs_lateral_error_m": 0.029558008536696434,
+          "ground_contact_fraction": 0.9483333826065063
+        },
+        {
+          "family": "lateral_sine",
+          "mean_abs_cut_height_error_m": 0.004836008418351412,
+          "mean_abs_lateral_error_m": 0.039670802652835846,
+          "ground_contact_fraction": 0.9500000476837158
+        },
+        {
+          "family": "offset_return",
+          "mean_abs_cut_height_error_m": 0.003722498659044504,
+          "mean_abs_lateral_error_m": 0.04051460325717926,
+          "ground_contact_fraction": 0.9627777934074402
+        },
+        {
+          "family": "random_spline",
+          "mean_abs_cut_height_error_m": 0.005601214244961739,
+          "mean_abs_lateral_error_m": 0.05557040497660637,
+          "ground_contact_fraction": 0.941111147403717
+        },
+        {
+          "family": "s_curve",
+          "mean_abs_cut_height_error_m": 0.002813811181113124,
+          "mean_abs_lateral_error_m": 0.034147750586271286,
+          "ground_contact_fraction": 0.967222273349762
+        },
+        {
+          "family": "straight",
+          "mean_abs_cut_height_error_m": 0.004590317141264677,
+          "mean_abs_lateral_error_m": 0.03316214308142662,
+          "ground_contact_fraction": 0.9500000476837158
+        }
+      ]
+    }
+  },
+  "gates": {
+    "meshes": 1,
+    "metrics": {},
+    "gates": {},
+    "margins": {},
+    "passed": false,
+    "failing": [],
+    "thin_margins": [],
+    "note": "fewer than 3 meshes; per-mesh metrics saved, gates not evaluated"
+  }
+}

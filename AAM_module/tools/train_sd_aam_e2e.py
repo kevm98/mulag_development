@@ -39,7 +39,7 @@ transition and still converge.
 Output layout matches the frozen-AAM contract (``aam.pt`` + ``metrics.json``
 with ``in_dim``/``lag_ticks``/``feature_dim``/``latent_dim`` and
 ``input_normalization``) so the result loads directly in
-``PPO_ID_AAM_FD/online_runtime.py``. There is deliberately no ``encoder.pt``:
+``PPO_AAM_FD/online_runtime.py``. There is deliberately no ``encoder.pt``:
 this path has no privileged encoder, and downstream label regeneration via
 ``build_stage31_aam_dataset.py`` is neither needed nor valid here.
 """

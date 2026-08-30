@@ -111,7 +111,7 @@ train_aam() {
   [ -f "$AAM_RUN/.training_complete" ] && { latest "$AAM_RUN"; return; }
   resume=$(resume_from "$AAM_RUN" "$AAM_BASE")
   wait_gpu
-  "$PY" PPO_ID_AAM_FD/scripts/train.py --resume "$resume" --stages 6 --stage_iterations 300 --num_envs 256 --seed 41 \
+  "$PY" PPO_AAM_FD/scripts/train.py --resume "$resume" --stages 6 --stage_iterations 300 --num_envs 256 --seed 41 \
     --vehicle_speed_min_kmh 2.0 --vehicle_speed_max_kmh 7.0 --vehicle_speed_sampling uniform --learning_rate 1e-5 --fixed_learning_rate \
     --gamma 0.97 --lam 0.95 --entropy_coef 0.001 --contact_safety_reward true --contact_focus --contact_stage B \
     --contact_latch true --contact_latch_release_steps 60 --online_aam_residual_scale 0.25 --obs_normalizer freeze \

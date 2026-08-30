@@ -1190,6 +1190,27 @@ class MulagUpperLevelEnv(DirectRLEnv):
                 )
                 self._load_fd_correction()
                 self._setup_plant_perturbation()
+                # Mixed-plant randomisation: the command ROM and ID->FD are two
+                # different PLANT MODELS, not two parameter draws, so switching
+                # between them is a far larger change than any factor sweep in
+                # this repo -- every one of which was measured non-degrading.
+                # A single policy should not cover both, which is the condition
+                # adaptation needs. Both runtimes are built here and one is
+                # selected per episode; the ROM also restores the hydraulic
+                # factor channel, which is inert on the FD path because
+                # CylinderFDRuntime.step takes no factor argument.
+                if bool(getattr(self.cfg, "mixed_plant_enabled", False)):
+                    control_dt_mixed = max(
+                        float(getattr(self, "step_dt", float(self.cfg.sim.dt) * float(self.cfg.decimation))),
+                        1.0e-6,
+                    )
+                    self._command_cylinder_rom = CommandCylinderROMRuntime(
+                        checkpoint=self.cfg.command_rom_checkpoint,
+                        num_envs=self.num_envs,
+                        device=self.device,
+                        control_dt_s=control_dt_mixed,
+                    )
+                    self._setup_rom_factor_perturbation()
             elif dynamics_model == "rom":
                 self._cylinder_rom = CylinderROMRuntime(
                     models_root=self.cfg.cylinder_models_root,
@@ -1298,6 +1319,28 @@ class MulagUpperLevelEnv(DirectRLEnv):
                     )
             print(f"[MulagUpperLevelEnv]   dynamics model: {dynamics_model}", flush=True)
 
+    def _select_episode_plant(self) -> None:
+        """Pick this episode's plant model: command ROM or ID->FD.
+
+        Per EPISODE, not per environment. Both runtimes carry stateful history
+        (the ROM's per-env buffer and previous predicted valve, the FD's valve
+        history), so driving only a subset of envs from each would feed every
+        runtime states produced by the OTHER plant and corrupt the history for
+        the envs it does not own. One plant per episode keeps both consistent
+        and still forces the estimator to infer which plant it is on from the
+        episode's own history, which is the property being tested.
+
+        Deterministic in the episode counter so an evaluation is reproducible
+        and a paired arm comparison sees the same plant sequence.
+        """
+        fraction = float(getattr(self.cfg, "mixed_plant_rom_fraction", 0.5))
+        seed = int(getattr(self.cfg, "mixed_plant_seed", 20260829))
+        index = int(getattr(self, "_mixed_plant_episode_index", 0))
+        generator = torch.Generator(device="cpu").manual_seed(seed + index)
+        draw = float(torch.rand(1, generator=generator).item())
+        self._mixed_plant_episode_index = index + 1
+        self._episode_plant = "command_rom" if draw < fraction else "fd"
+
     def _setup_plant_perturbation(self) -> None:
         """Attach the optional plant-side valve perturbation (FD boundary).
 
@@ -1306,7 +1349,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         valve is perturbed. The resulting commanded/response mismatch is the
         signal the AAM has to infer the plant change from.
         """
-        from PPO_ID_AAM_FD.plant_perturbation import (
+        from PPO_AAM_FD.plant_perturbation import (
             PlantPerturbation, PlantPerturbationCfg,
         )
 
@@ -1322,6 +1365,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
             ),
             step_delay_steps=getattr(self.cfg, "plant_perturbation_step_delay_steps", None),
             seed=int(getattr(self.cfg, "plant_perturbation_seed", 20260816)),
+            pair_period=getattr(self.cfg, "plant_perturbation_pair_period", None),
         )
         self._plant_perturbation = PlantPerturbation(
             cfg,
@@ -1421,7 +1465,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         for the mid-episode tracking test, since `seal` is the factor the
         privileged AAM identifies best.
         """
-        from PPO_ID_AAM_FD.plant_perturbation import (
+        from PPO_AAM_FD.plant_perturbation import (
             RomFactorPerturbation, RomFactorPerturbationCfg,
         )
 
@@ -1451,7 +1495,7 @@ class MulagUpperLevelEnv(DirectRLEnv):
         """Attach the optional Stage-31 causal AAM/adapter state machine."""
         if str(self.cfg.cylinder_dynamics_model).lower() != "fd":
             raise ValueError("online AAM ID adapter requires cylinder_dynamics_model='fd'.")
-        from PPO_ID_AAM_FD.online_runtime import OnlineAAMIDFDController
+        from PPO_AAM_FD.online_runtime import OnlineAAMIDFDController
 
         self._online_aam = OnlineAAMIDFDController(
             aam_checkpoint=getattr(self.cfg, "online_aam_checkpoint"),
@@ -2058,6 +2102,190 @@ class MulagUpperLevelEnv(DirectRLEnv):
         )
         self._aam_policy_z_lpf_valid[:] = True
 
+    def _privileged_factor_observation(self) -> torch.Tensor:
+        """Raw privileged factors, normalised to [-1, 1] over their ranges.
+
+        The policy latent mode is honoured here too. Without it the raw-e route
+        would have no ablation arms at all -- an oracle gate with nothing to
+        compare the oracle against -- and the upper-bound experiment could not
+        distinguish "the policy uses the factors" from "the factors happen to
+        be present". `privileged`/`estimated` deliver the true vector; the
+        remaining modes degrade it exactly as they degrade the 2-D code.
+        """
+        e = self._deployment_factor_values
+        lo = self._privileged_factor_lo
+        hi = self._privileged_factor_hi
+        z = (2.0 * (e - lo) / (hi - lo) - 1.0).clamp(-2.0, 2.0)
+
+        # PER-ENV arm assignment. Running one arm per rollout, back to back on
+        # the same env, is biased: an A/A control with three IDENTICAL arms
+        # measured differences of 1.1-2.4 mm with CIs excluding zero, and 0/64
+        # environments identical. reset() does not restore PhysX contact state,
+        # the FD valve history or the normalizer, so position in the sequence
+        # drives the result. Order counterbalancing confirmed it -- a mass
+        # sweep showed no effect ascending and REVERSED sign descending.
+        #
+        # Assigning arms per environment inside ONE rollout removes the
+        # sequence entirely: every arm is stepped in the same physics at the
+        # same time. Pairing per environment is lost (each arm sees different
+        # terrain), so variance rises -- but the estimator is unbiased, and a
+        # noisy unbiased instrument is usable where a biased one is not.
+        per_env_modes = getattr(self, "_per_env_arm_modes", None)
+        if per_env_modes is not None:
+            out = torch.zeros_like(z)
+            mean_z = z.mean(dim=0, keepdim=True).expand_as(z)
+            rolled = torch.roll(z, shifts=1, dims=0) if self.num_envs > 1 else z
+            for arm in set(per_env_modes):
+                idx = torch.tensor(
+                    [i for i, m in enumerate(per_env_modes) if m == arm],
+                    dtype=torch.long, device=z.device,
+                )
+                if arm in ("privileged", "true", "estimated"):
+                    out[idx] = z[idx]
+                elif arm == "zero":
+                    out[idx] = 0.0
+                elif arm == "mean":
+                    out[idx] = mean_z[idx]
+                elif arm == "shuffled":
+                    out[idx] = rolled[idx]
+                else:
+                    raise ValueError(f"unsupported per-env arm {arm!r}")
+            return out
+
+        mode = str(
+            getattr(self.cfg, "online_aam_policy_latent_mode", "estimated")
+        ).strip().lower()
+        if mode in ("privileged", "true", "estimated"):
+            return z
+        if mode == "zero":
+            return torch.zeros_like(z)
+        if mode == "mean":
+            # One constant vector for every environment: carries the
+            # distribution but no per-plant information.
+            return z.mean(dim=0, keepdim=True).expand_as(z).contiguous()
+        if mode == "shuffled":
+            # Fixed roll, so no environment keeps its own factors.
+            return (
+                torch.roll(z, shifts=1, dims=0).contiguous()
+                if self.num_envs > 1
+                else z
+            )
+        raise ValueError(
+            f"online_aam_policy_latent_mode={mode!r} is not supported on the "
+            "privileged-e route; use privileged/estimated/zero/mean/shuffled"
+        )
+
+    def _rma_context_observation(self) -> torch.Tensor:
+        """The four-wide RMA privileged context, in normalised coordinates.
+
+        Order and normalisation come from ``PPO_AAM_FD.rma_adaptation``, so
+        the value the policy sees in Phase 1 and the value the estimator regresses
+        in Phase 2 are the same quantity in the same units. A mismatch there is a
+        silent train/deploy gap that no ablation would reveal.
+
+        Nominal maps to the zero vector, which is why the migrated Phase 1 init
+        can carry zeroed context weights and still be exactly the source policy.
+
+        Every axis is read from the object that actually applies it -- alpha and
+        delay from the plant perturbation, mass_scale from the latched deployment
+        factor row that is written into PhysX via ``set_masses``. Reading a
+        configured range instead of the applied value is how a context ends up
+        describing a plant that was never simulated.
+        """
+        from PPO_AAM_FD.rma_adaptation import normalized_context
+
+        n = self.num_envs
+        device = self.device
+        alpha = torch.ones(n, device=device)
+        delay = torch.zeros(n, device=device)
+        perturbation = getattr(self, "_plant_perturbation", None)
+        if perturbation is not None and perturbation.enabled:
+            theta = perturbation.true_theta()
+            alpha = theta[:, 0].to(device=device, dtype=torch.float32)
+            delay = theta[:, 1].to(device=device, dtype=torch.float32)
+
+        # Lag is a scalar config axis today (actuator_stress applies it to every
+        # environment); it becomes per-env when the lag stage randomises it.
+        tau = torch.full(
+            (n,), float(getattr(self.cfg, "actuator_stress_lag_tau_s", 0.0)), device=device
+        )
+
+        mass = torch.ones(n, device=device)
+        values = getattr(self, "_deployment_factor_values", None)
+        if values is not None and values.shape[-1] > 4:
+            mass = values[:, 4].to(device=device, dtype=torch.float32)
+
+        raw = torch.stack((alpha, tau, delay, mass), dim=-1)
+        return normalized_context(raw)
+
+    def _rif_context_observation(self) -> torch.Tensor:
+        """Per-env RIF actuator context (alpha, delay), normalised to [-1, 1].
+
+        This is the RMA Stage 1 privileged channel for the axes that actually
+        move the task metric.  The legacy privileged-e route carries the six
+        HYDRAULIC/mechanical factor draws, and those are measured to be nearly
+        inert at the task level: a valve-effectiveness step of x0.6 costs 0.2%
+        lateral error, while a transport-delay step of 2 -> 8 costs +22% (see
+        the --plant_step_delay_steps help in PPO_ROM/scripts/evaluate_gates.py).
+        The analytic action-separation screen in PPO_RLA_ID_FD/memory.md reaches
+        the same ordering from the other direction: delay is the only axis that
+        demands a real action change at no command-authority cost, while
+        authority buys its separation with headroom this machine does not have
+        (a 10% cut already forces 33% clipping on cylinder 1).
+
+        So a context that omits delay is describing a plant change the policy
+        has no reason to act on, which is why every previous oracle arm scored
+        identically to zero and shuffled.
+
+        `PlantPerturbation.true_theta` documents that theta must never reach the
+        controller.  That rule governs the DEPLOYED arm; this route is the
+        training-time privileged upper bound, exactly like the privileged-e
+        route above, and is never a deployable arm.  The estimator replaces it
+        in Phase 2.
+        """
+        perturbation = getattr(self, "_plant_perturbation", None)
+        if perturbation is None:
+            return torch.zeros((self.num_envs, 2), device=self.device)
+        theta = perturbation.true_theta()
+        alpha_lo, alpha_hi = tuple(self.cfg.plant_perturbation_alpha_range)
+        delay_lo, delay_hi = tuple(self.cfg.plant_perturbation_delay_steps_range)
+
+        def scale(value, lo, hi):
+            # A degenerate range means the axis is not being randomised, so it
+            # carries no plant identity; emit a constant rather than dividing
+            # by zero and injecting a NaN into the observation.
+            span = float(hi) - float(lo)
+            if span <= 0.0:
+                return torch.zeros_like(value, dtype=torch.float32)
+            return (2.0 * (value.to(torch.float32) - float(lo)) / span - 1.0).clamp(-2.0, 2.0)
+
+        z = torch.stack(
+            (
+                scale(theta["alpha"], alpha_lo, alpha_hi),
+                scale(theta["delay_steps"], delay_lo, delay_hi),
+            ),
+            dim=-1,
+        )
+        mode = str(
+            getattr(self.cfg, "online_aam_policy_latent_mode", "estimated")
+        ).strip().lower()
+        if mode in ("privileged", "true", "estimated"):
+            return z
+        if mode == "zero":
+            return torch.zeros_like(z)
+        if mode == "mean":
+            return z.mean(dim=0, keepdim=True).expand_as(z).contiguous()
+        if mode == "shuffled":
+            return (
+                torch.roll(z, shifts=1, dims=0).contiguous()
+                if self.num_envs > 1
+                else z
+            )
+        raise ValueError(
+            f"online_aam_policy_latent_mode={mode!r} is not supported on the "
+            "RIF-context route; use privileged/estimated/zero/mean/shuffled"
+        )
+
     def _policy_latent_observation(self) -> torch.Tensor:
         """Return the PPO-only latent arm without changing the AAM controller.
 
@@ -2145,7 +2373,35 @@ class MulagUpperLevelEnv(DirectRLEnv):
             self._obs_unimog_pose_dot,
         ]
         if self._online_aam is not None and bool(getattr(self.cfg, "online_aam_policy_observation", False)):
-            parts.append(self._policy_latent_observation())
+            if bool(getattr(self.cfg, "online_aam_policy_privileged_e", False)):
+                # RMA Stage 1 upper bound: give the policy the RAW privileged
+                # factor vector instead of a learned 2-D code.
+                #
+                # The frozen encoder was fitted for SD dynamics prediction, not
+                # for control, and carries ~0.4% plant identity; a policy that
+                # cannot use it tells us nothing about whether the TASK is
+                # adaptation-limited. Feeding all six channels at full fidelity
+                # removes the encoder from the question entirely: if the policy
+                # cannot exploit e itself, no encoder of any width can help, and
+                # the negative result is decisive rather than about d_z=2.
+                #
+                # Channels are min-max normalised to [-1, 1] over their audited
+                # ranges so no channel dominates by unit alone -- com_z spans
+                # 0.15 m while mass_scale spans 0.7, and an unnormalised com_z
+                # would be invisible next to it.
+                parts.append(self._privileged_factor_observation())
+            elif bool(getattr(self.cfg, "online_aam_policy_rma_context", False)):
+                # RMA Stage 1: the four-wide context of experiments/RMA_PPO --
+                # (authority, lag tau, delay, mass_scale). Every axis here is one
+                # measured to move the plant; the six ROM factors are not.
+                parts.append(self._rma_context_observation())
+            elif bool(getattr(self.cfg, "online_aam_policy_rif_context", False)):
+                # RIF Stage 1: the actuator-boundary context (alpha, delay).
+                # Delay is the axis the dose-response measured as adaptation
+                # relevant; the hydraulic draws above are not.
+                parts.append(self._rif_context_observation())
+            else:
+                parts.append(self._policy_latent_observation())
         obs = torch.cat(parts, dim=-1)
         obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
         return obs
@@ -2377,6 +2633,11 @@ class MulagUpperLevelEnv(DirectRLEnv):
 
     def _run_cylinder_id_pipeline(self) -> None:
         dynamics_model = str(self.cfg.cylinder_dynamics_model).lower()
+        # Mixed-plant: the episode's plant overrides the configured one. Chosen
+        # at reset so a whole episode runs on one plant -- the AAM must infer
+        # WHICH plant from history, which is the point.
+        if bool(getattr(self.cfg, "mixed_plant_enabled", False)):
+            dynamics_model = str(getattr(self, "_episode_plant", dynamics_model) or dynamics_model)
         rom_only = dynamics_model in {"base_rom", "command_rom"}
         use_sequence = bool(getattr(self.cfg, "use_sequence_cylinder_models", False))
         if not use_sequence and self._cylinder_adapter is None:
@@ -2543,7 +2804,33 @@ class MulagUpperLevelEnv(DirectRLEnv):
         self._aam_residual.zero_()
         self._aam_base_valve_cmd.zero_()
 
-        if use_sequence:
+        if bool(getattr(self.cfg, "direct_valve_command", False)):
+            # Gate 0c interface A -- classic RMA. The policy emits the valve
+            # command itself, pi(x, z) -> u, and the frozen ID is removed from
+            # the command path entirely.
+            #
+            # Gate 0 measured that path saturated: the ID anchor sat at its
+            # preclip limit on 79.9% of valve elements over the 33-cell panel,
+            # 34.5% of residuals were computed and then clipped away, and 37.9%
+            # of elements the residual could not move at all. A bounded
+            # residual cannot unsaturate an anchor already on its stops, so any
+            # oracle-gap null measured through it is confounded: it cannot
+            # separate "the task is not adaptation-limited" from "the credit
+            # was clipped before it reached the metric".
+            #
+            # The action is already clipped to [-1, 1] upstream, so scaling by
+            # max_abs_valve spans exactly the admissible command range and no
+            # further clamp can bind at nominal.
+            max_valve = float(self.cfg.max_abs_valve)
+            self._current_valve_cmd = torch.clamp(
+                self._action_hydraulic * max_valve, -max_valve, max_valve
+            )
+            # No ID anchor and no adapter residual exist on this interface;
+            # both stay zero so the Gate 0 instrumentation reports honestly
+            # rather than describing a path that is no longer in use.
+            self._fd_baseline_valve_cmd.zero_()
+            self._id_input_tensor.zero_()
+        elif use_sequence:
             # Sequence ID: predict DeltaValveCmd from history + target features
             seq_id_out = self._sequence_id.predict_delta_valve(
                 target_delta_x=reference.target_delta_x,
@@ -3726,6 +4013,8 @@ class MulagUpperLevelEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
+        if bool(getattr(self.cfg, "mixed_plant_enabled", False)):
+            self._select_episode_plant()
         if not isinstance(env_ids, torch.Tensor):
             env_ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
 

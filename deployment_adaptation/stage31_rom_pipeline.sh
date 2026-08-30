@@ -151,11 +151,11 @@ train_adapter() {
 runtime_gates() {
     require_file "$adapter"
     mkdir -p "$eval_dir"
-    "$python_bin" "$repo_root/PPO_ID_AAM_FD/scripts/preflight.py" \
+    "$python_bin" "$repo_root/PPO_AAM_FD/scripts/preflight.py" \
         --aam-model "$aam_dir" --adapter-model "$adapter" \
         --id-checkpoint "$id_checkpoint" --fd-checkpoint "$fd_checkpoint" \
         --out "$eval_dir/preflight.json"
-    "$python_bin" "$repo_root/PPO_ID_AAM_FD/scripts/minimum_online_adaptation_check.py" \
+    "$python_bin" "$repo_root/PPO_AAM_FD/scripts/minimum_online_adaptation_check.py" \
         --aam-model "$aam_dir" --adapter-model "$adapter" \
         --out "$eval_dir/minimum_online_adaptation_check.json"
     "$python_bin" "$aam_root/tools/evaluate_stage31_id_aam.py" \

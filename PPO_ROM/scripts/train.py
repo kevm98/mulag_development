@@ -133,6 +133,30 @@ p.add_argument(
     help="PPO epochs per rollout for trajectory-regularized PPO.",
 )
 p.add_argument(
+    "--context_lr_multiplier",
+    type=float,
+    default=1.0,
+    help=(
+        "Effective learning-rate multiplier for the actor's trailing CONTEXT "
+        "input columns only. Measured 2026-08-29: after 400 Phase 1 iterations "
+        "at --trajectory_actor_learning_rate 3e-6 the context weights had moved "
+        "from 0 to 3.7e-4, 6500x smaller than the base columns, and perturbing "
+        "the context changed the action by 0.01 percent -- the policy was "
+        "functionally context-blind, so every context ablation returned a null "
+        "because the arms were the same input to it. The tension is real: the "
+        "reference-KL anchor and the tiny actor LR are what stop the fine-tune "
+        "collapsing, but they also stop the context being learned. The context "
+        "columns are the ONLY new capacity and start at exactly zero, so scaling "
+        "their gradient lets them be learned while the trunk stays anchored."
+    ),
+)
+p.add_argument(
+    "--context_dim",
+    type=int,
+    default=4,
+    help="Width of the trailing context block --context_lr_multiplier applies to.",
+)
+p.add_argument(
     "--trajectory_actor_learning_rate",
     type=float,
     default=1.0e-5,
@@ -405,7 +429,24 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 import PPO_ROM  # noqa: F401,E402  (registers the gym task)
 
-if a.task.startswith("RRLAB-Mulag-Verge-IDFD"):
+if a.task.startswith("RRLAB-Mulag-Verge-ID-AAM-FD"):
+    # The AAM stack fine-tunes with the SAME post-distillation recipe as PPO-ROM
+    # and PPO-ID-FD -- trajectory regularisation, a reference-KL anchor and a
+    # tiny actor learning rate -- and that machinery lives only in this script.
+    # `PPO_AAM_FD/scripts/train.py` forwards to `verge_task/scripts/train.py`,
+    # which has none of those flags, so a plain PPO resume there is free to walk
+    # away from the distilled policy. Measured: lateral 0.05 -> 1.25 m while
+    # total reward ROSE, i.e. PPO correctly optimising an objective that prefers
+    # planting the cutter over holding the line.
+    #
+    # Checked BEFORE the IDFD prefix: "ID-AAM-FD" does not start with "IDFD",
+    # but keeping this first makes the ordering independent of that spelling.
+    import importlib
+
+    importlib.import_module("PPO_AAM_FD")
+    TASK_ID = a.task
+    EXPECTED_ACTUATOR = "id_aam_fd"
+elif a.task.startswith("RRLAB-Mulag-Verge-IDFD"):
     import importlib
 
     importlib.import_module("PPO_ID_FD")
@@ -759,11 +800,52 @@ def main() -> None:
         runner.alg.optimizer = new_optimizer
         runner.alg.learning_rate = float(a.trajectory_actor_learning_rate)
 
+    def install_context_lr_multiplier() -> None:
+        """Scale the gradient of the actor's trailing context columns.
+
+        A slice of a weight matrix cannot be its own optimizer parameter group,
+        so the equivalent is a gradient hook: multiplying dL/dW on those columns
+        by k gives them an effective learning rate of k * lr while every other
+        weight keeps the anchored rate. The hook lives on the PARAMETER, so it
+        survives the later optimizer rebuild.
+        """
+        mult = float(a.context_lr_multiplier)
+        if mult == 1.0:
+            return
+        ctx = int(a.context_dim)
+        first = None
+        for module in runner.alg.actor.modules():
+            if isinstance(module, torch.nn.Linear):
+                first = module
+                break
+        if first is None:
+            raise RuntimeError("no Linear layer found in the actor")
+        if first.weight.shape[1] <= ctx:
+            raise RuntimeError(
+                f"actor input width {first.weight.shape[1]} does not exceed "
+                f"context_dim {ctx}"
+            )
+
+        def scale_context_columns(grad, _mult=mult, _ctx=ctx):
+            scaled = grad.clone()
+            scaled[:, -_ctx:] *= _mult
+            return scaled
+
+        first.weight.register_hook(scale_context_columns)
+        print(
+            f"[PPO3-1-CONTEXT] last {ctx} of {first.weight.shape[1]} input "
+            f"columns get {mult}x gradient -> effective lr "
+            f"{mult * float(a.trajectory_actor_learning_rate):.3g}; trunk stays "
+            f"at {float(a.trajectory_actor_learning_rate):.3g}",
+            flush=True,
+        )
+
     resume_infos_for_optimizer = (resume_payload or {}).get("infos") or {}
     if a.trajectory_regularized and bool(
         resume_infos_for_optimizer.get("trajectory_regularized", False)
     ):
         configure_trajectory_optimizer()
+    install_context_lr_multiplier()
 
     startup_manifest = {
         "schema": "terrain_shared_v2",

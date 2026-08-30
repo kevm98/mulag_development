@@ -41,7 +41,7 @@ train_stage() {  # name domain resume_checkpoint
     echo "[curr] stage $name already complete"; return 0
   fi
   echo "[curr] stage $name  domain=$domain  resume=$(basename "$resume")"
-  "$PY" PPO_ID_AAM_FD/scripts/train.py \
+  "$PY" PPO_AAM_FD/scripts/train.py \
     --resume "$resume" --reset_optimizer_on_resume \
     --stages 6 --stage_iterations "$ITERS" --num_envs "$ENVS" --seed 41 \
     --vehicle_speed_min_kmh 2.0 --vehicle_speed_max_kmh 7.0 \

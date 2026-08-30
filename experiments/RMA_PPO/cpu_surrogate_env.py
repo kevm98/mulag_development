@@ -27,7 +27,7 @@ if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 
 from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime  # noqa: E402
-from PPO_ID_AAM_FD.rma_adaptation.core import ActuationConfig, DeploymentActuation  # noqa: E402
+from PPO_AAM_FD.rma_adaptation.core import ActuationConfig, DeploymentActuation  # noqa: E402
 from AAM_module.tools.train_sd_z import BeliefEncoder, SDz, causal_windows_np  # noqa: E402
 
 

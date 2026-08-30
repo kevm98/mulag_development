@@ -177,7 +177,7 @@ train_idfd() {
 }
 train_aam() {
   # Warm-start from the PROMOTED ID-FD policy migrated to the 68-D AAM contract
-  # (PPO_ID_AAM_FD/scripts/migrate_idfd_checkpoint.py), not from an older AAM
+  # (PPO_AAM_FD/scripts/migrate_idfd_checkpoint.py), not from an older AAM
   # run. Every AAM checkpoint on disk predates the 2--7 km/h work and carries a
   # speed normalizer centred on 2.3 km/h, which puts 7 km/h at +6.7 sigma; they
   # also bottom the cylinder out (p01 headroom exactly 0.0000 at 2 km/h, with
@@ -208,7 +208,7 @@ train_aam() {
     # it anchors to the wrong behaviour. ROM and ID-FD keep their leash; this
     # stage must not have one. lr 1e-5 was the old value and drifted off a
     # passing policy in 300 iterations.
-    "$PY" PPO_ID_AAM_FD/scripts/train.py --resume "$r" --reset_optimizer_on_resume --stages 6 --stage_iterations 300 --num_envs 256 --seed 41 --vehicle_speed_min_kmh 2.0 --vehicle_speed_max_kmh 7.0 --vehicle_speed_sampling active_time_balanced --factor_domain combined_train --learning_rate 3e-6 --fixed_learning_rate --gamma 0.97 --lam 0.95 --entropy_coef 0.001 --contact_safety_reward true --contact_focus --contact_stage B --contact_latch true --contact_latch_release_steps 60 --online_aam_residual_scale 0.25 --obs_normalizer freeze --save_interval 25 --log_dir "$d" --headless --device cuda:0 >"$OUT/aam_ordered_train.log" 2>&1
+    "$PY" PPO_AAM_FD/scripts/train.py --resume "$r" --reset_optimizer_on_resume --stages 6 --stage_iterations 300 --num_envs 256 --seed 41 --vehicle_speed_min_kmh 2.0 --vehicle_speed_max_kmh 7.0 --vehicle_speed_sampling active_time_balanced --factor_domain combined_train --learning_rate 3e-6 --fixed_learning_rate --gamma 0.97 --lam 0.95 --entropy_coef 0.001 --contact_safety_reward true --contact_focus --contact_stage B --contact_latch true --contact_latch_release_steps 60 --online_aam_residual_scale 0.25 --obs_normalizer freeze --save_interval 25 --log_dir "$d" --headless --device cuda:0 >"$OUT/aam_ordered_train.log" 2>&1
     checkpoint=$(latest "$d"); [ -n "$checkpoint" ] || return 1
     printf '%s\n' "$checkpoint" >"$d/.training_complete"
   fi

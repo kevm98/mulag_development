@@ -44,7 +44,7 @@
 | 4.1 | Baseline controller (DLS + paired ID/FD) | Not started | 0 | 800 | 0 |  | [`PPO_ID_FD/README.md`](../PPO_ID_FD/README.md) | CPU DLS, measured cylinder feedback |
 | 4.2 | PPO residual policy on ID/FD | Not started | 0 | 800 | 0 |  | [`PPO_ID_FD/scripts/train.sh`](../PPO_ID_FD/scripts/train.sh) | Curriculum, obs 33-D |
 | 4.3 | ROM-based policy (PPO2) | Not started | 0 | 800 | 0 |  | [`PPO_ROM/README.md`](../PPO_ROM/README.md) | 41-D obs, exact+procedural mix |
-| 4.4 | AAM domain adaptation (latent factor encoder) | Not started | 0 | 800 | 0 |  | [`PPO_ID_AAM_FD/online_runtime.py`](../PPO_ID_AAM_FD/online_runtime.py) | Stage 20–28 chain |
+| 4.4 | AAM domain adaptation (latent factor encoder) | Not started | 0 | 800 | 0 |  | [`PPO_AAM_FD/online_runtime.py`](../PPO_AAM_FD/online_runtime.py) | Stage 20–28 chain |
 | 4.5 | Deployment pipeline (stage 31 ROM) | Not started | 0 | 800 | 0 |  | [`deployment_adaptation/stage31_rom_pipeline.sh`](../deployment_adaptation/stage31_rom_pipeline.sh) | Online adaptation protocol |
 | 5 | **Experiments & Evaluation** | Not started | 0 | 2000 | 0 |  |  |  |
 | 5.1 | Training configurations & hardware | Not started | 0 | 500 | 0 |  | [`PPO_ID_FD/scripts/preflight.py`](../PPO_ID_FD/scripts/preflight.py) | RTX 3060, num_envs 64–256 |

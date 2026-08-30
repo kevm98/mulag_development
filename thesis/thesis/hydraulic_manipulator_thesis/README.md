@@ -15,7 +15,7 @@ the thesis may use for them:
 | **PPO--ID--FD** | policy → desired motion → frozen ID → frozen strict FD → PhysX | none |
 | **PPO--(AAM)--ID--FD** | policy(obs+ẑ) → desired motion → frozen ID + adapter(ẑ) → frozen strict FD → PhysX | causal AAM history → ẑ |
 
-**ẑ routing (authoritative, verified against `PPO_ID_AAM_FD/env_cfg.py` and
+**ẑ routing (authoritative, verified against `PPO_AAM_FD/env_cfg.py` and
 `mulag_plant/runtime/mulag_upper_level_env.py`):** ẑ → {π_θ, g_ψ}. It is appended
 to the policy observation (66 → 68, `online_aam_policy_observation=True`) *and*
 conditions the bounded ID adapter. Policy conditioning is **not** an ablation —

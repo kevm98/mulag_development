@@ -75,7 +75,7 @@ for maximum in 3.0 4.0 5.0 6.0 7.0; do
   if [ ! -f "$run/.training_complete" ]; then
     iterations=50
     [ "$maximum" = 3.0 ] && iterations=25
-    "$PY" PPO_ID_AAM_FD/scripts/train.py \
+    "$PY" PPO_AAM_FD/scripts/train.py \
       --resume "$promoted" --stages 6 --stage_iterations "$iterations" \
       --num_envs 256 --seed 71 \
       --vehicle_speed_min_kmh 2.0 --vehicle_speed_max_kmh "$maximum" \

@@ -21,7 +21,7 @@ and historical AAM artifacts remain intact.
 
 The clean source for Phase 1 is the validated ID-FD checkpoint
 `logs/rsl_rl/ppo4_1_sole/speed_range_2_7_pathfix_v2_idfd/model_promoted_2_7kmh.pt`.
-The existing 68-D PPO_ID_AAM_FD checkpoint remains a historical artifact and
+The existing 68-D PPO_AAM_FD checkpoint remains a historical artifact and
 was not overwritten.
 
 For completeness, the currently promoted online-AAM continuation at
@@ -42,7 +42,7 @@ it is deliberately not the Phase 1 source for the four-coordinate RMA pivot.
 | Critic first layer | `critic_state_dict["mlp.0.weight"]`: `(256, 66)` |
 | Normalization | actor and critic `obs_normalizer._mean/_std/_var`, each `(1,66)` |
 | Command route | PPO → existing sole-action chain → desired cylinder motion → ID → FD → PhysX; no valve action is exposed to PPO |
-| Evaluation entry | `PPO_ID_AAM_FD/scripts/evaluate_gates.py` delegates to `PPO_ROM/scripts/evaluate_gates.py`; `PPO_ID_AAM_FD/visualize.sh` is the canonical wrapper |
+| Evaluation entry | `PPO_AAM_FD/scripts/evaluate_gates.py` delegates to `PPO_ROM/scripts/evaluate_gates.py`; `PPO_AAM_FD/visualize.sh` is the canonical wrapper |
 
 The checkpoint reports the same four-axis 0.004 m authority and no teacher
 execution. This is the correct base for the new context experiment.
@@ -68,7 +68,7 @@ normalized context values, not a learned encoder output in Phase 1.
 
 ## 4. Common deployment-actuation wrapper
 
-`PPO_ID_AAM_FD/rma_adaptation/core.py` adds the opt-in
+`PPO_AAM_FD/rma_adaptation/core.py` adds the opt-in
 `DeploymentActuation` wrapper. Its order is:
 
 1. authority: `dx_authorized = alpha * dx_raw`;
@@ -104,7 +104,7 @@ assembly so an evaluator cannot silently append a different width.
 
 ## 7. Checkpoint surgery
 
-`PPO_ID_AAM_FD/scripts/migrate_privileged_context_checkpoint.py` performs a
+`PPO_AAM_FD/scripts/migrate_privileged_context_checkpoint.py` performs a
 non-destructive 66→70 expansion:
 
 - copies actor and critic state dictionaries;
@@ -121,7 +121,7 @@ base observations with random context and confirms equal outputs to `1e-6`.
 
 ## 8. Phase 1 configuration
 
-`PPO_ID_AAM_FD/rma_adaptation/config.py` and
+`PPO_AAM_FD/rma_adaptation/config.py` and
 `experiments/RMA_PPO/config.json` define a conservative, configurable sequence:
 
 ```text
@@ -204,7 +204,7 @@ The required local PyTorch installation is available at
 torch 2.13.0, CUDA available: False, device count: 0
 ```
 
-`PPO_ID_AAM_FD/tests/test_rma_adaptation_cpu.py` contains 16 CPU tests. The
+`PPO_AAM_FD/tests/test_rma_adaptation_cpu.py` contains 16 CPU tests. The
 repository image has no pytest module, so the same 16 assertions were executed
 by a direct Python 3.11 harness; all 16 passed. Source compilation and import
 checks also passed. No simulator or PPO process was launched.

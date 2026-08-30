@@ -40,7 +40,7 @@ Once simulator resources are available, the paired Gate-1 sweep is launched
 with separate per-arm/per-key reports:
 
 ```bash
-python PPO_ID_AAM_FD/scripts/evaluate_factor_sweep.py \
+python PPO_AAM_FD/scripts/evaluate_factor_sweep.py \
   --rom_checkpoint <PPO-ROM-checkpoint> \
   --idfd_checkpoint <PPO-ID-FD-checkpoint> \
   --out outputs/phase1_gate1_flow_sweep \

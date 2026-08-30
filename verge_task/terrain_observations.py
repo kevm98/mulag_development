@@ -156,7 +156,21 @@ def observation_space_for_cfg(cfg) -> int:
     )
     width += 1
     if bool(getattr(cfg, "online_aam_policy_observation", False)):
-        width += 2
+        # Three mutually exclusive context routes share this slot, and they are
+        # NOT the same width. Omitting them here is not a cosmetic bug: this
+        # helper's value is assigned over cfg.observation_space in train.py, so
+        # a route that appends 6 channels while this returns +2 builds a
+        # 68-wide network for a 72-wide observation. That is exactly the
+        # failure this function's docstring exists to prevent, and it silently
+        # made the privileged-e route train as an ordinary 2-D-latent policy.
+        if bool(getattr(cfg, "online_aam_policy_privileged_e", False)):
+            width += 6   # raw privileged factor vector (DIM_ORDER)
+        elif bool(getattr(cfg, "online_aam_policy_rma_context", False)):
+            width += 4   # RMA context (alpha, tau, delay, mass_scale)
+        elif bool(getattr(cfg, "online_aam_policy_rif_context", False)):
+            width += 2   # RIF actuator context (alpha, delay)
+        else:
+            width += 2   # frozen 2-D encoder latent / z_hat
     return width
 
 

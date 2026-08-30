@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -1284,6 +1285,32 @@ def main() -> None:
             return
 
     wrapped = RslRlVecEnvWrapper(env, clip_actions=runner_cfg.clip_actions)
+    if os.environ.get("MULAG_ARMA_PHI"):
+        # A-RMA Phase 3: RL fine-tuning with the FROZEN Phase 2 estimator in the
+        # loop, so the policy is optimised on the z_hat it will actually receive
+        # rather than on the true context it saw in Phase 1.
+        from verge_task.arma_phase3 import Phase3LatentAdapter, load_phi
+
+        _phi_path = os.environ["MULAG_ARMA_PHI"]
+        _phi, _payload = load_phi(_phi_path, a.device)
+        _ctx = int(_payload["context_dim"])
+        wrapped = Phase3LatentAdapter(
+            wrapped, _phi,
+            base_dim=int(raw.cfg.observation_space) - _ctx,
+            context_dim=_ctx,
+            history=int(_payload["history"]),
+            target_mean=_payload["target_mean"],
+            target_std=_payload["target_std"],
+            num_envs=int(raw.num_envs),
+            action_dim=int(raw.cfg.action_space),
+            device=a.device,
+        )
+        print(
+            f"[PPO3-ARMA] Phase 3: frozen phi from {_phi_path} "
+            f"(history={_payload['history']}, context_dim={_ctx}) substituted into "
+            "the observation; PPO now optimises on z_hat",
+            flush=True,
+        )
     log_dir = (
         Path(a.log_dir).expanduser().resolve()
         if a.log_dir
@@ -1432,6 +1459,27 @@ def main() -> None:
             with torch.no_grad():
                 critic_output.weight.zero_()
                 critic_output.bias.zero_()
+        if os.environ.get("MULAG_RMA_ENCODER"):
+            # RMA Phase 1 proper: mu is trained JOINTLY with the policy under
+            # PPO. Installed AFTER runner.load so the warm start is in place
+            # first; the zero-initialised decoder means this must not change
+            # the policy's output at all.
+            from verge_task.rma_encoder import wrap_actor_critic
+
+            _latent = int(os.environ.get("MULAG_RMA_LATENT", "2"))
+            _ctx = 6 if bool(getattr(raw.cfg, "online_aam_policy_privileged_e", False)) else 2
+            _info = wrap_actor_critic(
+                runner,
+                base_dim=int(raw.cfg.observation_space) - _ctx,
+                context_dim=_ctx,
+                latent_dim=_latent,
+            )
+            print(f"[PPO3-RMA] jointly-trained encoder installed: {_info}", flush=True)
+            if _info["init_output_drift"] > 1e-6:
+                raise RuntimeError(
+                    "RMA encoder changed the warm-started policy at init "
+                    f"(drift {_info['init_output_drift']}); comparison would be confounded"
+                )
         if a.reset_critic_head_on_resume:
             critic_output = runner.alg.critic.mlp[-1]
             if not isinstance(critic_output, torch.nn.Linear):

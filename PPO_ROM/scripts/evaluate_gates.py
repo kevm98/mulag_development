@@ -354,6 +354,142 @@ p.add_argument(
     help="mid-episode ROM factor change, e.g. 'seal=0.9'",
 )
 p.add_argument(
+    "--video",
+    action="store_true",
+    help=(
+        "Record an mp4 of the rollout instead of opening a viewer. This box is "
+        "headless (no DISPLAY), so the live Isaac window used on the Legion "
+        "machine cannot open here; recording is the equivalent. Forces "
+        "--enable_cameras."
+    ),
+)
+p.add_argument(
+    "--video_length",
+    type=int,
+    default=600,
+    help="Frames to record. 600 at 60 Hz is ~10 s of simulated motion.",
+)
+p.add_argument(
+    "--video_dir",
+    default="outputs/videos",
+)
+p.add_argument(
+    "--residual_checkpoint",
+    default=None,
+    help=(
+        "Score a frozen base policy plus a history-conditioned residual. The "
+        "residual lives in the actor's `mlp`, so this reuses roll_mesh and every "
+        "measurement convention in this file rather than reimplementing them -- "
+        "a standalone evaluator was written and got the frozen base 29x wrong "
+        "twice, first by mis-handling parked steps and then by omitting rsl_rl's "
+        "normaliser epsilon."
+    ),
+)
+p.add_argument(
+    "--residual_history",
+    type=int,
+    default=20,
+)
+p.add_argument(
+    "--residual_alpha",
+    type=float,
+    default=0.5,
+)
+p.add_argument(
+    "--residual_latent_dim",
+    type=int,
+    default=8,
+)
+p.add_argument(
+    "--residual_no_history",
+    action="store_true",
+    help="Zero the history: same capacity and weights, but cannot adapt online.",
+)
+p.add_argument(
+    "--arms_per_env",
+    default="",
+    help=(
+        "Comma-separated context arms assigned PER ENVIRONMENT inside ONE "
+        "rollout, e.g. 'privileged,mean,shuffled,zero'. Use this, not "
+        "--paired_arms: running one arm per rollout back-to-back on the same "
+        "env is BIASED. An A/A control with three identical arms measured "
+        "1.1-2.4 mm differences with CIs excluding zero, and an order-"
+        "counterbalanced mass sweep showed no effect ascending and a REVERSED "
+        "sign descending. Per-env assignment steps every arm in the same "
+        "physics at the same time, so there is no sequence to bias it."
+    ),
+)
+p.add_argument(
+    "--paired_mass_scale",
+    default="",
+    help=(
+        "Comma-separated cutter mass scales scored IN ONE PROCESS on the same "
+        "environments, e.g. '1.0,1.5,2.5,4.0'. G1 on the MECHANICAL axis. "
+        "Actuator axes are measured dead in this pipeline -- 1.07 s of "
+        "transport delay does not degrade tracking and weakening the valve "
+        "IMPROVES it -- while the only privileged-context win all night came "
+        "from mass_scale/com_z, the sole factors that reach the FD plant. "
+        "This finds whether a wider payload range costs a fixed policy enough "
+        "to give an estimator something to recover."
+    ),
+)
+p.add_argument(
+    "--paired_alpha",
+    default="",
+    help=(
+        "Comma-separated valve-effectiveness values scored IN ONE PROCESS on "
+        "the same environments, e.g. '1.0,0.6,0.4,0.25'. G1 on the authority "
+        "axis: delay was measured non-degrading to 16 steps, so authority is "
+        "the next candidate for a perturbation box that actually costs the "
+        "baseline something. Watch action_saturation alongside the error -- a "
+        "degradation that arrives WITH saturation is the actuator running out "
+        "of command, not a recoverable adaptation opportunity."
+    ),
+)
+p.add_argument(
+    "--paired_delay_steps",
+    default="",
+    help=(
+        "Comma-separated transport delays in control steps to score IN ONE "
+        "PROCESS on the same environments, e.g. '0,2,4,8'. This is the G1 "
+        "degradation gate: the question is whether a fixed no-context policy "
+        "gets MEASURABLY WORSE as the plant moves. Adaptation can only recover "
+        "headroom that a degradation creates, so if no severity degrades the "
+        "baseline there is nothing for any estimator to win back. Paired "
+        "per-env like --paired_arms, because across-process means at one seed "
+        "disagree by 22-74% and cannot resolve this."
+    ),
+)
+p.add_argument(
+    "--paired_arms",
+    default="",
+    help=(
+        "Comma-separated online_aam_policy_latent_mode arms to score IN ONE "
+        "PROCESS on the same environments, e.g. "
+        "'privileged,mean,shuffled,zero'. The latent mode is read from cfg on "
+        "every observation build, so arms can be switched on a live env; each "
+        "arm re-resets from the same seed, so they share terrain, path and "
+        "factor draw and the per-env differences are paired. This is the only "
+        "valid way to measure an oracle gap here -- separate processes at the "
+        "same seed disagree by more than any adaptation effect being sought."
+    ),
+)
+p.add_argument(
+    "--action_scale",
+    type=float,
+    default=None,
+    help=(
+        "Evaluate at a different per-step action scale in metres. Required "
+        "whenever the checkpoint was TRAINED at a non-default scale: the "
+        "policy's action is q_ref = q_now + action * action_scale, so scoring "
+        "a 0.012-trained policy at the 0.02 default silently changes the plant "
+        "contract under it. The per-axis row is re-derived, not just the "
+        "scalar, because cylinder_action_scale_per_axis_m is computed FROM "
+        "action_scale by apply_c4_authority_stage and would otherwise stay at "
+        "the stage's value."
+    ),
+)
+p.add_argument(
     "--plant_alpha_range",
     default=None,
     metavar="LO:HI",
@@ -578,6 +714,10 @@ if a.checkpoint is not None and (a.teacher or a.null):
 if a.teacher and a.null:
     p.error("--teacher and --null are mutually exclusive")
 
+if getattr(a, "video", False):
+    # Cameras must be enabled BEFORE the app launches; the render pipeline is
+    # built at startup and cannot be turned on afterwards.
+    a.enable_cameras = True
 launcher = AppLauncher(a)
 simulation_app = launcher.app
 
@@ -594,7 +734,7 @@ from PPO_ROM.gates import GATES, check_gates  # noqa: E402
 if a.task.startswith("RRLAB-Mulag-Verge-ID-AAM-FD"):
     import importlib
 
-    _pkg = importlib.import_module("PPO_ID_AAM_FD")
+    _pkg = importlib.import_module("PPO_AAM_FD")
     TASK_ID = a.task
     EXPECTED_ACTUATOR = "id_aam_fd"
 elif a.task.startswith("RRLAB-Mulag-Verge-IDFD"):
@@ -810,6 +950,90 @@ def _headroom_diagnostic(
 
 
 @torch.no_grad()
+def _build_residual_policy(runner, raw, env_cfg):
+    """Frozen base + history residual, scored through this file's own rollout.
+
+    The history is kept in this closure, which is correct HERE and would be
+    wrong in training: roll_mesh calls the policy exactly once per environment
+    step, whereas PPO calls the actor many times per update epoch and would
+    advance a closure-held buffer out of sync with the simulation.
+
+    rsl_rl's actor performs the observation normalisation, so this code never
+    touches it. That is deliberate: hand-rolling it produced a frozen base 29x
+    off the reference twice.
+    """
+    from tensordict import TensorDict
+
+    from verge_task.residual_adapter import ResidualMLP
+
+    payload = torch.load(a.residual_checkpoint, map_location=a.device, weights_only=False)
+    sd = payload["actor_state_dict"]
+    base_width = int(sd["mlp.base_mlp.0.weight"].shape[1])
+    action_dim = int(env_cfg.action_space)
+    base_dim = base_width - 4 if base_width in (70, 72) else base_width
+    history = int(a.residual_history)
+    feature = base_dim + action_dim
+    wide = base_width + history * feature
+
+    import torch.nn as nn
+    base_mlp = nn.Sequential(
+        nn.Linear(sd["mlp.base_mlp.0.weight"].shape[1], sd["mlp.base_mlp.0.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.2.weight"].shape[1], sd["mlp.base_mlp.2.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.4.weight"].shape[1], sd["mlp.base_mlp.4.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.6.weight"].shape[1], sd["mlp.base_mlp.6.weight"].shape[0]),
+    ).to(a.device)
+    residual = ResidualMLP(
+        base_mlp, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
+        history=history, latent_dim=int(a.residual_latent_dim),
+        alpha=float(a.residual_alpha),
+    ).to(a.device)
+
+    actor = runner.alg.actor
+    actor.mlp = residual
+    # Widen the actor's normaliser to the residual's observation and load the
+    # checkpoint's statistics, so rsl_rl normalises exactly as it did in training.
+    norm = actor.obs_normalizer
+    for name in ("_mean", "_var", "_std"):
+        if hasattr(norm, name):
+            src = sd[f"obs_normalizer.{name}"].to(a.device)
+            setattr(norm, name, src.clone())
+    missing, unexpected = actor.load_state_dict(sd, strict=False)
+    if any(k.startswith("mlp.") for k in missing):
+        raise RuntimeError(f"residual weights did not load: missing {missing[:4]}")
+    actor.eval()
+    print(
+        f"[PPO3-1-GATES] residual policy: base_width={base_width} history={history} "
+        f"alpha={a.residual_alpha} wide={wide} "
+        f"history={'ZEROED' if a.residual_no_history else 'live'}",
+        flush=True,
+    )
+
+    n = int(raw.num_envs)
+    state = {
+        "hist": torch.zeros((n, history, feature), device=a.device),
+        "prev": torch.zeros((n, action_dim), device=a.device),
+    }
+
+    def residual_policy(obs):
+        base = obs["policy"] if isinstance(obs, dict) else obs
+        step = torch.nan_to_num(
+            torch.cat((base[:, :base_dim], state["prev"]), dim=-1), nan=0.0,
+            posinf=0.0, neginf=0.0)
+        state["hist"] = torch.roll(state["hist"], shifts=-1, dims=1)
+        state["hist"][:, -1, :] = step
+        flat = state["hist"].flatten(1)
+        if a.residual_no_history:
+            flat = torch.zeros_like(flat)
+        td = TensorDict({"policy": torch.cat((base, flat), dim=-1)},
+                        batch_size=[base.shape[0]])
+        with torch.no_grad():
+            action = actor(td)
+        state["prev"] = torch.nan_to_num(action.detach().clone(), nan=0.0)
+        return action
+
+    return residual_policy
+
+
 def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> dict:
     """Actor-mean rollout on one held-out mesh, collecting the 8 gate metrics.
 
@@ -862,6 +1086,7 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
             "lateral_error_m": [],
         }
     _report_every = max(int(steps) // 10, 1)
+    _frames = [] if getattr(a, "video", False) else None
     _t0 = time.time()
     for _step in range(int(steps)):
         if _step and _step % _report_every == 0:
@@ -874,6 +1099,13 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
             )
         action = policy(obs)
         obs, _, terminated, truncated, _ = raw.step(action)
+        if _frames is not None and len(_frames) < int(a.video_length):
+            # Captured HERE, not via gym.wrappers.RecordVideo: this rollout
+            # drives `raw` (the unwrapped env) directly, so a wrapper placed
+            # around `env` never sees a step and silently records nothing.
+            _frame = raw.render()
+            if _frame is not None:
+                _frames.append(_frame)
         # DirectRLEnv resets inside ``step`` before returning observations. Do
         # not start a second episode in the same held-out rollout once the
         # complete vector reaches the 26 m endpoint.
@@ -993,6 +1225,23 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 _Z_POLICY_LIVE['n'] = n
                 _Z_POLICY_LIVE['mean'] = mean
                 _Z_POLICY_LIVE['m2'] = m2
+                # ACROSS-ENVIRONMENT spread of the latent the actor reads.
+                # Temporal variance alone cannot separate `privileged` from
+                # `zero`: both are constant within an episode, so both report
+                # 0. They differ in whether environments see DIFFERENT values
+                # -- privileged carries a distinct plant code per env, zero is
+                # identically zero everywhere. Without this, a broken
+                # privileged arm is indistinguishable from a policy that
+                # ignores the latent, and Gate 1 cannot be interpreted.
+                if zp.ndim == 2 and zp.shape[0] > 1:
+                    _Z_POLICY_LIVE['across_env_std'] = max(
+                        float(_Z_POLICY_LIVE.get('across_env_std', 0.0)),
+                        float(zp.std(dim=0, unbiased=False).amax()),
+                    )
+                _Z_POLICY_LIVE['abs_max'] = max(
+                    float(_Z_POLICY_LIVE.get('abs_max', 0.0)),
+                    float(zp.abs().amax()),
+                )
         # Command reversal rate, the second mechanism variable. A reversal is a
         # sign change of the commanded increment, counted per axis per step and
         # scaled to the control rate, matching experiments/E1 control effort.
@@ -1250,6 +1499,24 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
         # draws or every environment equally. Those two have opposite fixes:
         # the first is a plant-context problem and belongs to the online
         # adaptation, the second is structural to the trajectory.
+        # Per-ENVIRONMENT mean error, the unit a paired arm comparison needs.
+        # Whole-run means are not comparable across processes: two identical
+        # invocations of this script at the same seed were measured 22% apart
+        # (38.75-67.43 mm over six nominally-equivalent runs), so an across-run
+        # difference smaller than that carries no information. Pairing on the
+        # environment cancels the terrain, path and factor draw it shares.
+        "per_env_lateral_m": [
+            float(v) for v in (
+                (lateral_steps * active_steps).sum(dim=0)
+                / active_steps.sum(dim=0).clamp_min(1)
+            )
+        ],
+        "per_env_cut_error_m": [
+            float(v) for v in (
+                (error_steps.abs() * active_steps).sum(dim=0)
+                / active_steps.sum(dim=0).clamp_min(1)
+            )
+        ],
         "per_env_headroom": _per_env_headroom(
             raw, headroom_cyl_steps, active_steps
         ),
@@ -1300,6 +1567,19 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
             control_dt_s=np.asarray(float(raw.step_dt)),
         )
         print(f"[PPO3-1-GATES] wrote trace {trace_path}", flush=True)
+    if _frames:
+        # Written here rather than through gym.wrappers.RecordVideo: this rollout
+        # drives the UNWRAPPED env, so a recording wrapper never sees a step.
+        import os as _os
+
+        import imageio.v2 as _imageio
+
+        _dir = _os.path.join(str(a.video_dir), f"mesh{mesh}")
+        _os.makedirs(_dir, exist_ok=True)
+        _path = _os.path.join(_dir, f"rollout_mesh{mesh}.mp4")
+        _imageio.mimsave(_path, _frames, fps=30, macro_block_size=1)
+        print(f"[PPO3-1-GATES] wrote {_path} ({len(_frames)} frames)", flush=True)
+
     return result
 
 
@@ -1376,6 +1656,27 @@ def main() -> None:
             num_envs=a.num_envs,
         )
         apply_c4_authority_stage(env_cfg, int(a.stage))
+        if a.action_scale is not None:
+            # MUST come after apply_c4_authority_stage, never before and never
+            # followed by another stage call: that chain reaches
+            # apply_sole_curriculum_stage, which ASSIGNS action_scale for the
+            # stage, so an override on either side of it is silently reverted.
+            # The per-axis row is then re-derived here by hand -- exactly the
+            # tail of apply_c4_authority_stage -- because it is computed from
+            # action_scale and would otherwise keep the stage's value while the
+            # scalar carried ours, mixing two contracts in one run.
+            override_cfg(env_cfg, "action_scale", float(a.action_scale))
+            _base_scale = max(float(env_cfg.action_scale), 1.0e-9)
+            override_cfg(
+                env_cfg,
+                "cylinder_action_scale_per_axis_m",
+                (
+                    _base_scale,
+                    _base_scale,
+                    _base_scale,
+                    _base_scale * float(getattr(env_cfg, "c4_action_scale_gain", 3.0)),
+                ),
+            )
         apply_trajectory_shapes(env_cfg, selected_shapes)
         if a.cylinder_target_max_lead_per_axis_m:
             override_cfg(
@@ -1624,7 +1925,10 @@ def main() -> None:
                 )
         configure_terrain_gpu_physx_memory(env_cfg, int(a.num_envs))
 
-        env = gym.make(TASK_ID, cfg=env_cfg, render_mode=None)
+        env = gym.make(
+            TASK_ID, cfg=env_cfg,
+            render_mode="rgb_array" if getattr(a, "video", False) else None,
+        )
         raw = env.unwrapped
         if a.teacher or a.null:
             zeros = torch.zeros(
@@ -1635,7 +1939,7 @@ def main() -> None:
                 return _zeros
         else:
             if EXPECTED_ACTUATOR == "id_aam_fd":
-                from PPO_ID_AAM_FD.env_cfg import PpoIDAAMFDPPORunnerCfg
+                from PPO_AAM_FD.env_cfg import PpoIDAAMFDPPORunnerCfg
                 runner_cfg = PpoIDAAMFDPPORunnerCfg()
             elif EXPECTED_ACTUATOR == "idfd":
                 from PPO_ID_FD.env_cfg import Ppo41IDFDPPORunnerCfg
@@ -1658,13 +1962,201 @@ def main() -> None:
                 },
             )
             policy = runner.get_inference_policy(device=a.device)
+            if getattr(a, "residual_checkpoint", None):
+                policy = _build_residual_policy(runner, raw, env_cfg)
         profiler = cProfile.Profile() if a.profile_out else None
         if profiler is not None:
             profiler.enable()
         try:
-            per_mesh[str(mesh)] = roll_mesh(
-                raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
-            )
+            if a.arms_per_env:
+                arms = [x.strip() for x in a.arms_per_env.split(",") if x.strip()]
+                # `arms[i % n]` ALIASES the arm against the terrain: height scale
+                # is `scales[env_index % 4]` and path family is
+                # `families[env_index % 11]`, so with 4 arms every arm is locked
+                # to one relief scale for the whole run. Measured on an A/A where
+                # all arms were the same tensor by construction, that produced a
+                # 1.0-2.5 mm spread ordered by relief, not by context -- larger
+                # than the effects under test.
+                #
+                # 11 families x 4 scales are coprime, so a block of 44 covers
+                # every (family, scale) pair exactly once. Assigning arms in
+                # blocks of 44 therefore gives every arm an identical terrain
+                # census; with MULAG_SHARED_TERRAIN=1 the seed is shared too, so
+                # env j and env j+44 differ ONLY by arm and the comparison is
+                # exactly paired.
+                # DERIVE the cycle; do not hardcode it. It is
+                # lcm(#path families, #height scales), and the height-scale count
+                # is a CURRICULUM setting: stage 4 training runs six scales
+                # (0.35..1.15) while the gate config runs four. A hardcoded 44
+                # silently re-aliases arm against terrain the moment that count
+                # changes -- which is the defect this block exists to fix.
+                from math import lcm
+
+                from verge_task.terrain import TRACKING_PATH_FAMILIES
+
+                scales = tuple(
+                    getattr(raw, "_terrain_height_scales", None)
+                    or getattr(env_cfg, "terrain_height_scales", (0.5, 0.7, 0.85, 1.0))
+                )
+                n_scales = len(set(scales))
+                n_families = len(TRACKING_PATH_FAMILIES)
+                CYCLE = lcm(n_families, n_scales)
+                block = CYCLE * len(arms)
+                print(
+                    f"[PPO3-1-GATES] terrain cycle = lcm({n_families} families, "
+                    f"{n_scales} height scales) = {CYCLE}; block = {block}",
+                    flush=True,
+                )
+                if raw.num_envs % block:
+                    raise SystemExit(
+                        f"--arms_per_env with {len(arms)} arms needs num_envs to be a "
+                        f"multiple of {block} = lcm({n_families} path families, "
+                        f"{n_scales} height scales) x {len(arms)} arms, so each arm gets "
+                        f"a balanced terrain census; got {raw.num_envs}."
+                    )
+                modes = [arms[(i // CYCLE) % len(arms)] for i in range(raw.num_envs)]
+                raw._per_env_arm_modes = modes
+                print(f"[PPO3-1-GATES] arms per env: {arms} "
+                      f"({raw.num_envs // len(arms)} envs each)", flush=True)
+                result = roll_mesh(
+                    raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                )
+                raw._per_env_arm_modes = None
+                lat = result["per_env_lateral_m"]
+                cut = result["per_env_cut_error_m"]
+                result["arms_per_env"] = {
+                    arm: {
+                        "env_indices": [i for i, m in enumerate(modes) if m == arm],
+                        "per_env_lateral_m": [lat[i] for i, m in enumerate(modes) if m == arm],
+                        "per_env_cut_error_m": [cut[i] for i, m in enumerate(modes) if m == arm],
+                    }
+                    for arm in arms
+                }
+                per_mesh[str(mesh)] = result
+            elif a.paired_mass_scale:
+                levels = [float(x) for x in a.paired_mass_scale.split(",") if x.strip()]
+                view = raw.robot.root_physx_view
+                body = int(raw._deployment_factor_body_id)
+                baseline = raw._deployment_factor_baseline_masses
+                idx_all = torch.arange(raw.num_envs, dtype=torch.long)
+                res = {}
+                for lv in levels:
+                    masses = baseline.clone()
+                    masses[:, body] = baseline[:, body] * lv
+                    view.set_masses(masses, idx_all)
+                    print(f"[PPO3-1-GATES] paired mass_scale: {lv}", flush=True)
+                    res[str(lv)] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                view.set_masses(baseline, idx_all)
+                base = res[str(levels[0])]
+                base["paired_mass_scale"] = {
+                    k: {"per_env_lateral_m": r["per_env_lateral_m"],
+                        "per_env_cut_error_m": r["per_env_cut_error_m"]}
+                    for k, r in res.items()
+                }
+                per_mesh[str(mesh)] = base
+            elif a.paired_alpha:
+                levels = [float(x) for x in a.paired_alpha.split(",") if x.strip()]
+                from PPO_AAM_FD.plant_perturbation import (
+                    PlantPerturbation, PlantPerturbationCfg,
+                )
+                res = {}
+                for lv in levels:
+                    raw._plant_perturbation = PlantPerturbation(
+                        PlantPerturbationCfg(
+                            enabled=lv < 1.0,
+                            alpha_range=(lv, lv),
+                            delay_steps_range=(0, 0),
+                        ),
+                        num_envs=raw.num_envs, device=raw.device,
+                        control_dt=raw._control_dt,
+                    )
+                    print(f"[PPO3-1-GATES] paired alpha: {lv}", flush=True)
+                    res[str(lv)] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                base = res[str(levels[0])]
+                base["paired_alpha"] = {
+                    k: {"per_env_lateral_m": r["per_env_lateral_m"],
+                        "per_env_cut_error_m": r["per_env_cut_error_m"]}
+                    for k, r in res.items()
+                }
+                per_mesh[str(mesh)] = base
+            elif a.paired_delay_steps:
+                # G1 degradation envelope, paired. The perturbation lives in
+                # PlantPerturbation, which samples per-env at construction, so
+                # the delay is re-driven here by rebuilding its config between
+                # rollouts on the SAME env instance.
+                levels = [
+                    int(x.strip()) for x in a.paired_delay_steps.split(",") if x.strip()
+                ]
+                from PPO_AAM_FD.plant_perturbation import (
+                    PlantPerturbation, PlantPerturbationCfg,
+                )
+                stress_results = {}
+                for level in levels:
+                    raw._plant_perturbation = PlantPerturbation(
+                        PlantPerturbationCfg(
+                            enabled=level > 0,
+                            alpha_range=(1.0, 1.0),
+                            delay_steps_range=(level, level),
+                        ),
+                        num_envs=raw.num_envs,
+                        device=raw.device,
+                        control_dt=raw._control_dt,
+                    )
+                    print(f"[PPO3-1-GATES] paired delay: {level}", flush=True)
+                    stress_results[str(level)] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                base = stress_results[str(levels[0])]
+                base["paired_delay"] = {
+                    k: {
+                        "per_env_lateral_m": r["per_env_lateral_m"],
+                        "per_env_cut_error_m": r["per_env_cut_error_m"],
+                    }
+                    for k, r in stress_results.items()
+                }
+                per_mesh[str(mesh)] = base
+            elif a.paired_arms:
+                # Score every arm on the SAME live env. `_flatten_observations`
+                # re-reads online_aam_policy_latent_mode on each build, so the
+                # arm can be switched between rollouts without rebuilding, and
+                # each rollout re-resets from the identical seed. The result is
+                # a paired per-environment comparison, which is the only kind
+                # this harness can support: separate processes at one seed were
+                # measured 22% apart, far above any oracle gap worth finding.
+                arms = [x.strip() for x in a.paired_arms.split(",") if x.strip()]
+                previous_mode = getattr(raw.cfg, "online_aam_policy_latent_mode", None)
+                arm_results = {}
+                for arm in arms:
+                    override_cfg(raw.cfg, "online_aam_policy_latent_mode", arm)
+                    print(f"[PPO3-1-GATES] paired arm: {arm}", flush=True)
+                    arm_results[arm] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                if previous_mode is not None:
+                    override_cfg(
+                        raw.cfg, "online_aam_policy_latent_mode", previous_mode
+                    )
+                base = arm_results[arms[0]]
+                base["paired_arms"] = {
+                    arm: {
+                        "per_env_lateral_m": r["per_env_lateral_m"],
+                        "per_env_cut_error_m": r["per_env_cut_error_m"],
+                        "mean_abs_cut_height_error_m": r["mean_abs_cut_height_error_m"],
+                        "worst_family_mean_abs_lateral_error_m": r[
+                            "worst_family_mean_abs_lateral_error_m"
+                        ],
+                    }
+                    for arm, r in arm_results.items()
+                }
+                per_mesh[str(mesh)] = base
+            else:
+                per_mesh[str(mesh)] = roll_mesh(
+                    raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                )
         finally:
             if profiler is not None:
                 profiler.disable()
@@ -1781,6 +2273,12 @@ def main() -> None:
                 _Z_POLICY_LIVE["m2"] / max(int(_Z_POLICY_LIVE.get("n", 1)) - 1, 1)
             ).mean()
         ) if isinstance(_Z_POLICY_LIVE.get("m2"), torch.Tensor) else 0.0,
+        # Separates a live privileged arm from a dead one; see the accumulation
+        # site for why temporal variance alone is not sufficient.
+        "policy_latent_across_env_std": float(
+            _Z_POLICY_LIVE.get("across_env_std", 0.0)
+        ),
+        "policy_latent_abs_max": float(_Z_POLICY_LIVE.get("abs_max", 0.0)),
         "command_reversals_per_s": (
             float(_CMD_LIVE["reversals"]) / float(_CMD_LIVE["steps"])
             / max(float(getattr(env_cfg.sim, "dt", 1.0 / 180.0))
@@ -1826,6 +2324,10 @@ def main() -> None:
         ),
         "deployment_factor_enabled": bool(
             getattr(env_cfg, "deployment_factor_enabled", False)
+        ),
+        "action_scale": float(getattr(env_cfg, "action_scale", 0.0)),
+        "cylinder_action_scale_per_axis_m": list(
+            getattr(env_cfg, "cylinder_action_scale_per_axis_m", ()) or ()
         ),
         "deployment_factor_manifest": str(
             Path(getattr(env_cfg, "deployment_factor_manifest", "")).expanduser().resolve()

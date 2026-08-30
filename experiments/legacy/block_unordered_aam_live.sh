@@ -38,9 +38,9 @@ stop_unordered() {
     case "$args" in
       *"$ROOT/experiments/schedule_speed_curriculum_aam_first.sh"*|\
       *"$ROOT/experiments/schedule_speed_randomization.sh"*|\
-      *"PPO_ID_AAM_FD/scripts/train.py"*|\
+      *"PPO_AAM_FD/scripts/train.py"*|\
       *"verge_task/scripts/train.py"*"--actuator id_aam_fd"*|\
-      *"PPO_ID_AAM_FD/scripts/score"*|\
+      *"PPO_AAM_FD/scripts/score"*|\
       *"score_per_mesh.sh"*"id_aam"*)
         if ! ordered_ancestor "$pid"; then
           printf '[%s] stopping unordered AAM pid=%s ppid=%s args=%s\n' "$(date -Is)" "$pid" "$ppid" "$args" >>"$LOG"

@@ -626,6 +626,14 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # deployment_mass_step_time_s onwards.
     deployment_mass_step_time_s: float | None = None
     deployment_mass_step_scale: float = 1.0
+    # Per-env jitter on the step instant, in seconds. A fixed instant can be
+    # compensated on a timer without sensing the change, which would let a
+    # non-adaptive arm match an adaptive one and hide the effect under test.
+    deployment_mass_step_jitter_s: float = 0.0
+    deployment_mass_step_seed: int = 20260829
+    # Two well-separated mass modes. Each env starts in one and flips to the
+    # other mid-episode, so a non-adaptive policy is wrong in BOTH halves.
+    deployment_mass_bimodal: tuple | None = None
     tracking_reference_step_m: float = 0.0
     tracking_reference_step_time_s: float = 0.0
     tracking_path_family_schedule: tuple = ()
@@ -647,6 +655,22 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # 0.35 and 1.15 were added). Training gets the wider distribution from
     # scripts/train.py instead, which is the only place that may change it.
     terrain_height_scales: tuple = (0.50, 0.70, 0.85, 1.00)
+
+    # Per-environment cylinder joint damping scale. None disables it (authored
+    # damping is used unchanged). Measured 2026-08-29: damping x3 moves the
+    # open-loop response 15.0% at the joint, as strong as cutter mass x1.5 and
+    # far stronger than com_z, yet it is not a factor-manifest column.
+    damping_scale_range: tuple | None = None
+    damping_scale_seed: int = 20260829
+    # Tile the draw so env j and env j+period share damping, for paired arms.
+    damping_scale_pair_period: int | None = None
+    # Same tiling for the payload draw, for paired arms.
+    payload_scale_pair_period: int | None = None
+    # False (default): the payload is a FIXED property of each environment, so a
+    # run is reproducible and absolute numbers are comparable across runs. True
+    # redraws every episode, which adds diversity during training but makes the
+    # draw depend on the reset history.
+    payload_scale_resample_per_episode: bool = False
     terrain_tracking_amplitude_scales: tuple = ()
     """Per-environment ladder of path widths; empty falls back to the scalar.
 
