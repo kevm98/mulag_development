@@ -658,10 +658,13 @@ differs is only the space in which the request is bounded.
       node[pos=.72,right,font=\scriptsize] {$\bm{u}$};
     \draw[sigarrow,cborange!90!black] (contractA) -- (pathA.north);
     \draw[sigarrow,cbgreen!80!black] (contractB) -- (pathB.north);
-    \draw[sigarrow,cbgreen!80!black] (pathA.south) |- (plant.north west) ;
-    \draw[sigarrow,cbgreen!80!black] (pathB.south) |- (plant.north east) ;
-    \draw[sigarrow,cbgreen!80!black] (plant.west) -| (-6.4,-9.35) |- (obs.west)
-      node[pos=.55,left,font=\scriptsize,text=cbgreen!60!black] {measured state};
+    \draw[sigarrow,cbblue!80!black] (pathA.south) -- (pathA.south |- plant.north);
+    \draw[sigarrow,cbgreen!80!black] (pathB.south) -- (pathB.south |- plant.north);
+    \draw[sigarrow,cbgreen!80!black] (plant.west) -| (-6.4,-9.35) |- (obs.west);
+    % Placed at an explicit midpoint: pos= on a multi-segment -| path is
+    % parameterised by segment, not arc length, and lands at the top.
+    \node[font=\scriptsize\bfseries,text=cbgreen!55!black,rotate=90,
+      anchor=south,inner sep=2pt] at (-6.4,-4.675) {measured state};
   \end{tikzpicture}
   \caption{Deployed control stacks. R and IF share one action contract, a
   bounded cylinder increment, and differ only in how they realise it. AF does

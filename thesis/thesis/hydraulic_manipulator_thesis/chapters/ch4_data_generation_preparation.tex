@@ -631,17 +631,17 @@ control steps, but it now drives the whole run rather than three windows inside
 one. Each run is $11\,040$ control steps, giving $1\,302\,720$ steps across the
 collection.
 
-The reason for collecting twice is an identifiability result rather than a
-preference, and it is the sharpest one in this thesis. Under a task controller
-the command is computed from the state, so command and response are close to
-redundant and the plant has little left to explain. Measured on the earlier
-task-controller collection, a latent-conditioned state predictor scored
-\emph{behind} its own no-latent baseline, $0.17596$ against $0.17278$, with the
-privileged latent worse still at $0.18515$; the same architecture, objective and
-selection criterion on this collection lower free-running error instead. Nothing
-about the model changed. What changed was whether the data contained an answer. Training the
-adaptation module on task-controller data would therefore have produced a
-confident negative about an architecture that works.
+The reason for collecting twice is structural rather than a preference. Under a
+task controller the command is computed from the state, so command and response
+are close to redundant and a plant descriptor has little left to explain. A
+model asked to identify the plant from that data is not being given a hard
+problem; it is being given one with no answer in it, and what it reports is a
+property of the data rather than of the architecture. Removing the controller is
+what makes the question well posed. That is why the open-loop collection exists
+and why every model-level result in this thesis is fitted on it. How rich the
+excitation has to be, and the amplitude beyond which plant identity stops being
+recoverable, are measurements on this collection and are listed among the work
+still outstanding.
 
 The collection records its own feature contract, and what each consumer takes
 from it is set out separately: Section~\ref{sec:data:history-features} for the
