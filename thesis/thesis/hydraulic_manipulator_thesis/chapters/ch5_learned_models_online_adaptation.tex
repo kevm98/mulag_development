@@ -15,23 +15,21 @@ both closed-loop operation and open-loop valve excitation were required. This
 chapter develops the learned representations that consume them: the
 inverse-dynamics (ID) and forward-dynamics (FD) networks of the \ppoIDFD{}
 actuator path, the command-conditioned reduced-order model (ROM) that replaces
-them in \ppoROM, and the system-dynamics surrogate, privileged factor encoder
-and Arm Adaptation Module (AAM) that together carry the identifiability
-argument.
+them in \ppoROM, and the Arm Adaptation Module (AAM) that estimates plant
+context at runtime.
 
-The chapter follows one evidence chain. Each link is
-established in turn: the latent exists, it is recoverable causally from
-observable history, the recovered estimate is as informative as a privileged
-one, and it improves a model that consumes it. The chain then fails at its last
-link, where the correction must reach a command that is already
-saturated. The diagnosis specifies the redesign carried out in
-Chapter~\ref{chap:control} and evaluated in Chapter~\ref{chap:evaluation}.
+The chapter continues one evidence chain. Section~\ref{sec:data:system-dynamics}
+established the first link on the data itself: a compact plant context exists
+and improves prediction, and the improvement sits in pressure. What follows here
+is whether that context is recoverable causally from observable history, whether
+the recovered estimate is as informative as a privileged one, and whether it
+reaches the command. The chain fails at that last link, where the correction
+must act on a command already saturated. The diagnosis specifies the redesign
+carried out in Chapter~\ref{chap:control} and evaluated in
+Chapter~\ref{chap:evaluation}.
 
-Two commitments organise the chapter. The first is that the surrogate is kept
-strictly separate from the deployed actuator: the system-dynamics surrogate is an
-instrument for establishing whether a compact dynamics latent exists and is
-useful, never a component of any control stack. The second is that no model is
-accepted on a supervised score, because a recurring result of this work is that
+One commitment organises the chapter: no model is accepted on a supervised
+score, because a recurring result of this work is that
 such scores can be uninformative: a forward model
 reached a one-step $R^2$ near $0.999$ while having learned almost nothing about
 valve authority (Section~\ref{sec:models:fd}). Every model is therefore
@@ -488,80 +486,12 @@ Section~\ref{sec:sys:rom-is-plant}. Unlike the ID--FD path, it has seen PhysX
 data. It is frozen and has no latent input; adaptation modifies only the inverse
 path.
 
-\section{A Predictive Test of Plant Identity}
-\label{sec:models:latent}
-
-The system-dynamics surrogate is a prediction instrument. It is not an actuator,
-and it is not an adaptation model: the only adaptation model in this thesis is
-the AAM of Section~\ref{sec:models:aam}. Its purpose is to settle one question
-before any adaptive machinery is built, namely whether a compact description of
-which plant is present improves prediction of that plant at all. If it does not,
-nothing downstream can recover the difference.
-
-It approximates the command-ROM--PhysX plant and is trained from scratch on the
-IsaacLab data of Section~\ref{sec:data:isaaclab}. At each $\unit[50]{ms}$ step
-it predicts the next 12-dimensional hydraulic-state increment from the
-observable state, joint context, consecutive commands and a six-tick causal
-belief, under a five-transition unroll; the matched control $SD_0$ is identical
-but has no latent input. A privileged encoder $\latent=\mu(\factorvec)$ maps the
-six physical factors to two dimensions and is trained jointly with $SD_z$, so
-the latent is whatever serves prediction rather than a quantity fixed in
-advance.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[page=4,width=\textwidth]{images/ch5_network_architectures}
-  \caption{System-dynamics surrogate and its information flow. A training-time
-  factor encoder supplies a two-dimensional plant context. A GRU derives a
-  16-dimensional causal belief from observable history. These features are
-  fused with the current hydraulic state, consecutive valve commands and joint
-  context. A three-layer, 256-wide MLP predicts the next state increment using
-  a five-step training unroll.}
-  \label{fig:models:sd-architecture}
-\end{figure}
-
-The latent provides a narrow benefit. Pooled rollout error falls by
-$7.20\times10^{5}$ on $20$ validation runs ($95\,\%$ interval
-$[-1.03\times10^{6},-4.30\times10^{5}]$) and by $4.41\times10^{5}$ on $16$ test
-runs ($[-7.61\times10^{5},-1.74\times10^{5}]$). The per-channel decomposition
-places the whole of that gain in pressure: the extension and velocity intervals
-cross zero on both pools (Table~\ref{tab:models:latent-channels}), and those two
-are the channels the controller integrates.
-
-\begin{table}[H]
-  \centering
-  \caption{Per-channel decomposition of the paired latent advantage at a
-  $20$-tick horizon, pooled over $36$ runs. Values are the mean paired
-  difference between the latent-conditioned model and the no-latent control,
-  with a $95\,\%$ bootstrap interval; a negative value favours the latent for
-  the pooled state error, and a positive value favours it for the per-channel
-  errors as signed here. The advantage is confined to the pressure channel.}
-  \label{tab:models:latent-channels}
-  \begin{tabular}{lccc}
-    \toprule
-    Channel & mean paired difference & $95\,\%$ interval & excludes zero \\
-    \midrule
-    extension & $5.2\times10^{-5}$ & $[-3.6\times10^{-5},\; 1.4\times10^{-4}]$ & no \\
-    velocity  & $-2.4\times10^{-4}$ & $[-7.1\times10^{-4},\; 2.4\times10^{-4}]$ & no \\
-    pressure  & $1.75\times10^{5}$ & $[2.1\times10^{4},\; 3.3\times10^{5}]$ & yes \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Two limits follow and both are carried forward. The test compares separately
-trained models, so it establishes that the context is informative, not that an
-estimator can recover it or that a controller can use it; the within-model
-substitution of Section~\ref{sec:models:chain} isolates that. And the
-informative channel is pressure, which is the first appearance of the delivery
-problem Section~\ref{sec:models:chain} closes on. The encoder, $SD_z$, belief
-module, normalisers, input mask, split and rollout protocol are then frozen for
-downstream use.
-
 \section{Arm Adaptation Module}
 \label{sec:models:aam}
 
-This section describes the encoder trained offline against a latent target on
-the frozen collection of Section~\ref{sec:data:isaaclab}. Its purpose here is
+This section describes the encoder trained offline against the plant context
+of Section~\ref{sec:data:system-dynamics}, on the frozen collection of
+Section~\ref{sec:data:isaaclab}. Its purpose here is
 evidentiary: it establishes that plant identity is recoverable from causal
 observable history at all, which is the third link in the chain of
 Chapter~\ref{chap:evaluation} and a precondition for anything built on top of
@@ -691,7 +621,8 @@ $SD_z(\bm{s},\bm{u},\latenthat)$ under the frozen protocol with paired
 bootstrap intervals. Neither the true nor estimated latent improves extension
 or velocity over $SD_0$ with an interval excluding zero. The estimate is not
 worse than the true latent, so estimation is not the limiting stage. The
-measurable advantage remains in pressure (Table~\ref{tab:models:latent-channels}).
+measurable advantage remains in pressure, as it was for the separately
+trained pair of Section~\ref{sec:data:system-dynamics}.
 
 The estimate is therefore not the main loss. The missing link is a path from
 pressure information to the integrated extension command with sufficient

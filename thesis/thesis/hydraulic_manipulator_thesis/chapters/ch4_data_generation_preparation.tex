@@ -164,7 +164,7 @@ Four requirements governed collection and preparation.
     latent adaptation both need many plants rather than one. The
     variation has to be physically meaningful, it has to demonstrably
     change the measured response, and it has to be recorded per run,
-    because the privileged latent of Section~\ref{sec:models:latent} is computed from those recorded factors.
+    because the privileged plant context of Section~\ref{sec:data:system-dynamics} is computed from those recorded factors.
   \item[R4: clean separation.] Train, validation, and test material must
     be separable at the level of complete runs, so that no transition
     window straddles a split boundary and no run contributes to two
@@ -778,13 +778,13 @@ collection at all, for the reason given in Section~\ref{sec:data:onpolicy}.
 \subsection{Features and Targets for the Prediction Models}
 \label{sec:data:sd-features}
 
-The prediction models of Section~\ref{sec:models:latent} read the same runs
-through a different contract. Each sample is a transition at the
-$\unit[50]{ms}$ tick rather than a history window, pairing the previous and
-current valve command with the state, and training draws five consecutive
-transitions at a time. They additionally receive the privileged factor vector
-$\factorvec$, which the adaptation module never sees and which is what allows
-them to define the target the module is then asked to recover.
+The prediction models read the same runs through a third contract: a transition
+at the $\unit[50]{ms}$ tick rather than a history window, and the privileged
+factor vector $\factorvec$, which the adaptation module never sees and which is
+what allows them to define the target the module is then asked to recover. That
+contract is set out with the dataset it produces in
+Section~\ref{sec:data:system-dynamics}, because what it is for is only visible
+alongside the audit it makes possible.
 
 \subsection{On-Policy Data for the Deployed Adaptation Residual}
 \label{sec:data:onpolicy}
@@ -913,16 +913,91 @@ disjoint keys across splits), physical validity per run (finite physics, exact
 model-grid alignment, full command rank, bounded saturation), and leakage
 structurally, with privileged channels removed by an explicit input mask rather
 than by trusting the feature list. Its limitation is scale: $118$ runs over six
-factors is a sparse design, which is why the identifiability claims of
-Chapter~\ref{chap:evaluation} are reported with paired bootstrap intervals and
-per-run detail rather than pooled point estimates. The limitation is specific
+factors is a sparse design, which is why the paired test of
+Section~\ref{sec:data:sd-audit} is reported with bootstrap intervals and
+per-run detail rather than as a pooled point estimate. The limitation is specific
 to what this collection supports. It does not bound the closed-loop adaptation
 result, which is not estimated from these runs at all but from paired
 environments generated on-policy under the plant design of
 Section~\ref{sec:data:onpolicy}.
 
+\section{The System-Dynamics Dataset}
+\label{sec:data:system-dynamics}
+
+The prediction models read the deployment collection through a third contract,
+built once and frozen with the rest. It is a derived view rather than a separate
+collection: the same $118$ runs, resampled from the $\unit[60]{Hz}$ control log
+to the $\unit[20]{Hz}$ model tick by taking every third step, giving $3\,840$
+transitions per run and $453\,120$ in total. The run-level split is inherited
+unchanged, $82$ training, $20$ validation and $16$ test runs, so a run
+contributes to exactly one split here and in every other view of this data.
+
+Each sample is one transition. The input is the $12$-dimensional hydraulic
+state, the $10$-dimensional joint context and the valve command pair, previous
+and current, for $30$ channels; the target is the hydraulic-state increment to
+the next tick, in the same $12$ dimensions. Training draws five consecutive
+transitions at a time so the objective is a short rollout rather than a
+one-step fit. Four per-tick flags travel with every sample, recording cylinder
+limit, command saturation, valve saturation and non-finite physics, so a model
+can be scored on valid ticks alone rather than on whatever the run happened to
+contain. Each run additionally carries its own six-factor vector $\factorvec$.
+That vector is privileged: it is what allows a target to be defined for the
+adaptation module of Section~\ref{sec:data:history-features}, and it is masked
+out of every deployable input.
+
+\subsection{Whether the Dataset Separates Plants}
+\label{sec:data:sd-audit}
+
+One property of this dataset cannot be checked by an audit of its structure. The
+checks of Section~\ref{sec:data:diagnostics} establish that the runs are valid,
+that the factor design is full rank and that the splits do not leak. They do not
+establish that the runs \emph{differ by plant} in a way any model could use, and
+if they do not, nothing built on this dataset can recover the difference.
+
+The test is a paired one on the dataset itself. Two prediction models are
+trained on identical samples, splits and objective. One receives a
+two-dimensional plant context from an encoder $\latent = \mu(\factorvec)$
+trained jointly with it; the matched control receives no such input. Neither is
+an actuator and neither enters a control stack. The difference between them is
+the question.
+
+The context helps, and narrowly. Pooled rollout error falls by
+$7.20\times10^{5}$ on the $20$ validation runs, with a $95\,\%$ interval of
+$[-1.03\times10^{6},\, -4.30\times10^{5}]$, and by $4.41\times10^{5}$ on the
+$16$ test runs, interval $[-7.61\times10^{5},\, -1.74\times10^{5}]$. Both
+exclude zero, so the dataset does separate plants. Where it separates them is
+the more useful result: the per-channel decomposition puts the whole gain in
+pressure, and the extension and velocity intervals cross zero on both pools.
+
+\begin{table}[H]
+  \centering
+  \caption{Per-channel decomposition of the paired advantage at a $20$-tick
+  horizon, pooled over $36$ held-out runs. Values are the mean paired difference
+  between the context-conditioned model and the matched control, with a
+  $95\,\%$ bootstrap interval. The advantage is confined to pressure.}
+  \label{tab:data:latent-channels}
+  \begin{tabular}{lccc}
+    \toprule
+    Channel & mean paired difference & $95\,\%$ interval & excludes zero \\
+    \midrule
+    extension & $5.2\times10^{-5}$ & $[-3.6\times10^{-5},\; 1.4\times10^{-4}]$ & no \\
+    velocity  & $-2.4\times10^{-4}$ & $[-7.1\times10^{-4},\; 2.4\times10^{-4}]$ & no \\
+    pressure  & $1.75\times10^{5}$ & $[2.1\times10^{4},\; 3.3\times10^{5}]$ & yes \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two limits travel with this result and both matter later. It compares separately
+trained models, so it establishes that the context is informative, not that an
+estimator could recover it or that a controller could use it;
+Section~\ref{sec:models:chain} substitutes contexts within one model, which is
+the tighter test. And the informative channel is pressure, which the controller
+does not integrate. That is the first appearance of the delivery problem the
+rest of this thesis runs into: this dataset carries plant identity in the one
+channel that reaches the command path least directly.
+
 With the data described and audited, the next chapter turns to what was
 learned from it: the inverse and forward models that form the
-\ppoIDFD{} actuator path, the command-conditioned reduced-order model
-that replaces them in \ppoROM, and the system-dynamics surrogate and encoders
-built on the IsaacLab collection.
+\ppoIDFD{} actuator path, the command-conditioned reduced-order model that
+replaces them in \ppoROM, and the adaptation module that estimates at runtime
+what the surrogate above was given.
