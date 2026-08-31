@@ -57,7 +57,7 @@
 
 % Acknowledgements (optional)
 \RRLABpreface{Acknowledgements}{%
-\emph{``It always seems impossible until it's done.''} --- Nelson Mandela
+\emph{``It always seems impossible until it's done.''} \hfill Nelson Mandela
 
 I would like to express my sincere gratitude to my supervisor,
 \textbf{[Supervisor's Name]}, for their invaluable guidance, support, and
@@ -73,53 +73,54 @@ this achievement possible.
 % stacks PPO-ROM / PPO-ID-FD / PPO-(AAM)-ID-FD, principal results,
 % contribution. State results according to completed evidence.)
 \RRLABabstract{Abstract}{%
-Hydraulic manipulators are difficult to control precisely, because the actuator
-response is nonlinear, depends on load and supply pressure, and varies between
-individual machines. Simulating that response faithfully is possible, but the
-models that do so are far too slow to be evaluated inside reinforcement
-learning. Ignoring the hydraulics and commanding joint positions directly avoids
-that cost, but discards the behaviour that makes the machine difficult to
-control in the first place.
+Hydraulic manipulators are difficult to control precisely: the actuator response
+is nonlinear, depends on load and supply pressure, and varies between machines.
+Faithful simulation is possible but far too slow for reinforcement learning,
+while commanding joint positions directly discards the behaviour that makes the
+machine difficult.
 
 This thesis investigates how hydraulic actuator dynamics learned from
-high-fidelity simulation can be reduced, transferred into a computationally
-efficient robotic simulation, and used for reinforcement-learning control of a
-verge mowing arm. Two actuator representations are identified from randomised
-simulation campaigns. The first is a modular chain of an inverse model, which
-maps a desired cylinder motion to a valve command, and a forward model, which
-predicts the resulting response. The second is a physics-structured
-reduced-order model, in which pressure, force and extension propagation remain
-explicit while learning covers valve realisation and unmodelled loading. Both
-representations are realised in the deployment simulator and used as the
-actuation interface for policy learning. A damped least-squares controller
-provides privileged demonstrations during training and is removed afterwards, so
-that the distilled policy becomes the sole deployed controller.
+high-fidelity simulation can be reduced, transferred into an efficient robotic
+simulation, and used for reinforcement-learning control of a verge mowing arm.
+Two actuator representations are identified from randomised campaigns: a modular
+chain of an inverse model, mapping desired cylinder motion to a valve command,
+and a forward model predicting the response; and a physics-structured
+reduced-order model keeping pressure, force and extension propagation explicit
+while learning covers valve realisation and loading. Both serve as the actuation
+interface for policy learning. A damped least-squares controller supplies
+privileged demonstrations and is then removed, so the distilled policy becomes
+the sole deployed controller.
 
-The inverse and forward representation is shown to transfer to the deployment
-simulator without deployment-specific retraining, while the reduced-order model
-is transferred with a small bounded calibration against the deployment plant.
-Supervised accuracy is shown to be an unreliable guide to control,
-because a forward model achieved a high predictive score while learning to
-ignore the valve command. Excitation design and input ablation are established
-as the tests that expose this failure. Both representations then support
-closed-loop terrain following, and the choice of representation is shown to
-change the control strategy that the policy learns. Online adaptation is
-examined last, against the robustness already obtained. Plant identity proves
-recoverable only from deliberate excitation and not from the data the task
-controller produces, and the trained stacks absorb the plant variation studied
-here without assistance, which bounds the benefit that conditioning on plant
-identity can provide. The two measurements that establish this bound, an
-identifiability envelope and an oracle ceiling read from the true plant
-factors, are cheap and both precede estimator training. Together they form a
-decision procedure for whether online adaptation is worth building on a given
-machine, which this thesis takes as its principal contribution.
+The inverse and forward pair transfers to the deployment simulation without
+retraining in the one-step regime the policy uses, where extension error stays
+millimetre-scale across plant domains, and the reduced-order model transfers
+with a small bounded calibration against the deployment plant. Supervised
+accuracy proves an unreliable guide to control: a forward model scored highly
+while learning to ignore the valve command, and excitation design with input
+ablation are established as the tests that expose it. Both representations
+support closed-loop terrain following, and the choice of representation changes
+the control strategy the policy learns.
+
+Online adaptation is examined last. Plant identity proves recoverable only from
+deliberate excitation, and under the randomised plant family the trained stacks
+absorb the variation unaided, so adaptation is tested on a plant whose load
+changes mid-episode. There a bounded correction on the inverse model's output
+changes nothing, and the reason is delivery rather than estimation: that command
+already rests against its limit for most of the scored window, so the authority
+to act is absent where the information arrives. Removing the inverse model, so
+that the policy emits the valve command and a bounded residual conditioned on
+causal history acts upon it, converts the same information into a substantial
+gain: cut-height error falls by roughly half and lateral error by more than
+two fifths against the frozen policy the stack is built from. The thesis contributes a decision procedure for whether
+online adaptation is worth building on a machine, and the finding that on a
+saturating actuator the placement of the correction, not the quality of the
+estimate, decides whether adaptation pays.
 }
-
 % Table of contents (plus list of figures/tables)
 \RRLABcontents
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Main matter — one file per chapter
+%% Main matter - one file per chapter
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Insert exactly one unnumbered, header-free blank page between chapters.
@@ -129,8 +130,8 @@ machine, which this thesis takes as its principal contribution.
   \clearpage
   \begingroup
     \thispagestyle{empty}%
-    \null
-    \newpage
+    \mbox{}%
+    \clearpage
   \endgroup}
 
 % Preserve the template's normal paragraph and heading gaps.  With

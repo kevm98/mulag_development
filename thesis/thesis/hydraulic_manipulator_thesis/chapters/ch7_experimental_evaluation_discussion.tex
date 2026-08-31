@@ -45,8 +45,8 @@ Section~\ref{sec:intro:contributions}:
   \item[RQ5] How does the choice of actuator representation affect tracking,
     command behaviour, latency and robustness under plant variation?
   \item[RQ6] Where plant variation survives that robustness, is it identifiable
-    from recent observations, and does online adaptation by latent
-    identification improve closed-loop performance?
+    from recent observations, and does online adaptation conditioned on that
+    history improve closed-loop performance?
 \end{description}
 
 The two differ in kind. RQ5 asks what a design choice changes and is answered by
@@ -1007,29 +1007,55 @@ meshes, under the plant the arms were trained on.
   environments across three held-out meshes. The control arm differs from the
   adaptive arm only in that its history window is zeroed; the frozen base, the
   architecture, the $53\,836$ trainable parameters, the budget, the reward and
-  the seed are shared. Percentages are median paired improvements over the
-  frozen base.}
+  the seed are shared. The percentage column is the ordinary reduction of the
+  mean, $1 - \bar{e}_{\mathrm{arm}}/\bar{e}_{\mathrm{base}}$. The paired
+  statistic the arms were pre-registered on is a different quantity and is
+  defined in the text.}
   \label{tab:eval:arms}
   \begin{tabular}{lcccc}
     \toprule
     & \multicolumn{2}{c}{cut-height error}
     & \multicolumn{2}{c}{lateral error} \\
     \cmidrule(lr){2-3} \cmidrule(lr){4-5}
-    Arm & mean & over base & mean & over base \\
+    Arm & mean & reduction & mean & reduction \\
     \midrule
     base (frozen policy)     & $\unit[7.964]{mm}$ & ---           & $\unit[61.155]{mm}$ & --- \\
-    control (history zeroed) & $\unit[5.380]{mm}$ & ---           & $\unit[61.521]{mm}$ & --- \\
-    adaptive (history live)  & $\mathbf{\unit[3.772]{mm}}$ & $+120.1\,\%$ & $\mathbf{\unit[35.371]{mm}}$ & $+78.2\,\%$ \\
+    control (history zeroed) & $\unit[5.380]{mm}$ & $32.4\,\%$    & $\unit[61.521]{mm}$ & $-0.6\,\%$ \\
+    adaptive (history live)  & $\mathbf{\unit[3.772]{mm}}$ & $\mathbf{52.6\,\%}$ & $\mathbf{\unit[35.371]{mm}}$ & $\mathbf{42.2\,\%}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The adaptive arm improves both scored errors against the policy it wraps: cut
-height by $120.1\,\%$ and lateral by $78.2\,\%$, with paired differences of
-$+3.626\;[+3.082,\, +4.503]$ and $+22.533\;[+20.802,\, +23.990]$ millimetres.
-Against the capacity-matched control it improves both again, by $56.9\,\%$ and
-$80.4\,\%$, with paired differences of $+1.836\;[+1.553,\, +2.155]$ and
-$+25.266\;[+23.378,\, +26.367]$. All four intervals exclude zero.
+The adaptive arm lowers both scored errors against the policy it wraps. Cut
+height falls from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and lateral from
+$\unit[61.155]{mm}$ to $\unit[35.371]{mm}$, reductions of $52.6\,\%$ and
+$42.2\,\%$, with paired differences of $+3.626\;[+3.082,\, +4.503]$ and
+$+22.533\;[+20.802,\, +23.990]$ millimetres. Against the capacity-matched
+control the reductions are $29.9\,\%$ and $42.5\,\%$, with paired differences of
+$+1.836\;[+1.553,\, +2.155]$ and $+25.266\;[+23.378,\, +26.367]$. All four
+intervals exclude zero.
+
+The arms were pre-registered on a different statistic, and it is defined here so
+that the two are not read as one. It is a paired ratio, taken per environment
+and then reduced by the median over environments:
+%
+\begin{equation}
+  \label{eq:eval:ratio-gain}
+  g = \operatorname*{median}_{e}
+      \frac{\bar{e}^{\,\mathrm{ref}}_{e}}{\bar{e}^{\,\mathrm{adaptive}}_{e}}
+      \; - \; 1 ,
+\end{equation}
+%
+where $\bar{e}_{e}$ is an arm's mean absolute error over environment $e$. On
+that statistic the adaptive arm scores $+120.1\,\%$ on cut height and
+$+78.2\,\%$ on lateral against the base, and $+56.9\,\%$ and $+80.4\,\%$ against
+the control. A value above $100\,\%$ is not a reduction larger than the error
+itself: $g$ says how many times worse the reference arm is, so $+120.1\,\%$
+means the base carries $2.2$ times the adaptive arm's error in the median
+environment. It is quoted because it is what was declared in advance, and
+because a median over environments is not carried by the few environments where
+the base fails outright, which a ratio of means is. The reductions above are the
+figures to compare with other work.
 
 The control arm is what makes this attributable, and the two metrics divide the
 credit differently. On \emph{lateral} error, adding the residual's capacity with
@@ -1151,8 +1177,8 @@ that way.
 
 The reported arms are trained for $400$ iterations, which was the protocol budget
 for every arm from the start. Resuming the same adaptive arm to $1200$ iterations
-still passes both criteria, at $+85.5\,\%$ cut height and $+39.1\,\%$ lateral
-against the base, so the result is not an artefact of stopping at a fortunate
+still passes both criteria, at $g = +85.5\,\%$ cut height and $+39.1\,\%$
+lateral against the base (Equation~\ref{eq:eval:ratio-gain}), so the result is not an artefact of stopping at a fortunate
 point. Held-out performance is nonetheless lower at $1200$ than at $400$, which
 is ordinary overfitting to the training plants, and the shorter budget is what is
 reported because it is what was declared.
@@ -1174,7 +1200,7 @@ that online adaptation improves both errors in general.
 The falsification control is also outstanding. A sham condition, in which the
 flip schedule fires but the mass never changes, separates adaptation from a
 policy that has simply learned to track better. Under the earlier objective the
-sham showed $+29.3\,\%$, meaning a substantial part of the measured gain there
+sham showed $g = +29.3\,\%$, meaning a substantial part of the measured gain there
 was improved tracking rather than response to the plant. That control has not
 been repeated under the objective reported here, and until it is, the share of
 the gain attributable to adaptation specifically is bounded above rather than
@@ -1229,26 +1255,38 @@ left to Section~\ref{sec:eval:boundary-design}.
 \subsection*{RQ6: Whether Online Adaptation Pays}
 
 \emph{Where plant variation survives that robustness, is it identifiable from
-recent observations, and does online adaptation improve closed-loop
-performance?}
+recent observations, and does online adaptation conditioned on that history
+improve closed-loop performance?}
 
 It is identifiable, but only from data collected to make it so, and it pays
 where the correction has authority to act.
 
-On identifiability, the same architecture, objective and selection criterion put
-the latent \emph{behind} its no-latent baseline on task-controller data and
-ahead of it by a median $22.3\,\%$ on open-loop excitation data
-(Section~\ref{sec:data:openloop-collection}). Nothing about the model changed; what
-changed was whether the data contained an answer. That check is cheap, needs no
-estimator, and belongs before the decision to build one.
+On identifiability, the same architecture, objective and selection criterion
+placed the latent behind its no-latent baseline on task-controller data and
+ahead of it on open-loop excitation data
+(Section~\ref{sec:data:openloop-collection}). Nothing about the model changed;
+what changed was whether the data contained an answer. That check is cheap,
+needs no estimator, and belongs before the decision to build one.
+
+What the deployed stack does with that history is narrower than the phrase
+``latent identification'' suggests, and the distinction matters for what this
+answer supports. The explicit plant latent, decodable against the true factors,
+belongs to the AAM and is the route that fails at delivery. The mechanism
+scored below conditions a bounded residual on a causal state--action window and
+trains its encoder end to end for control; nothing constrains its internal
+representation to carry physical parameters, and no experiment here tests
+whether it does. The claim is therefore about history conditioning, not about
+plant identification.
 
 On whether it pays, the first attempt said no, and the reason was delivery
 rather than estimation: the correction was added to a command already resting on
 its own clip, so it was clipped away before reaching the plant
 (Section~\ref{sec:models:chain}). Removing the inverse model from the command
 path changes the answer. Against its own frozen base the adaptive arm improves
-cut height by $120.1\,\%$ and lateral by $78.2\,\%$, every paired interval
-excluding zero (Section~\ref{sec:eval:adaptation}). The capacity-matched control
+cut height from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and lateral from
+$\unit[61.155]{mm}$ to $\unit[35.371]{mm}$, reductions of $52.6\,\%$ and
+$42.2\,\%$, every paired interval excluding zero
+(Section~\ref{sec:eval:adaptation}). The capacity-matched control
 divides the credit: capacity alone buys cut-height accuracy but leaves lateral
 error at baseline, so the lateral gain belongs to the history input.
 

@@ -160,9 +160,21 @@ remains for adaptation once the first four are settled. The six questions are:
   \item How does the choice of actuator representation affect tracking, command
     behaviour, latency and robustness under plant variation?
   \item Where plant variation survives that robustness, is it identifiable from
-    recent observations, and does online adaptation by latent identification
+    recent observations, and does online adaptation conditioned on that history
     improve closed-loop performance?
 \end{enumerate}
+
+Two mechanisms sit under the second half of RQ6 and are kept apart throughout,
+because the thesis studies both and deploys only one. The \emph{explicit} route
+estimates a low-dimensional plant latent, which is decodable against the true
+factors and is what the AAM of Section~\ref{sec:models:aam} produces; it is the
+route the identifiability evidence concerns, and it is the one that fails at
+delivery. The route that is actually deployed conditions a bounded residual on a
+causal state--action history window and trains its encoder end to end for
+control (Section~\ref{sec:ctrl:af-residual}). Its internal representation is
+not constrained to identify physical parameters and is not tested for that, so
+the deployed mechanism is described here as history-conditioned adaptation with
+an implicit control-relevant context, not as latent identification.
 
 The first is answered in Chapters~\ref{chap:data} and~\ref{chap:models}, the
 second and third in Chapter~\ref{chap:models}, the fourth in

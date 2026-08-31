@@ -735,32 +735,54 @@ fractions so that episodes of different completed length remain comparable.
   \centering
   \caption{Eight system-level acceptance gates. Each gate uses at least three
   terrain meshes and the worst mesh; tracking-critical gates also use the worst
-  path family. $^{\dagger}$Hard impacts is a wear constraint.}
+  path family. The last column states where each number comes from, because a
+  threshold read off an earlier baseline does not carry the same weight as one
+  fixed by the task or by the machine.}
   \label{tab:sys:gates}
   \small
-  \begin{tabular}{llll}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}llllp{2.5cm}@{}}
     \toprule
-    Gate & Metric & Threshold & Aggregation \\
+    Gate & Metric & Threshold & Aggregation & Origin \\
     \midrule
     Cut height        & mean $|e_{\mathrm{cut}}|$
-                      & $\leq \unit[0.040]{m}$ & worst mesh \\
+                      & $\leq \unit[0.040]{m}$ & worst mesh & mowing spec \\
     Lateral tracking  & mean $|e_{\mathrm{lat}}|$
-                      & $\leq \unit[0.300]{m}$ & worst mesh, worst family \\
+                      & $\leq \unit[0.300]{m}$ & worst mesh, worst family & earlier baseline \\
     Ground contact    & contact fraction
-                      & $\geq 0.700$ & worst mesh, worst family \\
+                      & $\geq 0.700$ & worst mesh, worst family & mowing spec \\
     Head alignment    & p01 head-down alignment
-                      & $\geq 0.900$ & worst mesh \\
-    Hard impacts$^{\dagger}$ & hard-impact step fraction
-                      & $\leq 0.350$ & worst mesh \\
+                      & $\geq 0.900$ & worst mesh & tool geometry \\
+    Hard impacts      & hard-impact step fraction
+                      & $\leq 0.350$ & worst mesh & wear tolerance \\
     Tool acceleration & p95 cutter acceleration
-                      & $\leq \unit[120]{m/s^2}$ & worst mesh \\
+                      & $\leq \unit[120]{m/s^2}$ & worst mesh & measured floor $\times 1.2$ \\
     Cylinder headroom & p01 travel margin
-                      & $\geq \unit[0.005]{m}$ & worst mesh \\
+                      & $\geq \unit[0.005]{m}$ & worst mesh & machine limit \\
     Safety terminations & termination rate
-                      & $\leq 0.080$ & worst mesh \\
+                      & $\leq 0.080$ & worst mesh & engineering tolerance \\
     \bottomrule
   \end{tabular}
 \end{table}
+
+The origins are not equivalent, and the difference decides how much each gate
+can be asked to do. Cut height and ground contact come from what verge mowing
+requires of the tool. Head alignment follows from the cutting head's geometry,
+which must stay down to cut at all. Cylinder headroom is a machine limit: the
+arm must not drive into its own travel stops. Tool acceleration and safety
+terminations are engineering tolerances, the first set at roughly $1.2$ times
+the acceleration floor measured on a working stack, the second at the rate of
+raw envelope violations judged acceptable per control step.
+
+The lateral gate is the exception and is treated as one throughout. Its
+$\unit[0.300]{m}$ was anchored on an earlier and narrower trajectory library,
+and once that library was widened the number stopped describing the task and
+started describing whichever family the widening made hardest. It still ranks
+candidates usefully, because every candidate meets the same number, but it is
+not a task requirement and no claim in this thesis rests on passing it.
+Section~\ref{sec:eval:tracking} shows both stacks failing it on a single family
+each, and a different family in each case, which is what a stale threshold
+looks like.
 
 \subsection{Cylinder and Model Checks}
 
