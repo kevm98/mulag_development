@@ -81,8 +81,8 @@ its history.
 during training and is then removed; the distilled policy emits desired cylinder
 motion directly into the learned actuator and is the entire deployed controller.
 Over $33$ evaluation cells \ppoIDFD{} holds a mean lateral error of
-$\unit[70.3]{mm}$, a median of $\unit[28.1]{mm}$ and $95.29\,\%$ ground
-contact. Reward ascent alone does not deliver this result. Unconstrained
+$\unit[70.3]{mm}$, a median of $\unit[28.1]{mm}$ and $95.29\,\%$ ground contact
+(Table~\ref{tab:eval:tracking}). Reward ascent alone does not deliver this result. Unconstrained
 fine-tuning raised total return while degrading the primary tracking objective
 by up to a factor of $12.9$, with the critic remaining healthy throughout. The
 failure is therefore one of objective mismatch rather than of optimisation, and
@@ -198,9 +198,11 @@ authority varies by a factor of $15$--$75$ across pressure quartiles and can
 change sign.
 
 \textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
-The inverse model transferred across the deployment plant family with a spread
-of only a factor of $1.09$ between the best and worst domain, and an ordering
-that does not follow plant severity, so it was deployed frozen everywhere
+The inverse model transferred across the deployment plant family at
+millimetre scale in every domain, from $\unit[2.36]{mm}$ to $\unit[3.36]{mm}$
+one-step, and with an ordering that does not follow plant severity: the nominal
+plant scores worst and the combined draws best
+(Table~\ref{tab:models:id-trust}). It was therefore deployed frozen everywhere
 downstream. Where a deployment offset did have to be absorbed, it was absorbed
 by a correction capped at $\unit[3]{mm}$ and gated to vanish at zero command,
 with every hydraulic parameter frozen and the original data retained as replay.
@@ -259,17 +261,16 @@ the conditioned policy were built. That conversion of an open-ended engineering
 effort into a measurement is the design contribution this thesis most expects to
 transfer.
 
-Where the estimate is used matters as much as whether it exists. Its value lies
-in variation over time rather than in the plant identity it carries, by a factor
-of about thirty-two, and the two consumers want opposite things from that
-variation: a one-step predictor gains $13.6\,\%$ from its movement, while a
-memoryless actor integrates nothing, so a moving latent changes the action tick
-to tick. Filtering on the policy path alone, at fixed content, improves
-cut-height tracking by $14.5\,\%$ on the median in $22$ of $33$ cells with an
-interior optimum at $\tau = \unit[0.796]{s}$. Two qualifications belong with
-that: the temporal variance of the latent as the actor reads it does not order
-with $\tau$, so the proposed cause is not the measured one, and the optimum may
-belong to a policy trained on the unfiltered signal.
+Where the estimate is used matters as much as whether it exists, and a
+prediction model and a policy do not want the same thing from it. A dynamics
+model integrates over a window and gains from an estimate that moves within it.
+A memoryless actor integrates nothing, so the same movement reaches it as
+action noise from one tick to the next. That asymmetry argues for filtering the
+estimate on the policy path while leaving the model path untouched, at fixed
+information content. The sweep that would fix the filter constant was run on the
+stack that preceded the command-path rebuild, so no cutoff is recommended here;
+repeating it on the deployed stack is listed in
+Section~\ref{sec:concl:future}.
 
 \section{Contributions}
 
@@ -369,7 +370,7 @@ Section~\ref{sec:data:openloop-collection} applies to machine data unchanged.
 
 Fine-tuning on that data is then a well-posed problem rather than an open-ended
 one. The inverse model transferred across the deployment plant family with a
-spread of only a factor of $1.09$, so the gap to a real machine is plausibly a
+spread of a factor of $1.42$, so the gap to a real machine is plausibly a
 bounded offset rather than a different function, and the mechanism for absorbing
 such an offset has already been validated once: a correction capped at
 $\unit[3]{mm}$ and gated to vanish at zero command, with every hydraulic
