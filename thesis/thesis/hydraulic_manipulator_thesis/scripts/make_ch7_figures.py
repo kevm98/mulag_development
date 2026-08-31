@@ -17,12 +17,18 @@ Produces, in chapter order:
     ch7_ref_step          7.3  response to a 100 mm step in the commanded line
     ch7_control_effort    7.3  effort against the tracking it buys
     ch7_e5_robustness     7.4  per-trajectory error across the randomisation sweep
-    ch7_identifiability   7.5  decode quality and operating-point drift
-    ch7_openloop_claims   7.5  the latent-mode ladder over five seeds
-    ch7_id_sufficiency    7.5  latent against a matched no-latent baseline
-    ch7_four_latents      7.5  predictive utility of the estimated latent
-    ch7_af_arms           7.6  the three residual arms through a change of load
-    ch7_pressure_stacks   7.6  differential pressure per cylinder, three stacks
+    ch7_af_arms           7.5  the three residual arms through a change of load
+    ch7_pressure_stacks   7.5  differential pressure per cylinder, three stacks
+
+Four more are generated but are NOT currently referenced by the chapter. They
+belong to the identifiability section, which was withdrawn because it rests on
+five training seeds that predate the rebuilt command path. The code is kept so
+that the reruns regenerate them unchanged; nothing else depends on them.
+
+    ch7_identifiability        decode quality and operating-point drift
+    ch7_openloop_claims        the latent-mode ladder over five seeds
+    ch7_id_sufficiency         latent against a matched no-latent baseline
+    ch7_four_latents           predictive utility of the estimated latent
 
 Run:  python3 scripts/make_ch7_figures.py
 """
@@ -38,7 +44,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ch7_style import (C_AMBER, C_BLUE, C_GRAY, C_GREEN, C_GRN, C_ORANGE,
-                       C_PINK, C_RED, C_RULE, EXP, FULL, FULLW, GATES, MESHES,
+                       C_PINK, C_RED, C_RULE, EXP, FULL, FULLW, GATES, JSON_KEY,
+                       MESHES,
                        OPENLOOP, OUTPUTS, PAIR, REPO, SHORT, STACKS, e1_cells,
                        e1_family_means, e1_worst_mesh, load, save)
 
@@ -403,7 +410,7 @@ def fig_chain_by_stack():
     ax.axhspan(len(links) - 1 - 0.5, len(links) - 1 + 0.5, color="#EDF1F4", lw=0,
                zorder=0)
     for i, (s, label, col) in enumerate(PAIR):
-        vals = [d[FULL[s]][k]["median_ms"] for k in links]
+        vals = [d[JSON_KEY[s]][k]["median_ms"] for k in links]
         ax.barh(y + (i - 0.5) * h, vals, height=h * 0.88, color=col, alpha=.92,
                 label=label, zorder=2)
         for j, v in enumerate(vals):
@@ -481,7 +488,7 @@ def fig_ref_step():
     y = np.arange(len(names))
     off = np.linspace(-.17, .17, len(PAIR))
     for i, (key, lab, col) in enumerate(PAIR):
-        vals = [stats[FULL[key]][n] for n in names]
+        vals = [stats[JSON_KEY[key]][n] for n in names]
         axb.barh(y + off[i], vals, height=.28, color=col, edgecolor="white",
                  linewidth=.6, alpha=.92)
         for j, v in enumerate(vals):
@@ -516,7 +523,7 @@ def fig_control_effort():
     fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.85),
                                    gridspec_kw=dict(width_ratios=[1, 1.1]))
     for key, lab, col in PAIR:
-        r = d[FULL[key]]
+        r = d[JSON_KEY[key]]
         axa.scatter(1000 * r["mean_abs_lateral_m"], r["rms_command"], s=64,
                     color=col, zorder=3, edgecolor="white", linewidth=.8)
         # Labels to the right of their point: centred under the leftmost point
@@ -536,7 +543,7 @@ def fig_control_effort():
 
     y = np.arange(len(PAIR))
     for i, (key, lab, col) in enumerate(PAIR):
-        v = d[FULL[key]]["reversals_per_s"]
+        v = d[JSON_KEY[key]]["reversals_per_s"]
         axb.barh(i, v, height=.42, color=col, alpha=.92)
         axb.annotate(f"{v:.1f}", (v, i), xytext=(4, 0),
                      textcoords="offset points", va="center", fontsize=8.2,
@@ -981,18 +988,30 @@ def fig_pressure_stacks():
     save(fig, "ch7_pressure_stacks")
 
 
+# Figures the chapter currently uses.
 FIGURES = [fig_e1_paths, fig_e1_tracking, fig_e1_gates,
            fig_delay_response, fig_delay_summary, fig_chain_by_stack,
            fig_ref_step, fig_control_effort, fig_e5_robustness,
-           fig_identifiability, fig_openloop_claims, fig_id_sufficiency,
-           fig_four_latents, fig_af_arms, fig_pressure_stacks]
+           fig_af_arms, fig_pressure_stacks]
+
+# Generated on request, for the withdrawn identifiability section. Run
+#   python3 scripts/make_ch7_figures.py --withdrawn
+# once the seed reruns land.
+WITHDRAWN = [fig_identifiability, fig_openloop_claims, fig_id_sufficiency,
+             fig_four_latents]
 
 
 def main(argv=None):
     argv = argv or sys.argv[1:]
-    todo = FIGURES
-    if argv:
-        todo = [f for f in FIGURES if any(a in f.__name__ for a in argv)]
+    pool = FIGURES + WITHDRAWN
+    if "--withdrawn" in argv:
+        argv = [a for a in argv if a != "--withdrawn"]
+        todo = WITHDRAWN if not argv else [
+            f for f in pool if any(a in f.__name__ for a in argv)]
+    elif argv:
+        todo = [f for f in pool if any(a in f.__name__ for a in argv)]
+    else:
+        todo = FIGURES
     for f in todo:
         f()
 

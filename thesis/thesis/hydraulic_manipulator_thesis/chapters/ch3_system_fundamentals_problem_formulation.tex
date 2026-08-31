@@ -614,42 +614,63 @@ differs is only the space in which the request is bounded.
   \centering
   \begin{tikzpicture}[x=1cm,y=1cm,>=Latex,font=\small]
     \node[draw=cbblue!90!black,line width=.8pt,rounded corners=2pt,fill=cbblue!42,
-      minimum width=6.4cm,minimum height=1.25cm,align=center,font=\small] (obs) at (0,0)
+      minimum width=10.2cm,minimum height=1.1cm,align=center,font=\small] (obs) at (0,0)
       {observation\\[-1pt]\scriptsize state, terrain, reference};
     \node[draw=cbblue!95!black,line width=.8pt,rounded corners=2pt,fill=cbblue!82,text=white,
-      minimum width=6.4cm,minimum height=1.25cm,align=center,font=\small\bfseries] (policy) at (0,-2.05)
+      minimum width=10.2cm,minimum height=1.1cm,align=center,font=\small\bfseries] (policy) at (0,-1.85)
       {policy $\pi_\theta$};
-    \node[draw=cborange!90!black,line width=.8pt,rounded corners=2pt,fill=cborange!78,
-      minimum width=6.4cm,minimum height=1.25cm,align=center,font=\small] (contract) at (0,-4.1)
-      {action contract\\[-1pt]\scriptsize bounded cylinder increment $\Delta x^*$};
 
-    \node[draw=cbblue!90!black,line width=.8pt,rounded corners=3pt,fill=cbblue!8,minimum width=6.4cm,
-      minimum height=4.55cm] (path) at (0,-7.55) {};
-    \node[font=\small\bfseries,text=cbblue!85!black] at (0,-5.9) {actuator path};
+    % The two stacks do not share an action contract. R and IF emit a bounded
+    % cylinder increment; AF emits the valve command itself, which is the one
+    % structural difference between them and the reason AF is not a third
+    % column in any cross-stack table.
+    \node[draw=cborange!90!black,line width=.8pt,rounded corners=2pt,fill=cborange!78,
+      minimum width=5.9cm,minimum height=1.15cm,align=center,font=\small] (contractA) at (-2.5,-3.75)
+      {action contract\\[-1pt]\scriptsize bounded cylinder increment $\Delta x^*$};
+    \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,fill=cbgreen!62,text=white,
+      minimum width=4.0cm,minimum height=1.15cm,align=center,font=\small] (contractB) at (3.6,-3.75)
+      {action contract\\[-1pt]\scriptsize bounded valve command $\bm{u}$};
+
+    \node[draw=cbblue!90!black,line width=.8pt,rounded corners=3pt,fill=cbblue!8,
+      minimum width=5.9cm,minimum height=2.55cm] (pathA) at (-2.5,-6.35) {};
+    \node[font=\scriptsize\bfseries,text=cbblue!85!black] at (-2.5,-5.45) {actuator path};
     \node[draw=cbblue!95!black,line width=.8pt,rounded corners=2pt,fill=cbblue!82,text=white,
-      minimum width=5.25cm,minimum height=.78cm,font=\small\bfseries] at (0,-6.63) {R: ROM};
+      minimum width=4.9cm,minimum height=.72cm,font=\small\bfseries] at (-2.5,-6.28) {R: ROM};
     \node[draw=cborange!95!black,line width=.8pt,rounded corners=2pt,fill=cborange!86,
-      minimum width=5.25cm,minimum height=.78cm,font=\small\bfseries] at (0,-7.65)
+      minimum width=4.9cm,minimum height=.72cm,font=\small\bfseries] at (-2.5,-7.15)
       {IF: ID $\longrightarrow$ FD};
+
+    \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=3pt,fill=cbgreen!8,
+      minimum width=4.0cm,minimum height=2.55cm] (pathB) at (3.6,-6.35) {};
+    \node[font=\scriptsize\bfseries,text=cbgreen!55!black] at (3.6,-5.45) {actuator path};
     \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,fill=cbgreen!78,text=white,
-      minimum width=5.25cm,minimum height=.78cm,font=\small\bfseries] at (0,-8.67)
-      {AF: AAM + FD};
+      minimum width=3.3cm,minimum height=1.12cm,align=center,font=\small\bfseries] at (3.6,-6.72)
+      {AF: history\\[-2pt]residual $+$ FD};
 
     \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,fill=cbgreen!68,text=white,
-      minimum width=6.4cm,minimum height=1.35cm,align=center,font=\small\bfseries] (plant) at (0,-11.15)
+      minimum width=10.2cm,minimum height=1.2cm,align=center,font=\small\bfseries] (plant) at (0,-9.35)
       {PhysX plant\\[-1pt]\scriptsize arm, terrain, and contact};
 
     \draw[sigarrow,cbblue!90!black] (obs) -- (policy);
-    \draw[sigarrow,cborange!90!black] (policy) -- (contract)
-      node[midway,right,font=\scriptsize] {$\Delta x^*$};
-    \draw[sigarrow,cborange!90!black] (contract) -- (path.north);
-    \draw[sigarrow,cbgreen!80!black] (path.south) -- (plant);
-    \draw[sigarrow,cbgreen!80!black] (plant.west) -| (-4.25,-11.15) |- (obs.west)
+    \draw[sigarrow,cborange!90!black] (policy.south) -| (contractA.north)
+      node[pos=.72,left,font=\scriptsize] {$\Delta x^*$};
+    \draw[sigarrow,cbgreen!80!black] (policy.south) -| (contractB.north)
+      node[pos=.72,right,font=\scriptsize] {$\bm{u}$};
+    \draw[sigarrow,cborange!90!black] (contractA) -- (pathA.north);
+    \draw[sigarrow,cbgreen!80!black] (contractB) -- (pathB.north);
+    \draw[sigarrow,cbgreen!80!black] (pathA.south) |- (plant.north west) ;
+    \draw[sigarrow,cbgreen!80!black] (pathB.south) |- (plant.north east) ;
+    \draw[sigarrow,cbgreen!80!black] (plant.west) -| (-6.4,-9.35) |- (obs.west)
       node[pos=.55,left,font=\scriptsize,text=cbgreen!60!black] {measured state};
   \end{tikzpicture}
-  \caption{Deployed control stack. The policy produces a bounded cylinder
-  increment; R, IF, or AF realizes it in the shared PhysX plant. Measured
-  state closes the loop.}
+  \caption{Deployed control stacks. R and IF share one action contract, a
+  bounded cylinder increment, and differ only in how they realise it. AF does
+  not share it: the policy emits the valve command itself and a bounded
+  residual conditioned on causal history acts on that command before the frozen
+  forward model. All three set the same PhysX cylinder target, and measured
+  state closes the loop. The differing contract is why AF is compared within
+  itself rather than against the other two
+  (Section~\ref{sec:eval:standing}).}
   \label{fig:sys:architecture}
 \end{figure}
 

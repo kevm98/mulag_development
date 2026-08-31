@@ -170,24 +170,24 @@
 % Page 4: system-dynamics surrogate
 \begin{tikzpicture}[remember picture,overlay,x=1cm,y=1cm]
 \begin{scope}[shift={(current page.south west)}]
-  \pagetitle{System-dynamics surrogate ($SD_z$)}
+  \pagetitle{System-dynamics surrogate ($SD_z$): information flow}
 
   % Three independent information lanes feed one explicit feature bus.
-  \node[panel, minimum width=9.20cm, minimum height=2.50cm,
+  \node[panel, minimum width=8.95cm, minimum height=2.50cm,
         anchor=south west] at (0.25,7.25) {};
   \node[anchor=west, font=\sffamily\bfseries\fontsize{12.5}{14.5}\selectfont,
-        text=violet] at (0.58,9.38) {Static plant context};
+        text=violet] at (0.58,9.38) {Training-time plant context};
   \accentcard{1.55}{8.10}{2.10}{1.20}
     {Plant factors\\[-1pt]\normalfont $\boldsymbol{e}$ - 6}{violet}{sdfactors}
   \accentcard{4.65}{8.10}{2.35}{1.42}
     {Encoder $\mu$\\[-1pt]\normalfont\fontsize{11.5}{13}\selectfont
      $6\rightarrow32\rightarrow2$}{violet}{sdencoder}
-  \accentcard{8.00}{8.10}{1.55}{1.25}
+  \accentcard{7.80}{8.10}{1.70}{1.25}
     {Latent\\[-1pt]\normalfont $\boldsymbol{z}$ - 2}{violet}{sdz}
   \draw[flow] (sdfactors.east) -- (sdencoder.west);
   \draw[flow] (sdencoder.east) -- (sdz.west);
 
-  \node[panel, minimum width=9.20cm, minimum height=2.90cm,
+  \node[panel, minimum width=8.95cm, minimum height=2.90cm,
         anchor=south west] at (0.25,4.05) {};
   \node[anchor=west, font=\sffamily\bfseries\fontsize{12.5}{14.5}\selectfont,
         text=blue] at (0.58,6.58) {Causal dynamic belief};
@@ -196,36 +196,37 @@
      \fontsize{11}{13}\selectfont $6\times20$ rows}{blue}{sdhistory}
   \accentcard{4.65}{5.10}{2.05}{1.42}
     {GRU\\[-1pt]\normalfont hidden size 16}{blue}{sdgru}
-  \accentcard{8.00}{5.10}{1.55}{1.25}
+  \accentcard{7.80}{5.10}{1.70}{1.25}
     {Belief\\[-1pt]\normalfont $\boldsymbol{b}_k$ - 16}{blue}{sdbelief}
   \draw[flow] (sdhistory.east) -- (sdgru.west);
   \draw[flow] (sdgru.east) -- (sdbelief.west);
 
-  \node[panel, minimum width=9.20cm, minimum height=2.35cm,
+  \node[panel, minimum width=8.95cm, minimum height=2.35cm,
         anchor=south west] at (0.25,1.35) {};
   \node[anchor=west, font=\sffamily\bfseries\fontsize{12.5}{14.5}\selectfont,
         text=teal] at (0.58,3.35) {Current transition inputs - 30};
-  \accentcard{4.75}{2.25}{6.90}{1.35}
+  \accentcard{4.62}{2.25}{6.65}{1.35}
     {\fontsize{12}{14}\selectfont
      Hydraulic state $\boldsymbol{s}_k$ - 12\quad
      valve pair $[\boldsymbol{u}_{k-1},\boldsymbol{u}_k]$ - 8\\[-1pt]
      \normalfont\fontsize{11}{13}\selectfont joint context - 10}{teal}{sdstep}
 
   % Parallel entries join once; the transition model remains purely left-to-right.
-  \coordinate (sdbus) at (9.85,5.35);
-  \draw[draw=ink, line width=1.15pt] (9.85,2.25) -- (9.85,8.10);
-  \draw[flow] (sdz.east) -- (9.85,8.10);
-  \draw[flow] (sdbelief.east) -- (9.85,5.10);
-  \draw[flow] (sdstep.east) -- (9.85,2.25);
+  \coordinate (sdbus) at (9.45,5.35);
+  \draw[draw=ink, line width=1.15pt] (9.45,2.25) -- (9.45,8.10);
+  \draw[flow] (sdz.east) -- (9.45,8.10);
+  \draw[flow] (sdbelief.east) -- (9.45,5.10);
+  \draw[flow] (sdstep.east) -- (9.45,2.25);
 
-  \accentcard{11.40}{5.35}{1.85}{2.05}
-    {Concat.\\[-1pt]\normalfont 48 features}{navy}{sdconcat}
+  \accentcard{10.85}{5.35}{1.80}{2.05}
+    {Feature\\fusion\\[-1pt]\normalfont 48}{navy}{sdconcat}
   \draw[flow] (sdbus) -- (sdconcat.west);
-  \accentcard{14.40}{5.35}{2.65}{2.55}
+  \accentcard{13.55}{5.35}{2.55}{2.55}
     {Transition MLP\\[2pt]\normalfont $3\times256$\\SiLU}{navy}{sdmlp}
   \draw[flow] (sdconcat.east) -- (sdmlp.west);
-  \accentcard{17.20}{5.35}{1.10}{1.45}
-    {$\Delta\hat{\boldsymbol{s}}_k$\\[-1pt]\normalfont 12}{teal}{sdoutput}
+  \accentcard{16.35}{5.35}{2.05}{1.65}
+    {Predicted change\\[-1pt]\normalfont
+     $\Delta\hat{\boldsymbol{s}}_k$ - 12}{teal}{sdoutput}
   \draw[flow] (sdmlp.east) -- (sdoutput.west);
 \end{scope}
 \end{tikzpicture}

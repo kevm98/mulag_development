@@ -372,7 +372,7 @@ def action_chain():
 
     s.append(rect(798, 300, 310, 88, "#F2ECF9", PURPLE, 2.2, 8))
     s.append(T(953, 335, "Actuator realization", 23, INK, "bold"))
-    s.append(T(953, 368, "R   |   IF   |   AIF", 22, PURPLE, "bold"))
+    s.append(T(953, 368, "R   |   IF   |   AF", 22, PURPLE, "bold"))
     s.append(arrow(953, 250, 953, 296, PURPLE, 2.5, marker="arrowpurple"))
 
     s.append(rect(798, 450, 310, 92, "#EEF8F1", "#5F946D", 2.3, 8))
@@ -549,7 +549,7 @@ def teacher_student():
           arrow(428, 421, 470, 421, INK, 2.4),
           rect(720, 365, 166, 112, "#F7F7F7", INK, 2.0, 8),
           T(803, 401, "Actuator path", 20, INK, "bold"),
-          T(803, 438, "R | IF | AIF", 20, INK, "bold"),
+          T(803, 438, "R | IF | AF", 20, INK, "bold"),
           T(803, 464, "bounded target", 17, MUTED),
           arrow(674, 421, 716, 421, INK, 2.4)]
 

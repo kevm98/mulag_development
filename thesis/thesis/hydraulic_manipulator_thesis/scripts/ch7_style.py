@@ -41,8 +41,13 @@ C_RULE = "#5A6B78"
 # The chapter names the stacks R, IF and AF (macros.tex), so the figures use
 # the same tokens the tables and captions do, expanded once in the legend so a
 # figure still reads on its own.
+# AF is PPO-AAM-FD. The inverse model left its command path, so a legend that
+# still says ID misdescribes the stack it labels. The report JSONs predate the
+# rename and are keyed on the old string, which is what JSON_KEY is for.
 FULL = {"ppo_rom": "PPO-ROM", "ppo_id_fd": "PPO-ID-FD",
-        "ppo_aam_id_fd": "PPO-(AAM)-ID-FD"}
+        "ppo_aam_id_fd": "PPO-AAM-FD"}
+JSON_KEY = {"ppo_rom": "PPO-ROM", "ppo_id_fd": "PPO-ID-FD",
+            "ppo_aam_id_fd": "PPO-(AAM)-ID-FD"}
 SHORT = {"ppo_rom": "R", "ppo_id_fd": "IF", "ppo_aam_id_fd": "AF"}
 LEGEND = {k: f"{SHORT[k]} \u2014 {FULL[k]}" for k in FULL}
 
