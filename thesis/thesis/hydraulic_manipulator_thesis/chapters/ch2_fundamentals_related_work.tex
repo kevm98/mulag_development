@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 2 — Fundamentals and Related Work (12–18 pages)
+%% Chapter 2 - Fundamentals and Related Work (12-18 pages)
 %% Purpose: provide only the theory and literature needed to
 %% understand the research choices, then end with the
 %% unresolved gap addressed by the thesis.
@@ -26,8 +26,8 @@ adaptation, and Section~\ref{sec:fund:rl-residual} policy optimization with
 structured priors.
 Section~\ref{sec:fund:gap} then states the gap that remains and how the
 three control stacks of this thesis (\ppoROM, \ppoIDFD, and
-\ppoAAMIDFD) address it. As defined in Chapter~\ref{chap:introduction},
-these abbreviate PPO--ROM, PPO--ID--FD, and PPO--(AAM)--ID--FD,
+\ppoAAMFD) address it. As defined in Chapter~\ref{chap:introduction},
+these abbreviate PPO--ROM, PPO--ID--FD, and PPO--AAM--FD,
 respectively. Only material that is
 needed for the later chapters is included. The concrete system definition
 and problem formulation follow in Chapter~\ref{chap:system}.
@@ -217,6 +217,7 @@ payload, producing robustness to physically plausible plant variation.
 
 \newpage
 \subsection{From Robustness to Adaptation}
+\label{sec:fund:adaptation}
 
 Figure~\ref{fig:fund:robust-adaptive} contrasts a policy trained for one robust
 response across the plant family with an adaptive stack that conditions its
@@ -242,13 +243,16 @@ learned latent need not have a direct physical interpretation. It can also
 condition a dynamics model rather than a policy, as in the contextual neural
 ODE of Yu et al.~\cite{yu2026context}.
 
-The AAM in Chapter~\ref{chap:models} estimates a two-dimensional latent from
-one second of causal observable history. In \ppoAAMIDFD, that estimate enters
-the actor observation and a bounded adapter around frozen inverse dynamics; it
-does not condition the ROM, forward model or PhysX plant. The experiments keep
-two distinctions explicit: randomized training is robust but not automatically
-adaptive, and an informative privileged latent does not prove that an inferred
-latent improves closed-loop control.
+The adaptation module in Chapter~\ref{chap:models} encodes one second of
+causal observable history. In \ppoAAMFD, that encoding conditions a bounded
+residual on the valve command the policy itself emits, while the base policy
+remains frozen; it does not condition the ROM, the forward model or the PhysX
+plant. The experiments keep two distinctions explicit: randomized training is
+robust but not automatically adaptive, and an informative privileged latent
+does not prove that an inferred one improves closed-loop control. The second
+distinction is not rhetorical here, since the privileged-context route was
+tried on this stack and returned a null while the history-conditioned route did
+not.
 
 \section{Reinforcement Learning and Structured Priors}
 \label{sec:fund:rl-residual}
@@ -270,9 +274,22 @@ Learning from scratch would discard reliable kinematics. Residual RL instead
 adds a bounded learned correction to a controller at runtime
 ~\cite{johannink2019residual,silver2018residual}. Policy distillation moves the
 prior to training: a privileged DLS teacher supplies demonstrations, then the
-student acts alone~\cite{ross2011reduction}. This thesis distils the teacher and
-then anchors PPO updates to the frozen student (Section
-~\ref{sec:ctrl:anchored}). The deployed actor remains the sole controller.
+student acts alone~\cite{ross2011reduction}. This thesis takes the second
+route. The teacher is distilled and PPO updates are anchored to the frozen
+student (Section~\ref{sec:ctrl:anchored}), and the deployed actor remains the
+sole controller: no analytic controller runs underneath it at deployment, so
+the runtime correction of residual RL is not the construction used here.
+
+One clarification belongs here, because the vocabulary collides. The adaptive
+stack of Chapter~\ref{chap:control} does add a bounded term to its own frozen
+actor, but that term is not a residual in the sense of this subsection. There
+is no classical controller beneath it to correct, and its purpose is not to
+supply a prior that accelerates learning. It is an online adaptation mechanism
+internal to the reinforcement-learning policy, whose only function is to carry
+the dependence on inferred plant context that a frozen actor cannot express. It
+therefore belongs to the latent-adaptation line of
+Section~\ref{sec:fund:adaptation} and is compared against that literature, not
+against residual policy learning.
 
 The idea parallels real-world fine-tuning that retains a simulation-trained
 value function~\cite{yin2025rapidly}, but here the retained object is the
@@ -338,18 +355,24 @@ Parenthesized marks denote partial or implicit coverage.
       {\scriptsize\cite{johannink2019residual,silver2018residual,ross2011reduction,yin2025rapidly}}
       & --- & --- & --- & $\checkmark$ & --- \\
     \midrule
-    This thesis (\ppoROM{} / \ppoIDFD{} / \ppoAAMIDFD)
-      & $\checkmark$ & $\checkmark$ & ($\checkmark$) & $\checkmark$ & $\checkmark$ \\
+    This thesis (\ppoROM{} / \ppoIDFD{} / \ppoAAMFD)
+      & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The partial mark in column III reflects the results: the latent is recovered
-causally, but its closed-loop benefit is less conclusive. The contribution is
-therefore the complete experimental chain---identifiable cylinder data,
-physics-structured models fast enough for parallel training, online latent
-estimation, and a common evaluation protocol---rather than an unqualified claim
-that adaptation always improves control. The three tested stacks are:
+Column III is claimed in full, and the qualification it once carried is worth
+stating because it was earned rather than assumed. Causal recovery of the
+latent was established first; the closed-loop benefit was not, and on the
+inverse-model path it could not be, for the saturation reason developed in
+Section~\ref{sec:ctrl:af-no-id}. It is claimed here because the adaptive
+residual is measured against its own frozen base under a paired protocol and
+separates from it. The contribution remains the complete experimental
+chain: identifiable cylinder data, physics-structured models fast enough for
+parallel training, online adaptation and a common evaluation protocol. It is
+not an unqualified claim that adaptation always improves control; the
+conditions under which it does not are reported alongside those under which it
+does. The three tested stacks are:
 
 \begin{description}
   \item[\ppoROM.] A command-conditioned ROM realizes the policy's desired
@@ -358,14 +381,18 @@ that adaptation always improves control. The three tested stacks are:
   \item[\ppoIDFD.] The same policy interface drives the frozen inverse model
     followed by the strict forward model, forming the robust learned
     baseline.
-  \item[\ppoAAMIDFD.] The AAM infers a dynamics latent from causal observable
-    history. It conditions the policy observation and a bounded adapter around
-    the frozen inverse model, ahead of the same forward model and PhysX.
+  \item[\ppoAAMFD.] The policy emits the valve command directly and the
+    inverse model leaves the path. A causal history encoder conditions a
+    bounded residual on that command, which the same forward model realizes
+    ahead of PhysX.
 \end{description}
 
-All stacks share the task, action contract, terrain, trajectories, deployment
-factors and acceptance gates. Their training runs are not fully matched, and
-the ROM is calibrated to the deployment plant; causal architectural claims
-therefore rely on within-checkpoint ablations rather than the across-stack
-contrast (Section~\ref{sec:ctrl:constraints}). Chapter~\ref{chap:system}
+All stacks share the task, terrain, trajectories, deployment factors and
+acceptance gates. \ppoROM{} and \ppoIDFD{} additionally share the action
+contract and form the matched pair; \ppoAAMFD{} does not, because its policy
+chooses a valve command rather than a cylinder increment, and it is therefore
+compared with its own frozen base rather than ranked against the others. The
+ROM is calibrated to the deployment plant, so causal architectural claims rely
+on the matched pair and on within-stack paired ablations rather than on a
+three-way contrast (Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system}
 now grounds this comparison in the concrete machine.

@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 1 — Introduction (indicative length: 6–9 pages)
+%% Chapter 1 - Introduction (indicative length: 6-9 pages)
 %% Purpose: introduce the practical and scientific problem,
 %% motivate the proposed learning-based adaptive architecture,
 %% and state exactly what the thesis contributes.
@@ -128,12 +128,13 @@ rather than the first. The research statement of the thesis is as follows:
 \paragraph{Comparison notation.}
 For readability, the three policy--actuator stacks carry both a short label and
 a full name, and the two are used interchangeably throughout this thesis:
-\emph{R} is \ppoROM, \emph{IF} is \ppoIDFD, and \emph{AIF} is \ppoAAMIDFD.
+\emph{R} is \ppoROM, \emph{IF} is \ppoIDFD, and \emph{AF} is \ppoAAMFD.
 The short labels are preferred where several stacks appear in one sentence and
 the full names where the actuator path itself is the subject. R uses the command-conditioned reduced-order
-model; IF uses the frozen inverse/forward pair; and AIF augments IF with online
-adaptation. The labels name the complete stacks, not just their actuator
-models.
+model; IF uses the frozen inverse/forward pair; and AF retains the forward model
+alone, the policy emitting the valve command directly, with online adaptation
+supplied by a bounded history-conditioned residual. The labels name the complete
+stacks, not just their actuator models.
 
 \researchstatement{To determine how hydraulic actuator dynamics learned from
 high-fidelity simulation can be reduced, transferred into a computationally
@@ -171,10 +172,14 @@ Chapter~\ref{chap:evaluation}.
 RQ6 is the question named in the title, and it is deliberately placed last. It
 is only worth asking once the preceding questions have established that the
 learned models transfer, that a policy can control through them, and how much
-plant variation the resulting closed loop already absorbs unaided. A small
-answer to RQ6 is then a result about the system rather than a failure of the
-method, because accurate models and a robust policy leave less for adaptation to
-recover. The work rests on the following contributions:
+plant variation the resulting closed loop already absorbs unaided. An answer of any size to RQ6 is then a result about the system rather than a
+verdict on the method, because accurate models and a robust policy leave less
+for adaptation to recover. The answer this thesis reaches is that the size
+depends on where the adaptation is placed: on a command path that is already
+saturated it is indistinguishable from nothing, and on one with authority to
+spare it is substantial. Both halves are reported, and the second is
+intelligible only because the first was measured first. The work rests on the
+following contributions:
 
 \textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
 hydraulic actuation from high-fidelity Simscape data and transfers it into
@@ -229,6 +234,21 @@ open-ended engineering effort into a measurement, and it is the contribution of
 this thesis most likely to transfer to other machines and other
 latent-conditioned designs.
 
+\textbf{Online Adaptation on a Saturating Actuator:} A demonstration that the
+binding constraint on latent-conditioned adaptation here is delivery rather
+than estimation, and a redesign that follows from it. With the inverse model in
+the command path, the estimate is informative and the closed-loop effect is
+absent, because the correction is added to a command already resting against
+its own limit for most of the scored window. Removing that model, so that the
+policy emits the valve command itself and a bounded history-conditioned
+residual acts on it, converts the same information into a measured improvement:
+cut-height error falls from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and
+lateral error from $\unit[61.155]{mm}$ to $\unit[35.371]{mm}$ against the
+stack's own frozen base under a mid-episode plant change, paired across $528$
+environments on held-out meshes. The claim is about the placement of
+adaptation on saturating actuators, not about the superiority of one actuator
+representation over another.
+
 The components on which these contributions rest, namely the causal plant
 estimator, the bounded adaptation path and the eight-gate evaluation harness,
 are described where they are used. They are technical enablers rather than
@@ -241,7 +261,7 @@ This thesis investigates how hydraulic actuator dynamics learned from
 high-fidelity simulation can be reduced, transferred into a computationally
 efficient robotic simulation and used for reinforcement-learning control,
 grounding its investigation in the identifiability of the actuator models and in
-the robustness of the controllers built on them. The document is organized as
+the robustness of the controllers built on them. The document is organised as
 follows:
 
 \textbf{Chapter~\ref{chap:fundamentals}} establishes the background against
@@ -282,17 +302,21 @@ command-conditioned reduced-order model that serves as the deployment plant
 inside GPU-parallel training. The chapter closes with the material required for
 the final research question, namely the privileged latent and its measured
 limits, the causal estimator that infers a deployable substitute from observable
-history, and the bounded adapter through which that estimate reaches the
-actuator path.
+history, and the bounded adapter through which that estimate first reached the
+actuator path. That adapter produces no closed-loop effect, and the chapter ends
+by establishing why: the limit is the delivery of the correction rather than the
+quality of the estimate, which is the finding the following chapter acts on.
 
 \textbf{Chapter~\ref{chap:control}} describes the control framework and its
 integration with the simulator, and answers the fourth research question. It
 presents the damped least-squares teacher used for demonstration and data
-collection, the observation and action interfaces shared by all three stacks,
-the distillation of the teacher into a student policy, and the
-reference-anchored fine-tuning that makes further policy optimisation admissible
-without discarding the distilled behaviour. It then assembles the three deployed
-control stacks and states the rules under which they may be compared.
+collection, the shared observation interface and the action interface the two
+non-adaptive stacks hold in common, the distillation of the teacher into a
+student policy, and the reference-anchored fine-tuning that makes further policy
+optimisation admissible without discarding the distilled behaviour. It then
+assembles the three deployed control stacks, including the removal of the
+inverse model from the adaptive command path that the preceding chapter
+motivates, and states which comparison each stack can carry.
 
 \textbf{Chapter~\ref{chap:evaluation}} reports the experimental evaluation and
 answers the last two research questions. It establishes the excitation envelope

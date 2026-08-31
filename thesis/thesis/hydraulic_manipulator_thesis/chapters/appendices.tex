@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Appendices A–E (per the experimental plan)
+%% Appendices A-E (per the experimental plan)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \chapter{System Parameters and Coordinate Mappings}
@@ -128,7 +128,7 @@ eight gates, is not used.
 \label{app:dataset}
 % (a) Historical Simscape campaigns: parameter ranges,
 %     trajectory-generation settings, run split, preprocessing.
-% (b) IsaacLab adaptation collection: full run manifest, the six factor
+% (b) IsaacLab deployment collections: full run manifest, the six factor
 %     ranges, per-domain draw seeds, segment structure, PRBS settings,
 %     the 82/20/16 run-level split and its factor keys, and the frozen
 %     dataset checksums.
@@ -169,7 +169,7 @@ failure late in a multi-day batch does not cost the whole collection.
 For every run the archive stores the time vector, the five valve
 commands, the four cylinder extensions, the four chamber pressure
 differences, the four rod forces, the five joint positions and
-velocities, the reference position and velocity signals, and, crucially,
+velocities, the reference position and velocity signals, and
 the complete parameter structure that produced the run. That last item
 is what makes the batch usable for the latent-adaptation work: the
 privileged plant descriptor $\bm{\xi}$ of
@@ -241,7 +241,7 @@ surrogates exist.
 \begin{table}[htbp]
   \centering
   \caption{The six randomized physical factors of the IsaacLab
-  adaptation collection and their final ranges. One factor vector is
+  deployment collections and their final ranges. One factor vector is
   drawn per run and held fixed for the whole run.}
   \label{tab:data:factors}
   \small
@@ -286,18 +286,22 @@ surrogates exist.
   \end{tabular}
 \end{table}
 
-\section{The Frozen Adaptation Collection}
+\section{The Frozen Deployment Collections}
 \label{app:data:frozen}
 
-The IsaacLab adaptation collection is frozen, and every model-level result in
-this thesis is fitted and scored on it. Its manifest records $118$ runs, one
-factor vector per run, held fixed for the duration of that run. The
-domain composition and the run-level split are given in
-Table~\ref{tab:app:frozen}.
+Two collections are recorded in the deployment plant and both are frozen: the
+task-controller collection and the open-loop excitation collection of
+Section~\ref{sec:data:openloop-collection}. They share their factor design,
+domain composition and run-level split, and differ only in how the arm is
+driven. Each manifest records $118$ runs, one factor vector per run, held fixed
+for the duration of that run. The model-level results in this thesis are fitted
+and scored on the open-loop collection, for the identifiability reason given in
+Section~\ref{sec:data:openloop-collection}. The composition common to both is given
+in Table~\ref{tab:app:frozen}.
 
 \begin{table}[htbp]
   \centering
-  \caption{Composition of the frozen adaptation collection, counted directly
+  \caption{Composition of the frozen deployment collections, counted directly
   from the manifest. The run-level split is $102$ training runs against $16$
   held-out test runs; the training portion is further divided $82/20$ into
   fitting and validation runs, so that no window from a validation or test run
@@ -358,7 +362,7 @@ runs overwrite checkpoints in place.
     \texttt{best\_fd\_cylinder\_strict.pt} & forward model, frozen
       & \texttt{1f41e44309a8f320430a3382ca88ce5f} \\
     \midrule
-    \texttt{headroom\_priced\_v1/model\_299.pt} & \ppoAAMIDFD{} policy
+    \texttt{headroom\_priced\_v1/model\_299.pt} & \ppoAAMFD{} policy
       & \texttt{aaf6b4bab7cfeac53fb95a3d15470cde} \\
     \texttt{rom\_s6\_aligned/model\_598.pt} & \ppoROM{} policy
       & \texttt{ce7e3ab9649b1193f123f9f91107bbf8} \\
@@ -413,6 +417,12 @@ the control loop. Its velocity output failed validation on two axes
 
 \section{The Adaptation Module}
 
+This section describes the offline AAM, the encoder trained against a latent
+target in Chapter~\ref{chap:models}. The residual encoder deployed in
+\ppoAAMFD{} is a different component, trained jointly with its head under the
+reinforcement objective and against no target
+(Section~\ref{sec:ctrl:af-encoder}).
+
 The AAM is a causal one-dimensional convolutional network over the last $20$
 rows of the $\unit[50]{ms}$ deployment observable. The input row is $18$
 columns wide,
@@ -431,7 +441,7 @@ environments.
 The latent dimension is $2$ because the module regresses onto the frozen state
 predictor's latent, which is $2$-dimensional by construction. This is the
 structural reason the deployed latent decodes only one of the six physical
-factors, and Section~\ref{sec:eval:latent-content} treats it as a finding rather
+factors, and Section~\ref{sec:models:aam-content} treats it as a finding rather
 than a configuration choice.
 
 The ID adapter is deliberately small: a two-layer network of width $64$, mapping
@@ -439,7 +449,7 @@ a $30$-dimensional feature row to a $4$-dimensional residual, $76$ stored
 tensors' worth of normalisation statistics included. Its feature row is the
 inverse model's $28$ inputs concatenated with the $2$ latent components, which
 is the pressure-inclusive contract discussed in
-Section~\ref{sec:eval:validity}. Its output is bounded at $0.15$ per cylinder
+Section~\ref{sec:eval:standing}. Its output is bounded at $0.15$ per cylinder
 (Table~\ref{tab:app:limits}) and scaled by a declared residual factor, $0.25$
 for every result reported here.
 
@@ -452,8 +462,12 @@ paired with a different frozen actuator than the one it was trained for.
 
 \section{The Observation Vector}
 
-The policy observation is $66$ columns for \ppoROM{} and \ppoIDFD{}, and $68$
-for \ppoAAMIDFD{}: the same $66$ with the two latent components appended.
+The policy observation is $66$ columns for every stack. \ppoAAMFD{} deploys
+this same actor frozen and unmodified; its adaptation residual reads a history
+window carried alongside the observation rather than appended to the actor's
+input (Section~\ref{sec:ctrl:af-residual}). The $66$--$68$ row below records the
+two latent columns of the earlier latent-conditioned design, retained for
+reference.
 Table~\ref{tab:app:obs} gives the layout by index. The final twelve columns are
 the model-error block, and they exist because the policy is a memoryless
 multilayer perceptron: it already observes the actuator's prediction and the
@@ -466,7 +480,7 @@ policy no matter how long it trains.
   \centering
   \caption{Policy observation layout. Indices are zero-based and half-open.
   Columns $0$--$53$ are the task block, $54$--$65$ the model-error block, and
-  $66$--$67$ exist only for \ppoAAMIDFD{}.}
+  $66$--$67$ belong only to the earlier latent-conditioned design.}
   \label{tab:app:obs}
   \small
   \begin{tabular}{lll}
@@ -497,7 +511,7 @@ policy no matter how long it trains.
     $58$--$62$ & $4$ & actuator prediction residual \\
     $62$--$66$ & $4$ & normalised cylinder effort \\
     \midrule
-    $66$--$68$ & $2$ & $\hat z$, \ppoAAMIDFD{} only \\
+    $66$--$68$ & $2$ & $\latenthat$, earlier latent-conditioned design only \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -547,7 +561,7 @@ differ are exactly those discussed there.
   \small
   \begin{tabular}{lccc}
     \toprule
-    & \ppoROM{} & \ppoIDFD{} & \ppoAAMIDFD{} \\
+    & \ppoROM{} & \ppoIDFD{} & \ppoAAMFD{} \\
     \midrule
     manifest schema        & \multicolumn{3}{c}{\texttt{terrain\_shared\_v2}} \\
     seed                   & $17$ & $17$ & $41$ \\
@@ -558,7 +572,7 @@ differ are exactly those discussed there.
     entropy coefficient    & $0.001$ & $0.001$ & $0.001$ \\
     frozen-actor warm-up   & $150$ & $150$ & $0$ \\
     observation normaliser & freeze & freeze & freeze \\
-    observation width      & $66$ & $66$ & $68$ \\
+    observation width      & $66$ & $66$ & $66$ \\
     discount $\gamma$      & --- & --- & $0.97$ \\
     GAE $\lambda$          & --- & --- & $0.95$ \\
     steps per environment  & --- & --- & $32$ \\
@@ -591,7 +605,7 @@ which.
 
 \begin{table}[htbp]
   \centering
-  \caption{\ppoAAMIDFD{} per-family results on mesh $1337$, full
+  \caption{\ppoAAMFD{} per-family results on mesh $1337$, full
   $\unit[26]{m}$ path at $\unit[4]{km/h}$, checkpoint
   \texttt{headroom\_priced\_v1}/$299$. Families are ordered by lateral error.
   Nine of eleven sit near $\unit[0.03]{m}$; the distribution is not
@@ -630,12 +644,11 @@ the ground rather than of a tracking error alone.
 
 \section{The Latent Substitution Arms}
 
-The four latent conditions of Section~\ref{sec:eval:oracle} share one
-checkpoint and one set of weights, and differ only in what occupies the latent
-slot. This is the comparison that carries the most weight in this thesis,
-because it is immune to the training-condition asymmetries of
-Section~\ref{sec:eval:hypotheses}: no training differs between the arms, since
-no training occurs.
+The latent conditions recorded here share one checkpoint and one set of
+weights, and differ only in what occupies the latent slot. They were scored on
+the earlier adaptive architecture, in which the residual corrected the inverse
+model's output, and are retained as a record of that measurement rather than as
+a result about the deployed stack (Section~\ref{sec:eval:standing}).
 
 \begin{table}[htbp]
   \centering

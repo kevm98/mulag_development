@@ -1,15 +1,17 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 7 — Experimental Evaluation and Discussion
+%% Chapter 7 - Experimental Evaluation and Discussion
 %% Structure:
 %%   7.1 Experimental protocol (RQs, hypotheses, matrix, metrics, fairness)
 %%   7.2 Closed-loop task performance            <- the robot, up front
 %%   7.3 Actuator representation and dynamic response (RQ5)
 %%   7.4 Generalisation and robustness
-%%   7.5 Identifiability of plant variation
-%%   7.6 Online adaptation
-%%   7.7 Why the model-level gain does not reach the controller
-%%   7.8 Integrated discussion (RQ5, RQ6)
-%%   7.9 Threats to validity
+%%   7.5 Online adaptation
+%%   7.6 Integrated discussion (RQ5, RQ6)
+%%
+%% The model-level identifiability experiments (excitation envelope, latent
+%% content, frozen-inverse sufficiency, predictive utility) are NOT part of this
+%% chapter. Identifiability is established with the data in Section 4.6 and the
+%% models in Chapter 5; this chapter evaluates the control stacks only.
 %%
 %% Every closed-loop experiment evaluates exactly three rows:
 %%   PPO-ROM            frozen: command ROM              adaptive: none
@@ -50,18 +52,20 @@ Section~\ref{sec:intro:contributions}:
 The two differ in kind. RQ5 asks what a design choice changes and is answered by
 direct measurement on the matched pair \ppoROM{} (R) and \ppoIDFD{} (IF), which
 agree on every recorded training field and differ only in the actuator path.
-RQ6 asks whether a mechanism pays, could fail in ways worth declaring in
-advance, and is therefore carried by predeclared hypotheses and by
+RQ6 tests whether adaptation improves control and states its failure conditions
+in advance. It is therefore carried by predeclared hypotheses and by
 within-checkpoint substitutions rather than by the position of \ppoAAMFD{}
 (AF) in a table. The short labels R, IF and AF of
 Section~\ref{sec:intro:contributions} are used interchangeably with the full
 names. RQ6 also decomposes into a chain of dependent questions, each worth
 testing only if the one before it holds: is plant identity present in the data
-at all; can an estimator recover it; does the estimate follow the plant when the
-plant moves; does it improve a model that consumes it; does that improvement
-reach the controller; and if it does not, what stops it? The first four links
-hold and the fifth does not, which is why the chapter spends its last
-experiments on the sixth.
+at all; can an estimator recover it; does it improve a model that consumes it;
+and does that improvement reach the controller? The first three links are
+settled before this chapter -- by the excitation collection of
+Section~\ref{sec:data:openloop-collection} and the model-level results of
+Chapter~\ref{chap:models} -- and only the last is a question about the machine.
+That is the one this chapter answers, in
+Section~\ref{sec:eval:adaptation}.
 
 \subsection{Test Conditions and Experimental Matrix}
 \label{sec:eval:matrix}
@@ -70,8 +74,10 @@ Every closed-loop experiment scores exactly three rows -- \ppoROM{},
 \ppoIDFD{} and \ppoAAMFD{} -- under one common condition: three held-out
 terrain meshes, the eleven trajectory families of the library, a pinned truck
 speed of $\unit[4]{km/h}$, a $\unit[26]{m}$ scored window, $32$ environments and
-a fixed evaluation seed. Model-level experiments use the open-loop excitation
-collection \texttt{rom\_openloop\_v1} of Section~\ref{sec:eval:excitation}.
+a fixed evaluation seed. The one model-level experiment here, the dead-time
+measurement of Section~\ref{sec:eval:delay-plant}, uses the open-loop
+excitation collection \texttt{rom\_openloop\_v1} of
+Section~\ref{sec:data:openloop-collection}.
 Everything scored here is held out: the meshes are unseen, the families are
 scored individually rather than pooled, and the plant is drawn from sixteen
 reserved factor configurations whose keys are disjoint from training and
@@ -109,10 +115,6 @@ replication unit.
     Training budget       & \ref{sec:eval:budget} & $400$ against $1200$ iterations & $528$ paired envs \\
     \midrule
     \multicolumn{4}{@{}l}{\emph{Model level}} \\
-    Identifiability envelope & \ref{sec:eval:excitation} & four excitation tiers & $36$ held-out runs \\
-    Latent content        & \ref{sec:eval:latent-content} & online, constant, shuffled & five training seeds \\
-    Frozen-inverse sufficiency & \ref{sec:eval:id-sufficiency} & latent, no latent & five training seeds \\
-    Predictive utility    & \ref{sec:eval:predictive-utility} & privileged, estimated, mean, shuffled & $36$ held-out runs \\
     Actuation dead time   & \ref{sec:eval:delay-plant} & four excitation tiers & $24$ runs \\
     \bottomrule
   \end{tabular}
@@ -136,8 +138,8 @@ Selection uses the validation split; reserved test runs are scored once.
 
 The unit of replication differs by experiment, and getting it wrong would
 inflate the evidence. Model-level experiments replicate over training seeds. The
-closed-loop evaluation is deterministic --- five evaluation seeds returned
-bit-identical numbers to nine decimal places --- so its unit is the (mesh,
+closed-loop evaluation is deterministic. Five evaluation seeds returned
+bit-identical numbers to nine decimal places, so its unit is the (mesh,
 family) cell, and metrics existing only per mesh are marked $n=3$.
 
 Several controls run alongside the experiments, and each was added because
@@ -163,9 +165,9 @@ tracking, and it has not been repeated under the current objective.
 \subsection{What the Three Stacks Can and Cannot Be Compared For}
 \label{sec:eval:standing}
 
-\ppoROM{} and \ppoIDFD{} agree on every recorded manifest field --- seed,
+\ppoROM{} and \ppoIDFD{} agree on every recorded manifest field, including seed,
 terrain seed, environments, stage, learning rate, entropy coefficient, frozen
-normaliser and warm-up --- and differ only in the actuator path. A difference
+normaliser and warm-up. They differ only in the actuator path. A difference
 between them is attributable to the actuator representation, and that pair
 answers RQ5.
 
@@ -427,9 +429,7 @@ family, so the per-family reading applies to those two alone.
 Three questions follow. Why the representations produce different controllers is
 answered in Section~\ref{sec:eval:delay}; whether the performance survives
 unseen terrain and plant in Section~\ref{sec:eval:robustness}; and whether an
-estimated latent reaches the task from
-Section~\ref{sec:eval:identifiability} onwards, ending in
-Section~\ref{sec:eval:adaptation}.
+estimated latent reaches the task in Section~\ref{sec:eval:adaptation}.
 
 \section{Actuator Representation and Dynamic Response}
 \label{sec:eval:delay}
@@ -458,12 +458,13 @@ reversals, which is what wears the machine.
 \subsection{Dead Time in the Plant}
 \label{sec:eval:delay-plant}
 
-Delay is measured here rather than assumed, and it is worth separating from an
+Delay is measured here rather than assumed. This result is separate from an
 earlier negative result. Attempts to identify the valve's dynamic \emph{model}
 from the available datasets did not succeed, but that is a parameter-fitting
 outcome and says nothing about whether the command-to-response \emph{latency} is
 observable. It is, and the open-loop collection of
-Section~\ref{sec:eval:excitation} is close to an ideal instrument for it: the
+Section~\ref{sec:data:openloop-collection} is close to an ideal instrument for
+it: the
 excitation is a train of zero-mean square waves with known edge times, which is
 what one would design for a step-response measurement.
 
@@ -706,10 +707,9 @@ $50$\,ms and a plant that answers in $117$\,ms are both fast relative to a loop
 that needs seconds to move the tool to a new line. Whatever the latent
 contributes, it contributes it to a controller whose response is set elsewhere,
 which is one candidate explanation for the gap between the model-level effect
-reported in Section~\ref{sec:eval:id-sufficiency} and the closely matched
-closed-loop arms of Section~\ref{sec:eval:tracking}. It is taken up as
-an explanation once the model-level effect itself has been established, and it
-is resolved in Section~\ref{sec:models:chain}: the correction had no authority
+reported in Section~\ref{sec:models:latent} and the closely matched
+closed-loop arms of Section~\ref{sec:eval:tracking}. It is
+resolved in Section~\ref{sec:models:chain}: the correction had no authority
 left at the point where it was applied.
 
 \subsection{Control Effort and Command Chatter}
@@ -836,8 +836,8 @@ and is the nominal plant.
 \end{figure}
 
 The curves are flat. Neither stack's tracking moves across the sweep, on any
-metric, at any scale. A flat curve admits two readings --- the controllers
-absorbed the stress, or the stress never arrived --- and the next subsection
+metric, at any scale. A flat curve has two possible explanations: the controllers
+absorbed the stress, or the stress never arrived. The next subsection
 establishes which, because the answer determines what the sweep is evidence
 for.
 
@@ -957,341 +957,23 @@ The boundary search itself, sweeping $\alpha$ downwards on each stack until the
 acceptance gates fail, is specified but not run, and it is the most direct
 extension of this chapter.
 
-\section{Identifiability of Plant Variation}
-\label{sec:eval:identifiability}
-
-Sections~\ref{sec:eval:tracking} to~\ref{sec:eval:robustness} answer RQ5 and
-leave RQ6 standing. Both representations support closed-loop control on
-held-out terrain, plants and trajectories, and neither degrades when the plant
-is moved as far as this work can move it -- all without any online adaptation.
-That is the setting in which adaptation has to earn its place, and the first
-question is not whether an estimator is accurate but whether there is anything
-in the data for it to recover. This section measures that, and then asks what
-kind of quantity the recovered latent actually is.
-
-\subsection{Excitation Design and the Identifiability Envelope}
-\label{sec:eval:excitation}
-
-What the data makes identifiable determines what any estimator can recover, so
-it is measured before any estimator is judged, and the headline is that
-excitation gathered under a task controller does not separate plants at all.
-
-The reason is structural: a task controller computes its command from the
-measured state, so command and response are nearly redundant and little is left
-for a plant descriptor to explain. The input must be rich enough to keep the
-regressor well conditioned~\cite{ljung1999system,schoukens2019nonlinear}. The
-collection used here therefore removes the controller and applies open-loop
-zero-mean square-wave excitation at the cylinder-command interface, since the
-command reduced-order model accepts cylinder extensions rather than valve
-signals (Section~\ref{sec:models:rom}). It comprises $118$ plant draws of
-$11\,040$ steps, split $82/20/16$ by run, with a Hankel matrix at full rank
-$40$ of $40$ and condition number $17.8$. Four amplitude tiers are swept;
-Table~\ref{tab:eval:identifiability} decodes the six true factors from the
-per-tier mean estimate on held-out runs, with seal condition as the positive
-control.
-
-\begin{table}[tbp]
-  \centering
-  \caption{What each excitation tier makes identifiable, and why the higher
-  tiers do not. Decode $R^2$ is held out over $36$ reserved runs; drift is the
-  across-plant spread of cylinder extension at matched ticks, expressed as a
-  fraction of the stroke the probe itself produces. Plant identity survives the
-  first two tiers and is gone by the third, while command saturation never
-  exceeds ten per cent.}
-  \label{tab:eval:identifiability}
-  \begin{tabular}{lcccc}
-    \toprule
-    Amplitude & seal $R^2$ & mean $R^2$ & drift / stroke & command sat. \\
-    \midrule
-    $0.05$ & $0.703$  & $0.109$  & $0.18$ & $0.11\%$ \\
-    $0.15$ & $0.505$  & $0.099$  & $0.28$ & $0.35\%$ \\
-    $0.35$ & $-0.018$ & $-0.040$ & $0.39$ & $3.26\%$ \\
-    $0.70$ & $0.043$  & $-0.021$ & $0.50$ & $9.98\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[tbp]
-  \centering
-  \includegraphics[width=.62\textwidth]{images/ch7_identifiability}
-  \caption{The identifiability envelope. (a) Held-out decode $R^2$ for each of
-  the six plant factors at each excitation level. Only the seal condition is
-  recoverable, and only in the two lowest tiers. (b) The two candidate
-  explanations, on the same amplitude rows: operating-point drift, as a fraction
-  of the stroke the probe produces, rises steadily with amplitude, while command
-  saturation stays low throughout and cannot account for the collapse.}
-  \label{fig:eval:identifiability}
-\end{figure}
-
-The obvious explanation for the collapse, actuator saturation, is wrong:
-saturation reaches only $9.98\%$ of steps even at the largest amplitude, which
-cannot account for a decode falling from $R^2 = 0.703$ to zero. Operating-point
-drift does account for it. Every run executes an identical schedule, so at a
-matched tick the only difference between runs is the plant, and the across-run
-spread of cylinder extension grows from $1.5$\,mm at the start to $54.2$\,mm at
-the end, half the stroke the probe itself produces. Once runs are that far
-apart, a one-second window cannot separate a response that differs because the
-seal is leaking from one that differs because the cylinder sits five centimetres
-lower.
-
-Two consequences constrain later sections. All adaptation experiments here run
-below amplitude $0.35$, inside the band where plant identity is present at all.
-And because the plan ramps amplitude monotonically across the episode, one tier
-per quarter, amplitude and episode time are the same axis: this collection
-supports statements about amplitude, not about elapsed time. A pilot analysis
-that read decode quality as decaying over the episode was reading the amplitude
-sweep.
-
-\subsection{Closed-Loop Data Against Excitation Data}
-\label{sec:eval:closedloop-data}
-
-The envelope above is a statement about data rather than about estimators, and
-the sharpest demonstration of that is an architecture that changes sign when the
-data changes. The latent-conditioned state predictor of
-Section~\ref{sec:eval:id-sufficiency} lowers free-running error by a median of
-$22.3\,\%$ on the open-loop collection. On the earlier collection gathered under
-a task controller, the same architecture, the same objective and the same
-selection criterion put the latent \emph{behind} its no-latent baseline: the
-no-latent predictor scored $0.17278$, the end-to-end latent $0.17596$ and the
-privileged latent $0.18515$, so plant conditioning appeared worthless or worse.
-
-Nothing about the model changed between those two results. What changed was
-whether the data contained an answer, exactly as the envelope above predicts:
-under a task controller the command is computed from the state, so command and
-response are close to redundant and the plant has little left to explain. Two
-consequences follow for this chapter. Reporting only the closed-loop collection
-would have supported a confident negative conclusion about the architecture that
-the open-loop data contradicts, which is why every model-level experiment here
-uses \texttt{rom\_openloop\_v1}. And an identifiability check of this kind is
-cheap, requires no estimator, and belongs before rather than after the decision
-to build one.
-
-\subsection{Information Content of the Adaptive Latent}
-\label{sec:eval:latent-content}
-
-That the latent helps does not establish why. Either the estimator recognises
-which plant it is on, or it tracks a time-varying operating condition and its
-value lies in the estimate moving. A substitution experiment separates them,
-changing nothing but the contents of the latent slot. One trained model is
-scored three ways: \emph{online}, read from history at every tick as in
-deployment; \emph{constant}, replaced by that run's own mean, which preserves
-plant identity exactly and destroys all variation; and \emph{shuffled},
-replaced by another run's mean, preserving the distribution while making the
-identity wrong.
-
-\begin{table}[tbp]
-  \centering
-  \caption{Where the latent's value lies, five seeds, one trained model each,
-  scored on the reserved validation runs. Freezing the estimate at its correct
-  per-episode value costs $13.6\%$; making that frozen value wrong costs a
-  further $0.43\%$. Both effects have the same sign in every seed.}
-  \label{tab:eval:latent-content}
-  \begin{tabular}{lccc}
-    \toprule
-    Latent supplied to the state model & mean error & vs.\ online & seeds \\
-    \midrule
-    online estimate $\latenthat(t)$        & $0.018842$ & ---        & --- \\
-    per-episode constant, correct identity & $0.021402$ & $+13.6\%$  & $5/5$ \\
-    per-episode constant, wrong identity   & $0.021492$ & $+14.1\%$  & $5/5$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The decomposition is tight across seeds (Figure~\ref{fig:eval:claims}b).
-Removing the variation costs $13.6\%$, per-seed range $11.9$ to $14.3\%$;
-removing the identity on top of that costs a further $0.43\%$, range $0.32$ to
-$0.84\%$. The second is consistently signed across all five seeds and so is
-real, but roughly thirty times smaller. Essentially all of the latent's value
-lies in the estimate moving, almost none in its being correct about which plant
-this is. The thesis therefore does not claim the module identifies the plant; it
-claims the module tracks a time-varying operating condition, and that the
-tracking earns the performance. That is the ordinary form of such an estimator:
-a fixed one-second causal window carrying no state between ticks re-estimates
-rather than accumulates, as recursive estimation with a forgetting factor does
-when the parameters are themselves
-time-varying~\cite{astrom1995adaptive,ljung1999system}.
-
-Two boundaries apply. This analysis concerns the estimator trained on open-loop
-excitation, a different model on different data from the deployed one of
-Section~\ref{sec:models:aam-content}: that one is static within a run, this one
-varies within an episode by roughly nine times the spread between plants, and
-excitation decides which behaviour appears. And everything here is measured on a
-dynamics model rather than in the control loop; only
-Section~\ref{sec:eval:adaptation} carries the claim into the task.
-
-\begin{figure}[tbp]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_openloop_claims}
-  \caption{The model-level result as a single sequence, worst at the top. Each
-  point is one of the five seeds and the heavy bar is the mean. The
-  \emph{gaps} are the claim: making the constant latent correct about the plant
-  rather than wrong is worth $0.43\%$, while allowing that same estimate to vary
-  in time is worth $13.6\%$ -- a factor of thirty-two. The topmost row is a
-  separately trained no-latent model rather than an ablation of the three below
-  it, so the step down to it is not attributable to the latent alone and is
-  divided off.}
-  \label{fig:eval:claims}
-\end{figure}
-
-\subsection{The Model-Level Gain and the Frozen Inverse Model}
-\label{sec:eval:id-sufficiency}
-
-The inverse model is trained on randomised Simscape data and deployed against
-the IsaacLab reduced-order plant, and the architecture of
-Chapter~\ref{chap:control} depends on it staying frozen. The question is whether that
-is defensible. The direct measurement of inverse-model transfer error is
-reported in Section~\ref{sec:models:id-trust}; what is tested here is the
-weaker but more consequential proposition that whatever residual gap remains is
-learnable \emph{without touching the inverse model at all}.
-
-The test removes the inverse model from the loop entirely. A state predictor
-consumes the current state, the applied command and an estimated latent inferred
-end to end from $[\jointpos, \jointvel, \dpress, \valvecmd]$, and predicts the
-next state. The baseline is the same predictor with no latent input, retrained
-on the identical data, split and objective, at five matched seeds.
-Figure~\ref{fig:eval:sufficiency} reports the pairs.
-
-\begin{figure}[tbp]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_id_sufficiency}
-  \caption{Latent conditioning against a matched no-latent baseline, five seeds.
-  (a)~Each line is one seed. No pair crosses, which is the result; the mean is
-  not. (b)~The same data as paired changes, with the mean dashed and the median
-  solid. Seed $20260823$ carries the mean because its baseline is an outlier, so
-  the median $-22.3\,\%$ is the figure to quote.}
-  \label{fig:eval:sufficiency}
-\end{figure}
-
-\begin{table}[tbp]
-  \centering
-  \caption{Sufficiency of the frozen inverse model, five matched seeds. The
-  estimated latent lowers free-running state error in every seed. Seed
-  $20260823$ has an anomalously poor baseline and inflates the mean, so the
-  median of $-22.3\%$ is the representative figure.}
-  \label{tab:eval:id-sufficiency}
-  \begin{tabular}{lccc}
-    \toprule
-    Seed & no latent & estimated latent & change \\
-    \midrule
-    $20260820$ & $0.02438$ & $0.01893$ & $-22.3\%$ \\
-    $20260821$ & $0.02410$ & $0.01855$ & $-23.0\%$ \\
-    $20260822$ & $0.02328$ & $0.01945$ & $-16.5\%$ \\
-    $20260823$ & $0.03190$ & $0.01808$ & $-43.3\%$ \\
-    $20260824$ & $0.02359$ & $0.01920$ & $-18.6\%$ \\
-    \midrule
-    mean       & $0.02545$ & $0.01884$ & $-24.7\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The estimated latent improves on the no-latent baseline in $5$ of $5$ seeds,
-with a mean paired change of $-24.7\%$ and a paired bootstrap $95\%$ confidence
-interval of $[-34.2\%, -18.2\%]$ that excludes zero
-(Figure~\ref{fig:eval:claims}a). One qualification belongs with the number
-rather than in a footnote: seed $20260823$ produced an unusually poor baseline
-at $0.03190$ against roughly $0.024$ elsewhere, and its $-43.3\%$ is as much a
-statement about that baseline as about the latent. The median change of
-$-22.3\%$ is the figure to quote, and the sign, reproduced in every seed of a
-paired design, is what supports it.
-
-That the same comparison reverses on controller-driven data is what makes the
-result interpretable, and it is reported with the identifiability evidence in
-Section~\ref{sec:eval:closedloop-data}.
-
-The claim is therefore supported, with its scope stated plainly. The experiment does
-not measure inverse-model error, and it is not evidence that the inverse model
-is accurate in any absolute sense. It shows that the residual mismatch between
-the Simscape training distribution and the deployment plant is recoverable by a
-latent-conditioned state model, which is what licenses the simpler architecture
-in which the inverse model is never fine-tuned online.
-
-\subsection{Estimated Against Privileged Latents}
-\label{sec:eval:predictive-utility}
-
-Section~\ref{sec:eval:latent-content} established that the latent's value is
-temporal and Section~\ref{sec:eval:id-sufficiency} that it lowers free-running
-error. Neither asked the question a controller cares about: is the \emph{estimated}
-latent as useful as the true one, and is it better than no plant information at
-all? That comparison is made here, on the frozen system-dynamics surrogate, by
-supplying four different latents to one network and changing nothing else.
-
-The four arms are the privileged latent read from the true factors, the causal
-AAM estimate, an in-distribution mean carrying no plant information, and a
-shuffled latent with the right distribution and the wrong plant. All four are
-scored on the same $36$ held-out runs, on free-running rollouts at one, ten and
-twenty ticks, with the model integrating its own predictions.
-
-\begin{table}[tbp]
-  \centering
-  \caption{Free-running rollout error under four latents, pooled over $36$
-  held-out runs. Lower is better. The estimate tracks the privileged latent at
-  every horizon, and both are clearly ahead of an uninformative or a wrong one.}
-  \label{tab:eval:four-latents}
-  \begin{tabular}{lcccc}
-    \toprule
-    Horizon & privileged $\latent$ & estimated $\latenthat$ & mean & shuffled \\
-    \midrule
-    $1$ tick             & $2.961\times10^{5}$ & $2.966\times10^{5}$ & $3.388\times10^{5}$ & $3.499\times10^{5}$ \\
-    $10$ ($\unit[0.5]{s}$) & $1.820\times10^{6}$ & $1.826\times10^{6}$ & $1.952\times10^{6}$ & $1.998\times10^{6}$ \\
-    $20$ ($\unit[1.0]{s}$) & $2.961\times10^{6}$ & $2.977\times10^{6}$ & $3.196\times10^{6}$ & $3.256\times10^{6}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Table~\ref{tab:eval:four-latents} gives the ordering, and the paired statistics
-give its standing. Against the privileged latent the estimate is
-indistinguishable: the paired difference at twenty ticks is
-$+1.60\times10^{4}$ with a $95\,\%$ interval of
-$[-1.35\times10^{4},\, +4.62\times10^{4}]$, and the estimate is ahead in $18$ of
-$36$ runs, which is exactly chance. Against the two uninformative controls it
-resolves: $-2.19\times10^{5}$ with the interval excluding zero and $33$ of $36$
-runs against the mean latent, and $-2.79\times10^{5}$ with $29$ of $36$ against
-the shuffled one. On the reserved test split the estimate is marginally ahead of
-the privileged latent, $2.837\times10^{6}$ against $2.850\times10^{6}$.
-
-\begin{figure}[tbp]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7_four_latents}
-  \caption{Predictive utility of the estimated latent, $36$ held-out runs.
-  (a)~Free-running rollout error against horizon under the four latents. The
-  estimate tracks the privileged latent at every horizon while both stay clear
-  of an uninformative or a wrong one. (b)~Paired advantage of the estimate at
-  the $\unit[1.0]{s}$ horizon, per channel, as a percentage of the control arm's
-  own error, with $95\,\%$ paired bootstrap intervals. Extension and velocity
-  are the channels the deployed controller integrates, and both resolve.}
-  \label{fig:eval:four-latents}
-\end{figure}
-
-Two things follow. The AAM recovers essentially all of the information the
-privileged encoder carries, so the estimator is not the limiting component of
-the adaptation chain. And the advantage resolves on extension and velocity, not
-only on pressure: against the mean latent the extension difference is
-$-1.87\times10^{-4}$ with $32$ of $36$ runs and the velocity difference
-$-5.14\times10^{-4}$ with $31$ of $36$, both intervals excluding zero. This is a
-different comparison from the one in Section~\ref{sec:models:latent}, which
-contrasted a latent-conditioned model with a separately trained no-latent model
-and found the advantage confined to pressure. Substituting latents \emph{within}
-one model isolates the latent itself, and by that measure the channels the
-controller integrates do respond.
-
 \section{Online Adaptation}
 \label{sec:eval:adaptation}
 
-Plant identity is present in the data when the excitation is right, and what the
-latent carries is a moving operating condition rather than a fixed label. This
-section asks what that buys. It proceeds outward from the model to the machine:
-first whether the latent improves a model that consumes it and whether the
-estimate is as good as the truth, then whether the estimate follows the plant
-when the plant moves, then whether either matters to the closed loop under a
-plant change and under an oracle that removes estimator error altogether.
+Plant identity is present in the data when the excitation is right, and what
+the latent carries is a moving operating condition rather than a fixed label
+(Section~\ref{sec:models:aam-content}). Both are established on the models
+themselves in Chapter~\ref{chap:models}. This section asks the only question
+those results leave open, and the one the thesis is named for: whether any of it
+changes what the machine does under a plant change.
 
 \subsection{The Adaptation Experiment}
 \label{sec:eval:adaptation-design}
 
-The preceding sections establish that plant identity is present, recoverable and
-useful to a model. This section asks the question the thesis is named for:
-whether it changes what the machine does. The experiment is deliberately narrow,
-because a broad one would not be attributable.
+Chapter~\ref{chap:models} establishes that plant identity is present,
+recoverable and useful to a model. The experiment below asks whether it reaches
+the closed loop. It is deliberately narrow, because a broad one would not be
+attributable.
 
 Three arms are compared. All three share the frozen base policy, the residual
 architecture, the $53\,836$ trainable parameters, the training budget, the reward
@@ -1386,8 +1068,8 @@ an artefact of one plant draw.
 \subsection{Where the Advantage Comes From}
 \label{sec:eval:attribution}
 
-The history input is doing the work, and it is worth being precise about what
-kind of work, because two mechanisms would both produce the table above.
+The history input produces the improvement, but two mechanisms could explain
+the result.
 
 The first is response to the change itself: the residual senses that the load
 has moved and corrects for it. The second is continuous conditioning: the
@@ -1421,7 +1103,7 @@ records it as outstanding.
 \subsection{The Pressure Channel Across the Three Stacks}
 \label{sec:eval:pressure-signals}
 
-The latent carries mainly seal condition (Section~\ref{sec:eval:latent-content}),
+The latent carries mainly seal condition (Section~\ref{sec:models:aam-content}),
 and seal condition acts through pressure, so the pressure the actuator model
 carries is where any conditioning should first be visible.
 Figure~\ref{fig:eval:pressure-stacks} shows it per cylinder for all three
@@ -1556,7 +1238,7 @@ where the correction has authority to act.
 On identifiability, the same architecture, objective and selection criterion put
 the latent \emph{behind} its no-latent baseline on task-controller data and
 ahead of it by a median $22.3\,\%$ on open-loop excitation data
-(Section~\ref{sec:eval:closedloop-data}). Nothing about the model changed; what
+(Section~\ref{sec:data:openloop-collection}). Nothing about the model changed; what
 changed was whether the data contained an answer. That check is cheap, needs no
 estimator, and belongs before the decision to build one.
 
@@ -1581,7 +1263,7 @@ transient would spend most of an episode no better than its baseline.
 Chapter~\ref{chap:fundamentals} positioned this work against history-based
 adaptation methods that infer a plant code and condition a policy on it. Two
 conditions those arguments leave implicit are made measurable here: whether the
-data identifies the plant at all (Section~\ref{sec:eval:excitation}), and
+data identifies the plant at all (Section~\ref{sec:data:openloop-collection}), and
 whether the correction has authority to act
 (Section~\ref{sec:eval:delivered-stress}). Both are cheap and both precede
 estimator training.

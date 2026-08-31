@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 4 — Data Generation and Preparation (10–16 pages)
+%% Chapter 4 - Data Generation and Preparation (10-16 pages)
 %% Purpose: explain how the Simscape datasets were designed to
 %% contain realistic operation, causal actuator excitation, and
 %% variation required for robust and adaptive learning.
@@ -24,8 +24,9 @@ correction head remained trainable, with Simscape replay retained
 (Section~\ref{sec:data:rom-calibration}). The ID--FD pair was not calibrated
 in IsaacLab.
 
-\emph{IsaacLab adaptation data.} The system-dynamics surrogate, privileged
-encoder and AAM use a separate $118$-run collection from the deployed command
+\emph{IsaacLab deployment data.} The system-dynamics surrogate, the privileged
+encoder and the adaptation module use two $118$-run collections recorded in the
+deployed command
 ROM--PhysX plant, including dedicated PRBS windows
 (Section~\ref{sec:data:isaaclab}). No earlier adaptation or system-dynamics
 model was reused. Figure~\ref{fig:data:pipeline} summarizes the common
@@ -429,8 +430,9 @@ directly on the export.
 
 The separate thousand-run randomized curriculum was collected for an earlier
 adaptation plan. No reported result is trained on or evaluated against it; the
-adaptation chain uses the IsaacLab collection of
-Section~\ref{sec:data:isaaclab}. The curriculum is retained as provenance and
+identifiability chain uses the IsaacLab collection of
+Section~\ref{sec:data:isaaclab}, and the deployed residual is trained
+on-policy (Section~\ref{sec:data:onpolicy}). The curriculum is retained as provenance and
 documented in Appendix~\ref{app:dataset}.
 
 \section{Closed-Loop Calibration Data for the Command ROM}
@@ -454,19 +456,29 @@ cutter--ground contact. The bounded head limits, but does not remove, this
 coverage gap. Section~\ref{sec:sys:rom-is-plant} explains the consequence for
 the three-way comparison.
 
-\section{The IsaacLab Adaptation Collection}
+\section{The IsaacLab Deployment Collections}
 \label{sec:data:isaaclab}
 
-\subsection{Provenance of the Adaptation Data}
+Two collections are recorded in the deployment plant. They share their factor
+design, their domains, their splits and their freezing procedure, and differ in
+one respect only: how the arm is driven. The first is driven by the task
+controller and is the collection the inverse and forward models are scored
+against in Section~\ref{sec:models:id-trust}; the second is driven by open-loop
+excitation and is the one the adaptation module is trained on. Why both exist is
+itself a result, and it is given in
+Section~\ref{sec:data:openloop-collection}.
 
-The models that carry the adaptation argument
-(the system-dynamics surrogate, the privileged factor encoder, and the
-AAM) describe the plant that the adaptive controller is closed around. That
+\subsection{Provenance of the Deployment Data}
+
+The models that carry the identifiability argument
+(the system-dynamics surrogate, the privileged factor encoder, and the offline
+history encoder) describe the plant that the adaptive controller is closed
+around. That
 plant is not the Simscape model. It is the command ROM plus PhysX, the
 same four-dimensional cylinder command port used at deployment. A
 surrogate identified on Simscape data would be a model of a model, and
 the latent it defines would describe variation the deployment plant does
-not necessarily exhibit. The adaptation dataset is therefore collected
+not necessarily exhibit. Both collections are therefore made
 \emph{in} the deployment plant, and the frozen ROM, ID and FD
 checkpoints enter this chain only as fixed components, never as things
 to be retrained.
@@ -531,7 +543,7 @@ the claims of Chapter~\ref{chap:evaluation}: a test run does not merely
 come from a different episode, it comes from a plant the models have
 never seen.
 
-\subsection{Collection Procedure}
+\subsection{Collection Procedure: The Task-Controller Runs}
 
 Every run is collected through the same interface the policy uses. The
 DLS controller closes the loop on measured cylinder state and issues its
@@ -550,7 +562,7 @@ can distinguish the two. Each run follows a fixed eleven-segment structure
 (settle, three postures, three PRBS windows, DLS task motion,
 reach-and-return, and stow), giving $11\,304$ control steps
 and $\unit[188.4]{s}$ of simulated time per run. The separate open-loop
-excitation collection of Section~\ref{sec:eval:excitation} uses a different
+excitation collection of Section~\ref{sec:data:openloop-collection} uses a different
 schedule and runs to $11\,040$ steps. Three postures plus
 line, coupled-sine, and reach-and-return motion were verified in a pilot
 to give full rank over all four action channels under varied geometry
@@ -605,11 +617,42 @@ configuration and its frozen run-level outputs.
 \end{figure}
 \clearpage
 
+\subsection{The Open-Loop Excitation Collection}
+\label{sec:data:openloop-collection}
+
+A second collection of $118$ runs was recorded in the same deployment plant,
+with the same six-factor design and the same domain and split structure, and it
+is the one the adaptation module is trained on. It differs from the collection
+above in a single respect, and that respect is the point of it: there is no task
+controller. Each run is driven by open-loop excitation alone, the vehicle is
+stationary, and no policy is in the loop. The excitation is the same
+four-channel PRBS used as a probe above, at amplitude $0.02$ and held for ten
+control steps, but it now drives the whole run rather than three windows inside
+one. Each run is $11\,040$ control steps, giving $1\,302\,720$ steps across the
+collection.
+
+The reason for collecting twice is an identifiability result rather than a
+preference, and it is the sharpest one in this thesis. Under a task controller
+the command is computed from the state, so command and response are close to
+redundant and the plant has little left to explain. Measured on the earlier
+task-controller collection, a latent-conditioned state predictor scored
+\emph{behind} its own no-latent baseline, $0.17596$ against $0.17278$, with the
+privileged latent worse still at $0.18515$; the same architecture, objective and
+selection criterion on this collection lower free-running error instead. Nothing
+about the model changed. What changed was whether the data contained an answer. Training the
+adaptation module on task-controller data would therefore have produced a
+confident negative about an architecture that works.
+
+The collection records its own feature contract, and what each consumer takes
+from it is set out separately: Section~\ref{sec:data:history-features} for the
+adaptation module and Section~\ref{sec:data:sd-features} for the prediction
+models.
+
 \subsection{The Frozen Dataset}
 
-The final collection contains $118$ complete runs: $2$ nominal, $40$
-hydraulic-only, $12$ mechanical-only, $48$ combined-training, and $16$
-unseen combined-test. Collection ran in four vectorized IsaacLab
+Both collections contain $118$ complete runs under the identical domain
+design: $2$ nominal, $40$ hydraulic-only, $12$ mechanical-only, $48$
+combined-training, and $16$ unseen combined-test. Collection ran in four vectorized IsaacLab
 environments with per-environment factors and logging. Slots that
 tripped a safety or validity check were discarded and retried
 individually rather than being silently kept. All $118$ runs passed the
@@ -617,7 +660,7 @@ final collection gate, which checks finite physics, exact model-grid
 alignment, command rank, factor-response authority, state coverage, and
 saturation limits.
 
-The dataset is then \emph{frozen}: the raw runs are checksummed and the
+Each dataset is then \emph{frozen}: the raw runs are checksummed and the
 run-level split is fixed at $82$ training, $20$ validation, and $16$
 reserved combined-test runs, with zero factor-key leakage between them.
 The reserved sixteen do not influence history length, checkpoint,
@@ -634,7 +677,7 @@ state row $t+3$. Nothing is interpolated. This is the same alignment
 rule as Section~\ref{sec:sys:timing}, and it is enforced rather than
 assumed, because a model trained across a mismatched interval is wrong by a fixed factor in the quantity it exists to supply.
 
-The hydraulic state used by the system-dynamics models is
+The hydraulic state used by the system-dynamics surrogates is
 %
 \begin{equation}
   \label{eq:data:sdstate}
@@ -646,7 +689,7 @@ with joint position and velocity carried as \emph{context} only, and the
 prediction target the next $\unit[50]{ms}$ state delta. Differential pressure
 is not a measured signal. At runtime it is the actuator model's recursive
 state, generated by the command ROM or frozen forward model
-(Section~\ref{sec:sys:actuation}). The system-dynamics model and AAM may use it
+(Section~\ref{sec:sys:actuation}). The system-dynamics surrogate and AAM may use it
 because it exists inside the deployed loop, but it inherits actuator-model
 error. Causal history is therefore retained to represent pressure transients
 that one sample cannot summarize.
@@ -672,8 +715,8 @@ enforce at inference time.
 \paragraph{Increment Targets}
 Every dynamic target is a within-run one-step increment,
 $\Delta \bm{x}_k = \bm{x}_{k+1} - \bm{x}_k$, never an absolute state.
-This removes the large static component of the signals and, more
-importantly, makes the trivial persistence solution an explicit baseline
+This removes the large static component of the signals and makes the trivial
+persistence solution an explicit baseline
 that a model can be measured against rather than a hiding place it can
 settle into.
 
@@ -695,23 +738,24 @@ output grid, which is consistent with the trapezoidal identity that the
 strict data satisfies to $R^2 = 0.994$--$0.9997$
 (Equation~\ref{eq:models:trapezoid}).
 
-\subsection{Observable History of the Adaptation Models}
+\subsection{Features and Targets for the Adaptation Module}
 \label{sec:data:history-features}
 
-The adaptation models use the frozen IsaacLab collection. A history window
-carries only quantities produced by the deployed stack at
-runtime: the five joint positions, the five joint velocities, the four
-cylinder pressure differences and the four previously applied valve commands,
-giving the eighteen-value row of Section~\ref{sec:models:aam}. The pressure
-entry is the learned actuator's own recursive state rather than a measurement
-(Section~\ref{sec:sys:actuation}, Table~\ref{tab:sys:signals}); it is admitted because the model
-that generates it runs inside the deployed loop, and the consequence of that
-choice is examined where the estimator is evaluated. Four classes of signal
-are excluded by construction, and the exclusion is enforced by an explicit
-input mask rather than by convention:
+The adaptation module is trained on the open-loop collection of
+Section~\ref{sec:data:openloop-collection}. Its history window carries only
+quantities the deployed stack produces at runtime: the five joint positions, the
+five joint velocities, the four cylinder pressure differences and the four
+previously applied valve commands, giving the eighteen-value row of
+Section~\ref{sec:models:aam}. The pressure entry is the learned actuator's own
+recursive state rather than a measurement
+(Section~\ref{sec:sys:actuation}, Table~\ref{tab:sys:signals}); it is admitted
+because the model that generates it runs inside the deployed loop, and the
+consequence of that choice is examined where the estimator is evaluated. Four
+classes of signal are excluded by construction, and the exclusion is enforced by
+an explicit input mask rather than by convention:
 
 \begin{itemize}
-  \item the physical factors $\factorvec$ and the true latent $\bm{z}$,
+  \item the physical factors $\factorvec$ and the true latent $\latent$,
     because recovering them is the estimator's job;
   \item any future observation, because the estimator is causal;
   \item the hidden internal state of the command ROM, because the
@@ -722,11 +766,63 @@ input mask rather than by convention:
 
 Windows are contained within a single run and never cross a run
 boundary, and each window carries the stopped-gradient target
-$\bm{z} = \mu(\factorvec)$ of its own run together with the run
+$\latent = \mu(\factorvec)$ of its own run together with the run
 identifier, domain, split, and valid history bounds. Applied to the
 $118$ frozen runs this yields $444\,624$ causal history ticks. What is
 built from them, how the history length is chosen, and how the result is
 validated downstream belong to Chapter~\ref{chap:models}.
+
+The residual encoder deployed in \ppoAAMFD{} shares this row but uses no
+collection at all, for the reason given in Section~\ref{sec:data:onpolicy}.
+
+\subsection{Features and Targets for the Prediction Models}
+\label{sec:data:sd-features}
+
+The prediction models of Section~\ref{sec:models:latent} read the same runs
+through a different contract. Each sample is a transition at the
+$\unit[50]{ms}$ tick rather than a history window, pairing the previous and
+current valve command with the state, and training draws five consecutive
+transitions at a time. They additionally receive the privileged factor vector
+$\factorvec$, which the adaptation module never sees and which is what allows
+them to define the target the module is then asked to recover.
+
+\subsection{On-Policy Data for the Deployed Adaptation Residual}
+\label{sec:data:onpolicy}
+
+The residual that carries the adaptation result in \ppoAAMFD{} is not trained
+from the frozen collection above, and the difference is one of kind rather than
+of scale. It has no dataset, no stopped-gradient latent target and no
+run-level splits, because its encoder never regresses a target at all: the
+encoder and the residual head are optimized together under the reinforcement
+objective, so their training data is the on-policy experience the stack
+generates as it learns.
+
+The reason for the change is a measured failure of the offline route, reported
+in Section~\ref{sec:ctrl:af-encoder}. An encoder fitted to the dynamics target
+of this collection and then frozen carried about $0.4\,\%$ plant identity into
+the controller and scored $7.1\,\%$ worse than simply supplying the mean
+context. A latent that is accurate against a dynamics target is not thereby
+useful to a controller, and no amount of additional offline data addresses
+that, because the deficiency is in the objective rather than in the sample
+count.
+
+What replaces the dataset is a plant design, since on-policy training makes
+the training distribution a property of the environment rather than of a file.
+The cutter mass is drawn from two well-separated modes and flips between them
+\emph{mid-episode}, so that no single compromise response is correct in both
+halves of a run. The flip instant is jittered per environment, so it cannot be
+anticipated on a timer, and the direction is balanced across environments, so
+it cannot be assumed. The consequence is that history is not merely available
+to the residual but necessary to it: an arm that cannot see the history is
+measured, and it does not merely fail to improve on the frozen base but falls
+well below it (Section~\ref{sec:eval:adaptation}).
+
+Two properties of the frozen collection are nonetheless inherited unchanged.
+The history row is the same eighteen-value row defined above, with the same
+four exclusion classes enforced by the same input mask, so nothing enters the
+on-policy encoder that was barred from the offline one. And the plant is still
+the deployment plant, the command ROM plus PhysX, so the change of training
+regime does not smuggle in a different system.
 
 \section{Preprocessing and Data Splits}
 \label{sec:data:preprocessing}
@@ -738,7 +834,7 @@ score that mostly measures interpolation within a run. For the
 command-conditioned dataset the $1\,040$ runs are divided into $936$
 training, $52$ validation, and $52$ test runs, giving $407\,160$,
 $22\,620$, and $22\,620$ transitions respectively, with no run
-identifier appearing in more than one split. The IsaacLab adaptation
+identifier appearing in more than one split. The IsaacLab deployment
 collection is split by run \emph{and} by factor configuration
 ($82$/$20$/$16$, Section~\ref{sec:data:isaaclab}), which is the stronger
 condition: separating runs alone would still let two runs of the same
@@ -817,12 +913,16 @@ disjoint keys across splits), physical validity per run (finite physics, exact
 model-grid alignment, full command rank, bounded saturation), and leakage
 structurally, with privileged channels removed by an explicit input mask rather
 than by trusting the feature list. Its limitation is scale: $118$ runs over six
-factors is a sparse design, which is why the adaptation claims of
+factors is a sparse design, which is why the identifiability claims of
 Chapter~\ref{chap:evaluation} are reported with paired bootstrap intervals and
-per-run detail rather than pooled point estimates.
+per-run detail rather than pooled point estimates. The limitation is specific
+to what this collection supports. It does not bound the closed-loop adaptation
+result, which is not estimated from these runs at all but from paired
+environments generated on-policy under the plant design of
+Section~\ref{sec:data:onpolicy}.
 
 With the data described and audited, the next chapter turns to what was
 learned from it: the inverse and forward models that form the
 \ppoIDFD{} actuator path, the command-conditioned reduced-order model
-that replaces them in \ppoROM, and the system-dynamics, encoder, and
-adaptation models built on the IsaacLab collection.
+that replaces them in \ppoROM, and the system-dynamics surrogate and encoders
+built on the IsaacLab collection.

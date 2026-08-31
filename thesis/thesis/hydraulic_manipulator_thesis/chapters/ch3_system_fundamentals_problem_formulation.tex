@@ -1,6 +1,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 3 — System Fundamentals and Problem Formulation
-%% (10–15 pages)
+%% Chapter 3 - System Fundamentals and Problem Formulation
+%% (10-15 pages)
 %% Purpose: describe the physical and simulated system once,
 %% define all coordinate spaces and interfaces, and formulate
 %% the control objective mathematically.
@@ -26,7 +26,7 @@ defined here, but they are not assumed to be identical plants.
 Sections~\ref{sec:sys:platform}--\ref{sec:sys:actuation} define the mechanism,
 coordinate spaces, and signals. Sections~\ref{sec:sys:simscape} and
 \ref{sec:sys:isaaclab} describe the two simulation models. The remaining
-sections define the verge-following task, the R, IF, and AIF control stacks,
+sections define the verge-following task, the R, IF, and AF control stacks,
 the control objective, and the acceptance gates used in the experiments.
 
 \section{Manipulator Platform}
@@ -193,23 +193,23 @@ Table~\ref{tab:sys:signals} lists the signals and their availability.
     $\bm{h}$ & $\mathbb{R}^{9}$ & I & forward terrain-height profile ahead of the cutter \\
     $\bm{c} = [\Delta\bm{x}^*, \Delta\dot{\bm{x}}^*]$ & $\mathbb{R}^8$ & I & desired cylinder command \\
     $\factorvec$ & $\mathbb{R}^6$ & P & physical randomization factors of the active plant \\
-    $\bm{z} = \mu(\factorvec)$ & $\mathbb{R}^{d_z}$ & P & privileged dynamics latent, $d_z = 2$ \\
-    $\latenthat$ & $\mathbb{R}^{d_z}$ & M & AAM estimate of $\bm{z}$ from observable history \\
+    $\latent = \mu(\factorvec)$ & $\mathbb{R}^{d_z}$ & P & privileged dynamics latent, $d_z = 2$ \\
+    $\latenthat$ & $\mathbb{R}^{d_z}$ & M & AAM estimate of $\latent$ from observable history \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 In IsaacLab, valve commands and differential pressures are learned-actuator
-states, not direct measurements. R produces them internally; IF and AIF obtain
-them from the inverse/forward pair. $\factorvec$ and
-$\bm{z}=\mu(\factorvec)$ are privileged; only $\latenthat$ may enter AIF.
+states, not direct measurements. R produces them internally; IF obtains them
+from the inverse/forward pair, and AF from the frozen forward model alone. $\factorvec$ and
+$\latent=\mu(\factorvec)$ are privileged; only $\latenthat$ may enter AF.
 
 \subsection{Sensing and Observability}
 \label{sec:sys:sensing}
 
 The deployable observation contains articulation state, terrain rays, contact
 signals, the desired cylinder command, and actuator-model pressure state. Plant
-parameters are not observed; AIF infers their effect from causal history.
+parameters are not observed; AF infers their effect from causal history.
 
 \begin{figure}[htbp]
   \centering
@@ -274,7 +274,8 @@ plant model and the actuator of R:
 \begin{itemize}
   \item R uses the deployment plant itself and is the reference condition.
   \item IF replaces it with an independently identified inverse/forward pair.
-  \item AIF adds online adaptation to IF.
+  \item AF drops the inverse model, has the policy emit the valve command
+        directly, and adds online adaptation on the forward model.
 \end{itemize}
 
 The R--IF gap measures the transfer cost of the independently identified pair;
@@ -599,6 +600,13 @@ this limit; the worst case (\texttt{boom\_sweep}) required $3.7\times$ the
 available rate. Path and terrain parameters are now derived from
 \eqref{eq:sys:rate-ceiling}, and a preflight check rejects infeasible tasks.
 
+Equation~\eqref{eq:sys:rate-ceiling} is a property of the cylinder-increment
+contract, so it describes the action chains of R and IF directly. AF bounds its
+command in valve space instead, and the same arithmetic does not apply to it.
+The paths and terrain derived from the ceiling are nonetheless shared by all
+three stacks, so what the task \emph{demands} is identical in every case; what
+differs is only the space in which the request is bounded.
+
 \section{Control Architecture}
 \label{sec:sys:architecture}
 
@@ -625,7 +633,7 @@ available rate. Path and terrain parameters are now derived from
       {IF: ID $\longrightarrow$ FD};
     \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,fill=cbgreen!78,text=white,
       minimum width=5.25cm,minimum height=.78cm,font=\small\bfseries] at (0,-8.67)
-      {AIF: AAM + IF};
+      {AF: AAM + FD};
 
     \node[draw=cbgreen!90!black,line width=.8pt,rounded corners=2pt,fill=cbgreen!68,text=white,
       minimum width=6.4cm,minimum height=1.35cm,align=center,font=\small\bfseries] (plant) at (0,-11.15)
@@ -640,17 +648,19 @@ available rate. Path and terrain parameters are now derived from
       node[pos=.55,left,font=\scriptsize,text=cbgreen!60!black] {measured state};
   \end{tikzpicture}
   \caption{Deployed control stack. The policy produces a bounded cylinder
-  increment; R, IF, or AIF realizes it in the shared PhysX plant. Measured
+  increment; R, IF, or AF realizes it in the shared PhysX plant. Measured
   state closes the loop.}
   \label{fig:sys:architecture}
 \end{figure}
 
 The vehicle advances at the scripted speed and the reference generator supplies
 the verge centre line and cut height. The policy maps normalized observations to
-four desired cylinder increments; it has no runtime baseline controller. The
-action contract bounds those increments. R uses the command ROM, IF the frozen
-inverse/forward pair, and AIF adds the bounded adapter conditioned on
-$\latenthat$. All paths set the same PhysX cylinder target. The DLS controller
+four bounded actions and has no runtime baseline controller. In R and IF those
+actions are desired cylinder increments and the action contract bounds them as
+such; R uses the command ROM and IF the frozen inverse/forward pair to realise
+them. AF instead emits the valve command directly and
+realises it through the frozen forward model, adding a bounded residual
+conditioned on causal history. All paths set the same PhysX cylinder target. The DLS controller
 is used only for teaching and identification.
 
 \section{Problem Formulation}
@@ -671,8 +681,10 @@ $\bm{p}_c(t)$ and terrain height $g(\cdot)$, the scored errors are
 The objective is to minimize the mean and tail of both errors across path
 families and terrain while maintaining contact, head alignment, and smooth
 motion. Learned models are evaluated on one-step and recursive cylinder
-predictions. The stacks are tested across the randomized plant family; AIF is
-compared with IF on held-out factors.
+predictions. The stacks are tested across the randomized plant family. R and IF are compared
+with each other on held-out factors, and AF is compared with its own frozen base
+under a plant change, for the reasons given in
+Section~\ref{sec:ctrl:matching}.
 
 Constraints are cylinder limits and headroom
 (Table~\ref{tab:sys:cylinders}), the action contract, checkpoint output limits,

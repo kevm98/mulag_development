@@ -1,6 +1,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Chapter 6 — Control Framework and Simulation Integration
-%% (12–18 pages)
+%% Chapter 6 - Control Framework and Simulation Integration
+%% (12-18 pages)
 %% Purpose: specify the complete controller and present the THREE
 %% control stacks as one controlled experiment rather than a
 %% collection of disconnected models.
@@ -8,11 +8,16 @@
 %% definition, integration details, and the matching rules that make
 %% the three-way comparison fair.
 %%
-%% NOTE ON NOMENCLATURE: the only stack names are PPO-ROM, PPO-ID-FD
-%% and PPO-(AAM)-ID-FD. The earlier PPO1/PPO2 and PPO1-A/B,
-%% PPO2-A/B/C/D labels are superseded and must not reappear.
-%% The policy is NOT a residual policy: it emits the desired cylinder
-%% command directly and no nominal command is added at runtime.
+%% NOTE ON NOMENCLATURE: the only stack names are PPO-ROM (R),
+%% PPO-ID-FD (IF) and PPO-AAM-FD (AF). The earlier PPO1/PPO2 and
+%% PPO1-A/B, PPO2-A/B/C/D labels are superseded and must not reappear,
+%% and neither must AF or PPO-(AAM)-ID-FD.
+%% The BASE policy is NOT a residual policy: it emits its command
+%% directly and no nominal command is added at runtime. AF adds a
+%% bounded term around that frozen base, but this is an online
+%% adaptation mechanism internal to the RL policy, NOT residual RL in
+%% the sense of correcting a classical controller: no analytic
+%% controller runs underneath at deployment.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \chapter{Control Framework and Simulation Integration}
 \label{chap:control}
@@ -57,7 +62,7 @@ policy.
   contact signals drive the DLS teacher, which supplies DAgger labels to the
   actor. At deployment only the lower feedback loop remains: measured
   observations pass through the PPO actor, the shared cylinder interface and
-  the selected R, IF or AIF actuator path before PhysX updates the arm. No
+  the selected R, IF or AF actuator path before PhysX updates the arm. No
   nominal command is added to the policy output.}
   \label{fig:ctrl:teacher-student}
 \end{figure}
@@ -202,20 +207,28 @@ The deployed controller is a memoryless Gaussian multilayer perceptron. It maps
 a $66$-value observation to four normalized actions, one desired motion command
 per hydraulic cylinder, and that is the entire control law. Actor and critic
 are separate networks with hidden widths $256$--$128$--$64$ and ELU
-activations, over empirically normalized observations. \ppoAAMIDFD{} is the one
-exception: its actor reads $68$ values, the same $66$ plus the two channels of
-$\hat{\bm{z}}$, so the latent conditions the policy as well as the inverse
-model. That is an architectural difference between the stacks rather than a
-tuning difference, and Section~\ref{sec:ctrl:constraints} states how the
-comparison accounts for it.
+activations, over empirically normalized observations. This description is of
+the base policy, and it is shared by all three stacks: the actor width is the
+same $66$ in each, and \ppoAAMFD{} deploys this network frozen and unmodified
+rather than a widened variant of it. Two things differ for \ppoAAMFD{} and are
+treated where they arise. Its four actions are interpreted as valve commands
+rather than as desired cylinder increments
+(Section~\ref{sec:ctrl:af-fd-sufficient}), and the deployed controller is this
+policy plus an additive residual whose own encoder reads a history window
+carried alongside the observation, leaving the base actor's input unchanged
+(Section~\ref{sec:ctrl:af-residual}).
 
-Three things it is \emph{not} must be stated, because each was a design
-option that was considered and rejected. It is not a residual: there is no
-nominal command to correct. It is not recurrent: temporal inference in this
-architecture belongs to the AAM of Chapter~\ref{chap:models}, and giving the
-policy its own memory would confound the two. And it does not command the
-vehicle: the truck's forward motion is scripted, so the policy cannot solve a
-tracking problem by driving differently.
+Three things this base policy is \emph{not} must be stated, because each was a
+design option that was considered and rejected. It is not itself a residual:
+it has no nominal command to correct, and where a residual does appear in
+\ppoAAMFD{} it is added around this policy rather than built into it, which is
+what keeps the frozen base recoverable exactly. It is not recurrent: temporal
+inference is placed in a separate encoder, offline in the module of
+Chapter~\ref{chap:models} and jointly trained with the residual in
+Section~\ref{sec:ctrl:af-encoder}, and giving the policy its own memory would
+confound the two. And it does not command the vehicle: the truck's forward
+motion is scripted, so the policy cannot solve a tracking problem by driving
+differently.
 
 \subsection{The Observation Vector}
 
@@ -231,14 +244,13 @@ actuator interface, ten of pose and context, and twelve of model error.
   \caption{The $66$-value policy observation, drawn to scale by group. The
   channels combine measurements, derived quantities and actuator-model
   estimates. No trajectory-family
-  label, no physical factor vector and no true latent enters the actor.
-  \ppoAAMIDFD{} appends the two estimated latent channels to this vector,
-  giving $68$, and is reported as the different architecture that it is.}
+  label, physical factor vector or latent estimate enters the actor. AF keeps
+  this $66$-channel input unchanged and carries its causal history separately.}
   \label{fig:ctrl:observation}
 \end{figure}
 
-The last group deserves an argument, because twelve of sixty-six channels is a
-substantial fraction of the observation spent on something that is not the task.
+The last group uses twelve of the sixty-six channels, so its role needs to be
+explicit. These channels describe the actuator rather than the task.
 Those channels carry the actuator's standing error: the cylinder tracking
 residual, the actuator prediction residual, and the normalized cylinder effort.
 They exist as a direct consequence of the policy being memoryless. Forming an
@@ -251,11 +263,14 @@ the p01 head alignment sat at $0.79$--$0.80$ and did not respond to changes in
 the feedforward source or the levelling gain, because the policy had no
 observable evidence of the error it was being asked to correct.
 
-This group is also what makes the three stacks comparable. Under the ROM the
+This group is also what makes the matched pair comparable. Under the ROM the
 tracking residual is near zero, because the ROM reaches what it is told. Under
 a learned ID--FD path it is the model's standing error. The same observation
 contract therefore gives each policy an honest view of its own actuator's
-shortcomings, which is what a fair comparison requires.
+shortcomings, which is what the comparison of
+Section~\ref{sec:ctrl:matching} requires. The contract is shared by
+\ppoAAMFD{} as well, but comparability there rests on the paired construction
+against its own frozen base rather than on the observation alone.
 
 \subsection{The Action and Its Bounds}
 
@@ -273,7 +288,7 @@ introduce motion the policy did not request.
   \caption{PPO actor--critic formulation and deployed control path. The actor
   maps the observation to a four-dimensional Gaussian action. Rate limiting,
   exponential filtering, the travel shield, command scaling and the target-lead
-  cap bound that action before the selected R, IF or AIF actuator path drives
+  cap bound that action before the selected R, IF or AF actuator path drives
   the PhysX arm. The critic and reward update are training-only; measured state
   closes the deployed loop.}
   \label{fig:ctrl:action-chain}
@@ -292,6 +307,16 @@ learned range. The command scale converts the filtered action into
 $\unit[4]{mm}$ of cylinder travel per unit action. Finally the target
 integrator accumulates the increments in reference space, with the integrated
 target permitted to lead the measured extension by at most $\unit[18]{mm}$.
+
+This chain describes the cylinder-increment interpretation of the action, which
+is the one \ppoROM{} and \ppoIDFD{} use. Under \ppoAAMFD{} the same
+four-dimensional bounded action is read as a valve command and scaled to span
+exactly the admissible valve range, so that no further clamp binds at nominal,
+and the inverse-model anchor and the adapter residual of the earlier design are
+both held at zero. The bounding stages that act in cylinder space therefore do
+not have the same meaning on that stack, which is one of the reasons its
+results are read against its own frozen base rather than across the stacks
+(Section~\ref{sec:ctrl:matching}).
 
 That last cap is an anti-windup device and it is load-bearing. Relaxing it from
 $\unit[18]{mm}$ to $\unit[50]{mm}$ halved the lateral error on the two families
@@ -507,28 +532,13 @@ information rather than a repetition of what has already been fitted.
 Panel~(c) shows the corresponding closed-loop task metrics. They remain near
 the teacher's preflight values without matching them.
 
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch6_distillation}
-  \caption{A measured distillation run for the \ppoROM{} stack, from the stored
-  record. (a)~The teacher's execution probability is annealed to zero over the
-  first $70\,\%$ of iterations. (b)~Behaviour-cloning loss falls by over an
-  order of magnitude under teacher execution, then rises once the student is alone,
-  the distribution shift that DAgger is designed to surface, not a
-  regression. (c)~Cut-height error, lateral error and ground-contact fraction;
-  dotted lines mark the teacher's preflight values from
-  Table~\ref{tab:ctrl:teacher}.}
-  \label{fig:ctrl:distillation}
-\end{figure}
-
 \subsection{Objective Mismatch in Unconstrained Fine-Tuning}
 \label{sec:ctrl:finding}
 
-The natural next step is to treat the distilled actor as an initialization and
-improve it with PPO. That is what the residual literature does, it is what the
-plan for this thesis originally assumed, and in unconstrained form, on this
-task, it does not work. The finding is reported here in full because it is what
-motivates the anchored formulation of Section~\ref{sec:ctrl:anchored}, which is how the final policies are trained.
+The initial plan was to use the distilled actor as the PPO initialization and
+improve it without further constraints. On this task, that approach failed.
+The result motivates the anchored formulation of
+Section~\ref{sec:ctrl:anchored}, which is used for the final policies.
 
 PPO fine-tuning was run repeatedly from distilled checkpoints, and the outcome
 was consistent enough to be treated as a property of the problem rather than as
@@ -894,8 +904,8 @@ here as a reference \emph{condition} whose acceptance evidence is pending, and
 Chapter~\ref{chap:evaluation} reports the revalidated figures for all three
 stacks under one protocol.
 
-Three separate records of \ppoROM{} acceptance exist in the project, and because
-they disagree it is worth stating plainly which one this thesis relies on. The
+Three \ppoROM{} acceptance records exist in the project and they disagree. The
+thesis therefore distinguishes them explicitly. The
 pipeline's own documentation reports all eight gates passing across the $2$ to
 $\unit[7]{km/h}$ range on three meshes, which is a selection-time record for a
 different checkpoint than the one described above. An earlier six-mesh
@@ -926,10 +936,12 @@ Task, terrain families, meshes, observation contract, action chain, reward,
 gates and the PPO update are inherited unchanged, so the actuator
 representation is the only free variable between the two stacks.
 
-The stack matters to the argument twice over. It is the robust learned
-baseline against which \ppoAAMIDFD{} must be measured, since the two differ only
-by the AAM and the adapter, and it is the honest control for \ppoROM, whose
-actuator coincides with the deployment plant.
+The stack matters to the argument twice over. It is the honest control for
+\ppoROM, whose actuator coincides with the deployment plant, and it is the
+stack in which the inverse model is carried in the command path and is adequate
+there. It is not the reference against which \ppoAAMFD{} is measured: the two
+do not share the action contract, and the adaptive claim is made against that
+stack's own frozen base instead (Section~\ref{sec:ctrl:matching}).
 
 \emph{Robust} is used here in the sense of
 Section~\ref{sec:fund:domain-randomization}: the stack was trained across the
@@ -966,70 +978,391 @@ Section~\ref{sec:ctrl:anchored} with a lower actor learning rate than
 \ppoROM{} and a fixed exploration standard deviation of $0.05$, which is read
 from the run manifest rather than assumed to match.
 
-\section{AIF: The Adaptive Stack}
-\label{sec:ctrl:ppo-idaamfd}
+Figure~\ref{fig:ctrl:r-if-stack} summarises the two non-adaptive actuator paths
+used as baselines. Both use the same policy interface and PhysX task; only the
+actuator representation changes.
 
-\ppoAAMIDFD{} adds online adaptation to the \ppoIDFD{} path and changes nothing
-else about the plant. Figure~\ref{fig:ctrl:aam-stack} compares the complete R,
-IF and AIF signal paths. At every model tick the AAM of
-Section~\ref{sec:models:aam} reads the observable history window and produces
-$\hat{\bm{z}}$, which enters AIF in two places: it is appended to the policy observation, and
-it conditions the bounded adapter that corrects the frozen inverse model's
-valve command. The forward model, the base inverse model and the command ROM
-are untouched.
-
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
-  \includegraphics[width=\textwidth]{images/ch6_aam_stack}
-  \caption{Complete R, IF and AIF control pipelines. R maps policy commands
-  through the command ROM. IF composes the inverse and strict forward models.
-  AIF adds a causal history encoder whose estimate $\hat{\bm{z}}$ conditions
-  both the actor and the bounded inverse-model adapter. The true latent is a
-  simulation-only training target and is absent from deployment. All three
-  paths produce the same bounded cylinder target for the PhysX arm.}
-  \label{fig:ctrl:aam-stack}
+  \makebox[\textwidth][c]{%
+    \includegraphics[width=1.08\textwidth]{images/ch6_r_if_stack}}
+  \caption{The non-adaptive R and IF control pipelines. R sends the policy's
+  desired cylinder motion through the calibrated command ROM. IF composes the
+  independently identified inverse and strict forward models before applying
+  the same bounded cylinder target in PhysX. Both paths use the same
+  observation, action limits and task.}
+\label{fig:ctrl:r-if-stack}
 \end{figure}
 
-Conditioning the policy as well as the adapter is a deliberate design choice
-and it is the one place where this stack is not a drop-in substitution. The
-research question is whether an inferred description of the current plant
-improves closed-loop behaviour, and a latent that reached only the inverse model
-could change the realised valve command but never the intent behind it. The
-cost is that the actor is a $68$-input network rather than a $66$-input one,
-which is an architectural difference and is treated as one in
-Section~\ref{sec:ctrl:constraints}.
+\section{AF: The Adaptive Stack}
+\label{sec:ctrl:ppo-aamfd}
 
-The adapter itself is deliberately weak. It adds a residual to the base valve
-command, the residual is bounded by construction and further scaled by a
-declared factor of $0.25$, and the result is clipped to the same per-axis valve
-limits as \ppoIDFD. Three fallbacks make the degradation path exact rather than
-approximate. Until twenty complete history rows have accumulated the adapter is
-bypassed and the frozen inverse model's command is returned unchanged; a
-non-finite latent triggers the same bypass; and the residual scale can be set
-to zero at evaluation time without touching any other part of the stack. In all
-three cases the \emph{actuator path} is \ppoIDFD{} exactly, which is what makes
-the residual ablation a single-variable comparison. The actor is not restored by
-any of the three: it remains the $68$-input latent-conditioned network. This
-stack therefore never reduces to \ppoIDFD{} as a whole, and the across-stack
-contrast in Chapter~\ref{chap:evaluation} is read with that in mind.
+\ppoAAMFD{} places online adaptation on the forward model alone. The policy
+emits the valve command directly, the frozen strict forward model of
+Section~\ref{sec:models:fd} converts that command to a predicted extension
+increment, and PhysX receives the same bounded cylinder target as the other two
+stacks:
+%
+\begin{equation}
+  \label{eq:ctrl:af-path}
+  \pi_{\mathrm{frozen}} + \text{history residual}
+  \;\longrightarrow\; \bm{u}
+  \;\longrightarrow\; f_{\mathrm{FD}}
+  \;\longrightarrow\; \text{PhysX} .
+\end{equation}
+%
+The inverse model is absent from the command path. This is the one structural
+difference from \ppoIDFD{}, and it is deliberate: the name of the stack records
+the two models that remain, \AAM{} and \FD{}. Task, terrain families, meshes,
+observation contract, reward, gates and the PPO update are inherited unchanged,
+so the actuator representation and the adaptation path are the only free
+variables against the baselines.
 
-The estimate is not instantaneous, and the latency is part of the contract
-rather than an implementation detail. The AAM updates on the $\unit[20]{Hz}$
-model-tick grid and its output passes through a past-only rolling mean over five
-predictions, so a plant change reaches $\hat{\bm{z}}$ no earlier than
-$\unit[250]{ms}$ after it becomes visible in the history window, on top of the
-$\unit[1.0]{s}$ window itself. Section~\ref{sec:models:aam-content} showed the
-deployed estimate to be a near-static seal-condition fingerprint, so this
-latency bounds a quantity that does not, on the evidence available, move much
-within an episode.
+That the inverse model is genuinely out of the loop is a verified property
+rather than a claim about intent. Under the direct-valve configuration the
+adaptation-site instrumentation reports zero valve elements attributable to the
+inverse model and zero adapter applications at the inverse-model site across a
+complete run. The actuator key recorded inside the checkpoints still reads
+\texttt{id\_aam\_fd}; it is retained so that previously trained checkpoints
+remain loadable and is a legacy identifier, not a description of the runtime
+path. The reported counters are \texttt{valve\_elements} $= 0$,
+\texttt{adapter\_applied\_env\_ticks} $= 0$ and
+\texttt{online\_aam\_residual\_scale} $= 0.0$; were the inverse model in the
+path, all three would be non-zero.
 
-What this section does \emph{not} claim is that the added machinery improves the
-task. The stack is complete, its interfaces are verified, and its manifest records the
-eight gates passing on six held-out meshes at selection time; whether the
-adaptation path contributes anything measurable is a separate question, settled
-in Chapter~\ref{chap:evaluation}, and
-Section~\ref{sec:models:adapter} has already reported that the closed-loop
-contrasts are null and why.
+\begin{figure}[!htbp]
+  \centering
+  \makebox[\textwidth][c]{%
+    \includegraphics[width=1.08\textwidth]{images/ch6_aam_stack}}
+  \caption{Training and deployment path of AF. The frozen base actor emits the
+  valve command $\bm{u}_0$. A temporal encoder and residual head use causal
+  state--action history to add the bounded correction of
+  Equation~\eqref{eq:ctrl:af-residual}. Only these two modules receive the PPO
+  task gradient; the base actor and strict forward model remain frozen. The
+  composed valve command drives the forward model and the shared PhysX
+  verge-following task. The actor input remains $66$ channels; the history
+  window is carried separately and is not part of that count. Dashed paths
+  denote PPO updates and rollout feedback. No privileged factor vector or
+  inverse model enters the AF command path.}
+\label{fig:ctrl:aam-stack}
+\end{figure}
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch6_distillation}
+  \caption{A measured distillation run for the \ppoROM{} stack. (a)~The
+  teacher's execution probability falls to zero over the first $70\,\%$ of
+  iterations. (b)~Behaviour-cloning loss falls by over an order of magnitude
+  under teacher execution, then rises as the student visits new states.
+  (c)~Cut-height error, lateral error and ground-contact fraction; dotted lines
+  mark the teacher's preflight values from Table~\ref{tab:ctrl:teacher}.}
+  \label{fig:ctrl:distillation}
+\end{figure}
+
+
+\subsection{Why the Inverse Model Is Omitted}
+\label{sec:ctrl:af-no-id}
+
+The three stacks are not three attempts at one thing, and the inverse model's
+place in two of them follows from what each is for. The command ROM together
+with PhysX \emph{is} the deployment plant
+(Section~\ref{sec:models:rom-calibration}), and it is the only actuator
+representation calibrated against that plant, so \ppoROM{} uses the plant
+itself and fixes the reference condition. The inverse and forward models are
+identified independently of it, from the high-fidelity Simscape data of
+Chapter~\ref{chap:data}, and neither has seen the deployment plant during
+training. \ppoIDFD{} therefore measures something specific: the cost of
+substituting an independently identified pair for the plant itself.
+
+That question requires the inverse model. A policy that commands desired
+cylinder motion needs a map from that intent to a valve command, and supplying
+that map from identification data alone is exactly the substitution being
+priced. Composing the inverse model with the strict forward model is thus the
+right construction for the non-adaptive stack, and the R--IF gap is
+interpretable only because the composition is complete. The inverse model earns
+its place in \ppoIDFD{} on that reasoning and keeps it; nothing established
+below withdraws it.
+
+The adaptive stack asks a different question, and the inverse model does not
+survive the change. It was not discarded on suspicion: it was adopted only
+after it had been shown to be trustworthy, and it was disqualified later for a
+reason that the trust analysis itself uncovered.
+
+Three findings established the trust. Per-valve supervised validation reached
+$R^2 = 0.9973$--$0.9996$. Paired control fine-tuning
+(Section~\ref{sec:models:id-paired}) repaired the one property the supervised
+score could not certify: the composite normalised control error fell from
+$1.0011$, which is exactly the zero-response baseline, to $0.1086$, with all
+per-axis regression slopes above $0.8$ and all correlations above $0.92$. The
+frozen checkpoint then transferred to the $118$-run deployment collection, which
+lies outside its Simscape training distribution
+(Section~\ref{sec:models:id-trust}), with teacher-forced one-step extension
+error of $\unit[2.36]{mm}$ on the combined domain against $\unit[3.36]{mm}$ on
+nominal, and a held-out group no worse than the domains used in training. That
+is the regime in which the model is actually used, because the policy closes the
+loop at every tick. On that evidence the inverse model was adequate for
+\ppoIDFD, and \ppoIDFD{} was built on it. \ppoIDFD{} remains in
+this thesis for exactly that reason: it is the stack in which the inverse model
+is used and is adequate, and it is reported as such.
+
+The same transfer study recorded the failure mode that later disqualified the
+model for adaptation. Fed its own predictions instead of the measured state, the
+composite left the reference by more than a metre in \emph{every one} of the
+$118$ runs, and the mechanism was saturation: its pre-clip valve command sat at
+the limit on $89.1\,\%$ of elements, while the ROM valve recorded on the same
+runs never reached its bound at all.
+Instrumentation of the composed path in the closed loop measures the same thing
+directly, and in the terms that matter for adaptation rather than for rollout
+stability. Over the $33$-cell panel the inverse model's command sat at its
+pre-clip limit on $79.9\,\%$ of valve elements, a figure consistent with the
+per-cylinder occupancies reported in
+Section~\ref{sec:models:adapter-null}; $34.5\,\%$ of the corrections the
+adapter computed were clipped away after being computed; and on $37.9\,\%$ of
+elements the correction could not move the command at all. A bounded residual
+cannot unsaturate an anchor that is already on its stops, and the consequence
+is not merely a small effect but an uninterpretable one: a null measured
+through such a path cannot distinguish a task that is not adaptation-limited
+from credit that was clipped before it could reach the metric.
+
+The mechanism is visible in the model's own output contract. The inverse model
+predicts a valve-command \emph{increment}, and the deployed command is the
+accumulated, clipped quantity
+$\bm{u}_k = \operatorname{clip}(\bm{u}_{k-1} + \Delta\bm{u}_k, -\bm{u}_{\max},
+\bm{u}_{\max})$ with per-axis limits $[0.95,\, 0.95,\, 0.80,\, 0.80]$. Under
+sustained demand the accumulation walks the command onto its own clip and holds
+it there.
+
+This is what removes the headroom that online adaptation requires, and it
+explains why the measured clipping above is structural rather than incidental.
+The quantity being adapted and the quantity being saturated are the same, so the
+saturation is not an occasional excursion that a bounded residual can work
+around: it is the operating condition under precisely the sustained demand for
+which adaptation was introduced. A mechanism that needs the command to move
+cannot be demonstrated on a command that is at its stops nine times in ten.
+
+The disqualification is therefore specific, and it is not a retraction of
+anything claimed for \ppoIDFD{}. The inverse model remains adequate wherever
+its command is consumed as issued, because saturation of a command that nothing
+further must be added to is a limit on authority rather than a defect of the
+map. It fails only where a second signal has to be added to that command and
+survive the same clip. The non-adaptive stack is the first case and the
+adaptive stack is the second, which is why one keeps the inverse model and the
+other cannot.
+
+Repairing the inverse model rather than removing it was considered and
+rejected on cost. The repair would have required a new data collection, and the
+scale of that collection is known from the precedent in this same pipeline: the
+forward model suffered an analogous identifiability failure, and it was
+repaired only by collecting a purpose-built rank-4 open-loop valve-plateau
+dataset over four plant draws (Section~\ref{sec:models:fd-identifiability}).
+Two further limitations pointed the same way. The inverse model is trained on
+Simscape data alone, and deployment already substitutes the training-mean
+pressure because supplying the measured pressure raises extension error from
+$\unit[1.311]{mm}$ to $\unit[1.907]{mm}$. A model that must be fed a
+counterfactual input to remain accurate is a poor foundation for a mechanism
+whose entire purpose is to react to the true plant.
+
+The decision follows from the direct-valve formulation. Once the policy emits
+the valve command itself, the inverse model has no remaining function: its sole
+role in \ppoIDFD{} was to convert desired cylinder motion into a valve command,
+and a policy that outputs the valve command performs that conversion inside its
+own learned mapping. The saturation is not thereby abolished, since the
+command is still bounded, but it is no longer produced by an accumulator
+outside the policy's control, and the residual acts on the same quantity the
+policy itself has learned to keep within range. The inverse model was
+therefore removed rather than repaired, and no new data collection was
+required.
+
+\subsection{Whether the Forward Model Alone Is Sufficient}
+\label{sec:ctrl:af-fd-sufficient}
+
+Removing one of the two learned actuator models raises the question of whether
+the remaining one carries the path. Sufficiency here is a specific claim: the
+forward model must convert a commanded valve position into a one-step extension
+increment with genuine valve sensitivity, because that increment is the only
+quantity the controller integrates.
+
+The evidence for that claim is the strict retraining of
+Section~\ref{sec:models:fd-identifiability}, and it is the reason the
+retraining was necessary in the first place. Before it, the supervised score
+was misleading: at a $\unit[0.5]{s}$ horizon, zeroing the valve input changed
+the rollout-error ratio to only $0.94$, meaning the network had extrapolated
+smooth closed-loop kinematics rather than learned the valve's effect. After
+strict retraining on the open-loop plateau data the valve-zero error ratio
+rises to $1.81$, extension rollout RMSE falls from $\unit[75.2]{mm}$ to
+$\unit[12.4]{mm}$ at $\unit[0.5]{s}$ and from $\unit[157.9]{mm}$ to
+$\unit[27.3]{mm}$ at $\unit[1.0]{s}$, and per-axis one-step extension $R^2$
+improves from $[-5.7,\, 0.60]$ to $[0.76,\, 0.98]$. The kinematic consistency
+term holds in the strict data with $R^2 = 0.994$--$0.9997$.
+
+Sufficiency is therefore established on the channel that is used and is not
+claimed beyond it. Three qualifications are carried forward explicitly. Only
+the extension increment is integrated; the velocity output remains weak on two
+axes and is retained as a diagnostic. Zero-order hold remains competitive below
+$\unit[0.25]{s}$, so the forward model earns its place at the horizons the
+controller actually spans rather than uniformly. And the valve authority the
+model represents is strongly operating-point dependent, varying by a factor of
+$15$--$75$ across pressure quartiles and capable of changing sign, which is why
+a constant valve Jacobian was rejected and why the reduced-order structure is
+retained elsewhere in the pipeline. Within those limits the forward model
+supplies what the stack requires, and the composite no longer depends on a
+second learned model whose saturation was its dominant failure mode.
+
+\subsection{The Residual Controller}
+\label{sec:ctrl:af-residual}
+
+Adaptation enters as an additive, bounded residual on the valve command:
+%
+\begin{equation}
+  \label{eq:ctrl:af-residual}
+  \bm{u} = \operatorname{clip}\bigl(
+    \bm{u}_0 + \alpha \tanh
+    \bigl( g_\psi(\bm{o},\, \phi(\bm{H}_t)) \bigr),\, -1,\, 1 \bigr),
+  \qquad
+  \bm{u}_0 = \pi_{\mathrm{frozen}}(\bm{o}) ,
+\end{equation}
+%
+where $\phi$ is a temporal-convolution encoder over a window of
+$(\text{state},\, \text{action})$ pairs and $g_\psi$ is a small
+multilayer perceptron producing a per-cylinder correction. Only $\phi$ and
+$g_\psi$ are trained: $53\,836$ parameters against a $59\,588$-parameter frozen
+base.
+
+Three construction choices make the comparison in
+Chapter~\ref{chap:evaluation} a single-variable one, and each was verified
+rather than assumed. The final layer of $g_\psi$ is zero-initialised and
+$\tanh(0) = 0$, so at construction the residual is exactly zero and the wrapped
+policy reproduces the frozen base bit for bit, at a measured maximum absolute
+action difference of $0.0$. Every arm of an ablation therefore begins as the
+identical policy, and any end-state difference is attributable to the residual
+having been learned rather than to the task having been relearned. The
+correction is bounded by $\alpha\tanh(\cdot)$ regardless of what the head
+produces: with head weights drawn from $\mathcal{N}(0,\, 50)$ the output
+saturates at exactly $\alpha$ and remains finite, so a bad update degrades
+accuracy instead of emitting a non-finite action, which matters because a
+non-finite action written into the history buffer would poison the entire
+window. And the residual scale can be set to zero at evaluation time without
+touching any other part of the stack, in which case the stack reduces to the
+frozen base exactly.
+
+This last property is a strict improvement on the arrangement it replaces. In
+the earlier latent-conditioned design the actor was itself a $68$-input
+network, so disabling the residual restored the baseline actuator path but not
+the baseline actor, and the ablation was never quite single-variable. Under
+\ppoAAMFD{} the base actor is the distilled policy unmodified, the residual
+carries the whole of the context dependence, and disabling it recovers the
+baseline in full.
+
+The history window is carried in the observation vector rather than in a buffer
+held inside the module. PPO calls the actor many times per update epoch, and a
+module-held buffer would be advanced by the optimisation loop and desynchronise
+from the simulation; carrying it in the observation means the rollout buffer
+holds exactly the history under which each action was taken. At evaluation the
+opposite convention is correct, since the policy is called once per step. The
+causal convention is fixed throughout: the estimate at step $t$ uses
+$\bm{x}_{t-k:t-1}$ and $\bm{a}_{t-k:t-1}$ and does not include step $t$.
+
+\subsection{Why the Base Policy Is Frozen}
+\label{sec:ctrl:af-frozen}
+
+Freezing the base is structural rather than a tuning preference, and the
+alternative was closed by measurement before the residual route was adopted.
+
+Under a trajectory-regularised fine-tune with a reference-KL anchor the policy
+is stable but cannot acquire a new input dependence, because the anchor's
+reference is context-blind by construction and any context-dependent behaviour
+therefore increases KL to that reference and is penalised. A gradient
+multiplier of $1000$ applied to the context columns alone moved action
+sensitivity from $0.001\,\%$ to $0.004\,\%$ of action scale over $400$
+iterations. Masking the anchor at $\bm{z}=\bm{0}$, so that context dependence
+costs nothing in KL, was tried on a criterion fixed in advance and also failed,
+reaching $0.005\,\%$ of action scale with context weights four orders of
+magnitude below the base columns. The anchor is not the blocker. Without the
+anchor, PPO is free to walk away from the distilled behaviour and does,
+trading line tracking for ground contact because that raises its objective.
+
+A residual head has no anchor. It is new capacity whose only function is to
+depend on the latent, so nothing opposes that dependence. Measured on the same
+stack, the trained residual's action responds to its history at $3.35\,\%$ of
+action scale, roughly $840$ times the anchored route. The residual formulation
+is adopted on that measurement rather than on preference.
+
+\subsection{How the Adaptation Encoder Is Trained}
+\label{sec:ctrl:af-encoder}
+
+The encoder $\phi$ and the head $g_\psi$ are trained together under the
+reinforcement objective, not fitted offline to an auxiliary target and handed
+to a controller afterwards. This is the concurrent scheme of Ji et
+al.~\cite{ji2022concurrent}, and its consequence is that the latent is
+control-relevant by construction rather than by hope: the only gradient
+reaching $\phi$ is the one that improves the task.
+
+The alternative was tried in this project and failed in a way worth recording,
+because it is the failure the concurrent scheme is designed to avoid. An
+encoder frozen after being fitted offline to a dynamics objective carried about
+$0.4\,\%$ plant identity into the controller and scored $7.1\,\%$ worse than
+simply supplying the mean context. Feeding a policy a near-noise estimate is
+worse than feeding it a constant. A latent that is accurate against a dynamics
+target is not thereby useful to a controller, and the offline route provides no
+mechanism that would make it so.
+
+This changes the status of the adaptation module relative to the earlier
+design, and the change is one of kind rather than degree. The module is no
+longer a standalone model with its own supervised validation score that can be
+quoted independently of the controller; it has no meaning apart from the policy
+it was trained with. Its quality is therefore reported behaviourally in
+Chapter~\ref{chap:evaluation}, through the sensitivity of the action to the
+history and through the closed-loop contrast against the frozen base, and not as
+a latent reconstruction error.
+
+\subsection{Consistency With the Plant Dynamics}
+\label{sec:ctrl:af-consistency}
+
+Two consistency requirements follow from the system model of
+Chapter~\ref{chap:system}, and both are met by construction rather than by
+observation.
+
+The first is causality. Each history row carries observable quantities only:
+joint positions, joint velocities, cylinder pressure differences and the
+previous valve command. The privileged factor vector, the true latent, the
+reference, future rows and any hidden simulator state are excluded, and the
+estimate at step $t$ is formed without step $t$. Nothing enters the deployed
+path that would be unavailable on the physical machine.
+
+The second concerns what the pressure entries represent, and it is a
+qualification rather than a guarantee. Under \ppoAAMFD{} the pressure
+differences supplied to the encoder are recursive states of the frozen forward
+model, not measurements of the plant. The encoder therefore observes the plant
+through the forward model's representation of it, and its estimate is
+consistent with the true dynamics only to the extent that the forward model is.
+Section~\ref{sec:ctrl:af-fd-sufficient} bounds that extent: strong on the
+integrated extension channel, weak on velocity for two axes, and
+operating-point dependent in valve authority. This is a real limit on the
+interpretation of the latent and is carried into the discussion of
+Chapter~\ref{chap:evaluation} rather than resolved here.
+
+What the stack does not claim is a physically named estimate. The residual is
+trained to improve the task, and the quantity $\phi$ extracts is whatever
+serves that objective; it is not constrained to correspond to seal condition,
+compliance, supply pressure or any other named factor, and it is not reported
+as though it were. Recovering named physical quantities would require an
+explicit plant model and a different estimator, which is noted as future work
+in Chapter~\ref{chap:conclusion}.
+
+\subsection{What This Section Claims}
+\label{sec:ctrl:af-claims}
+
+The stack is complete and its interfaces are verified. The residual authority
+$\alpha$ is a genuine tuned hyperparameter and is reported as one rather than
+presented as a natural constant. The deployed value is $\alpha = 0.5$. At
+$\alpha = 0.15$ the residual is not merely less effective but actively worse
+than the base it corrects, at $\unit[10.041]{mm}$ cut-height error against the
+base's $\unit[7.964]{mm}$. A bounded correction needs enough authority to
+matter, and below that threshold it contributes noise rather than adaptation; no
+value of $\alpha$ should therefore be read as incidental.
+Whether the adaptation path contributes anything to closed-loop task
+performance is a separate question, settled by the paired comparison of
+Section~\ref{sec:eval:adaptation} and not asserted here.
 
 \section{IsaacLab Integration and Timing}
 \label{sec:ctrl:integration}
@@ -1051,10 +1384,11 @@ held prediction cannot re-anchor to a sagging measured position. Chapter~3
 records why that reference-space integration is mandatory: integrating against
 the measured extension turns a static hold into a slow ratchet.
 
-Order within a tick is fixed and asserted at run time. The AAM consumes the
-history window ending at the previous tick and produces $\hat{\bm{z}}$ before
-the inverse model runs, so no quantity computed at the current tick can
-influence its own estimate. History buffers are per-environment and cleared on
+Order within a tick is fixed and asserted at run time. The history encoder
+consumes the window ending at the previous tick and produces its estimate
+before the actuator path runs, ahead of the inverse model in \ppoIDFD{} and of
+the residual correction in \ppoAAMFD{}, so no quantity computed at the current
+tick can influence its own estimate. History buffers are per-environment and cleared on
 episode boundaries, which matters because the vectorised environments reset
 asynchronously and a shared buffer would leak one episode into the next. Both
 properties are checked rather than assumed: a runtime check replays a trace and
@@ -1089,58 +1423,71 @@ construction and no reward, critic or optimiser change could recover it.
 Terrain is derived from that ceiling, and the preflight assertion keeps the two
 from drifting apart.
 
-\subsection{Matching Rules for the Three-Stack Comparison}
+\subsection{Matching Rules and What Each Comparison Carries}
+\label{sec:ctrl:matching}
 
-The comparison is only informative if the three stacks differ where the
-hypothesis says they differ and nowhere else. The following are held identical
-across \ppoROM, \ppoIDFD{} and \ppoAAMIDFD: the verge task and its eleven path
-families, the terrain generator and the held-out mesh set, the reward function
-of Table~\ref{tab:ctrl:reward}, the action chain and its authority budget, the
+This thesis does not present a three-way ranking of the stacks, and the reason
+is structural rather than presentational. Two distinct comparisons are made,
+each with its own matching rule, and each carries one claim. Conflating them
+would produce a table whose rows are not commensurable.
+
+\paragraph{The Matched Pair: R Against IF}
+The representation claim rests on \ppoROM{} and \ppoIDFD, which agree on every
+recorded training field and differ only in the actuator path. Held identical
+across the pair are the verge task and its eleven path families, the terrain
+generator and the held-out mesh set, the reward function of
+Table~\ref{tab:ctrl:reward}, the action chain and its authority budget, the
 eight acceptance gates and their aggregation to the worst mesh and worst path
 family, episode length, actor and critic capacity, and the three-layer training
-construction of distillation, critic warm-up and reference-anchored PPO. This is
-the rule the comparison was designed to follow.
+construction of distillation, critic warm-up and reference-anchored PPO. That
+pair is a controlled single-variable comparison and is the only place an
+across-stack number is read as such.
 
-Four departures from that rule exist and are declared rather than smoothed
-over, because each of them weakens a comparison that would otherwise be clean.
+One departure is declared. \ppoROM's actuator is the command ROM, and the
+command ROM plus PhysX \emph{is} the deployment plant
+(Section~\ref{sec:models:rom-calibration}). Its tracking advantage over
+\ppoIDFD{} is therefore not evidence that a reduced-order model approximates
+the actuator better than an identified pair, because one of the two defines the
+target. \ppoROM{} is a reference condition, not a competitor.
 
-\paragraph{The Reference Stack Contains the Plant}
-\ppoROM's actuator is the command ROM, and the command ROM plus PhysX
-\emph{is} the deployment plant (Section~\ref{sec:models:rom-calibration}). Its
-tracking advantage over \ppoIDFD{} is therefore not evidence that a
-reduced-order model approximates the actuator better than an identified pair,
-because one of the two defines the target. \ppoROM{} is a reference condition,
-not a competitor.
+\paragraph{Why AF Is Not Ranked Against IF}
+\ppoAAMFD{} does not share the action contract of the other two. Under the
+direct-valve construction of Section~\ref{sec:ctrl:ppo-aamfd} the policy emits
+the valve command itself, where \ppoROM{} and \ppoIDFD{} both emit a bounded
+desired cylinder increment that a downstream actuator path realises. The
+quantity the policy chooses is not the same quantity in the two cases, so the
+action chain that makes the other comparison fair does not extend to this one.
+This is a declared property of the implementation rather than an observation
+about results, and it is the reason no row of any table ranks \ppoAAMFD{}
+against \ppoIDFD{} on task error. The adaptive claim is not weakened by this,
+because it was never a claim about beating the non-adaptive stack.
 
-\paragraph{The Adaptive Stack Has a Larger Observation}
-\ppoAAMIDFD's actor reads $68$ values against the others' $66$. Any difference
-in its favour is therefore attributable to the latent's content, to the two
-extra inputs, or to the adapter, and these are separated by evaluation-time
-ablation rather than by assumption: the zeroed, shuffled, frozen and mean-latent
-arms of Section~\ref{sec:models:adapter} all keep the architecture fixed and
-change only what occupies those channels.
+\paragraph{The Paired Comparison: AF Against Its Own Frozen Base}
+The adaptation claim is made within the adaptive stack, against the frozen base
+policy that stack was built from, and the matching there is exact rather than
+approximate. The arms share the frozen base policy, the residual architecture,
+the trainable capacity of $53\,836$ parameters, the training budget and the
+seed. Because the head of $g_\psi$ is zero-initialised and $\tanh(0)=0$, every
+arm begins as bit-for-bit the same policy, verified at a maximum absolute
+action difference of $0.0$. The single manipulated variable is whether the
+residual may see the $(\text{state},\, \text{action})$ history it is
+conditioned on.
 
-\paragraph{Only Two of the Three Runs Are Matched}
-The rule above is satisfied by \ppoROM{} and \ppoIDFD, which agree on every
-recorded training field and differ only in the actuator path, so that pair is a
-controlled single-variable comparison and carries the representation claim. It
-is not satisfied by the adaptive run, which differs in three recorded respects:
-seed ($41$ against $17$), actor learning rate ($3\times10^{-6}$ against
-$3\times10^{-4}$) and frozen-actor warm-up ($0$ against $150$ iterations). That
-stack is therefore reported as a third condition rather than a ranked
-competitor, and the deviation is recorded in
-Section~\ref{sec:eval:hypotheses} from the run manifests rather than inferred. The truck-speed schedule of the two reference runs is not
-recorded at all. Only one PPO training run exists per stack, so training variance
-is not estimated and the $33$ evaluation cells measure scenario variation rather
-than optimiser variability. The across-stack result is therefore conditional on
-the selected checkpoints, and causal attribution to the architecture comes from
-the within-checkpoint latent substitutions instead.
+That construction gives the comparison a property the across-stack contrasts
+cannot have: the arms are paired environment by environment, so scenario
+variation is differenced out rather than averaged over, and any separation is
+attributable to online sensing rather than to added parameters, a different
+optimiser trajectory or a different checkpoint. The result is reported on this
+basis in Section~\ref{sec:eval:adaptation}.
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
-Either all three stacks are distilled with identical teacher data and budget and
-then evaluated, or all three receive the same bounded fine-tuning budget, with
-both the distilled and the fine-tuned checkpoints reported. Comparing a
-distilled baseline against a separately optimised adaptive policy and
-attributing the difference to the AAM is not permitted, for the reason
+Comparing a distilled baseline against a separately optimised adaptive policy
+and attributing the difference to adaptation is not permitted, for the reason
 established in Section~\ref{sec:ctrl:finding}: reward ascent moves a policy off
-the acceptance criterion, so an unmatched budget is itself a treatment.
+the acceptance criterion, so an unmatched budget is itself a treatment. The
+paired construction above satisfies this rule by design rather than by
+bookkeeping. The base policy is frozen and identical across the arms, no arm
+receives a fine-tuning budget the others do not, and the only optimisation that
+occurs is of the residual, which every arm trains under the same budget and
+seed. The rule remains stated because it constrains any future stack added to
+this comparison, not because the present one is at risk of violating it.
