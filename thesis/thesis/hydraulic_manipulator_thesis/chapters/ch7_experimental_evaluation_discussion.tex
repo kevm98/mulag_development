@@ -154,12 +154,21 @@ replication. Full-path re-scoring guards against a selection window certifying
 part of an episode, the default covering $\unit[8.9]{m}$ of $\unit[26]{m}$.
 Retrained baselines guard against comparing numbers across collections, whose
 normalisers differ. Per-family resolution guards against a worst-family
-aggregate hiding a threshold artefact. The matched-pair design guards against
-crediting the architecture for what the training run produced, and the
-capacity-matched control against crediting sensing for what extra parameters
-buy. One control remains outstanding: a sham arm, in which the flip schedule
-fires but the load never moves, would separate adaptation from improved
-tracking, and it has not been repeated under the current objective.
+aggregate hiding a threshold artefact. The matched-pair design holds every
+recorded training field equal so that the actuator path is the only declared
+difference, and the capacity-matched control guards against crediting sensing
+for what extra parameters buy.
+
+Two gaps in that scheme are stated here rather than left to be inferred. The
+matched pair holds the manifest equal but not the optimisation: one training run
+represents each architecture, so a difference between R and IF is attributable
+to the actuator path only under the assumption that a second run of either would
+land in the same place, and that assumption is untested. The $33$ cells measure
+variation across terrain and trajectory, not across training. Every comparative
+statement in this chapter should be read with that scope. Second, a sham arm, in
+which the flip schedule fires but the load never moves, would separate
+adaptation from improved tracking; it has not been repeated under the current
+objective (Section~\ref{sec:eval:adaptation-limits}).
 
 
 \subsection{What the Three Stacks Can and Cannot Be Compared For}
