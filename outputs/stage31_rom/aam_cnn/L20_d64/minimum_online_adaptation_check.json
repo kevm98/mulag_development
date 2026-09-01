@@ -1,0 +1,109 @@
+{
+  "format": "minimum_online_adaptation_check_v1",
+  "status": "PASS",
+  "protocol": {
+    "aam_feature_dim": 18,
+    "aam_history_lag": 20,
+    "control_rate_hz": 60.0,
+    "aam_update_rate_hz": 20.0,
+    "smoother": "past-only rolling-5",
+    "valve_command_in_aam_input": false,
+    "device": "cpu",
+    "num_envs": 2,
+    "ticks": 72
+  },
+  "checks": {
+    "causal_trace_parity": {
+      "pass": true,
+      "max_abs_error": 0.0,
+      "tolerance": 1e-06
+    },
+    "no_future_influence": {
+      "pass": true,
+      "cutoff_index": 14,
+      "prefix_max_abs_error": 0.0
+    },
+    "warmup": {
+      "pass": true,
+      "history_lag_rows": 20,
+      "update_period_control_ticks": 3,
+      "first_ready_index_zero_based": 20
+    },
+    "50ms_sample_grid": {
+      "pass": true,
+      "sampled_rows": 24,
+      "first_ready_control_index_zero_based": 57,
+      "expected_first_ready_control_index_zero_based": 57,
+      "skipped_rows_do_not_advance_history": true
+    },
+    "reset_isolation": {
+      "pass": true,
+      "reset_env_ids": [
+        0
+      ]
+    },
+    "online_adaptation_active": {
+      "pass": true,
+      "aam_updates": 36,
+      "max_abs_z_hat": 1.45516836643219,
+      "max_abs_residual_before_fault_test": 0.11250000447034836
+    },
+    "bounded_residual": {
+      "pass": true,
+      "residual_scale": 0.75,
+      "max_abs_residual": 0.11250000447034836,
+      "max_abs_bound": 0.11250000447034836
+    },
+    "invalid_input_fallback": {
+      "pass": true
+    },
+    "latency": {
+      "pass": true,
+      "max_inference_latency_ms": 0.968206994002685,
+      "configured_limit_ms": 50.0,
+      "wall_time_ms": 64.8621910077054
+    }
+  },
+  "runtime_diagnostics": {
+    "enabled": true,
+    "history_lag": 20,
+    "aam_architecture": "cnn",
+    "update_period_control_ticks": 3,
+    "nominal_update_rate_hz": 20.0,
+    "input_grid": "50 ms model ticks when sample_mask is supplied",
+    "warmup_rows": 20,
+    "smoother": "causal_rolling_mean",
+    "smoother_window_predictions": 5,
+    "ready_envs": 0,
+    "fallback_envs": 2,
+    "aam_update_count": 36,
+    "fallback_count": 2,
+    "invalid_input_count": 0,
+    "reset_count": 0,
+    "last_latency_ms": 0.6812020001234487,
+    "max_latency_ms_observed": 0.968206994002685,
+    "residual_bound": [
+      [
+        0.11250000447034836,
+        0.11250000447034836,
+        0.11250000447034836,
+        0.11250000447034836
+      ]
+    ],
+    "command_limits": [
+      [
+        0.949999988079071,
+        0.949999988079071,
+        0.800000011920929,
+        0.800000011920929
+      ]
+    ],
+    "residual_scale": 0.75,
+    "latent_mode": "estimated"
+  },
+  "artifacts": {
+    "outputs/stage31_rom/aam_cnn/L20_d64/aam.pt": "cd6a7f0b118b96c7ce66b889b9b3e422c9c412ed59d721a86ee6ebb899dcba84",
+    "outputs/stage31_rom/aam_cnn/L20_d64/metrics.json": "42ffcafc9711726aa99e2122929c2a55db52250927ea8b27e8cc84ba35eaa9c7",
+    "outputs/stage31_rom/id_adapter/zhat_adapter.pt": "ff2deb75b14bd243ec74b373848491a252b6e0f6ec5046f8218b7f1365a39e0b"
+  }
+}

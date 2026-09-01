@@ -1,0 +1,210 @@
+{
+  "stage": "27",
+  "gate": "SD_0 vs SD_z(z_true) vs SD_z(z_hat) H20 hold-start; z_hat must retain a useful, statistically supported part of the true-latent advantage without privileged input",
+  "pass": false,
+  "verified_at": "2026-08-16T06:46:00.824940+00:00",
+  "horizon_ticks": 20,
+  "q_rollout": "hold-start",
+  "splits": {
+    "pooled_n_runs": 36,
+    "val_n_runs": 20,
+    "test_n_runs": 16
+  },
+  "checks": {
+    "ztrue_beats_none_pooled": false,
+    "ztrue_beats_none_test": false,
+    "zhat_beats_none_pooled": false,
+    "zhat_not_worse_than_true_pooled": true,
+    "retention_positive_both_channels": true
+  },
+  "test_split_diagnostics": {
+    "zhat_beats_none_test_extension": false,
+    "zhat_beats_none_test_velocity": false,
+    "note": "reserved test split has 16 runs; test per-channel CIs are wider than pooled and are reported as diagnostics only"
+  },
+  "paired": {
+    "ztrue_vs_none": {
+      "pooled": {
+        "extension": {
+          "mean_diff_true_minus_control": 5.23072552288927e-05,
+          "bootstrap_95ci": [
+            -3.644758368425591e-05,
+            0.00014441797153662918
+          ],
+          "n_runs": 36
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.0002448983259357703,
+          "bootstrap_95ci": [
+            -0.0007127954539131417,
+            0.00023503995662437535
+          ],
+          "n_runs": 36
+        },
+        "dP": {
+          "mean_diff_true_minus_control": 174549.6056596509,
+          "bootstrap_95ci": [
+            20669.034504603926,
+            330051.70531270775
+          ],
+          "n_runs": 36
+        },
+        "all": {
+          "mean_diff_true_minus_control": 100776.26181454229,
+          "bootstrap_95ci": [
+            11933.27263512249,
+            190555.4409087867
+          ],
+          "n_runs": 36
+        }
+      },
+      "test": {
+        "extension": {
+          "mean_diff_true_minus_control": 8.763942733779333e-05,
+          "bootstrap_95ci": [
+            -5.954823954713856e-05,
+            0.0002473905416061768
+          ],
+          "n_runs": 16
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.00030254939883528483,
+          "bootstrap_95ci": [
+            -0.0010873552669742193,
+            0.00042396540924066826
+          ],
+          "n_runs": 16
+        },
+        "dP": {
+          "mean_diff_true_minus_control": 138755.78261035882,
+          "bootstrap_95ci": [
+            -69789.36141122768,
+            347728.549513783
+          ],
+          "n_runs": 16
+        },
+        "all": {
+          "mean_diff_true_minus_control": 80110.68844170765,
+          "bootstrap_95ci": [
+            -40292.9065973444,
+            200761.1716667005
+          ],
+          "n_runs": 16
+        }
+      }
+    },
+    "zhat_vs_none": {
+      "pooled": {
+        "extension": {
+          "mean_diff_true_minus_control": 2.964681574515163e-05,
+          "bootstrap_95ci": [
+            -5.5263846473241655e-05,
+            0.00011812906409115952
+          ],
+          "n_runs": 36
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.0003031064761441399,
+          "bootstrap_95ci": [
+            -0.0007793030142283811,
+            0.00018061326775335008
+          ],
+          "n_runs": 36
+        },
+        "dP": {
+          "mean_diff_true_minus_control": 200820.52555123417,
+          "bootstrap_95ci": [
+            58803.81492461651,
+            342170.1070105181
+          ],
+          "n_runs": 36
+        },
+        "all": {
+          "mean_diff_true_minus_control": 115943.78448580707,
+          "bootstrap_95ci": [
+            33950.398376104305,
+            197552.00339116552
+          ],
+          "n_runs": 36
+        }
+      },
+      "test": {
+        "extension": {
+          "mean_diff_true_minus_control": 5.1130644389579274e-05,
+          "bootstrap_95ci": [
+            -6.970756029767383e-05,
+            0.0001808825766267875
+          ],
+          "n_runs": 16
+        },
+        "velocity": {
+          "mean_diff_true_minus_control": -0.00042541246545886016,
+          "bootstrap_95ci": [
+            -0.001246905416942786,
+            0.00030131312072074096
+          ],
+          "n_runs": 16
+        },
+        "dP": {
+          "mean_diff_true_minus_control": 120794.29788687502,
+          "bootstrap_95ci": [
+            -46075.36744496056,
+            282598.81114363257
+          ],
+          "n_runs": 16
+        },
+        "all": {
+          "mean_diff_true_minus_control": 69740.6204015591,
+          "bootstrap_95ci": [
+            -26601.625797358778,
+            163158.4996864445
+          ],
+          "n_runs": 16
+        }
+      }
+    },
+    "zhat_vs_true_pooled": {
+      "extension": {
+        "mean_diff_true_minus_control": -2.2660439483741066e-05,
+        "bootstrap_95ci": [
+          -5.616973562835695e-05,
+          6.733352770954335e-06
+        ],
+        "n_runs": 36
+      },
+      "velocity": {
+        "mean_diff_true_minus_control": -5.8208150208369556e-05,
+        "bootstrap_95ci": [
+          -0.00013995084494067717,
+          2.1859382717514325e-05
+        ],
+        "n_runs": 36
+      },
+      "dP": {
+        "mean_diff_true_minus_control": 26270.919891583268,
+        "bootstrap_95ci": [
+          -24615.863872636703,
+          78642.10174809759
+        ],
+        "n_runs": 36
+      },
+      "all": {
+        "mean_diff_true_minus_control": 15167.522671264784,
+        "bootstrap_95ci": [
+          -14211.975633201911,
+          45404.03861390229
+        ],
+        "n_runs": 36
+      }
+    }
+  },
+  "retention_fraction_of_true_advantage": {
+    "extension": 0.5667820958186268,
+    "velocity": 1.2376829240704401
+  },
+  "sources": {
+    "gate_rollout": "/home/rrlab/rrlab_mulag/outputs/stage31_rom/aam_cnn/L20_d64/rollout_gate.json",
+    "none_rollout": "/home/rrlab/rrlab_mulag/outputs/stage31_rom/sd_none/rollout_hold-start.json",
+    "none_mode": "zero"
+  }
+}
