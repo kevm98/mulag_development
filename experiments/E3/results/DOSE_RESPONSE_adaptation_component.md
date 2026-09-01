@@ -78,7 +78,54 @@ of the mid-episode plant change.**
 Non-monotone, two of four non-significant, one significantly negative. The
 cut-height benefit is attributable to improved tracking, not to adaptation.
 
-## Supported claim
+
+## CORRECTION 2026-09-01 18:10 UTC — what the dose axis actually varies
+
+The claim below originally read that 31% of the lateral gain at 3.0x is
+"attributable to the plant change", i.e. to online adaptation. **That overstates
+what this design isolates, and the overstatement is corrected here.**
+
+Checked against the artefacts, the per-environment STARTING mass at each dose is:
+
+| dose | `deployment_mass_bimodal` | per-env starting mass |
+|---|---|---|
+| 1.0 | [1.0, 1.0] | {1.0x: 176} |
+| 1.5 | [1.0, 1.5] | {1.0x: 88, 1.5x: 88} |
+| 2.0 | [1.0, 2.0] | {1.0x: 88, 2.0x: 88} |
+| 2.5 | [1.0, 2.5] | {1.0x: 88, 2.5x: 88} |
+| 3.0 | [1.0, 3.0] | {1.0x: 88, 3.0x: 88} |
+
+**Raising the dose therefore makes half the fleet heavier from t = 0**, as well as
+making the mid-episode change larger. The two are varied together and cannot be
+separated by this experiment.
+
+So the measured, significant, monotone effect is real, but its correct reading is:
+
+> **the residual's advantage grows with cutter mass** — +3.796, +3.912, +4.073,
+> +7.410 mm of lateral gain in excess of the 1.0x condition, every CI excluding
+> zero —
+
+which **includes, but does not isolate**, adaptation to the mid-episode change. A
+static-mass benefit produces the same curve.
+
+### Isolating the mid-episode component needs a different plant
+
+Every environment must start at the same mass and all must step together, so the
+pre-step window is a common baseline. Two attempts on 2026-09-01 failed and were
+discarded rather than reported:
+
+1. `MULAG_MASS_BIMODAL=1.0,3.0` — confounded: half the fleet starts at 3.0x, so
+   there is no common pre-step baseline. The difference-in-differences computed on
+   it was void and was discarded.
+2. `MULAG_MASS_BIMODAL=1.0,1.0` with `MULAG_MASS_STEP_SCALE=3.0` — inert: both
+   modes are 1.0 so the bimodal path overrides the step scale and the mass never
+   moves. Verified from the trace (`mass_scale_mean` = 1.00 throughout).
+
+The third configuration omits `MULAG_MASS_BIMODAL` entirely so
+`deployment_mass_step_scale` applies uniformly to every environment. Its result is
+reported wherever it lands, including a null.
+
+## Supported claim (superseded by the correction above)
 
 > A history-conditioned residual on a frozen base delivers a large
 > dose-independent improvement in tracking, **plus a statistically significant,
