@@ -8,7 +8,7 @@
 \chapter{System Fundamentals and Problem Formulation}
 \label{chap:system}
 
-Chapter~\ref{chap:fundamentals} established the control and modeling concepts
+Chapter~\ref{chap:fundamentals} established the control and modelling concepts
 used in this thesis. This chapter converts that background into a fixed system
 definition for the remaining work. It specifies the physical mechanism,
 coordinate mappings, available measurements, actuator models, task geometry,
@@ -184,7 +184,7 @@ Table~\ref{tab:sys:signals} lists the signals and their availability.
     \toprule
     Signal & Dimension & Availability & Meaning \\
     \midrule
-    $\bm{u}$ & $[-1,1]^4$ & S, M & normalized proportional-valve commands \\
+    $\bm{u}$ & $[-1,1]^4$ & S, M & normalised proportional-valve commands \\
     $\bm{x},\, \dot{\bm{x}}$ & $\mathbb{R}^4$ & S, I & cylinder extensions and velocities \\
     $\Delta\bm{p}$ & $\mathbb{R}^4$ & S, M & chamber pressure differences \\
     $\bm{F}$ & $\mathbb{R}^4$ & S & logged rod forces \\
@@ -192,7 +192,7 @@ Table~\ref{tab:sys:signals} lists the signals and their availability.
     $\bm{p}_c$ & $\mathbb{R}^3$ & S, I & cutter-tip position, truck frame \\
     $\bm{h}$ & $\mathbb{R}^{9}$ & I & forward terrain-height profile ahead of the cutter \\
     $\bm{c} = [\Delta\bm{x}^*, \Delta\dot{\bm{x}}^*]$ & $\mathbb{R}^8$ & I & desired cylinder command \\
-    $\factorvec$ & $\mathbb{R}^6$ & P & physical randomization factors of the active plant \\
+    $\factorvec$ & $\mathbb{R}^6$ & P & physical randomisation factors of the active plant \\
     $\latent = \mu(\factorvec)$ & $\mathbb{R}^{d_z}$ & P & privileged dynamics latent, $d_z = 2$ \\
     $\latenthat$ & $\mathbb{R}^{d_z}$ & M & AAM estimate of $\latent$ from observable history \\
     \bottomrule
@@ -506,7 +506,7 @@ The model represents one machine and omits thermal dynamics. The logged
 rod-force channel is not carried into the learned actuator models: force is
 generated internally by the PhysX plant at deployment, and the logged channel
 also fails the piston-area consistency audit (Section~\ref{sec:models:rom}). Chapter~\ref{chap:data} introduces variation
-through parameter randomization.
+through parameter randomisation.
 
 \section{IsaacLab Environment}
 \label{sec:sys:isaaclab}
@@ -514,7 +514,7 @@ through parameter randomization.
 Policy training, adaptation-data collection, and evaluation run in
 IsaacLab~\cite{mittal2023orbit} on PhysX. The USD articulation contains the
 Unimog carrier, five arm links, and four prismatic cylinder joints. Learned
-actuator models supply the hydraulic behavior between the controller and PhysX
+actuator models supply the hydraulic behaviour between the controller and PhysX
 cylinder targets.
 
 \subsection{Simulation and Control Rates}
@@ -563,7 +563,7 @@ a speed sampled from $2$ to $\unit[7]{km/h}$; development uses
 $\unit[4]{km/h}$. Episodes allow $2808$ steps ($\unit[46.8]{s}$), while scoring
 stops when the strip is completed. The arm must keep the cutter at the target
 height, on the verge centre line, in contact with the ground, and within its
-travel limits. Terrain height is randomized per environment
+travel limits. Terrain height is randomised per environment
 (Figure~\ref{fig:sys:verge-task-render}).
 
 \begin{figure}[htbp]
@@ -572,7 +572,7 @@ travel limits. Terrain height is randomized per environment
   \caption{IsaacLab realization of the moving verge-following task. The
   scripted truck travels on the level road while the four-cylinder arm places
   the cutter above the procedurally generated verge and follows the white
-  reference path. Randomized grass, bushes, soil patches, twigs, and logs form
+  reference path. Randomised grass, bushes, soil patches, twigs, and logs form
   a non-colliding visual layer; the underlying verge mesh supplies the terrain
   disturbance and height-sensing geometry used by the controller.}
   \label{fig:sys:verge-task-render}
@@ -678,7 +678,7 @@ differs is only the space in which the request is bounded.
 \end{figure}
 
 The vehicle advances at the scripted speed and the reference generator supplies
-the verge centre line and cut height. The policy maps normalized observations to
+the verge centre line and cut height. The policy maps normalised observations to
 four bounded actions and has no runtime baseline controller. In R and IF those
 actions are desired cylinder increments and the action contract bounds them as
 such; R uses the command ROM and IF the frozen inverse/forward pair to realise
@@ -705,7 +705,7 @@ $\bm{p}_c(t)$ and terrain height $g(\cdot)$, the scored errors are
 The objective is to minimize the mean and tail of both errors across path
 families and terrain while maintaining contact, head alignment, and smooth
 motion. Learned models are evaluated on one-step and recursive cylinder
-predictions. The stacks are tested across the randomized plant family. R and IF are compared
+predictions. The stacks are tested across the randomised plant family. R and IF are compared
 with each other on held-out factors, and AF is compared with its own frozen base
 under a plant change, for the reasons given in
 Section~\ref{sec:ctrl:matching}.
@@ -745,7 +745,7 @@ stack as accepted, and no claim of certified acceptance is made anywhere in
 this work.
 
 All controller stacks are evaluated with the same path, terrain, and
-randomization conditions. A candidate is preferred when it satisfies more of
+randomisation conditions. A candidate is preferred when it satisfies more of
 the gates at a wider margin; strong mean tracking does not compensate for loss
 of contact, inadequate cylinder headroom, excessive impacts, or safety
 terminations. Worst-case

@@ -20,9 +20,9 @@ Section~\ref{sec:fund:conventional-control} reviews how conventional
 model-based control deals with hydraulic uncertainty. The remaining sections cover the learning methods this work builds on.
 Section~\ref{sec:fund:learned-dynamics} treats data-driven dynamics models and
 the pitfalls of identifying them from closed-loop data.
-Section~\ref{sec:fund:rom} covers reduced-order and grey-box modeling,
-Section~\ref{sec:fund:domain-randomization} domain randomization and latent
-adaptation, and Section~\ref{sec:fund:rl-residual} policy optimization with
+Section~\ref{sec:fund:rom} covers reduced-order and grey-box modelling,
+Section~\ref{sec:fund:domain-randomization} domain randomisation and latent
+adaptation, and Section~\ref{sec:fund:rl-residual} policy optimisation with
 structured priors.
 Section~\ref{sec:fund:gap} then states the gap that remains and how the
 three control stacks of this thesis (\ppoROM, \ppoIDFD, and
@@ -82,17 +82,17 @@ are mixed into cutter error.
 
 The component-level Simscape plant~\cite{mathworks2024simscape} resolves the
 stiff hydraulic dynamics but runs one machine at small integration steps.
-Policy optimization instead benefits from thousands of GPU-parallel
+Policy optimisation instead benefits from thousands of GPU-parallel
 plants~\cite{makoviychuk2021isaac}. The detailed model is therefore used
 offline to generate identification data; compact actuator models carry its
-behavior into parallel training, as summarized in
+behaviour into parallel training, as summarised in
 Figure~\ref{fig:fund:simtosim}.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch2/fund_sim_to_sim}
   \caption{Simscape supplies high-fidelity hydraulic data; compact actuator
-  models transfer that behavior to GPU-parallel training in IsaacLab. Product
+  models transfer that behaviour to GPU-parallel training in IsaacLab. Product
   images: MathWorks and NVIDIA.}
   \label{fig:fund:simtosim}
 \end{figure}
@@ -173,10 +173,10 @@ Chapter~\ref{chap:data} therefore uses open-loop valve excitation, and every
 learned model is checked with zeroed and shuffled commands. Prediction score
 alone is not treated as evidence of control authority.
 
-\section{Reduced-Order Modeling}
+\section{Reduced-Order Modelling}
 \label{sec:fund:rom}
 
-Reduced-order models retain dominant behavior at lower cost
+Reduced-order models retain dominant behaviour at lower cost
 \cite{benner2015survey}. Here the full Simscape plant is reduced to
 per-cylinder extension, velocity and pressure difference. The construction is
 grey-box: known structure is embedded so that data fits what remains unknown
@@ -203,13 +203,13 @@ rigid-body mechanics (Figure~\ref{fig:fund:workflow}).
   \label{fig:fund:workflow}
 \end{figure}
 
-\section{Domain Randomization and Latent Adaptation}
+\section{Domain Randomisation and Latent Adaptation}
 \label{sec:fund:domain-randomization}
 
-\subsection{Robustness Through Randomized Training}
+\subsection{Robustness Through Randomised Training}
 
 A model trained on one simulated plant inherits its parameters as assumptions.
-Domain randomization instead trains across a family, first for visual
+Domain randomisation instead trains across a family, first for visual
 appearance~\cite{tobin2017domain} and then for dynamics such as mass,
 friction, gain and latency~\cite{peng2018sim}. The hydraulic family in
 Chapter~\ref{chap:data} varies bulk modulus, valve gain, leakage, friction and
@@ -227,7 +227,7 @@ response on the current plant.
   \centering
   \input{images/ch2/fund_robust_adaptive}
   \caption{Comparison of robust training and latent adaptation. Robust
-  training applies one fixed response across the randomized plant family. The
+  training applies one fixed response across the randomised plant family. The
   adaptive stack uses privileged factors only to supervise training; during
   deployment, the AAM infers context from observable history and conditions
   the downstream response.}
@@ -247,7 +247,7 @@ The adaptation module in Chapter~\ref{chap:models} encodes one second of
 causal observable history. In \ppoAAMFD, that encoding conditions a bounded
 residual on the valve command the policy itself emits, while the base policy
 remains frozen; it does not condition the ROM, the forward model or the PhysX
-plant. The experiments keep two distinctions explicit: randomized training is
+plant. The experiments keep two distinctions explicit: randomised training is
 robust but not automatically adaptive, and an informative privileged latent
 does not prove that an inferred one improves closed-loop control. The second
 distinction is not rhetorical here, since the privileged-context route was
@@ -257,9 +257,9 @@ not.
 \section{Reinforcement Learning and Structured Priors}
 \label{sec:fund:rl-residual}
 
-\subsection{Policy Optimization}
+\subsection{Policy Optimisation}
 
-Reinforcement learning optimizes a policy from observations to actions for
+Reinforcement learning optimises a policy from observations to actions for
 expected cumulative reward~\cite{sutton2018reinforcement}. This thesis uses
 PPO~\cite{schulman2017proximal} with generalized advantage estimation
 ~\cite{schulman2016gae}; Section~\ref{sec:ctrl:optimization} gives the exact
@@ -305,7 +305,7 @@ tracking \cite{egli2020towards} and general automation
 commercial material handlers with underactuated tools. Maitan et
 al. \cite{maitan2026contraction} learned force control on a physical cylinder,
 using a contraction-metric filter to bound exploration. These studies establish
-scale and feasibility, but do not combine a randomized plant family, online
+scale and feasibility, but do not combine a randomised plant family, online
 actuator adaptation, a privileged kinematic teacher and a matched comparison of
 actuator representations.
 
@@ -322,7 +322,7 @@ provides structure but requires maintained plant models; learned dynamics
 replace derivation with data but depend on identifiable excitation; actuator
 surrogates and latent adaptation are established mainly for electric legged
 robots; and hydraulic RL studies do not isolate actuator representation under
-a matched protocol. Table~\ref{tab:fund:positioning} summarizes this position.
+a matched protocol. Table~\ref{tab:fund:positioning} summarises this position.
 
 The five criteria are: (I) learned hydraulic actuation, (II) data audited for
 causal input identifiability, (III) online latent adaptation, (IV) a structured

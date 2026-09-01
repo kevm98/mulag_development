@@ -149,7 +149,7 @@ controller that closes quickly on the task error simply excites it.
 One implementation detail determines whether distillation converges to
 something usable. The teacher's output $\Delta\bm{x}^{*}$ is a desired cylinder
 target, and it is \emph{not} written to PhysX directly. It is converted into the
-same normalized four-value action the student emits and pushed through the
+same normalised four-value action the student emits and pushed through the
 student's entire action chain and into the same plant
 (Section~\ref{sec:ctrl:ppo}), so every label the student is asked to imitate is
 by construction an action the student can produce. A teacher writing targets
@@ -204,10 +204,10 @@ itself cannot pass, which carries no information about the policy.
 \subsection{Policy Definition}
 
 The deployed controller is a memoryless Gaussian multilayer perceptron. It maps
-a $66$-value observation to four normalized actions, one desired motion command
+a $66$-value observation to four normalised actions, one desired motion command
 per hydraulic cylinder, and that is the entire control law. Actor and critic
 are separate networks with hidden widths $256$--$128$--$64$ and ELU
-activations, over empirically normalized observations. This description is of
+activations, over empirically normalised observations. This description is of
 the base policy, and it is shared by all three stacks: the actor width is the
 same $66$ in each, and \ppoAAMFD{} deploys this network frozen and unmodified
 rather than a widened variant of it. Two things differ for \ppoAAMFD{} and are
@@ -252,7 +252,7 @@ actuator interface, ten of pose and context, and twelve of model error.
 The last group uses twelve of the sixty-six channels, so its role needs to be
 explicit. These channels describe the actuator rather than the task.
 Those channels carry the actuator's standing error: the cylinder tracking
-residual, the actuator prediction residual, and the normalized cylinder effort.
+residual, the actuator prediction residual, and the normalised cylinder effort.
 They exist as a direct consequence of the policy being memoryless. Forming an
 error requires differencing position across two steps and comparing against a
 prediction issued on the previous step, and a feedforward network can construct
@@ -436,7 +436,7 @@ offset'' forbids. Removing it produced the first training block in a full
 session that did not degrade, improving the held-out score from $1.2058$ to
 $0.3678$. The \emph{head barrier} was replaced, because in its earlier form the
 head group dwarfed lateral tracking and line following could never compete for
-the optimizer's attention. And the \emph{clearance barrier} was disabled, since
+the optimiser's attention. And the \emph{clearance barrier} was disabled, since
 measured contact, cylinder headroom and cut-height error proved more reliable
 signals of the same condition.
 
@@ -449,7 +449,7 @@ criterion and the reward's role is only to keep a gradient against gross
 excursions. The action-rate term is held mild for a related reason:
 cylinder~4 owns head pitch, so a rate tax falls hardest on the fast corrections
 that keep the head down as boom attitude shifts, and under a heavier tax the
-optimizer chose head drift over paying it.
+optimiser chose head drift over paying it.
 
 Every term is logged individually and by name during training. The earlier stack
 logged an aggregate and a partial subset, with the two largest lateral terms not
@@ -461,10 +461,10 @@ eight physical gates of Section~\ref{sec:sys:evaluation-criteria}, and a policy
 may raise total reward while failing the thing the reward was written to
 encourage.
 
-\subsection{Optimization}
+\subsection{Optimisation}
 \label{sec:ctrl:optimization}
 
-Policies are optimized with clipped-surrogate PPO over generalized advantage
+Policies are optimised with clipped-surrogate PPO over generalized advantage
 estimation, in the form of Section~\ref{sec:fund:rl-residual}. The maintained
 configuration uses clip parameter $\epsilon = 0.2$, discount $\gamma = 0.99$,
 GAE parameter $\lambda = 0.95$, five learning epochs over four minibatches per
@@ -481,7 +481,7 @@ adaptive learning-rate schedule: clip $\epsilon = 0.1$, discount
 $\gamma = 0.97$, three learning epochs, fixed learning rates of $10^{-5}$ for
 the actor and $10^{-4}$ for the critic, entropy coefficient $0.001$, an
 exploration standard deviation fixed at $0.15$ and excluded from the gradient,
-and frozen observation normalizers.
+and frozen observation normalisers.
 
 Three of those departures are structural rather than tuning. The discount is
 reduced because the episode is long in simulation steps but locally controlled,
@@ -548,7 +548,7 @@ reward rose. And the primary tracking objective degraded, in the worst case by
 a factor of $12.9$.
 
 The mechanism follows from placing the reward and the gates side by side. The reward pays for ground contact and cut height as well as lateral
-tracking, and the optimizer discovers that it can buy the first two by spending
+tracking, and the optimiser discovers that it can buy the first two by spending
 the third. That trade increases total reward and moves the policy away from the gate that decides acceptance. The reward's optimum is simply not where
 the tracking gate is. Four earlier fine-tuning campaigns on a related
 configuration failed the same way in a different currency: every block degraded
@@ -556,7 +556,7 @@ head alignment, with p01 falling from $0.9854$ to the $0.48$--$0.78$ range while
 safety terminations rose from $1.3\,\%$ to $3.6$--$7.7\,\%$.
 
 This is a claim about two functionals over the same policy space rather
-than about the optimizer. Training maximizes the expected return
+than about the optimiser. Training maximizes the expected return
 $J(\vartheta)$, while acceptance is decided by the vector of physical gates
 $\bm{G}(\vartheta) \preceq \bm{g}^{\star}$ of
 Section~\ref{sec:sys:evaluation-criteria}. Writing
@@ -572,7 +572,7 @@ feasible set, the measured content of the finding is
 %
 Distillation lands inside $\mathcal{F}$ because the teacher was constructed to
 satisfy the gates, not to maximize $J$. Unconstrained ascent on $J$ from that
-point therefore leaves $\mathcal{F}$ by construction. This is the optimizer
+point therefore leaves $\mathcal{F}$ by construction. This is the optimiser
 working correctly on the wrong functional, and it is why the remedy is a
 constraint on the ascent rather than a repair of the reward.
 
@@ -588,12 +588,12 @@ success.
 
 The general form of the result applies beyond this machine. When a competent
 teacher exists and the acceptance criterion is not the reward, reward-based
-fine-tuning is not automatically an improvement step: PPO optimizes the written
+fine-tuning is not automatically an improvement step: PPO optimises the written
 objective, that objective is a proxy, and the teacher was constructed to do the
-task. Distillation transfers the intent; PPO then optimizes the proxy, and here
+task. Distillation transfers the intent; PPO then optimises the proxy, and here
 the two point in measurably different directions. Since that divergence grows
 with distance travelled from a policy where proxy and intent were measured to
-agree, the remedy is not to abandon reward optimization but to bound the
+agree, the remedy is not to abandon reward optimisation but to bound the
 distance explicitly, which is the subject of the next section.
 
 \section{Reference-Anchored PPO}
@@ -624,10 +624,10 @@ A resumed checkpoint carries an actor $\vartheta$ and a critic $\psi$. After
 distillation the actor already behaves sensibly, but the critic has never been
 fitted to the long terrain return, so the first PPO updates would move a useful
 actor using a value estimate that is not yet meaningful. The actor is therefore
-frozen for $150$ iterations while only the value loss is optimized, under the
+frozen for $150$ iterations while only the value loss is optimised, under the
 asserted invariant $\vartheta_{\text{after}} = \vartheta_{\text{before}}$. The
-observation normalizers are frozen at the same point: without that, the same
-raw observation is normalized differently from one iteration to the next, and
+observation normalisers are frozen at the same point: without that, the same
+raw observation is normalised differently from one iteration to the next, and
 the actor's behaviour changes while its weights do not.
 
 \subsection{The Reference Anchor}
@@ -709,10 +709,10 @@ sequence of updates each individually satisfying $D_{\mathrm{update}}$ can
 still walk arbitrarily far from feasibility, and that is the trajectory the earlier campaigns took, monotonically, with the reward rising the whole
 way. Only a constraint referred to a fixed feasible point can observe it.
 
-Enforcement is in two stages. During minibatch optimization the epoch is
+Enforcement is in two stages. During minibatch optimisation the epoch is
 early-stopped as soon as $D_{\mathrm{update}}$ exceeds its bound. After the
 update both divergences are recomputed over the full rollout. If either bound
-fails, or any quantity is non-finite, the actor and its optimizer state are
+fails, or any quantity is non-finite, the actor and its optimiser state are
 restored \emph{atomically}. On a divergence rejection the critic fit is
 retained when finite, since the bounds constrain the policy and not the value
 function, and rewinding valid critic fits computed on the same on-policy
@@ -737,7 +737,7 @@ checkpoint is scored and passes the gates, it is promoted to reference,
   B_{\delta_{\mathrm{ref}}}\bigl(\vartheta_{\mathrm{ref}}^{(m)}\bigr),
 \end{equation}
 %
-and the actor's optimizer moments are reset, because momentum accumulated
+and the actor's optimiser moments are reset, because momentum accumulated
 relative to the old anchor is not meaningful relative to the new one. The
 critic's are retained: it is fitting the same return, and its calibration is
 expensive to rebuild.
@@ -746,12 +746,12 @@ This is the structural point of the construction. The policy is at all times
 within a bounded divergence of a checkpoint that has been verified against
 $\bm{G}$, and the anchor advances only through verified checkpoints. The
 acceptance criterion therefore enters the training loop instead of appearing
-only at the end. The optimizer still ascends the proxy. It simply can never
+only at the end. The optimiser still ascends the proxy. It simply can never
 travel far from the last point at which proxy and intent were measured to
 agree. In this construction distillation is no longer the endpoint: it is
 $\vartheta_{\mathrm{ref}}^{(0)}$.
 
-Algorithm~\ref{alg:ctrl:anchored} summarizes the procedure in five stages.
+Algorithm~\ref{alg:ctrl:anchored} summarises the procedure in five stages.
 The first two produce the initial verified anchor. Stages~3 and~4 repeat for
 each PPO block, and Stage~5 returns the last promoted checkpoint.
 
@@ -773,7 +773,7 @@ each PPO block, and Stage~5 returns the last promoted checkpoint.
   remove $\pi_T$ from the controller
     \tcp*{all later rollouts are teacher-free}
   \tcp{\textbf{Stage 2 -- Warm the critic and set the first anchor}}
-  freeze $\vartheta$ and the observation normalizers\;
+  freeze $\vartheta$ and the observation normalisers\;
   \For{$j\leftarrow1$ \KwTo $150$}{
     roll out $\pi_{\vartheta}$ and set
     $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
@@ -788,7 +788,7 @@ each PPO block, and Stage~5 returns the last promoted checkpoint.
     freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
     \For{each PPO iteration in block $m$}{
       collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
-      compute and normalize GAE; save snapshot $\mathcal{S}$;
+      compute and normalise GAE; save snapshot $\mathcal{S}$;
         set $\vartheta_{\mathrm{old}}\leftarrow\vartheta$\;
       \For{$3$ epochs over the rollout minibatches}{
         \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
@@ -802,7 +802,7 @@ each PPO block, and Stage~5 returns the last promoted checkpoint.
       }
       \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{or}
         $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
-        restore the actor and its optimizer moments from $\mathcal{S}$;
+        restore the actor and its optimiser moments from $\mathcal{S}$;
           retain the new critic fit\;
       }
     }
@@ -817,7 +817,7 @@ each PPO block, and Stage~5 returns the last promoted checkpoint.
         selection rule\;
       load $\vartheta\leftarrow\vartheta^{\star}$ and set
         $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
-      reset the actor optimizer moments; retain the critic state\;
+      reset the actor optimiser moments; retain the critic state\;
     }{
       leave $\vartheta_{\mathrm{ref}}$ unchanged; do not promote the block\;
     }

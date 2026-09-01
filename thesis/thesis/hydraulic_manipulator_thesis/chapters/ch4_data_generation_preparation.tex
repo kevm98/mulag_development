@@ -29,7 +29,7 @@ encoder and the adaptation module use two $118$-run collections recorded in the
 deployed command
 ROM--PhysX plant, including dedicated PRBS windows
 (Section~\ref{sec:data:isaaclab}). No earlier adaptation or system-dynamics
-model was reused. Figure~\ref{fig:data:pipeline} summarizes the common
+model was reused. Figure~\ref{fig:data:pipeline} summarises the common
 preparation workflow.
 
 \begin{figure}[p]
@@ -57,7 +57,7 @@ preparation workflow.
     \node[draw=black!60,line width=.7pt,rounded corners=5pt,
       fill=white,minimum width=6.25cm,minimum height=.48cm,
       font=\scriptsize,text=black!75] at (-3.50,-.67)
-      {\textbf{Randomized campaign}\quad $1\,000$ runs $\cdot$ $12$ parameters};
+      {\textbf{Randomised campaign}\quad $1\,000$ runs $\cdot$ $12$ parameters};
 
     \node[source] (closed) at (-5.25,-1.85)
       {\textbf{Closed-loop}\\[-1pt]\footnotesize $1\,040$ runs};
@@ -106,13 +106,13 @@ preparation workflow.
       font=\scriptsize\bfseries,text=rltgreen]
       at ($(audit.south)!.38!(split.north)+(4.0mm,0)$) {PASS};
 
-    \node[process] (normalize) at (0,-10.20)
+    \node[process] (normalise) at (0,-10.20)
       {\textbf{NORMALIZE}\\[-1pt]\footnotesize training statistics only};
     \node[stage] at (-3.25,-10.20) {4};
-    \draw[flow] (split.south) -- (normalize.north);
+    \draw[flow] (split.south) -- (normalise.north);
 
     \coordinate (outbus) at (0,-12.50);
-    \draw[bus] (normalize.south) -- (0,-11.27);
+    \draw[bus] (normalise.south) -- (0,-11.27);
     \draw[bus] (0,-12.02) -- (outbus);
     \draw[line width=.8pt,black!65] (-5.25,-12.50) -- (5.25,-12.50);
     \node[font=\large\bfseries,text=black!80,fill=white,inner sep=2pt]
@@ -134,7 +134,7 @@ preparation workflow.
   \end{tikzpicture}
   \caption{Data-preparation workflow. Two Simscape collections and two
   IsaacLab collections pass through common extraction, audit, run-level
-  splitting and training-statistics normalization stages. The randomized
+  splitting and training-statistics normalisation stages. The randomised
   Simscape campaign is provenance metadata rather than a pipeline stage. A
   failed audit returns the experiment to collection; accepted material forms
   the inverse, forward, ROM and AAM datasets.}
@@ -177,10 +177,10 @@ correlation but is less representative of deployment. The two campaigns are
 therefore retained and combined as described in
 Section~\ref{sec:data:combining}.
 
-\section{Randomized Parameter Space of the Simscape Campaign}
+\section{Randomised Parameter Space of the Simscape Campaign}
 \label{sec:data:randomization}
 
-This section and the next record the Simscape randomization design and the
+This section and the next record the Simscape randomisation design and the
 procedure that executed it. No reported model is trained on this curriculum. It
 is retained as collection provenance and because its compliance analysis
 (Section~\ref{sec:data:compliance}) informed the IsaacLab factor design. The
@@ -200,7 +200,7 @@ parameter table is reproducible and can be audited independently of the
 data it produced.
 
 The batch is organised as a curriculum rather than a single homogeneous
-pool. Run~1 is the untouched nominal plant. Runs 2--251 randomize only
+pool. Run~1 is the untouched nominal plant. Runs 2--251 randomise only
 the hydraulics, runs 252--501 only the mechanics, and runs 502--1000
 both together, giving the composition shown in
 Figure~\ref{fig:data:design}(a). This structure is deliberate: it makes
@@ -213,7 +213,7 @@ uniformly mixed batch would not allow.
   \includegraphics[width=\textwidth]{images/ch4/ch4_dataset_design}
   \caption{Design of the two collection campaigns.
   (a)~Composition of the closed-loop curriculum: one nominal run, then $250$
-  hydraulics-only, $250$ mechanics-only and $499$ fully randomized draws.
+  hydraulics-only, $250$ mechanics-only and $499$ fully randomised draws.
   (b)~Timeline of one open-loop excitation run.}
   \label{fig:data:design}
 \end{figure}
@@ -241,7 +241,7 @@ of them very leaky and yet perfectly fast.
 \subsection{The Compressibility Axis}
 \label{sec:data:compliance}
 
-The entrained-air and dead-volume coordinates randomize the chamber dead
+The entrained-air and dead-volume coordinates randomise the chamber dead
 volume, which spans $505$ to $\unit[579]{mL}$ across the batch. This reaches
 the pressure dynamics through the continuity equation
 \eqref{eq:sys:continuity}, which carries the chamber volume: a larger chamber
@@ -270,7 +270,7 @@ controller cannot anticipate.
 \section{Closed-Loop Data Collection}
 \label{sec:data:closed-loop}
 
-Algorithm~\ref{alg:data:closed-loop} summarizes the procedure that produced
+Algorithm~\ref{alg:data:closed-loop} summarises the procedure that produced
 the curriculum of the preceding section, which no reported result uses. The
 parameter table is fixed before simulation, and each run receives a new
 reference path.
@@ -376,8 +376,8 @@ This provides both input excitation and useful stroke coverage.
 \subsection{Plant Draws and Acceptance}
 
 The same excitation is applied to four plant draws taken from the same
-parameter space as the closed-loop campaign: nominal, randomized
-hydraulics, randomized mechanics, and fully randomized. Holding the
+parameter space as the closed-loop campaign: nominal, randomised
+hydraulics, randomised mechanics, and fully randomised. Holding the
 input fixed and varying only the plant is what makes the four runs
 directly comparable, since any difference in the response is attributable
 to the parameters.
@@ -433,7 +433,7 @@ recomputed from the same file that produced it. Exact alignment, increment
 consistency and the identifiability failure were all checked directly on that
 export rather than assumed from a description of it.
 
-The separate thousand-run randomized curriculum was collected for an earlier
+The separate thousand-run randomised curriculum was collected for an earlier
 adaptation plan. No reported result is trained on or evaluated against it; the
 identifiability chain uses the IsaacLab collection of
 Section~\ref{sec:data:isaaclab}, and the deployed residual is trained
@@ -491,7 +491,7 @@ to be retrained.
 \subsection{The Physical Factor Vector}
 \label{sec:data:factors}
 
-The randomized quantity is a six-dimensional physical factor vector
+The randomised quantity is a six-dimensional physical factor vector
 %
 \begin{equation}
   \label{eq:data:factorvec}
@@ -518,7 +518,7 @@ carried as decoration.
 
 
 One omission is deliberate. Actuation delay is not a
-randomized coordinate. Delay in this system is an \emph{emergent}
+randomised coordinate. Delay in this system is an \emph{emergent}
 property of flow, compliance, and load rather than a free parameter, so
 it is measured as a response property of each run
 (Chapter~\ref{chap:evaluation}) instead of being supplied to any model
@@ -573,7 +573,7 @@ line, coupled-sine, and reach-and-return motion were verified in a pilot
 to give full rank over all four action channels under varied geometry
 and load.
 
-Figure~\ref{fig:data:isaaclab-collection} summarizes the IsaacLab collection
+Figure~\ref{fig:data:isaaclab-collection} summarises the IsaacLab collection
 configuration and its frozen run-level outputs.
 
 \clearpage
@@ -697,7 +697,7 @@ state, generated by the command ROM or frozen forward model
 (Section~\ref{sec:sys:actuation}). The system-dynamics surrogate and AAM may use it
 because it exists inside the deployed loop, but it inherits actuator-model
 error. Causal history is therefore retained to represent pressure transients
-that one sample cannot summarize.
+that one sample cannot summarise.
 
 \section{Feature and Target Construction}
 \label{sec:data:features}
@@ -798,7 +798,7 @@ The residual that carries the adaptation result in \ppoAAMFD{} is not trained
 from the frozen collection above, and the difference is one of kind rather than
 of scale. It has no dataset, no stopped-gradient latent target and no
 run-level splits, because its encoder never regresses a target at all: the
-encoder and the residual head are optimized together under the reinforcement
+encoder and the residual head are optimised together under the reinforcement
 objective, so their training data is the on-policy experience the stack
 generates as it learns.
 
@@ -859,8 +859,8 @@ excitation phase and is dynamically unlike everything before it. That
 split would have measured extrapolation to a different regime and called
 it generalisation.
 
-Normalization statistics are computed on the training split only and
-stored inside each checkpoint, so that a model always normalizes with the
+Normalisation statistics are computed on the training split only and
+stored inside each checkpoint, so that a model always normalises with the
 statistics it was fitted with. Mixing statistics between checkpoints
 silently invalidates any comparison, and the loader enforces the stored
 contract rather than recomputing it.
