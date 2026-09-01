@@ -54,9 +54,32 @@ p.add_argument("--alpha", type=float, default=0.25)
 p.add_argument("--lr", type=float, default=3.0e-4)
 p.add_argument("--seed", type=int, default=17)
 p.add_argument("--stage", type=int, default=4)
+p.add_argument("--lateral_tracking_std_m", type=float, default=None,
+               help="Override the stage-4 lateral reward kernel width (default 0.30 m). "
+                    "At the base operating point (cut 7.96 mm, lateral 61.2 mm) the "
+                    "cut-height reward gradient is 34x the lateral one, so the residual "
+                    "optimises cut height and lets lateral drift -- the source of the "
+                    "seed-dependent trade-offs. A Gaussian's gradient peaks at "
+                    "e=sigma/sqrt(2), i.e. sigma=0.086 m for the measured lateral error.")
+p.add_argument("--lateral_tracking_weight", type=float, default=None,
+               help="Override the lateral reward weight (default 3.0).")
 p.add_argument("--save_interval", type=int, default=25)
 p.add_argument("--log_dir", type=str, default=None)
 p.add_argument("--task", type=str, default="RRLAB-Mulag-Verge-ID-AAM-FD-v0")
+p.add_argument("--plant_history", action="store_true",
+               help="Feed phi ONLY the plant signature -- cylinder extensions "
+                    "(obs 12:16), velocities (16:20) and the action -- instead "
+                    "of the whole observation. 12 features per step rather than "
+                    "70. The full observation is mostly terrain and task state, "
+                    "which a 53k head fits as noise; the commanded-vs-achieved "
+                    "signature is what identifies the plant and is invariant to "
+                    "position on the terrain.")
+p.add_argument("--resume_residual", type=Path, default=None,
+               help="Continue training an existing residual checkpoint. Tests "
+                    "whether a run was UNDERTRAINED rather than unstable: all "
+                    "five seeds were still rising in reward at 400 iterations, "
+                    "so resuming the same runs isolates training length from "
+                    "seed identity, and costs half what retraining would.")
 p.add_argument("--no_history", action="store_true",
                help="Ablation: zero the history, so the residual cannot adapt. "
                     "Isolates 'a residual helps' from 'ONLINE ADAPTATION helps'.")
@@ -81,8 +104,10 @@ from verge_task.residual_adapter import ResidualMLP  # noqa: E402
 class HistoryObservation:
     """Append the flattened (base_obs, prev_action) history to the observation."""
 
+    PLANT_COLS = slice(12, 20)   # cylinder extensions 12:16, velocities 16:20
+
     def __init__(self, inner, *, base_dim, base_width, action_dim, history,
-                 num_envs, device, zero_history=False):
+                 num_envs, device, zero_history=False, plant_only=False):
         self.inner = inner
         self.base_dim = int(base_dim)
         self.base_width = int(base_width)
@@ -90,8 +115,10 @@ class HistoryObservation:
         self.history = int(history)
         self.device = device
         self.zero_history = bool(zero_history)
+        self.plant_only = bool(plant_only)
+        self.feature_dim = (8 + self.action_dim) if self.plant_only else (self.base_dim + self.action_dim)
         self._hist = torch.zeros(
-            (num_envs, self.history, self.base_dim + self.action_dim), device=device)
+            (num_envs, self.history, self.feature_dim), device=device)
         self._prev = torch.zeros((num_envs, self.action_dim), device=device)
 
     def __getattr__(self, name):
@@ -113,7 +140,8 @@ class HistoryObservation:
         # the previous ACTION is not scrubbed anywhere, so one NaN action would
         # poison the whole history window and surface as a NaN observation --
         # which is exactly how the first bimodal run died at iteration 314.
-        step = torch.cat((base_obs[:, : self.base_dim], self._prev), dim=-1)
+        cols = base_obs[:, self.PLANT_COLS] if self.plant_only else base_obs[:, : self.base_dim]
+        step = torch.cat((cols, self._prev), dim=-1)
         step = torch.nan_to_num(step, nan=0.0, posinf=0.0, neginf=0.0)
         self._hist = torch.roll(self._hist, shifts=-1, dims=1)
         self._hist[:, -1, :] = step
@@ -142,10 +170,25 @@ class HistoryObservation:
 def main() -> int:
     env_cfg = parse_env_cfg(a.task, device=a.device, num_envs=a.num_envs)
     apply_c4_authority_stage(env_cfg, int(a.stage))
+    # Reward rebalance. MUST come after the stage curriculum, which assigns
+    # lateral_tracking_std_m per stage and would otherwise overwrite this.
+    if a.lateral_tracking_std_m is not None:
+        env_cfg.lateral_tracking_std_m = float(a.lateral_tracking_std_m)
+    if a.lateral_tracking_weight is not None:
+        env_cfg.lateral_tracking_weight = float(a.lateral_tracking_weight)
+    print(
+        f"[residual] reward kernel: cut w="
+        f"{getattr(env_cfg, 'cut_tracking_weight', 8.0)} sigma="
+        f"{getattr(env_cfg, 'cut_tracking_std_m', 0.03)} | lateral w="
+        f"{getattr(env_cfg, 'lateral_tracking_weight', 3.0)} sigma="
+        f"{getattr(env_cfg, 'lateral_tracking_std_m', 0.30)}",
+        flush=True,
+    )
     base_width = int(env_cfg.observation_space)
     action_dim = int(env_cfg.action_space)
     base_dim = base_width - 4 if base_width in (70, 72) else base_width
-    hist_cols = int(a.history) * (base_dim + action_dim)
+    feat = (8 + action_dim) if a.plant_history else (base_dim + action_dim)
+    hist_cols = int(a.history) * feat
     wide = base_width + hist_cols
     # env_cfg.observation_space MUST stay at base_width: the environment derives
     # its own expected width (`_expected_observation_dim`) and raises if the cfg
@@ -166,7 +209,7 @@ def main() -> int:
     wrapped = HistoryObservation(
         wrapped, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
         history=int(a.history), num_envs=int(a.num_envs), device=a.device,
-        zero_history=bool(a.no_history))
+        zero_history=bool(a.no_history), plant_only=bool(a.plant_history))
 
     log_dir = a.log_dir or str(
         ROOT / "logs/rsl_rl/ppo_id_aam_fd" /
@@ -226,6 +269,18 @@ def main() -> int:
         history=int(a.history), latent_dim=int(a.latent_dim), alpha=float(a.alpha),
     ).to(a.device)
     runner.alg.actor.mlp = residual
+
+    if a.resume_residual:
+        prev = torch.load(a.resume_residual, map_location=a.device, weights_only=False)
+        psd = prev["actor_state_dict"]
+        loaded = {k[len("mlp."):]: v for k, v in psd.items() if k.startswith("mlp.")}
+        missing, unexpected = residual.load_state_dict(loaded, strict=False)
+        trained = [k for k in loaded if not k.startswith("base_mlp.")]
+        if not trained:
+            raise SystemExit(f"{a.resume_residual} carries no residual weights")
+        print(f"[residual] RESUMED {len(trained)} residual tensors from "
+              f"{a.resume_residual}; continuing for {a.iterations} more iterations",
+              flush=True)
 
     from itertools import chain
     runner.alg.optimizer = torch.optim.Adam(
