@@ -972,12 +972,47 @@ clamp, it is applied at the same point in every stack, and it is named for what
 it is: actuator-authority degradation at the deployment interface, not seal, not
 flow, and not any hydraulic parameter.
 
-That axis was subsequently implemented, and it is the $\alpha$ of the plant
-perturbation used in the adaptation experiment of
-Section~\ref{sec:eval:adaptation}, applied there together with a change of load.
-The boundary search itself, sweeping $\alpha$ downwards on each stack until the
-acceptance gates fail, is specified but not run, and it is the most direct
-extension of this chapter.
+That axis was implemented, and it is the $\alpha$ of the plant perturbation
+used in the adaptation experiment of Section~\ref{sec:eval:adaptation}. It was
+also swept downwards on \ppoROM{} until the acceptance gates fail, which is the
+boundary search the deployment factors could not deliver.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_rom_authority}
+  \caption{Actuator authority swept from nominal to zero on \ppoROM{}, three
+  held-out meshes per point. (a)~Ground contact against $\alpha$ on a
+  logarithmic axis, with the open marker at $\alpha = 0$, which no log axis can
+  carry. The stack holds the contact gate down to one per cent of nominal
+  actuator authority. (b)~Lateral error over the same sweep, which does not
+  report the failure: an arm with no authority barely moves, and an arm that
+  barely moves deviates little, so the deviation metrics improve as the stack
+  fails. Contact is the metric that sees it.}
+  \label{fig:eval:rom-authority}
+\end{figure}
+
+The result is a robustness statement of a kind the factor sweep could not make.
+\ppoROM{} holds the ground-contact gate until $\alpha$ reaches $0.01$: the
+actuator has to be reduced to one per cent of its nominal motion before the
+stack fails the contract. Contact is $0.791$ at full authority, still $0.708$ at
+$\alpha = 0.01$, and $0.615$ with the actuator disabled entirely. The curve is
+not monotone, and the non-monotonicity is the interesting part. Contact
+\emph{improves} as authority is first removed, peaking at $0.954$ around
+$\alpha = 0.2$, because the nominal stack is commanding more motion than the
+task needs and a partly starved arm tracks the ground more closely.
+
+That also explains why the deviation metrics are the wrong instrument here.
+Lateral error falls as the stack is starved, from $\unit[111]{mm}$ at nominal to
+$\unit[65]{mm}$ at $\alpha = 0.2$, and only rises again at the very bottom of
+the ladder. An arm with no authority cannot deviate, so a tracking metric
+reports a starved stack as a good one. The pre-registered criterion for this
+sweep is therefore ground contact, and the lateral panel is shown because the
+trap it illustrates is one an ordinary robustness study would fall into.
+
+The sweep was run on \ppoROM{} alone. Repeating it on the inverse/forward stacks
+is the direct extension, and unlike the factor sweep it is now a well-posed
+comparison, because $\alpha$ is applied at the same point and means the same
+thing on all three.
 
 \section{Online Adaptation}
 \label{sec:eval:adaptation}
@@ -1398,15 +1433,28 @@ stacks, on the same plant and aligned on the same event.
 Three properties of these traces bear on the rest of the chapter, and the first
 two are limitations of the signal rather than results.
 
-The pressure state is not a calibrated pressure on any stack, and it is
-reported per cylinder for that reason: there is no common physical level the
-four panels could sensibly be read against. The model's nominal supply is such a
-level in name only, since the states here run to several times it in both
-directions, so drawing it would invite a comparison that means nothing. On
-\ppoROM{} the excursions are clipped by a numerical guard at
-$\unit[1500]{bar}$, and that clip binds on the slew and the first boom cylinder
+The pressure state is not a calibrated pressure on any stack, and the magnitudes
+say so plainly. Over the whole deployment collection the median differential
+pressure is $\unit[57]{bar}$, which is an ordinary working value for a machine of
+this class, but the tail is not: ten per cent of ticks exceed the
+$\unit[340]{bar}$ nominal supply and the largest reach the $\unit[1500]{bar}$
+numerical guard. In the window drawn here, which is the load change and
+therefore the hardest-loaded part of the episode, the medians run from
+$\unit[277]{bar}$ to $\unit[2295]{bar}$ and the peaks to $\unit[3784]{bar}$.
+That last figure is roughly eleven times the nominal supply and past the yield
+strength of the steel a cylinder of this size is made from, so it is not a
+pressure the machine could develop. It is an internal state of an actuator model
+that was never trained to be one, since the rod-force channel carries no
+supervised weight and pressure-increment accuracy is only $R^2 = 0.06$ to $0.09$
+(Section~\ref{sec:models:rom}).
+
+Two consequences follow for how the figure is read. There is no common physical
+level the four panels can be read against, so none is drawn and each cylinder is
+reported on its own scale. And on \ppoROM{} the excursions are clipped by the
+$\unit[1500]{bar}$ guard, which binds on the slew and the first boom cylinder
 and not on the other two, so those panels show a flattened trace where the guard
-is active. On the inverse and forward path no such clip is
+is active. What the figure supports is the shape of the response either side of
+the change, not the level. On the inverse and forward path no such clip is
 applied, so the two stacks are not bounded in the same way and their absolute
 levels are not directly comparable. What is comparable, and what the figure is
 for, is the \emph{shape} of the response either side of the change.

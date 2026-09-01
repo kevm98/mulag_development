@@ -1084,6 +1084,79 @@ def fig_pressure_stacks():
     save(fig, "ch7_pressure_stacks")
 
 
+# ==========================================================================
+# 7.4  ROM robustness: the actuator-authority ladder
+# ==========================================================================
+def fig_rom_authority():
+    """How far actuator authority can be cut before the ROM stack fails.
+
+    This is the stress axis Section 7.4.2 specifies and the deployment factors
+    could not provide: it scales realised actuator motion directly, immediately
+    before the physics target, so it bypasses every clamp and means the same
+    thing on every stack.
+    """
+    d = load(EXP / "E5/results/rom_authority_ladder.json")
+    lv = sorted(d["levels"], key=lambda L: L["alpha"])
+    a = np.array([L["alpha"] for L in lv])
+    contact = np.array([L["contact"]["mean"] for L in lv])
+    worst = np.array([L["worst_mesh_contact"] for L in lv])
+    lateral = np.array([L["lateral"]["mean"] for L in lv])
+    gate = d["thresholds"]["breakdown_contact"]
+    brk = d["functional_breakdown_alpha"]
+    m = a > 0                      # alpha = 0 cannot sit on a log axis
+
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.9))
+
+    axa.axhspan(0.5, gate, color=C_RED, alpha=.07, lw=0)
+    axa.axhline(gate, color=C_RED, lw=1.0, ls="--")
+    axa.plot(a[m], contact[m], "-o", color=C_RED, lw=1.8, ms=4.5, mec="white",
+             mew=.8, label="mean over meshes")
+    axa.plot(a[m], worst[m], "--s", color="#8C9BA5", lw=1.2, ms=3.6,
+             mec="white", mew=.6, label="worst mesh")
+    axa.plot([a[m].min() * 0.55], [contact[~m][0]], "o", color=C_RED,
+             mfc="white", ms=5, mew=1.3)
+    axa.annotate("0", (a[m].min() * 0.55, contact[~m][0]), xytext=(0, -11),
+                 textcoords="offset points", ha="center", fontsize=7.2,
+                 color=C_RED)
+    axa.annotate(f"gate {gate:.2f}", (1.15, gate), xytext=(0, 3),
+                 textcoords="offset points", ha="right", fontsize=7.4,
+                 color=C_RED)
+    axa.annotate(f"holds to $\\alpha = {brk:g}$", (brk, gate), xytext=(7, -16),
+                 textcoords="offset points", fontsize=7.4, color="#3B4A55",
+                 arrowprops=dict(arrowstyle="->", color="#3B4A55", lw=.9))
+    axa.set_xscale("log")
+    axa.set_xlim(a[m].min() * 0.42, 1.35)
+    axa.set_ylim(0.55, 1.0)
+    axa.set_xlabel(r"actuator authority $\alpha$ (fraction of nominal)")
+    axa.set_ylabel("ground contact")
+    axa.grid(axis="y")
+    axa.legend(fontsize=7.4, loc="lower right")
+    axa.set_title("(a) contact holds until authority is nearly gone", loc="left",
+                  fontsize=8.4)
+
+    axb.plot(a[m], 1000 * lateral[m], "-o", color=C_AMBER, lw=1.8, ms=4.5,
+             mec="white", mew=.8)
+    axb.plot([a[m].min() * 0.55], [1000 * lateral[~m][0]], "o", color=C_AMBER,
+             mfc="white", ms=5, mew=1.3)
+    axb.set_xscale("log")
+    axb.set_xlim(a[m].min() * 0.42, 1.35)
+    axb.set_ylim(0, 160)
+    axb.set_xlabel(r"actuator authority $\alpha$ (fraction of nominal)")
+    axb.set_ylabel("lateral error (mm)")
+    axb.grid(axis="y")
+    axb.annotate("deviation metrics do not degrade:\na starved arm is stiller,\n"
+                 "so contact is the metric that\nreports the failure",
+                 xy=(0.03, 0.06), xycoords="axes fraction", fontsize=7.2,
+                 color="#6B7780", va="bottom")
+    axb.set_title("(b) and lateral error does not report it", loc="left",
+                  fontsize=8.4)
+    fig.subplots_adjust(left=.095, right=.985, top=.895, bottom=.165, wspace=.30)
+    save(fig, "ch7_rom_authority")
+    print(f"     breakdown at alpha={brk:g}; contact {contact[a==1][0]:.3f} at "
+          f"nominal, {contact[a==brk][0]:.3f} at breakdown, "
+          f"{contact[~m][0]:.3f} at zero")
+
+
 # Figures the chapter currently uses.
 
 
@@ -1183,7 +1256,8 @@ def fig_dose_response():
 FIGURES = [fig_e1_paths, fig_e1_tracking, fig_e1_gates,
            fig_delay_response, fig_delay_summary, fig_chain_by_stack,
            fig_ref_step, fig_control_effort, fig_e5_robustness,
-           fig_dose_response, fig_af_arms, fig_pressure_stacks]
+           fig_rom_authority, fig_dose_response, fig_af_arms,
+           fig_pressure_stacks]
 
 # Generated on request, for the withdrawn identifiability section. Run
 #   python3 scripts/make_ch7_figures.py --withdrawn
