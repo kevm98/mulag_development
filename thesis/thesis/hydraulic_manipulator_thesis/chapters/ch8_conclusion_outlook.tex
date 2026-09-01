@@ -150,14 +150,19 @@ pre-registered bar is not met and the result stands as a demonstrated mechanism
 rather than a general one (H3, Section~\ref{sec:eval:adaptation}).
 
 A capacity-matched control arm, identical but for a zeroed history window,
-divides that result honestly. Added capacity alone already buys cut-height
-accuracy, so part of that gain is not adaptation. It does not move lateral error
-at all, leaving it within half a millimetre of the baseline, while the adaptive
-arm improves it by more than three quarters. Lateral error moves only when the
-history is live, and that is what attributes the effect to online sensing rather
-than to parameters (H4). The claim is demonstrated on one seed and the
-pre-registered bar of five is not yet met, so it stands as a demonstration
-rather than a general result.
+settles what produces it. Against that control the adaptive arm improves both
+errors on both working seeds, by $51.3\,\%$ and $81.6\,\%$ on one and
+$51.4\,\%$ and $26.1\,\%$ on the other, with all four intervals excluding zero.
+The gain therefore belongs to the live history rather than to the added
+parameters (H4). This is the strongest single result of the strand.
+
+How much of it is adaptation is answered by subtracting a sham rather than
+passing or failing against one. Sweeping the magnitude of the mid-episode change
+leaves a lateral component that grows monotonically with it and resolves at
+every magnitude tested, $31\,\%$ of the lateral gain at the largest flip. That
+component is online adaptation in the strict sense. The remaining $69\,\%$, and
+all of the cut-height benefit, is tracking improvement that appears when the
+mass never moves.
 
 \section{Design Implications}
 
@@ -347,12 +352,14 @@ Policy-training variation is not quantified anywhere in this work, and it bounds
 two claims differently. R and IF are each represented by one training run, so
 the $33$ paired cells measure terrain and trajectory variation and say nothing
 about how far a second run of either would move; the actuator-representation
-result rests on that assumption. The adaptation result is narrower still: it is
-demonstrated on one seed, a second seed trades the two errors rather than
-improving both, and the pre-registered criterion of a median over five seeds is
-not met. The defensible claim there is that the delivery failure was diagnosed
-and repaired and the repair demonstrated, not that online adaptation improves
-both errors in general.
+result rests on that assumption. The adaptation result is quantified across
+seeds and bounded by them: two of five improve both errors, one trades, two are
+worse, so the pre-registered median is not met. The variance is intrinsic rather
+than an optimisation artefact, since lowering the learning rate merely reassigns
+which seeds fail. The defensible claim is that the delivery failure was
+diagnosed, repaired and demonstrated, with the mechanism attributed to the live
+history and a measurable part of it to the plant change, not that online
+adaptation improves both errors on an arbitrary seed.
 
 Finally, the bound is a bound on this loop. A commanded step cannot complete
 faster than $417$\,ms at the command rate limit while the plant answers in
