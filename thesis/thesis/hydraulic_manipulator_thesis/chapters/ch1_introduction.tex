@@ -108,30 +108,24 @@ the problem this thesis addresses.
 The difficulty described in Section~\ref{sec:intro:challenges} is a modelling
 problem before it is a control problem. A hydraulic actuator can be simulated
 accurately, but the models that do so are too slow to sit inside a
-reinforcement-learning loop that requires millions of environment steps. The
-alternative usually taken is to discard the hydraulics and command joint
-positions directly, which removes the load and pressure dependence that makes
-the machine difficult to control. What is needed is a representation that is
-cheap enough to train against and faithful enough that the resulting policy is
-controlling something close to the real actuator.
+reinforcement-learning loop requiring millions of environment steps, while the
+usual alternative of commanding joint positions directly removes the load and
+pressure dependence that makes the machine difficult to control. What is needed
+is a representation cheap enough to train against and faithful enough that the
+resulting policy controls something close to the real actuator.
 
 Learned actuator models and latent-conditioned adaptation are both established
-techniques, and Section~\ref{sec:intro:advances} described the progress that
-makes them practical on machines of this class. What remains unclear is how such
-models should be identified so that they retain the command dependence a
-controller needs, whether they transfer between simulators without being
-retrained, and whether online adaptation adds anything once a policy has been
-trained against them. This thesis therefore treats representation and transfer
-as the primary questions, and treats online adaptation as the last of them
-rather than the first. The research statement of the thesis is as follows:
+techniques. What remains unclear is how such models should be identified so that
+they retain the command dependence a controller needs, whether they transfer
+between simulators without retraining, and whether online adaptation adds
+anything once a policy has been trained against them. This thesis therefore
+treats representation and transfer as the primary questions and online
+adaptation as the last of them. The research statement is as follows:
 
 \paragraph{Comparison notation.}
-For readability, the three policy--actuator stacks carry both a short label and
-a full name, and the two are used interchangeably throughout this thesis:
-\emph{R} is \ppoROMfull, \emph{IF} is \ppoIDFDfull, and \emph{AF} is
-\ppoAAMFDfull.
-The short labels are preferred where several stacks appear in one sentence and
-the full names where the actuator path itself is the subject. R uses the command-conditioned reduced-order
+The three policy--actuator stacks carry both a short label and a full name, used
+interchangeably throughout: \emph{R} is \ppoROMfull, \emph{IF} is \ppoIDFDfull,
+and \emph{AF} is \ppoAAMFDfull. R uses the command-conditioned reduced-order
 model; IF uses the frozen inverse/forward pair; and AF retains the forward model
 alone, the policy emitting the valve command directly, with online adaptation
 supplied by a bounded history-conditioned residual. The labels name the complete
@@ -167,32 +161,29 @@ remains for adaptation once the first four are settled. The six questions are:
 
 Two mechanisms sit under the second half of RQ6 and are kept apart throughout,
 because the thesis studies both and deploys only one. The \emph{explicit} route
-estimates a low-dimensional plant latent, which is decodable against the true
-factors and is what the AAM of Section~\ref{sec:models:aam} produces; it is the
-route the identifiability evidence concerns, and it is the one that fails at
-delivery. The route that is actually deployed conditions a bounded residual on a
-causal state--action history window and trains its encoder end to end for
-control (Section~\ref{sec:ctrl:af-residual}). Its internal representation is
-not constrained to identify physical parameters and is not tested for that, so
-the deployed mechanism is described here as history-conditioned adaptation with
-an implicit control-relevant context, not as latent identification.
+estimates a low-dimensional plant latent decodable against the true factors,
+which is what the AAM of Section~\ref{sec:models:aam} produces; it is the route
+the identifiability evidence concerns and the one that fails at delivery. The
+deployed route conditions a bounded residual on a causal state--action history
+window and trains its encoder end to end for control
+(Section~\ref{sec:ctrl:af-residual}). Its internal representation is not
+constrained to identify physical parameters and is not tested for that, so it is
+described throughout as history-conditioned adaptation with an implicit
+control-relevant context, not as latent identification.
 
-The first is answered in Chapters~\ref{chap:data} and~\ref{chap:models}, the
-second and third in Chapter~\ref{chap:models}, the fourth in
-Chapter~\ref{chap:control}, and the last two in
+The first question is answered in Chapters~\ref{chap:data}
+and~\ref{chap:models}, the second and third in Chapter~\ref{chap:models}, the
+fourth in Chapter~\ref{chap:control}, and the last two in
 Chapter~\ref{chap:evaluation}.
 
-RQ6 is the question named in the title, and it is deliberately placed last. It
+RQ6 is the question named in the title and is deliberately placed last, since it
 is only worth asking once the preceding questions have established that the
 learned models transfer, that a policy can control through them, and how much
-plant variation the resulting closed loop already absorbs unaided. An answer of any size to RQ6 is then a result about the system rather than a
-verdict on the method, because accurate models and a robust policy leave less
-for adaptation to recover. The answer this thesis reaches is that the size
-depends on where the adaptation is placed: on a command path that is already
-saturated it is indistinguishable from nothing, and on one with authority to
-spare it is substantial. Both halves are reported, and the second is
-intelligible only because the first was measured first. The work rests on the
-following contributions:
+plant variation the closed loop already absorbs unaided. The answer this thesis
+reaches is that the size of any adaptation gain depends on where the adaptation
+is placed: on a command path already saturated it is indistinguishable from
+nothing, and on one with authority to spare it is substantial. The work rests on
+the following contributions:
 
 \textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
 hydraulic actuation from high-fidelity Simscape data and transfers it into
@@ -238,37 +229,32 @@ compounded their errors.
 protocol that scores the resulting stacks on tracking, control effort, latency,
 disturbance rejection and sensitivity to the magnitude of plant variation,
 together with a procedure that decides in advance whether online plant
-conditioning will repay the effort. The first of its two measurements
-establishes whether plant identity is present in the data the machine produces.
-The second supplies the true plant parameters through a privileged encoder and
-measures what the closed loop does with them. Both precede estimator training,
-and either can end the effort before it is incurred. This converts an
-open-ended engineering effort into a measurement, and it is the contribution of
-this thesis most likely to transfer to other machines and other
-latent-conditioned designs.
+conditioning will repay the effort. Its first measurement establishes whether
+plant identity is present in the data the machine produces; its second supplies
+the true plant parameters through a privileged encoder and measures what the
+closed loop does with them. Both precede estimator training and either can end
+the effort before it is incurred, which converts an open-ended engineering
+effort into a measurement.
 
 \textbf{Online Adaptation on a Saturating Actuator:} A demonstration that the
-binding constraint on latent-conditioned adaptation here is delivery rather
-than estimation, and a redesign that follows from it. With the inverse model in
-the command path, the estimate is informative and the closed-loop effect is
-absent, because the correction is added to a command already resting against
-its own limit for most of the scored window. Removing that model, so that the
-policy emits the valve command itself and a bounded history-conditioned
-residual acts on it, converts the same information into a measured improvement.
-On the better of the two seeds that replicate, cut-height error falls by
-$62.6\,\%$ and lateral error by $78.6\,\%$ against the stack's own frozen base
-under a mid-episode plant change, paired across $880$ environments on five
-held-out meshes. A capacity-matched control whose history window is zeroed does
-not deliver that gain, so it belongs to the live history rather than to the
-added parameters. It does not hold at the median of five training seeds, so
-what is demonstrated is a mechanism and not yet a reliable method. The claim is
-about the placement of adaptation on saturating actuators, not about the
-superiority of one actuator representation over another.
+binding constraint on latent-conditioned adaptation here is delivery rather than
+estimation, and a redesign that follows from it. With the inverse model in the
+command path the estimate is informative and the closed-loop effect is absent,
+because the correction is added to a command already resting against its own
+limit for most of the scored window. Removing that model, so that the policy
+emits the valve command itself and a bounded history-conditioned residual acts
+on it, converts the same information into a measured improvement. On the better
+of the two seeds that replicate, cut-height error falls by $62.6\,\%$ and
+lateral error by $78.6\,\%$ against the stack's own frozen base under a
+mid-episode plant change, paired across $880$ environments on five held-out
+meshes. A capacity-matched control whose history window is zeroed does not
+deliver that gain, so it belongs to the live history rather than to the added
+parameters. It does not hold at the median of five training seeds, so what is
+demonstrated is a mechanism and not yet a reliable method.
 
-The components on which these contributions rest, namely the causal plant
-estimator, the bounded adaptation path and the eight-gate evaluation harness,
-are described where they are used. They are technical enablers rather than
-separate claims.
+The causal plant estimator, the bounded adaptation path and the eight-gate
+evaluation harness are described where they are used, as technical enablers
+rather than separate claims.
 
 Figure~\ref{fig:intro:research-cycle} condenses the logic that connects these
 contributions. The sequence is a cycle rather than a one-way pipeline: evidence

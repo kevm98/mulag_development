@@ -22,24 +22,18 @@ residual are trained jointly under PPO in Chapter~\ref{chap:control}.
 
 The chapter continues one evidence chain. Section~\ref{sec:data:system-dynamics}
 established the first link on the data itself: a compact plant context exists
-and improves prediction, and the improvement sits in pressure. What follows here
-is whether that context is recoverable causally from observable history, whether
+and improves prediction, and the improvement sits in pressure. What follows is
+whether that context is recoverable causally from observable history, whether
 the recovered estimate is as informative as a privileged one, and whether it
-reaches the command. The chain fails at that last link, where the correction
-must act on a command already saturated. The diagnosis specifies the redesign
-carried out in Chapter~\ref{chap:control} and evaluated in
-Chapter~\ref{chap:evaluation}.
+reaches the command. The chain fails at that last link, and the diagnosis
+specifies the redesign carried out in Chapter~\ref{chap:control}.
 
 One commitment organises the chapter: no model is accepted on a supervised
-score, because a recurring result of this work is that
-such scores can be uninformative: a forward model
-reached a one-step $R^2$ near $0.999$ while having learned almost nothing about
+score, because such scores repeatedly proved uninformative here, a forward model
+reaching a one-step $R^2$ near $0.999$ while having learned almost nothing about
 valve authority (Section~\ref{sec:models:fd}). Every model is therefore
-presented with its contract, training objective, and the offline evidence that
-accepted or refused it. All models operate on cylinder-space signals; the
-mapping to task space belongs to Chapter~\ref{chap:system}, the control
-integration to Chapter~\ref{chap:control}, and deployment-level results to
-Chapter~\ref{chap:evaluation}.
+presented with its contract, training objective and the offline evidence that
+accepted or refused it. All models operate on cylinder-space signals.
 
 \section{Modelling Overview and Common Notation}
 \label{sec:models:overview}
@@ -206,16 +200,14 @@ path contains no inverse model (Section~\ref{sec:ctrl:af-no-id}).
 \subsection{Transfer of the Frozen Inverse Model}
 \label{sec:models:id-trust}
 
-Because the adapter corrects a frozen ID, its transfer was measured on the
-deployment collection itself: all $118$ frozen runs of
-Section~\ref{sec:data:isaaclab}, comprising $2$ nominal, $40$ hydraulic-only,
-$12$ mechanical-only and $64$ combined runs, of which $16$ are held-out
-combined-test. These runs lie outside the ID's training distribution, which
-contains only Simscape data, and they are recorded in the plant the adaptive
-controller is closed around rather than in a separate collection. Two regimes
-were scored: a teacher-forced one-step transfer, in which the measured cylinder
-state is supplied at every tick, and a closed-loop transfer, in which the pair's
-own prediction is fed back while the recorded reference is supplied. Pressure
+Because the adapter corrects a frozen ID, its transfer was measured on all $118$
+frozen runs of Section~\ref{sec:data:isaaclab}, comprising $2$ nominal, $40$
+hydraulic-only, $12$ mechanical-only and $64$ combined runs, of which $16$ are
+held-out combined-test. These runs lie outside the ID's Simscape-only training
+distribution and are recorded in the plant the adaptive controller is closed
+around. Two regimes were scored: a teacher-forced one-step transfer supplying
+the measured cylinder state at every tick, and a closed-loop transfer feeding
+back the pair's own prediction while supplying the recorded reference. Pressure
 and force are held at their training means, as the deployed feature contract
 requires.
 
@@ -263,13 +255,12 @@ measured plant tracks the recorded cylinder reference at about
 $\unit[0.807]{mm}$ on the held-out group, so the closed-loop divergence is a
 failure of model transfer and not a property of the collection.
 
-Two consequences follow and they point in different directions. The pair cannot
-be promoted as an unadapted autoregressive deployment path, because its own
-predicted state leaves the support its training data covered. Nothing in that
-result disturbs the one-step use \ppoIDFD{} makes of it. What it does disturb is
-adaptation: a bounded correction added to a command that is already resting on
-its stops has nothing left to move, which is the finding developed in
-Section~\ref{sec:ctrl:af-no-id}.
+Two consequences follow. The pair cannot be promoted as an unadapted
+autoregressive deployment path, because its own predicted state leaves the
+support its training data covered, though nothing in that result disturbs the
+one-step use \ppoIDFD{} makes of it. What it does disturb is adaptation: a
+bounded correction added to a command already resting on its stops has nothing
+left to move (Section~\ref{sec:ctrl:af-no-id}).
 
 \section{Forward Dynamics Model}
 \label{sec:models:fd}
@@ -493,16 +484,14 @@ valve command, as described in Section~\ref{sec:ctrl:ppo-aamfd}.
 \section{Offline Arm Adaptation Module Study}
 \label{sec:models:aam}
 
-This section describes the encoder trained offline against the plant context
-of Section~\ref{sec:data:system-dynamics}, on the frozen collection of
-Section~\ref{sec:data:isaaclab}. Its purpose here is
-evidentiary: it establishes that plant identity is recoverable from causal
-observable history at all, which is the third link in the chain of
-Chapter~\ref{chap:evaluation} and a precondition for anything built on top of
-it. The encoder actually deployed in \ppoAAMFD{} is trained differently, under
-the reinforcement objective and without a latent target
-(Section~\ref{sec:ctrl:af-encoder}). The results below measure the information
-in the history; they do not describe the deployed component.
+This section describes the encoder trained offline against the plant context of
+Section~\ref{sec:data:system-dynamics}, on the frozen collection of
+Section~\ref{sec:data:isaaclab}. Its purpose is evidentiary: it establishes that
+plant identity is recoverable from causal observable history at all, which is a
+precondition for anything built on top of it. The encoder deployed in
+\ppoAAMFD{} is trained differently (Section~\ref{sec:ctrl:af-encoder}), so the
+results below measure the information in the history rather than describing the
+deployed component.
 
 The offline AAM estimates $\latenthat=\mathrm{AAM}(\bm{H}_t)$ from deployment
 history. Each row contains five joint positions, five joint velocities, four
@@ -516,14 +505,12 @@ state are excluded. Using the previous valve command keeps each row causal.
 Validation selected the shortest competitive history from $5$, $10$, $20$ and
 $40$ ticks. Latent RMSE is $0.802$ on validation and $0.734$ on reserved test.
 
-Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop. The
-prototype ID adapter is bypassed until 20 rows are available. A causal
-five-prediction rolling mean adds $\unit[250]{ms}$ lag. Results reported for
-this route use that online smoother, not the earlier non-causal full-run
-average. The smoother belongs to this offline encoder and not to \ppoAAMFD,
-whose residual consumes its history window directly. The latency stated here
-therefore does not apply to the adaptive result of
-Chapter~\ref{chap:evaluation}.
+Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop, the
+prototype ID adapter is bypassed until 20 rows are available, and a causal
+five-prediction rolling mean adds $\unit[250]{ms}$ lag. That smoother belongs to
+this offline encoder and not to \ppoAAMFD, whose residual consumes its history
+window directly, so the latency stated here does not apply to the adaptive
+result of Chapter~\ref{chap:evaluation}.
 
 \subsection{Information Content of the Estimated Latent}
 \label{sec:models:aam-content}
@@ -545,11 +532,11 @@ plant model~\cite{hu2026bayesian}.
 \section{Earlier ID-Adapter Prototype}
 \label{sec:models:adapter}
 
-The earlier prototype applies the correction to the inverse model's output.
-This is the direct adaptation point while the inverse model remains in the
-command path, but the closed-loop evidence below shows that it has too little
-authority. The prototype is retained here because that result determines the
-redesign in Section~\ref{sec:ctrl:ppo-aamfd}; it is not the deployed AF stack.
+The earlier prototype applies the correction to the inverse model's output, the
+direct adaptation point while the inverse model remains in the command path. The
+closed-loop evidence below shows it has too little authority, and the prototype
+is retained because that result determines the redesign of
+Section~\ref{sec:ctrl:ppo-aamfd}.
 
 The frozen ID produces $\bm{u}_{\mathrm{base}}=\mathrm{ID}(\bm{s},\bm{r})$.
 The adapter adds a bounded latent-conditioned residual:
@@ -562,13 +549,10 @@ The adapter adds a bounded latent-conditioned residual:
 \end{equation}
 %
 Training minimises valve-command MSE at the exact ROM tick, with the residual
-bounded to $0.15$. The ID, FD and policy are frozen during adapter training.
-This earlier route uses a separately trained 68-input, latent-conditioned
-policy. Disabling the ID residual therefore restores the baseline actuator
-path but not the baseline actor. Final AF removes this asymmetry: its base
-actor retains the 66-channel input, the history-conditioned residual acts on
-the actor's valve command, and setting that residual to zero recovers the
-frozen base in full.
+bounded to $0.15$, and the ID, FD and policy are frozen. This route uses a
+separately trained 68-input latent-conditioned policy, so disabling the ID
+residual restores the baseline actuator path but not the baseline actor. Final
+AF removes that asymmetry (Section~\ref{sec:ctrl:af-residual}).
 
 Figure~\ref{fig:models:aam-architecture} shows the causal convolutional stack
 and the bounded adapter that consumes its estimate. It documents the earlier
@@ -638,14 +622,13 @@ actuator headroom.
 
 Every stage of the chain up to the command holds: plant identity is present, a
 causal estimator recovers it, the estimate is as informative as a privileged
-one, and it improves a model that consumes it. Delivery fails. The correction
-is added to a command
-that is already resting against its own clip for most of the scored window, so
-the authority to act on the information does not exist at the point where the
-information arrives. A limit of that shape is not addressed by a better
-estimator or a larger latent, and Section~\ref{sec:models:adapter-null} shows
-it is not addressed by reducing the demand either, since lowering the lead cap
-buys headroom at the cost of tripling cut-height error.
+one, and it improves a model that consumes it. Delivery fails. The correction is
+added to a command already resting against its own clip for most of the scored
+window, so the authority to act on the information does not exist at the point
+where the information arrives. A limit of that shape is not addressed by a
+better estimator or a larger latent, nor by reducing the demand, since lowering
+the lead cap buys headroom at the cost of tripling cut-height error
+(Section~\ref{sec:models:adapter-null}).
 
 It is addressed by removing the accumulator that consumes the headroom, which
 is what \ppoAAMFD{} does: the inverse model leaves the command path, the policy
@@ -685,21 +668,16 @@ Table~\ref{tab:models:frozen} records the selected checkpoints.
   \end{tabular}
 \end{table}
 
-The earlier ID adapter of this chapter is trained and selected on recorded
-valve-command error. This avoids the objective mismatch of an earlier
-next-state-loss variant. Each component is evaluated on its stated training
-contract.
+The earlier ID adapter is trained and selected on recorded valve-command error,
+which avoids the objective mismatch of an earlier next-state-loss variant. Each
+component is evaluated on its stated training contract. The adaptation residual
+of \ppoAAMFD{} is deliberately absent from Table~\ref{tab:models:frozen},
+because it has no supervised checkpoint: its encoder and head are optimised
+jointly under the reinforcement objective, and their provenance is a training
+run rather than an epoch number.
 
-One component of the deployed stack is deliberately absent from
-Table~\ref{tab:models:frozen}. The adaptation residual of \ppoAAMFD{} has no
-supervised checkpoint to record, because it is not trained in this chapter and
-not trained against a target: its encoder and head are optimised jointly under
-the reinforcement objective, and their provenance is a training run rather than
-an epoch number (Section~\ref{sec:ctrl:af-encoder}).
-
-With the models identified, audited and frozen, and with the one place the
-chain breaks located precisely, the next chapter builds the
-controllers that consume them. It assembles the reference and non-adaptive
-stacks from the models above unchanged, and then rebuilds the adaptive stack
-around the finding of Section~\ref{sec:models:chain}, removing from its command
-path the model that leaves no room for a correction to act.
+With the models identified, audited and frozen, and the one place the chain
+breaks located, the next chapter builds the controllers that consume them. It
+assembles the reference and non-adaptive stacks from the models above unchanged,
+then rebuilds the adaptive stack around the finding of
+Section~\ref{sec:models:chain}.

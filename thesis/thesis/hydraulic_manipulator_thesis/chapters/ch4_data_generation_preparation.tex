@@ -150,25 +150,23 @@ Four requirements governed collection and preparation.
 
 \begin{description}
   \item[R1: realistic operating distribution.] The learned models are
-    deployed inside a tracking controller, so they must be accurate in
-    the states that controller visits: coordinated multi-axis
-    motion, gravity-loaded poses, moderate speeds. Data collected far
-    from that distribution would be accurate where it does not matter.
+    deployed inside a tracking controller, so they must be accurate in the
+    states that controller visits, namely coordinated multi-axis motion,
+    gravity-loaded poses and moderate speeds.
   \item[R2: causal identifiability of the valve.] A forward model is
     only useful to a policy if it responds to the command. This requires
     that the valve signal in the training data carry information that the
     state history does not already carry, which is a property of the
     \emph{experiment}, not of the network~\cite{ljung1999system,
     isermann2011identification}.
-  \item[R3: variation across a plant family.] Robust training and, later,
-    latent adaptation both need many plants rather than one. The
-    variation has to be physically meaningful, it has to demonstrably
-    change the measured response, and it has to be recorded per run,
-    because the privileged plant context of Section~\ref{sec:data:system-dynamics} is computed from those recorded factors.
-  \item[R4: clean separation.] Train, validation, and test material must
-    be separable at the level of complete runs, so that no transition
-    window straddles a split boundary and no run contributes to two
-    splits.
+  \item[R3: variation across a plant family.] Robust training and latent
+    adaptation both need many plants rather than one. The variation must be
+    physically meaningful, must demonstrably change the measured response, and
+    must be recorded per run, because the privileged plant context of
+    Section~\ref{sec:data:system-dynamics} is computed from those factors.
+  \item[R4: clean separation.] Train, validation and test material must be
+    separable at the level of complete runs, so that no transition window
+    straddles a split boundary and no run contributes to two splits.
 \end{description}
 
 R1 and R2 require different experiments. Closed-loop control gives realistic
@@ -191,22 +189,19 @@ may continue at Section~\ref{sec:data:open-loop}.
 
 \subsection{Sampling Design}
 
-The closed-loop campaign draws its plants from a twelve-dimensional
-parameter space using Latin hypercube sampling~\cite{mckay1979comparison},
-which spreads the draws more evenly over each marginal than independent
-uniform sampling would at this sample size. The twelve coordinates are
-fixed once for the whole batch, before any simulation runs, so the
-parameter table is reproducible and can be audited independently of the
-data it produced.
+The closed-loop campaign draws its plants from a twelve-dimensional parameter
+space using Latin hypercube sampling~\cite{mckay1979comparison}, which spreads
+the draws more evenly over each marginal than independent uniform sampling would
+at this sample size. The twelve coordinates are fixed once for the whole batch,
+before any simulation runs, so the parameter table is reproducible and can be
+audited independently of the data it produced.
 
-The batch is organised as a curriculum rather than a single homogeneous
-pool. Run~1 is the untouched nominal plant. Runs 2--251 randomise only
-the hydraulics, runs 252--501 only the mechanics, and runs 502--1000
-both together, giving the composition shown in
-Figure~\ref{fig:data:design}(a). This structure is deliberate: it makes
-it possible to attribute a later modelling failure to the hydraulic or
-the mechanical axis by retraining on one block at a time, which a
-uniformly mixed batch would not allow.
+The batch is organised as a curriculum rather than a single homogeneous pool.
+Run~1 is the untouched nominal plant, runs 2--251 randomise only the hydraulics,
+runs 252--501 only the mechanics, and runs 502--1000 both together
+(Figure~\ref{fig:data:design}(a)). This makes it possible to attribute a later
+modelling failure to the hydraulic or the mechanical axis by retraining on one
+block at a time.
 
 \begin{figure}[tb]
   \centering
@@ -228,15 +223,13 @@ fluid, spools and seals wear, and relief settings drift.
 
 
 
-The seal-wear coordinate deserves comment because it is the one place
-where a single sampled number is deliberately allowed to move several
-model parameters together. A worn cylinder does not become leakier
+The seal-wear coordinate is the one place where a single sampled number moves
+several model parameters together. A worn cylinder does not become leakier
 without also becoming slower, so $w_{\mathrm{seal},i}$ scales the piston
-clearance linearly, the valve leakage area with the cube of the same
-factor, and the spool time constant from $\unit[8]{ms}$ to about
-$\unit[13]{ms}$ at the top of the range. Sampling those three
-independently would have produced physically incoherent machines, some
-of them very leaky and yet perfectly fast.
+clearance linearly, the valve leakage area with the cube of the same factor, and
+the spool time constant from $\unit[8]{ms}$ to about $\unit[13]{ms}$ at the top
+of the range. Sampling those three independently would have produced physically
+incoherent machines, some very leaky and yet perfectly fast.
 
 \subsection{The Compressibility Axis}
 \label{sec:data:compliance}
@@ -250,14 +243,12 @@ compressibility axis therefore enters the batch as capacitance variation.
 
 \subsection{Mechanical Parameters}
 
-The mechanical axes, listed in Table~\ref{tab:data:mechanical}, are
-applied to all fourteen rigid bodies of the mechanism: the six links,
-the four cylinder barrels, and the four pistons. For each body the mass
-is perturbed by up to $\pm 20\,\%$, the centre of mass by up to
-$\pm 5\,\%$ of its nominal offset, and the inertia tensor together with
-its products of inertia is perturbed consistently with the mass change,
-so that the body remains physically realisable rather than acquiring an
-inertia that its mass could not produce.
+The mechanical axes of Table~\ref{tab:data:mechanical} are applied to all
+fourteen rigid bodies, namely the six links, the four cylinder barrels and the
+four pistons. Per body, mass is perturbed by up to $\pm 20\,\%$, the centre of
+mass by up to $\pm 5\,\%$ of its nominal offset, and the inertia tensor with its
+products of inertia consistently with the mass change, so that the body remains
+physically realisable.
 
 
 
@@ -355,16 +346,14 @@ motivating a separate open-loop experiment.
 
 \subsection{Design of the Excitation Signal}
 
-The excitation run lasts $\unit[64]{s}$ and follows the fixed schedule
-in Figure~\ref{fig:data:design}(c). One second of startup is simulated
-and then discarded, because the plant is settling from its initial
-condition and those samples describe the initialisation rather than the
-dynamics. Four sequential slots follow, each giving one cylinder ten
-seconds of excitation followed by a half-second zero-command gap. The
-gaps make the boundaries between single-axis segments unambiguous. A
-twenty-second phase then drives all four channels at once, and a final
-second of zero command closes the run. Commands are limited to
-$\pm 0.90$ of full authority.
+The excitation run lasts $\unit[64]{s}$ and follows the fixed schedule in
+Figure~\ref{fig:data:design}(c). One second of startup is discarded, because
+those samples describe the initialisation rather than the dynamics. Four
+sequential slots follow, each giving one cylinder ten seconds of excitation
+followed by a half-second zero-command gap that makes the segment boundaries
+unambiguous. A twenty-second phase then drives all four channels at once, and a
+final second of zero command closes the run. Commands are limited to $\pm 0.90$
+of full authority.
 
 An initial rapidly switching signal met the formal persistence condition but
 kept each piston near one stroke position. The final design instead uses long
@@ -375,23 +364,17 @@ This provides both input excitation and useful stroke coverage.
 
 \subsection{Plant Draws and Acceptance}
 
-The same excitation is applied to four plant draws taken from the same
-parameter space as the closed-loop campaign: nominal, randomised
-hydraulics, randomised mechanics, and fully randomised. Holding the
-input fixed and varying only the plant is what makes the four runs
-directly comparable, since any difference in the response is attributable
-to the parameters.
+The same excitation is applied to four plant draws from the parameter space of
+the closed-loop campaign: nominal, randomised hydraulics, randomised mechanics
+and fully randomised. Holding the input fixed and varying only the plant makes
+the four runs directly comparable.
 
-Each run is checked for stroke coverage before it is accepted. The
-collector requires at least $10\,\%$ of the available stroke on
-cylinders 1--3 and $8\,\%$ on cylinder 4, and records the achieved
-coverage per channel in the run summary. The runs retained here cover
-$33\,\%$ of the stroke on cylinder 1, and $12\,\%$ on cylinder 4, which
-is the narrowest of the four. Every channel clears the acceptance floor,
-and the audit of Section~\ref{sec:data:diagnostics} confirms that the
-retained material is informative at these coverages: the instantaneous
-command matrix has full rank four and the lagged regressor matrix reaches
-rank eighty.
+Each run is checked for stroke coverage before acceptance, the collector
+requiring at least $10\,\%$ of available stroke on cylinders 1--3 and $8\,\%$ on
+cylinder 4. The retained runs cover $33\,\%$ of the stroke on cylinder 1 and
+$12\,\%$ on cylinder 4, the narrowest of the four. Every channel clears the
+floor, and Section~\ref{sec:data:diagnostics} confirms the material is
+informative at these coverages.
 
 An earlier export was rejected because half its runs contained duplicated
 state trajectories. The acceptance checks in
@@ -427,18 +410,14 @@ $936$/$52$/$52$ complete runs. Valve command is used only to supervise the
 ROM's internal valve head; it is not a runtime input
 (Section~\ref{sec:models:rom}).
 
-This aligned nominal-plant export trains the inverse, forward and ROM models.
-It ships with the project, so every model-level result in this thesis can be
-recomputed from the same file that produced it. Exact alignment, increment
-consistency and the identifiability failure were all checked directly on that
-export rather than assumed from a description of it.
+This aligned nominal-plant export trains the inverse, forward and ROM models and
+ships with the project, so every model-level result can be recomputed from the
+file that produced it. Exact alignment, increment consistency and the
+identifiability failure were checked directly on that export.
 
 The separate thousand-run randomised curriculum was collected for an earlier
-adaptation plan. No reported result is trained on or evaluated against it; the
-identifiability chain uses the IsaacLab collection of
-Section~\ref{sec:data:isaaclab}, and the deployed residual is trained
-on-policy (Section~\ref{sec:data:onpolicy}). The curriculum is retained as provenance and
-documented in Appendix~\ref{app:dataset}.
+adaptation plan and no reported result is trained on or evaluated against it. It
+is retained as provenance and documented in Appendix~\ref{app:dataset}.
 
 \section{Closed-Loop Calibration Data for the Command ROM}
 \label{sec:data:rom-calibration}
@@ -475,18 +454,14 @@ Section~\ref{sec:data:openloop-collection}.
 
 \subsection{Provenance of the Deployment Data}
 
-The models that carry the identifiability argument
-(the system-dynamics surrogate, the privileged factor encoder, and the offline
-history encoder) describe the plant that the adaptive controller is closed
-around. That
-plant is not the Simscape model. It is the command ROM plus PhysX, the
-same four-dimensional cylinder command port used at deployment. A
-surrogate identified on Simscape data would be a model of a model, and
-the latent it defines would describe variation the deployment plant does
-not necessarily exhibit. Both collections are therefore made
-\emph{in} the deployment plant, and the frozen ROM, ID and FD
-checkpoints enter this chain only as fixed components, never as things
-to be retrained.
+The models that carry the identifiability argument, namely the system-dynamics
+surrogate, the privileged factor encoder and the offline history encoder,
+describe the plant the adaptive controller is closed around. That plant is the
+command ROM plus PhysX, not the Simscape model. A surrogate identified on
+Simscape data would be a model of a model, and the latent it defines would
+describe variation the deployment plant does not necessarily exhibit. Both
+collections are therefore made \emph{in} the deployment plant, and the frozen
+ROM, ID and FD checkpoints enter this chain only as fixed components.
 
 \subsection{The Physical Factor Vector}
 \label{sec:data:factors}
@@ -505,25 +480,19 @@ The randomised quantity is a six-dimensional physical factor vector
   \bigr],
 \end{equation}
 %
-with the ranges of Table~\ref{tab:data:factors}. Four coordinates are
-hydraulic and two mechanical, which is what makes the hydraulic-only,
-mechanical-only, and combined domains of
-Section~\ref{sec:data:domains} separable. Each candidate was admitted
-only after a one-factor sensitivity screen confirmed that moving it
-alone produces a measurable change in cylinder extension, velocity,
-pressure, or end-effector motion. Parameters whose effect could not be
-measured, or which could not be varied safely, were rejected rather than
-carried as decoration.
+with the ranges of Table~\ref{tab:data:factors}. Four coordinates are hydraulic
+and two mechanical, which is what makes the hydraulic-only, mechanical-only and
+combined domains of Section~\ref{sec:data:domains} separable. Each candidate was
+admitted only after a one-factor sensitivity screen confirmed that moving it
+alone produces a measurable change in cylinder extension, velocity, pressure or
+end-effector motion.
 
-
-
-One omission is deliberate. Actuation delay is not a
-randomised coordinate. Delay in this system is an \emph{emergent}
-property of flow, compliance, and load rather than a free parameter, so
-it is measured as a response property of each run
-(Chapter~\ref{chap:evaluation}) instead of being supplied to any model
-as a known factor. Handing an estimator a factor that the real machine
-would never publish is the same mistake as handing it the true latent.
+One omission is deliberate. Actuation delay is not a randomised coordinate,
+because delay here is an \emph{emergent} property of flow, compliance and load
+rather than a free parameter. It is measured as a response property of each run
+(Chapter~\ref{chap:evaluation}) rather than supplied to any model as a known
+factor: handing an estimator a factor the real machine would never publish is
+the same mistake as handing it the true latent.
 
 \subsection{Domains and Factor Design}
 \label{sec:data:domains}
@@ -550,28 +519,20 @@ never seen.
 
 \subsection{Collection Procedure: The Task-Controller Runs}
 
-Every run is collected through the same interface the policy uses. The
-DLS controller closes the loop on measured cylinder state and issues its
-command through the four-dimensional action port into the command ROM
-and PhysX. No joint-target bypass is used, and no PPO policy is used to
-collect identification data, because a policy trained on the same plant
-would reintroduce the closed-loop correlation that
-Section~\ref{sec:data:open-loop} spent a campaign removing.
+Every run is collected through the same interface the policy uses. The DLS
+controller closes the loop on measured cylinder state and issues its command
+through the four-dimensional action port into the command ROM and PhysX. No
+joint-target bypass is used and no PPO policy collects identification data,
+because a policy trained on the same plant would reintroduce the closed-loop
+correlation that Section~\ref{sec:data:open-loop} spent a campaign removing.
 
-Independent excitation is supplied by dedicated four-channel PRBS
-windows applied through that same action port, with a small amplitude
-and a hold of ten control steps, so that the excitation is causally
-independent of the state without ever leaving the safe envelope. Probe
-actions are logged separately from controller output, so any analysis
-can distinguish the two. Each run follows a fixed eleven-segment structure
-(settle, three postures, three PRBS windows, DLS task motion,
-reach-and-return, and stow), giving $11\,304$ control steps
-and $\unit[188.4]{s}$ of simulated time per run. The separate open-loop
-excitation collection of Section~\ref{sec:data:openloop-collection} uses a different
-schedule and runs to $11\,040$ steps. Three postures plus
-line, coupled-sine, and reach-and-return motion were verified in a pilot
-to give full rank over all four action channels under varied geometry
-and load.
+Independent excitation is supplied by dedicated four-channel PRBS windows
+through that same action port, at small amplitude and a hold of ten control
+steps, so the excitation is causally independent of the state without leaving
+the safe envelope. Probe actions are logged separately from controller output.
+Each run follows a fixed eleven-segment structure (settle, three postures, three
+PRBS windows, DLS task motion, reach-and-return and stow), giving $11\,304$
+control steps and $\unit[188.4]{s}$ of simulated time per run.
 
 Figure~\ref{fig:data:isaaclab-collection} summarises the IsaacLab collection
 configuration and its frozen run-level outputs.
@@ -636,42 +597,37 @@ control steps, but it now drives the whole run rather than three windows inside
 one. Each run is $11\,040$ control steps, giving $1\,302\,720$ steps across the
 collection.
 
-The reason for collecting twice is structural rather than a preference. Under a
-task controller the command is computed from the state, so command and response
-are close to redundant and a plant descriptor has little left to explain. A
-model asked to identify the plant from that data is not being given a hard
-problem; it is being given one with no answer in it, and what it reports is a
-property of the data rather than of the architecture. Removing the controller is
-what makes the question well posed. That is why the open-loop collection exists
-and why every model-level result in this thesis is fitted on it. How rich the
-excitation has to be, and the amplitude beyond which plant identity stops being
-recoverable, are measurements on this collection and are listed among the work
-still outstanding.
+The reason for collecting twice is structural. Under a task controller the
+command is computed from the state, so command and response are close to
+redundant and a plant descriptor has little left to explain; a model asked to
+identify the plant from that data is being given a question with no answer in
+it, and what it reports is a property of the data rather than of the
+architecture. Removing the controller makes the question well posed, which is
+why every model-level result in this thesis is fitted on this collection. How
+rich the excitation must be, and the amplitude beyond which plant identity stops
+being recoverable, remain outstanding measurements.
 
-The collection records its own feature contract, and what each consumer takes
-from it is set out separately: Section~\ref{sec:data:history-features} for the
-adaptation module and Section~\ref{sec:data:sd-features} for the prediction
-models.
+What each consumer takes from the recorded feature contract is set out in
+Section~\ref{sec:data:history-features} for the adaptation module and
+Section~\ref{sec:data:sd-features} for the prediction models.
 
 \subsection{The Frozen Dataset}
 
-Both collections contain $118$ complete runs under the identical domain
-design: $2$ nominal, $40$ hydraulic-only, $12$ mechanical-only, $48$
-combined-training, and $16$ unseen combined-test. Collection ran in four vectorized IsaacLab
-environments with per-environment factors and logging. Slots that
-tripped a safety or validity check were discarded and retried
-individually rather than being silently kept. All $118$ runs passed the
-final collection gate, which checks finite physics, exact model-grid
-alignment, command rank, factor-response authority, state coverage, and
+Both collections contain $118$ complete runs under the identical domain design:
+$2$ nominal, $40$ hydraulic-only, $12$ mechanical-only, $48$ combined-training
+and $16$ unseen combined-test. Collection ran in four vectorized IsaacLab
+environments with per-environment factors and logging, and slots that tripped a
+safety or validity check were discarded and retried individually. All $118$ runs
+passed the final collection gate, which checks finite physics, exact model-grid
+alignment, command rank, factor-response authority, state coverage and
 saturation limits.
 
 Each dataset is then \emph{frozen}: the raw runs are checksummed and the
-run-level split is fixed at $82$ training, $20$ validation, and $16$
-reserved combined-test runs, with zero factor-key leakage between them.
-The reserved sixteen do not influence history length, checkpoint,
-hyperparameter or architecture selection. They are scored only after each
-model is fixed and are treated as a single-use test set. Test results are
-reported with validation results, not in place of them.
+run-level split is fixed at $82$ training, $20$ validation and $16$ reserved
+combined-test runs, with zero factor-key leakage between them. The reserved
+sixteen do not influence history length, checkpoint, hyperparameter or
+architecture selection; they are scored only after each model is fixed, and test
+results are reported with validation results rather than in place of them.
 
 \subsection{Learning Timebase and Hydraulic State}
 
@@ -719,11 +675,9 @@ enforce at inference time.
 
 \paragraph{Increment Targets}
 Every dynamic target is a within-run one-step increment,
-$\Delta \bm{x}_k = \bm{x}_{k+1} - \bm{x}_k$, never an absolute state.
-This removes the large static component of the signals and makes the trivial
-persistence solution an explicit baseline
-that a model can be measured against rather than a hiding place it can
-settle into.
+$\Delta \bm{x}_k = \bm{x}_{k+1} - \bm{x}_k$, never an absolute state. This
+removes the large static component of the signals and turns the trivial
+persistence solution into an explicit baseline rather than a hiding place.
 
 \paragraph{Causal Alignment}
 Features at step $k$ contain only quantities available at step $k$. The
@@ -732,16 +686,14 @@ the within-run difference of the states and requiring exact agreement,
 a check reported in Section~\ref{sec:data:diagnostics}.
 
 \paragraph{Time-Base Conversion}
-The open-loop campaign is logged at $\unit[0.01]{s}$ but the models run
-at $\unit[0.05]{s}$, so five consecutive raw samples are combined into a
-single transition. The valve input attributed to that transition is the
-command held at the start of the window, which is the causally correct
-choice. The mean command over the window is also recorded, but only for
-analysis. Cylinder extension velocity is not logged directly in the
-closed-loop archive and is obtained by differentiating extension on the
-output grid, which is consistent with the trapezoidal identity that the
-strict data satisfies to $R^2 = 0.994$--$0.9997$
-(Equation~\ref{eq:models:trapezoid}).
+The open-loop campaign is logged at $\unit[0.01]{s}$ but the models run at
+$\unit[0.05]{s}$, so five consecutive raw samples are combined into one
+transition. The valve input attributed to that transition is the command held at
+the start of the window, which is the causally correct choice; the window mean is
+recorded for analysis only. Cylinder extension velocity is not logged directly
+in the closed-loop archive and is obtained by differentiating extension on the
+output grid, consistent with the trapezoidal identity that the strict data
+satisfies to $R^2 = 0.994$--$0.9997$ (Equation~\ref{eq:models:trapezoid}).
 
 \subsection{Features and Targets for the Adaptation Module}
 \label{sec:data:history-features}
@@ -769,13 +721,11 @@ an explicit input mask rather than by convention:
     plant rather than the trajectory being asked of it.
 \end{itemize}
 
-Windows are contained within a single run and never cross a run
-boundary, and each window carries the stopped-gradient target
-$\latent = \mu(\factorvec)$ of its own run together with the run
-identifier, domain, split, and valid history bounds. Applied to the
-$118$ frozen runs this yields $444\,624$ causal history ticks. What is
-built from them, how the history length is chosen, and how the result is
-validated downstream belong to Chapter~\ref{chap:models}.
+Windows are contained within a single run, and each carries the
+stopped-gradient target $\latent = \mu(\factorvec)$ of its own run together with
+the run identifier, domain, split and valid history bounds. Applied to the $118$
+frozen runs this yields $444\,624$ causal history ticks; what is built from them
+belongs to Chapter~\ref{chap:models}.
 
 The residual encoder deployed in \ppoAAMFD{} shares this row but uses no
 collection at all, for the reason given in Section~\ref{sec:data:onpolicy}.
@@ -795,82 +745,64 @@ alongside the audit it makes possible.
 \label{sec:data:onpolicy}
 
 The residual that carries the adaptation result in \ppoAAMFD{} is not trained
-from the frozen collection above, and the difference is one of kind rather than
-of scale. It has no dataset, no stopped-gradient latent target and no
-run-level splits, because its encoder never regresses a target at all: the
-encoder and the residual head are optimised together under the reinforcement
-objective, so their training data is the on-policy experience the stack
-generates as it learns.
+from the frozen collection above. It has no dataset, no stopped-gradient latent
+target and no run-level splits, because its encoder never regresses a target:
+the encoder and the residual head are optimised together under the
+reinforcement objective, so their training data is the on-policy experience the
+stack generates as it learns. The reason is the measured failure of the offline
+route reported in Section~\ref{sec:ctrl:af-encoder}, where the deficiency lies
+in the objective rather than in the sample count.
 
-The reason for the change is a measured failure of the offline route, reported
-in Section~\ref{sec:ctrl:af-encoder}. An encoder fitted to the dynamics target
-of this collection and then frozen carried about $0.4\,\%$ plant identity into
-the controller and scored $7.1\,\%$ worse than simply supplying the mean
-context. A latent that is accurate against a dynamics target is not thereby
-useful to a controller, and no amount of additional offline data addresses
-that, because the deficiency is in the objective rather than in the sample
-count.
+What replaces the dataset is a plant design, since on-policy training makes the
+training distribution a property of the environment rather than of a file. The
+cutter mass is drawn from two well-separated modes and flips between them
+\emph{mid-episode}, so no single compromise response is correct in both halves
+of a run. The flip instant is jittered per environment so it cannot be
+anticipated on a timer, and the direction is balanced across environments so it
+cannot be assumed. History is therefore not merely available to the residual but
+necessary to it, and an arm that cannot see the history falls well below the
+frozen base rather than merely failing to improve on it
+(Section~\ref{sec:eval:adaptation}).
 
-What replaces the dataset is a plant design, since on-policy training makes
-the training distribution a property of the environment rather than of a file.
-The cutter mass is drawn from two well-separated modes and flips between them
-\emph{mid-episode}, so that no single compromise response is correct in both
-halves of a run. The flip instant is jittered per environment, so it cannot be
-anticipated on a timer, and the direction is balanced across environments, so
-it cannot be assumed. The consequence is that history is not merely available
-to the residual but necessary to it: an arm that cannot see the history is
-measured, and it does not merely fail to improve on the frozen base but falls
-well below it (Section~\ref{sec:eval:adaptation}).
-
-Two properties of the frozen collection are nonetheless inherited unchanged.
-The history row is the same eighteen-value row defined above, with the same
-four exclusion classes enforced by the same input mask, so nothing enters the
-on-policy encoder that was barred from the offline one. And the plant is still
-the deployment plant, the command ROM plus PhysX, so the change of training
-regime does not smuggle in a different system.
+Two properties of the frozen collection are inherited unchanged. The history row
+is the same eighteen-value row defined above, with the same four exclusion
+classes enforced by the same input mask, and the plant is still the deployment
+plant, so the change of training regime does not substitute a different
+system.
 
 \section{Preprocessing and Data Splits}
 \label{sec:data:preprocessing}
 
-Splitting is done at the level of complete runs, never of individual
-samples. A random sample-level split would place transitions from the
-same trajectory on both sides of the boundary and report a validation
-score that mostly measures interpolation within a run. For the
-command-conditioned dataset the $1\,040$ runs are divided into $936$
-training, $52$ validation, and $52$ test runs, giving $407\,160$,
-$22\,620$, and $22\,620$ transitions respectively, with no run
-identifier appearing in more than one split. The IsaacLab deployment
-collection is split by run \emph{and} by factor configuration
-($82$/$20$/$16$, Section~\ref{sec:data:isaaclab}), which is the stronger
-condition: separating runs alone would still let two runs of the same
-plant fall on opposite sides of the boundary and turn a claim about
-unseen plants into a claim about unseen episodes.
+Splitting is done at the level of complete runs, never of individual samples,
+because a random sample-level split would place transitions from the same
+trajectory on both sides of the boundary and report a score that mostly measures
+interpolation within a run. For the command-conditioned dataset the $1\,040$
+runs are divided into $936$ training, $52$ validation and $52$ test runs, giving
+$407\,160$, $22\,620$ and $22\,620$ transitions, with no run identifier in more
+than one split. The IsaacLab deployment collection is split by run \emph{and} by
+factor configuration ($82$/$20$/$16$), the stronger condition: separating runs
+alone would let two runs of the same plant fall on opposite sides of the
+boundary and turn a claim about unseen plants into a claim about unseen
+episodes.
 
-The strict open-loop export needs a different treatment because it
-contains only four runs, and holding one out would remove an entire
-plant draw from training. Instead each run is divided into twenty
-temporal blocks, every fifth block is assigned to validation, and a
-five-sample guard interval is discarded at each block boundary so that
-no $\unit[0.05]{s}$ transition window spans the split. A simple
-last-twenty-percent split was tried first and rejected: it changed the
-spread of the targets between training and validation by a factor of
-$1.3$ to $2.3$, because the final fifth of the run is the simultaneous
-excitation phase and is dynamically unlike everything before it. That
-split would have measured extrapolation to a different regime and called
-it generalisation.
+The strict open-loop export needs different treatment because it contains only
+four runs, and holding one out would remove an entire plant draw from training.
+Each run is instead divided into twenty temporal blocks, every fifth block is
+assigned to validation, and a five-sample guard interval is discarded at each
+boundary so that no $\unit[0.05]{s}$ transition window spans the split. A simple
+last-twenty-percent split was rejected because it changed the spread of the
+targets between training and validation by a factor of $1.3$ to $2.3$, the final
+fifth of the run being the simultaneous excitation phase and dynamically unlike
+everything before it.
 
-Normalisation statistics are computed on the training split only and
-stored inside each checkpoint, so that a model always normalises with the
-statistics it was fitted with. Mixing statistics between checkpoints
-silently invalidates any comparison, and the loader enforces the stored
-contract rather than recomputing it.
-
-Finally, samples are carried with an explicit validity flag rather than
-being silently dropped. In the strict export $93.7\,\%$ of samples are
-marked valid. The remainder are the excluded startup and shutdown
-seconds and the zero-command gaps. Keeping them in the archive with a
-flag, instead of deleting them, means the time base stays contiguous and
-the within-run difference checks remain meaningful.
+Normalisation statistics are computed on the training split only and stored
+inside each checkpoint, so a model always normalises with the statistics it was
+fitted with; the loader enforces the stored contract rather than recomputing it.
+Samples are carried with an explicit validity flag rather than silently dropped,
+$93.7\,\%$ of the strict export being marked valid and the remainder being the
+excluded startup and shutdown seconds and the zero-command gaps. Keeping them
+with a flag means the time base stays contiguous and the within-run difference
+checks remain meaningful.
 
 \section{Dataset Diagnostics}
 \label{sec:data:diagnostics}
@@ -882,48 +814,42 @@ export is reproduced in Table~\ref{tab:data:audit}.
 
 
 
-The two rank figures are the ones that speak directly to requirement R2.
-The instantaneous command matrix has rank four, so no channel is a
-linear combination of the others, and the lagged regressor matrix built
-from the command history has rank eighty, so the excitation is
-persistently exciting to the order the models need. The condition number
-of that lagged matrix is about $4.6\times10^{3}$, which is finite and
-workable rather than comfortable. It is a consequence of using long
-plateaus, and it is the price paid for the stroke coverage those
-plateaus buy.
+The two rank figures speak directly to requirement R2. The instantaneous command
+matrix has rank four, so no channel is a linear combination of the others, and
+the lagged regressor matrix built from the command history has rank eighty, so
+the excitation is persistently exciting to the order the models need. The
+condition number of that lagged matrix is about $4.6\times10^{3}$, finite and
+workable rather than comfortable, and it is the price paid for the stroke
+coverage the long plateaus buy.
 
-The exactness of the three increment checks deserves a word, since a
-maximum error of exactly zero invites suspicion. It is expected here:
-the targets are computed from the logged states by the same within-run
-difference that the check recomputes, so the check verifies that the
-extraction stage did what it claims, not that the simulation is
-accurate. It catches misalignment, off-by-one indexing, and rows that
-have been reordered or concatenated across run boundaries, which are the failure modes that occur. Physical fidelity is a separate
-question, addressed by the validation study in
-Section~\ref{sec:sys:simscape-validation}.
+The three increment checks return a maximum error of exactly zero, which is
+expected rather than suspicious: the targets are computed from the logged states
+by the same within-run difference the check recomputes, so the check verifies
+that the extraction stage did what it claims rather than that the simulation is
+accurate. It catches misalignment, off-by-one indexing and rows reordered or
+concatenated across run boundaries. Physical fidelity is addressed separately by
+the validation study of Section~\ref{sec:sys:simscape-validation}.
 
-Two properties of the Simscape material are recorded here because later
-chapters refer to them. Stroke coverage is $12\,\%$ on the head-pivot
-cylinder, the narrowest of the four channels, and that cylinder is also the one
-the strict forward model predicts least well. The rod-force channel carries zero
-supervised weight in the reduced-order model. That exclusion is a design choice
-rather than a data defect: force is generated internally by the PhysX plant at
-deployment, so the actuator model has no need to reproduce it, and the logged
-channel additionally fails a piston-area consistency check on this export, which
-confirms the choice. No result rests on it.
+Two properties of the Simscape material are recorded here because later chapters
+refer to them. Stroke coverage is $12\,\%$ on the head-pivot cylinder, the
+narrowest of the four channels and also the one the strict forward model
+predicts least well. The rod-force channel carries zero supervised weight in the
+reduced-order model, a design choice rather than a data defect: force is
+generated internally by the PhysX plant at deployment, and the logged channel
+additionally fails a piston-area consistency check on this export. No result
+rests on it.
 
-The IsaacLab collection is audited against different failure modes. Design
-adequacy is checked before use (unique factor keys, full active-factor rank,
-disjoint keys across splits), physical validity per run (finite physics, exact
-model-grid alignment, full command rank, bounded saturation), and leakage
-structurally, with privileged channels removed by an explicit input mask rather
-than by trusting the feature list. Its limitation is scale: $118$ runs over six
-factors is a sparse design, which is why the paired test of
-Section~\ref{sec:data:sd-audit} is reported with bootstrap intervals and
-per-run detail rather than as a pooled point estimate. The limitation is specific
-to what this collection supports. It does not bound the closed-loop adaptation
-result, which is not estimated from these runs at all but from paired
-environments generated on-policy under the plant design of
+The IsaacLab collection is audited against different failure modes: design
+adequacy before use (unique factor keys, full active-factor rank, disjoint keys
+across splits), physical validity per run (finite physics, exact model-grid
+alignment, full command rank, bounded saturation), and leakage structurally,
+with privileged channels removed by an explicit input mask rather than by
+trusting the feature list. Its limitation is scale, $118$ runs over six factors
+being a sparse design, which is why the paired test of
+Section~\ref{sec:data:sd-audit} is reported with bootstrap intervals and per-run
+detail rather than as a pooled point estimate. That limitation does not bound
+the closed-loop adaptation result, which is estimated from paired environments
+generated on-policy under the plant design of
 Section~\ref{sec:data:onpolicy}.
 
 \section{The System-Dynamics Dataset}
@@ -940,31 +866,29 @@ contributes to exactly one split here and in every other view of this data.
 Each sample is one transition. The input is the $12$-dimensional hydraulic
 state, the $10$-dimensional joint context and the valve command pair, previous
 and current, for $30$ channels; the target is the hydraulic-state increment to
-the next tick, in the same $12$ dimensions. Training draws five consecutive
-transitions at a time so the objective is a short rollout rather than a
-one-step fit. Four per-tick flags travel with every sample, recording cylinder
-limit, command saturation, valve saturation and non-finite physics, so a model
-can be scored on valid ticks alone rather than on whatever the run happened to
-contain. Each run additionally carries its own six-factor vector $\factorvec$.
-That vector is privileged: it is what allows a target to be defined for the
-adaptation module of Section~\ref{sec:data:history-features}, and it is masked
-out of every deployable input.
+the next tick in the same $12$ dimensions. Training draws five consecutive
+transitions at a time, so the objective is a short rollout rather than a
+one-step fit. Four per-tick flags record cylinder limit, command saturation,
+valve saturation and non-finite physics, so a model can be scored on valid ticks
+alone. Each run carries its own six-factor vector $\factorvec$, which is
+privileged: it is what allows a target to be defined for the adaptation module
+of Section~\ref{sec:data:history-features}, and it is masked out of every
+deployable input.
 
 \subsection{Dataset Separation Across Plants}
 \label{sec:data:sd-audit}
 
 One property of this dataset cannot be checked by an audit of its structure. The
 checks of Section~\ref{sec:data:diagnostics} establish that the runs are valid,
-that the factor design is full rank and that the splits do not leak. They do not
-establish that the runs \emph{differ by plant} in a way any model could use, and
-if they do not, nothing built on this dataset can recover the difference.
+that the factor design is full rank and that the splits do not leak, but not
+that the runs \emph{differ by plant} in a way any model could use. If they do
+not, nothing built on this dataset can recover the difference.
 
 The test is a paired one on the dataset itself. Two prediction models are
-trained on identical samples, splits and objective. One receives a
+trained on identical samples, splits and objective; one receives a
 two-dimensional plant context from an encoder $\latent = \mu(\factorvec)$
-trained jointly with it; the matched control receives no such input. Neither is
-an actuator and neither enters a control stack. The difference between them is
-the question.
+trained jointly with it, and the matched control receives no such input. Neither
+is an actuator and neither enters a control stack.
 
 The context helps, and narrowly. Pooled rollout error falls by
 $7.20\times10^{5}$ on the $20$ validation runs, with a $95\,\%$ interval of

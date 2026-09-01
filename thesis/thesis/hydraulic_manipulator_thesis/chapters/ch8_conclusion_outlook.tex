@@ -16,26 +16,22 @@ asked, which is also the order in which the answers depend on one another.
 
 \section{Summary of Findings}
 
-The findings are stated below in the order of the research questions. The first
-four concern how hydraulic actuation is learned, transferred and controlled. The
+The findings are stated in the order of the research questions. The first four
+concern how hydraulic actuation is learned, transferred and controlled, and the
 last two concern online adaptation.
 
 \textbf{The inverse and forward representation identified in Simscape transfers
 to the deployment simulation without retraining (RQ1, RQ2).} The inverse model
-was trained on Simscape data alone, the aligned closed-loop export of
-Section~\ref{sec:data:combining}, and evaluated on all $118$ IsaacLab
+was trained on Simscape data alone and evaluated on all $118$ IsaacLab
 deployment runs, drawn entirely outside that training distribution, where its
 teacher-forced one-step extension error is millimetre-scale and nearly flat
-across domains: $\unit[2.36]{mm}$ on the combined runs against
-$\unit[3.36]{mm}$ on nominal, with the held-out combined-test group no worse
-than the deployment domains the estimator was fitted on. The transfer claim is made in that one-step regime, which is
-how the policy uses the model; fed its own predictions instead, the composite
-diverges in every run, for the saturation reason set out in
-Section~\ref{sec:models:id-trust}. No deployment-specific retraining was required, and
-the inverse model stays frozen everywhere downstream. The reduced-order model is
-the exception and is treated as one throughout: it received a small bounded
-calibration against the deployment plant, so it is transferred with a correction
-rather than without one.
+across domains: $\unit[2.36]{mm}$ on the combined runs against $\unit[3.36]{mm}$
+on nominal, with the held-out combined-test group no worse than the domains the
+estimator was fitted on. The claim is made in that one-step regime, which is how
+the policy uses the model; fed its own predictions instead, the composite
+diverges in every run (Section~\ref{sec:models:id-trust}). The inverse model
+stays frozen everywhere downstream. The reduced-order model is the exception,
+having received a small bounded calibration against the deployment plant.
 
 \textbf{Supervised accuracy is not evidence of control authority (RQ1).} The
 first forward model scored near-perfectly and had learned to ignore the valve
@@ -62,21 +58,14 @@ $10.6$ for \ppoIDFD, which converts greater actuator effort into lower lateral
 error. The choice of representation therefore affects the resulting controller
 and is not an implementation detail.
 
-The standing of that comparison is stated here because it governs how the three
-stacks are read throughout. \ppoROM{} and \ppoIDFD{} agree on every recorded
-training field and differ only in the actuator path, so the contrast between
-them is controlled and the difference above \emph{is} attributable to the
-representation. \ppoAAMFD{} is a separately trained run at a different seed,
-a lower actor learning rate and no frozen-actor warm-up
-(Section~\ref{sec:ctrl:constraints}); it is reported as a deployed controller
-demonstrating the adaptive stack end to end, not as a ranked competitor, and no
-claim here rests on its position relative to the other two. Only one training
-run exists per stack, so seed variance is not estimated even for the matched
-pair. Claims about the adaptation path are carried instead by a paired within-stack
-comparison, in which three arms share the frozen base, the architecture, the
-budget and the reward, and differ only in whether the residual can see its
-history. At seed $17$ they share the training seed too, which is the one fully
-single-variable triple (Section~\ref{sec:eval:attribution}).
+\ppoROM{} and \ppoIDFD{} agree on every recorded training field and differ only
+in the actuator path, so the difference above \emph{is} attributable to the
+representation. \ppoAAMFD{} is a separately trained run at a different seed, a
+lower actor learning rate and no frozen-actor warm-up, reported as a deployed
+controller rather than a ranked competitor. Only one training run exists per
+stack, so seed variance is not estimated even for the matched pair, and claims
+about the adaptation path are carried instead by the paired within-stack
+comparison of Section~\ref{sec:eval:attribution}.
 
 \textbf{A learned policy can replace the classical controller at runtime
 (RQ4).} The damped-least-squares controller supplies privileged demonstrations
@@ -114,20 +103,15 @@ remains unmeasured.
 
 The remaining findings concern adaptation itself (RQ6).
 
-\textbf{Under the controller and signal set examined here, plant identity has
-to be excited for rather than observed.} Data gathered while this task
-controller drives the machine does not separate plants, because the command is
-computed from the state and the two are nearly redundant. This is a statement
-about the dataset the controller produces, not a claim that closed-loop
-identification is impossible in general: dedicated closed-loop identification
-methods exist and were not applied.
-Open-loop excitation repairs it, which is why the second collection of
-Section~\ref{sec:data:openloop-collection} exists and why every model-level
-result in this thesis is fitted on it. The amplitude at which identity stops
-being recoverable, and whether the cause is actuator saturation or
-operating-point drift, is a property of the collection rather than of any
-controller; measuring it is listed in Section~\ref{sec:concl:future} among the
-work still to be done.
+\textbf{Under the controller and signal set examined here, plant identity has to
+be excited for rather than observed.} Data gathered while this task controller
+drives the machine does not separate plants, because the command is computed
+from the state and the two are nearly redundant. This concerns the dataset the
+controller produces, not closed-loop identification in general: dedicated
+closed-loop identification methods exist and were not applied. Open-loop
+excitation repairs it, which is why every model-level result in this thesis is
+fitted on the second collection. The amplitude at which identity stops being
+recoverable remains unmeasured (Section~\ref{sec:concl:future}).
 
 \textbf{The estimator is not the limiting component (H1, H2, RQ6).} Under the
 chain gate of Section~\ref{sec:models:chain} the causal estimate is not worse
@@ -166,15 +150,15 @@ component recovers essentially all of a small change and about two fifths of the
 largest, so identification contributes across the whole range and what falls
 with dose is the proportion rather than the component.
 
-This is the form the answer takes, and it is more useful than a single number.
+The answer therefore takes the form of conditions rather than a single number.
 Plant identification contributes where the variation acts through a channel the
 correction can move, which here is lateral error and not cut height, because the
 latent carries seal condition and seal condition acts through pressure; where
 the variation is large enough to cost more than feedback absorbs unaided; where
 the correction retains authority at the point it is applied; and where the data
 identifies the plant at all. The last two conditions were established by
-violating them, and they are what the decision procedure of this thesis asks a
-practitioner to check before building an estimator.
+violating them, and they are what the decision procedure asks a practitioner to
+check before building an estimator.
 
 \section{Design Implications}
 
@@ -293,62 +277,48 @@ Section~\ref{sec:concl:future}.
 \section{Contributions}
 
 Section~\ref{sec:intro:contributions} stated six contributions. Their standing
-at the end of the work is as follows, in the order they were stated.
+at the end of the work is as follows, with the supporting evidence as summarised
+above rather than repeated.
 
-\textbf{Transferable hydraulic actuator learning} is delivered. Both
+\textbf{Transferable hydraulic actuator learning} is delivered: both
 representations were identified from Simscape and realised in IsaacLab, and the
-inverse model transfers without deployment-specific retraining.
-
-The \textbf{control-relevant identification and validation} procedure is
-delivered, and it is the contribution most likely to transfer independently of
-this machine. It
-covers both the input-ablation test that exposed a forward model with no command
-authority and the identifiability audit that established the excitation envelope,
-including the mechanism behind the upper amplitude limit.
-
-The \textbf{reduced-order actuator model} is delivered and carries everything
+inverse model transfers without deployment-specific retraining. The
+\textbf{reduced-order actuator model} is delivered and carries everything
 downstream, being accurate enough to serve as the deployment plant and cheap
 enough to evaluate inside GPU-parallel training, which the stiff implicit solver
-of the high-fidelity model it replaces cannot support. The qualification stated throughout stands. It was calibrated against
-IsaacLab and is therefore the reference condition rather than an independent
-competitor to the inverse and forward pair.
+of the model it replaces cannot support; it was calibrated against IsaacLab and
+is therefore the reference condition rather than an independent competitor.
 
-\textbf{Policy-only control through learned hydraulics} is demonstrated for
-both representations, with the classical controller absent from the deployed
-loop. It is demonstrated rather than certified. On worst-mesh, worst-family
-statistics both stacks fail the lateral gate and \ppoIDFD{} fails head
-alignment badly (Section~\ref{sec:eval:tracking}), so what the evidence
-supports is that a policy can drive the task through learned hydraulics with
-useful tracking, not that either stack satisfies the whole eight-gate
-acceptance contract.
+The \textbf{control-relevant identification and validation} procedure is
+delivered and is the contribution most likely to transfer independently of this
+machine, covering both the input-ablation test that exposed a forward model with
+no command authority and the identifiability audit that established the
+excitation envelope.
 
-The \textbf{decision procedure for online adaptation} is delivered, and its
-main product is the discipline that produced it rather than any single number.
-Its two measurements, whether plant identity is present in the data the machine
-produces and what a privileged latent buys in the closed loop, both precede
-estimator training and either can end the effort before it is incurred. Two
-further findings exist only because of the same discipline: that a selection
-window covering $8.9$ of $26$\,m certifies a third of an episode, and that a
-quantity which is gated but not priced is traded away by the optimiser.
+\textbf{Policy-only control through learned hydraulics} is demonstrated rather
+than certified. On worst-mesh, worst-family statistics both stacks fail the
+lateral gate and \ppoIDFD{} fails head alignment badly
+(Section~\ref{sec:eval:tracking}), so the evidence supports that a policy can
+drive the task through learned hydraulics with useful tracking, not that either
+stack satisfies the whole eight-gate acceptance contract.
 
-\textbf{Online adaptation on a saturating actuator} is the finding stated
-above: with the inverse model in the command path the estimate is informative
-and the closed-loop effect is absent, because the correction is added to a
-command already resting on its clip, and moving the correction onto the valve
-command converts the same information into a large gain on the seeds where the
-method works. It stands as a demonstrated mechanism. The median of five seeds
-does not meet the pre-registered bar, so it is not yet a general method.
+The \textbf{decision procedure for online adaptation} is delivered, and its main
+product is the discipline that produced it rather than any single number. Two
+further findings exist only because of that discipline: that a selection window
+covering $8.9$ of $26$\,m certifies a third of an episode, and that a quantity
+which is gated but not priced is traded away by the optimiser.
+
+\textbf{Online adaptation on a saturating actuator} stands as a demonstrated
+mechanism. The median of five seeds does not meet the pre-registered bar, so it
+is not yet a general method.
 
 Two enablers are recorded rather than claimed. The causal plant estimator and
 the bounded adaptation path behave as specified, with no privileged access, no
-future information, bounded output, and reversion to the robust actuator path on
-invalid input. The eight-gate promotion criterion serves as the non-reward
-criterion the training loop and the checkpoint selection both use, and one
-property of it is worth reuse: five of the eight gates separate the matched pair
-and carry the comparative claims, while lateral, hard impacts and tool
-acceleration do not (Section~\ref{sec:sys:gates}). Re-deriving those three
-against the widened trajectory library is specification work rather than control
-work.
+future information, bounded output and reversion to the robust actuator path on
+invalid input. Of the eight-gate promotion criterion, one property is worth
+reuse: five gates separate the matched pair and carry the comparative claims,
+while lateral, hard impacts and tool acceleration do not
+(Section~\ref{sec:sys:gates}).
 
 \section{Limitations}
 \label{sec:conclusion:limitations}

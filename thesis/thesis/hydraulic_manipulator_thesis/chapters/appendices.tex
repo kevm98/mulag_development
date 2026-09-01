@@ -621,6 +621,36 @@ weight was introduced after the measurement described in
 Section~\ref{sec:sys:gates}: the quantity was gated but not priced, and the
 optimiser traded it away while its return rose.
 
+\subsection*{Measurements Behind the Design Rules}
+
+The three rules of Section~\ref{sec:ctrl:ppo} were each adopted after a measured
+failure, and the figures are recorded here.
+
+\emph{Gaussian shaping.} Measured on the lateral term at an error of
+$\unit[0.50]{m}$, the gradient of $w\exp[-(e/s)^2]$ is $-2.07$ at $s=0.30$ but
+$-0.004$ at $s=0.15$, a factor of $520$ weaker in exactly the region occupied by
+the failing path families. The bounded shapes $B$ and $H$ of
+Equation~\eqref{eq:ctrl:shapes} replace it, $B$ retaining the same gradient at
+$\unit[0.5]{m}$ of error as at $\unit[0.05]{m}$ and $H$ buying quadratic
+precision near zero where cut height needs it.
+
+\emph{Sign convention.} Weighting the positive contact reward four-fold for the
+worst quarter of environments made a contact quality of $0.49$ pay $7.84$
+against $2.00$ for a quality of $0.50$, and collapsed worst-family contact
+within a single training block. Worst-case weighting is therefore admitted only
+on the non-positive terms.
+
+\emph{Removed terms.} Removing the action-magnitude penalty produced the first
+training block in a full session that did not degrade, improving the held-out
+score from $1.2058$ to $0.3678$. In its earlier form the head barrier dwarfed
+lateral tracking, so line following could never compete for the optimiser's
+attention.
+
+\emph{Logging.} The earlier stack logged an aggregate and a partial subset, with
+the two largest lateral terms not logged at all, which is part of why a reward
+term opposing the task survived thirteen campaigns. Every term is now logged
+individually and by name.
+
 \section{PPO Hyperparameters}
 
 Table~\ref{tab:app:ppo} lists the optimisation settings of the three evaluated
@@ -674,6 +704,30 @@ launch scripts. The two reference runs' manifests do not record their truck
 speed schedule, discount or GAE settings, so those cannot be verified from the
 frozen record; the adaptive run's manifest does record them. Section
 \ref{sec:eval:hypotheses} states the consequence.
+
+\section{The Three \texorpdfstring{\ppoROM{}}{PPO-ROM} Acceptance Records}
+\label{app:ppo:rom-records}
+
+Three acceptance records for \ppoROM{} exist in the project and they disagree,
+so Section~\ref{sec:ctrl:ppo-rom} treats none of them as certifying the
+checkpoint it selects. They are separated here.
+
+The first is the pipeline's own documentation, which reports all eight gates
+passing across the $2$ to $\unit[7]{km/h}$ range on three meshes. This is a
+selection-time record for a different checkpoint than the one that chapter
+describes. The second is an earlier six-mesh evaluation of the rebuilt pipeline,
+reporting seven gates passing and ground contact failing at $0.6486$ against the
+$0.700$ threshold, a margin of $-0.0514$; at the time this was the one genuine
+performance gap in the stack, and it is the record carried forward as an
+expectation into Chapter~\ref{chap:evaluation}. The third is the selection
+record of the checkpoint of Section~\ref{sec:ctrl:ppo-rom} itself, measured on
+the superseded $\unit[16]{m}$ rollout and marked provisional for that reason;
+that checkpoint's full-length six-mesh revalidation was never run.
+
+None of the three is the evidence used in Chapter~\ref{chap:evaluation}. The
+closed-loop comparison there re-scores a single checkpoint per stack under one
+protocol, at one speed, over the full path, on the same meshes and the same
+eleven path families.
 
 \chapter{Supplementary Results}
 \label{app:results}
