@@ -1076,6 +1076,15 @@ median environment. Significance is taken separately, from a bootstrap interval
 on the median paired \emph{difference} in millimetres, and an effect is called
 resolved only when that interval excludes zero.
 
+That interval is a statement about sampling, not a guarantee about the
+instrument. One of the three null comparisons of
+Section~\ref{sec:eval:instrument} resolved between two arms that are identical
+by construction, so an interval excluding zero is necessary evidence and not
+sufficient evidence. Every cut-height claim in this chapter is therefore read
+against the measured $\pm 10\,\%$ resolution floor as well as against its
+interval, and effects inside that band are reported as unresolved whatever the
+interval says.
+
 \subsection{The Instrument and Its Noise Floor}
 \label{sec:eval:instrument}
 
@@ -1272,12 +1281,15 @@ consistent with the route the perturbation takes. The cutter-mass change reaches
 the residual as load through the pressure and force entries of its history
 window, and the valve-command correction acts most directly on the lateral line.
 
-\subsection{Conditions for Plant Identification to Contribute}
+\subsection{Conditions for Plant-Dependent Adaptation to Contribute}
 \label{sec:eval:conditions}
 
 The dose sweep does more than establish that an adaptation component exists. It
 says where it acts and how large the plant change has to be before it is worth
 anything, and those two conditions are the transferable part of this result.
+The subject throughout is the deployed residual's control-relevant context,
+which is trained against the task and against no latent target. It is not a
+named physical parameter, and nothing below claims that it is.
 
 The first condition is the channel. The component is confined to lateral error;
 cut height shows none. That is not an accident of this experiment, and it
@@ -1287,9 +1299,9 @@ channel the actuator model propagates but the controller does not integrate, and
 what the residual can move through the valve command is the lateral line. The
 offline study points the same way for a different factor: the AAM latent decodes
 mainly seal condition, which also acts through pressure
-(Section~\ref{sec:models:aam-content}). Plant identification pays on the axis its
-information can reach, and the cut-height benefit, real as it is, is improved
-tracking arriving by another route.
+(Section~\ref{sec:models:aam-content}). Plant-dependent adaptation pays on the
+axis its context can reach, and the cut-height benefit, real as it is, is
+improved tracking arriving by another route.
 
 The second condition is magnitude, and the dose sweep measures it directly.
 Comparing the adaptation component against the tracking loss the plant change
@@ -1336,8 +1348,9 @@ collected to make plant identity present, since a task controller computes its
 command from the state and leaves a plant descriptor little to explain
 (Section~\ref{sec:data:openloop-collection}).
 
-Stated as one criterion: plant identification contributes to online adaptation
-when the variation acts through a channel the correction can move, when it is
+Stated as one criterion: a plant-dependent component contributes to online
+adaptation when the variation acts through a channel the correction can move,
+when it is
 large enough that the loss it causes exceeds what feedback absorbs unaided, when
 the correction retains authority where it is applied, and when the data
 identifies the plant at all. All four held here on the lateral axis, and the
@@ -1564,14 +1577,17 @@ the policy's own dynamics rather than by the actuation chain
 the strand: a faster actuator path is not by itself a design goal on a machine
 of this class.
 
-Robustness does not separate them, and both are robust in the strong sense.
-Every closed-loop figure here is measured on held-out meshes, eleven trajectory
-families scored individually, and plants drawn from sixteen reserved factor
-configurations disjoint from training. Underneath, the frozen inverse model was
+Robustness does not separate them, and both generalise across the population
+they were evaluated on. That population is specific and is what the claim is
+scoped to: held-out meshes, eleven trajectory families scored individually, and
+plants drawn from sixteen reserved factor configurations disjoint from training
+and validation by construction. Underneath, the frozen inverse model was
 identified on Simscape alone and transfers to all $118$ deployment runs with
 millimetre-scale one-step error, flat across domains
-(Section~\ref{sec:models:id-trust}). Generalisation across simulator, plant
-draw, terrain and trajectory is established for both, without online adaptation.
+(Section~\ref{sec:models:id-trust}). Across that held-out population, and
+without online adaptation, both stacks generalise over simulator, plant draw,
+terrain and trajectory. Nothing here establishes robustness outside it, and the
+next paragraph states why the sweep could not extend the claim.
 
 Robustness \emph{beyond} that population is a weaker claim than the sweep
 suggests. Tracking does not move across it, but on the inverse/forward plant the

@@ -772,14 +772,18 @@ per-environment reports under \texttt{outputs/rif\_delay} by
 \texttt{experiments/E3/code/seed\_table.py}. The model-level results come from
 the frozen collection of Appendix~\ref{app:data:frozen}.
 
-Two limits on that are stated here rather than left to be discovered. The
-artifacts of Table~\ref{tab:app:hashes} and those scripts regenerate the
-closed-loop and model-level tables from the frozen inputs, but they do not
-regenerate the inputs. The aligned Simscape export that trains the inverse,
-forward and reduced-order models predates this thesis and its collection script
-is unavailable, so that dataset is reproducible only as the frozen file it is
-(Section~\ref{sec:data:combining}). And the reports written before
-$16{:}34$ UTC on 31~August record no plant configuration, so they cannot be
-attributed to a plant. They are retained under
+Two things about the scope of that are stated here rather than left to be
+discovered. The first is a distinction. Every table in this thesis is
+reproducible from the frozen inputs, which ship with the project: the artifacts
+of Table~\ref{tab:app:hashes}, the Simscape collections, and the frozen
+IsaacLab collections of Appendix~\ref{app:data:frozen}. That is a different and
+weaker claim than regenerating those inputs from the original Simscape
+collection scripts, which is not attempted and not required, since the
+collections themselves are the record. Reproduction here means recomputing every
+reported number from the data that produced it.
+
+The second is an exclusion. The reports written before $16{:}34$ UTC on
+31~August record no plant configuration, so they cannot be attributed to a
+plant. They are retained under
 \texttt{outputs/rif\_delay/archive\_unrecorded\_plant} and no number in this
 thesis is taken from them (Section~\ref{sec:eval:instrument}).
