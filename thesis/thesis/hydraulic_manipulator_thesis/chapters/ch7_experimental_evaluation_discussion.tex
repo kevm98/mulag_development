@@ -1199,6 +1199,77 @@ seal condition, which acts through pressure
 (Section~\ref{sec:models:aam-content}), and it is lateral rather than cut height
 that the residual can move through the valve command.
 
+\subsection{Where Plant Identification Contributes}
+\label{sec:eval:conditions}
+
+The dose sweep does more than establish that an adaptation component exists. It
+says where it acts and how large the plant change has to be before it is worth
+anything, and those two conditions are the transferable part of this result.
+
+The first condition is the channel. The component is confined to lateral error;
+cut height shows none. That is not an accident of this experiment, and it
+follows from where the plant context lives. The latent carries mainly seal
+condition (Section~\ref{sec:models:aam-content}), seal condition acts through
+pressure, and pressure is the channel the actuator model propagates but the
+controller does not integrate. What the residual can move through the valve
+command is the lateral line. Plant identification pays on the axis its
+information can reach, and the cut-height benefit, real as it is, is improved
+tracking arriving by another route.
+
+The second condition is magnitude, and the dose sweep measures it directly.
+Comparing the adaptation component against the tracking loss the plant change
+itself causes gives the fraction of that loss the residual recovers.
+
+\begin{table}[tb]
+  \centering
+  \caption{How much of the plant change's own damage the adaptation component
+  recovers, read from Table~\ref{tab:eval:dose} and the base arm's errors at
+  each dose. The residual absorbs essentially all of a small change and roughly
+  two fifths of the largest, while the share of its total benefit that is
+  adaptation rather than tracking rises with the dose.}
+  \label{tab:eval:recovery}
+  \begin{tabular}{lccc}
+    \toprule
+    Flip magnitude & base error added (mm) & recovered (mm) & recovered \\
+    \midrule
+    $1.5$ & $3.616$  & $3.796$ & $\approx$ all \\
+    $2.0$ & $7.171$  & $3.912$ & $55\,\%$ \\
+    $2.5$ & $9.239$  & $4.073$ & $44\,\%$ \\
+    $3.0$ & $17.429$ & $7.410$ & $43\,\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The pattern is a saturation rather than a threshold. At the smallest change the
+component covers the whole of the added error, which is what a controller that
+has identified its plant should do; at the largest it covers about two fifths,
+because the damage grows faster than a bounded correction can answer. The
+component itself never stops growing, so identification keeps contributing
+across the whole range tested. What falls is the proportion, and that is a
+statement about the authority of a capped correction rather than about the
+quality of the estimate. The entry at $1.5$ should be read as consistent with
+full compensation rather than as exceeding it, since its interval is wide beside
+an added error of $\unit[3.6]{mm}$.
+
+Two further conditions come from earlier chapters and complete the set, because
+neither is visible in this sweep. Identification pays only where the correction
+has authority at the point it is applied: the same information delivered onto a
+command already resting against its clip produced no closed-loop effect at all
+(Section~\ref{sec:models:chain}), and moving the correction to a command with
+headroom is what changed the answer. And it pays only where the data was
+collected to make plant identity present, since a task controller computes its
+command from the state and leaves a plant descriptor little to explain
+(Section~\ref{sec:data:openloop-collection}).
+
+Stated as one criterion: plant identification contributes to online adaptation
+when the variation acts through a channel the correction can move, when it is
+large enough that the loss it causes exceeds what feedback absorbs unaided, when
+the correction retains authority where it is applied, and when the data
+identifies the plant at all. All four held here on the lateral axis, and the
+measured contribution is the result. The two that were tested and failed
+elsewhere in this thesis, authority and identifiability, are the ones the
+literature leaves implicit.
+
 \subsection{How Far the Mechanism Carries Across Seeds}
 \label{sec:eval:seed-table}
 
@@ -1463,15 +1534,23 @@ metric, on either working seed, with all four intervals excluding zero
 history. It does not belong to every seed, and the variance is intrinsic rather
 than an optimisation artefact (Section~\ref{sec:eval:seed-variance}).
 
-How much of it is adaptation is a separate question and is answered by
-subtracting a sham rather than passing or failing against one. Sweeping the
-magnitude of the plant change leaves a lateral component that grows
-monotonically with it and is resolved at every dose, $31\,\%$ of the lateral
-gain at the largest flip (Section~\ref{sec:eval:dose}). The other $69\,\%$, and
-all of the cut-height benefit, is tracking improvement that appears when the
-mass never moves at all. So there is genuine online adaptation here, it is
-confined to the lateral axis, and it is the minority of what the residual
-buys.
+How much of it is adaptation is a separate question, answered by subtracting a
+sham rather than passing or failing against one. Sweeping the magnitude of the
+plant change leaves a lateral component that grows monotonically with it and is
+resolved at every dose (Section~\ref{sec:eval:dose}). Measured against the
+damage the plant change itself does, that component recovers essentially all of
+a small change and about two fifths of the largest, so identification is
+contributing across the whole range tested and it is the proportion, not the
+component, that falls
+(Section~\ref{sec:eval:conditions}).
+
+That gives the answer a shape rather than a number. Plant identification
+contributes where the variation acts through a channel the correction can move,
+which here is the lateral axis and not cut height; where it is large enough to
+cost more than feedback absorbs unaided; where the correction still has
+authority at the point it is applied; and where the data identifies the plant at
+all. The last two are the conditions this thesis found by violating them, and
+they are the ones the literature leaves implicit.
 
 \subsection*{Relation to the Research Gap}
 
