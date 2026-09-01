@@ -35,7 +35,7 @@ THREADS=4
     d="$out/sd_none_s$s"
     [[ -f "$d/metrics.json" ]] && { echo "skip sd_none s$s"; continue; }
     echo "[sd_none s$s] start $(date +%T)"
-    "$py" "$aam/tools/train_sd_z.py" \
+    "$py" "$repo/sd_model/training/train_sd_z.py" \
       --root "$frozen" --history-lag 6 --belief-dim 16 \
       --unroll 5 --l1-weight 1.0 --rollout-weight 1.0 \
       --state-loss-weight 1.0 --rollout-q-mode hold-start \
@@ -57,7 +57,7 @@ gpu_pid=$!
     [[ -f "$d/metrics.json" ]] && { echo "skip e2e s$s"; continue; }
     (
       echo "[e2e s$s] start $(date +%T)"
-      "$py" "$aam/tools/train_sd_aam_e2e.py" \
+      "$py" "$repo/sd_model/training/train_sd_aam_e2e.py" \
         --root "$frozen" --lag 20 --latent-dim 2 --epochs 60 --device cpu \
         --unroll 5 --rollout-weight 1.0 --l1-weight 1.0 --tf-floor 0.2 \
         --rollout-ramp-epochs 20 --seed "$s" \

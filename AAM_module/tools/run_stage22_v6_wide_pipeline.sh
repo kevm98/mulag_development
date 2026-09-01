@@ -41,7 +41,7 @@ date -Is > "$collected/COLLECTION_COMPLETE"
 "$python_bin" "$aam_root/tools/make_splits.py" --root "$frozen"
 "$python_bin" "$aam_root/tools/build_timebase_samples.py" \
     --root "$frozen" --force
-"$python_bin" "$aam_root/tools/build_sd_dataset.py" \
+"$python_bin" "$repo_root/sd_model/dataset_tools/build_sd_dataset.py" \
     --root "$frozen" --force
 date -Is > "$frozen/DERIVED_COMPLETE"
 
@@ -63,9 +63,9 @@ if [[ -e "$none_dir/metrics.json" || -e "$none_dir/sd.pt" ]]; then
     echo "refusing existing no-latent model: $none_dir" >&2
     exit 2
 fi
-"$python_bin" "$aam_root/tools/train_sd_z.py" \
+"$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
     "${train_common[@]}" --latent-source none --out "$none_dir"
-"$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+"$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
     --root "$frozen" --model-dir "$none_dir" --latent-mode true \
     --horizons 1 5 10 20 --q-rollout hold-start \
     --out "$none_dir/rollout_hold-start.json"
@@ -76,15 +76,15 @@ for latent_dim in 2 4; do
         echo "refusing existing candidate model: $candidate_dir" >&2
         exit 2
     fi
-    "$python_bin" "$aam_root/tools/train_sd_z.py" \
+    "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
         "${train_common[@]}" --latent-source encoder \
         --latent-dim "$latent_dim" --out "$candidate_dir"
-    "$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$candidate_dir" \
         --latent-mode true zero shuffled random mean nominal \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$candidate_dir/rollout_gate.json"
-    "$python_bin" "$aam_root/tools/compare_sd_z_rollouts.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/compare_sd_z_rollouts.py" \
         --candidate "$candidate_dir/rollout_gate.json" \
         --control "$none_dir/rollout_hold-start.json" --horizon 20 \
         --out "$candidate_dir/true_vs_none_h20.json"

@@ -33,6 +33,22 @@ class ReferenceTrajectoryPPOCfg:
     future_coef: float = 0.0
     max_update_kl: float = 0.01
     max_reference_kl: float = 0.05
+    anchor_context_dim: int = 0
+    """Zero the trailing N context columns when evaluating the REFERENCE anchor.
+
+    The anchor exists to protect the base behaviour, not to forbid
+    context-sensitivity. Evaluated on the raw observation it does the latter:
+    the reference actor ignores the context, so ANY context-dependence the live
+    policy learns shows up as KL-to-reference and is penalised. Measured
+    consequence -- a 1000x gradient multiplier on the context columns moved
+    action sensitivity only from 0.001% to 0.004% of action scale, because the
+    anchor cancelled it.
+
+    With this set, the anchor becomes KL(pi_ref(.|x) || pi(.|x, z = 0)): it pins
+    what the policy does at NOMINAL context and leaves z-dependence free. Same
+    logic as residual policy learning (Silver et al. 2018; Johannink et al.
+    2019) -- anchor the base, free the correction.
+    """
     eps: float = 1.0e-8
 
     def validate(self) -> None:
@@ -354,16 +370,39 @@ class ReferenceTrajectoryPPOUpdate:
         actor(observations, stochastic_output=True)
         return actor.distribution.mean.detach().clone(), actor.distribution.std.detach().clone()
 
+    def _at_nominal_context(self, observations: Any) -> Any:
+        """Copy of the observation with the trailing context columns zeroed."""
+        n = int(self.cfg.anchor_context_dim)
+        if n <= 0:
+            return observations
+        if torch.is_tensor(observations):
+            out = observations.clone()
+            out[..., -n:] = 0.0
+            return out
+        out = observations.clone()
+        for key in list(out.keys()):
+            stream = out[key]
+            if torch.is_tensor(stream) and stream.shape[-1] > n:
+                nominal = stream.clone()
+                nominal[..., -n:] = 0.0
+                out[key] = nominal
+        return out
+
     @torch.no_grad()
     def _full_kl(
         self,
         observations: Any,
         old_params: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-        live_mean, live_std = self._distribution_params(self.alg.actor, observations)
         if old_params is None:
-            ref_mean, ref_std = self._distribution_params(self.reference, observations)
+            # ANCHOR term: compare at NOMINAL context, so the policy is pinned to
+            # the reference in what it does by default and pays nothing for
+            # depending on the context.
+            nominal = self._at_nominal_context(observations)
+            live_mean, live_std = self._distribution_params(self.alg.actor, nominal)
+            ref_mean, ref_std = self._distribution_params(self.reference, nominal)
             return diagonal_gaussian_kl(ref_mean, ref_std, live_mean, live_std, eps=self.cfg.eps)
+        live_mean, live_std = self._distribution_params(self.alg.actor, observations)
         old_mean, old_std = old_params
         return diagonal_gaussian_kl(old_mean, old_std, live_mean, live_std, eps=self.cfg.eps)
 

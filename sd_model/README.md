@@ -35,7 +35,7 @@ Test = the held-out combined runs (unseen factor combinations) of the full
 28-run dataset (20 train / 3 val / 5 test), with the zero-delta reference
 recomputed on those exact test runs (`data/zero_baseline.json`). These are
 the corrected full-set numbers; the earlier dev-set values are superseded
-(see `AAM_module/stage19b_sd_variance_analysis.md`). The zero-delta
+(see `sd_model/docs/stage19b_sd_variance_analysis.md`). The zero-delta
 predictor has R2 = 0 by definition.
 
 ## Plots
@@ -53,7 +53,7 @@ plots/summary_table.csv        machine-readable RMSE/R2 table
 ```
 
 The rollout and per-domain plots come from
-`AAM_module/tools/evaluate_sd_rollout.py` (multi-step error growth with the
+`sd_model/evaluation/evaluate_sd_rollout.py` (multi-step error growth with the
 model's own state fed back, and error grouped by hydraulic-only /
 mechanical-only / combined held-out runs). Rollout json files exist for all
 five modes under `data/rollout_<mode>.json`, including `su_delta`.
@@ -65,7 +65,7 @@ The plots, `data/zero_baseline.json`, `data/parity_hist3.npz` and
 every number in this folder refers to the current checkpoints. Two code
 fixes were required during the review:
 
-- `AAM_module/tools/evaluate_sd_rollout.py` now supports `--mode su_delta`
+- `sd_model/evaluation/evaluate_sd_rollout.py` now supports `--mode su_delta`
   and only evaluates history/delta modes from the trainer's first valid row
   per run (no invented warmup padding rows).
 - `sd_model/make_plots.py` was missing `su_delta` from its mode list and its
@@ -76,7 +76,7 @@ fixes were required during the review:
 Train (needs the frozen + SD dataset, e.g. the Stage 19 dev set):
 
 ```text
-python AAM_module/tools/train_sd_baseline.py --root <frozen_root> \
+python sd_model/training/train_sd_baseline.py --root <frozen_root> \
     --input su --epochs 150 --out outputs/sd_baseline/su
 ```
 
@@ -97,7 +97,7 @@ metrics, plots, zero baseline and summary table all refer to the same models.
 Evaluate closed-loop behaviour on the held-out runs:
 
 ```text
-python AAM_module/tools/evaluate_sd_rollout.py --root <frozen_root> \
+python sd_model/evaluation/evaluate_sd_rollout.py --root <frozen_root> \
     --mode hist3 --checkpoint sd_model/checkpoints/hist3.pt \
     --out sd_model/data/rollout_hist3.json
 ```
@@ -111,8 +111,8 @@ The full 28-run frozen dataset behind the current checkpoints and metrics:
 splits, train-only normalization, ~3768 aligned 50 ms transitions per run
 (~105k total). Built by `AAM_module/tools/collect_run_structure.py` and the
 Stage 16-18 pipeline, frozen at `AAM_module/datasets/master_v1_frozen`.
-Full details and numbers: `AAM_module/stage19_sd_baseline.md` and
-`AAM_module/stage19b_sd_variance_analysis.md`.
+Full details and numbers: `sd_model/docs/stage19_sd_baseline.md` and
+`sd_model/docs/stage19b_sd_variance_analysis.md`.
 
 ## Later stages in this folder
 
@@ -137,8 +137,8 @@ Stage docs: `AAM_module/stage20_system_factor_encoder.md`,
 `stage23_frozen/dz2_nodp_holdq/` is the immutable frozen copy of the
 selected Stage 22 model (encoder + SD + belief, `metrics.json` statistics,
 explicit `protocol.json`, checksums and provenance). Created by
-`AAM_module/tools/freeze_sd_model.py`; the frozen copy reproduces the Stage
+`sd_model/freezing/freeze_sd_model.py`; the frozen copy reproduces the Stage
 22 rollout metrics exactly (verified by
-`AAM_module/tools/verify_frozen_sd_model.py`, verdict under
+`sd_model/freezing/verify_frozen_sd_model.py`, verdict under
 `AAM_module/results/stage23_frozen_verify/`). The AAM stages consume this
 copy as the stopped-gradient `z = mu(e)` source and must not fine-tune it.

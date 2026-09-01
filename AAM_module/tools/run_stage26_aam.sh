@@ -25,20 +25,20 @@ fi
     --root "$frozen" --model-dir "$aam_dir" \
     --out "$aam_dir/zhat_by_tick.json"
 
-"$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+"$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
     --root "$frozen" --model-dir "$frozen_sdz" \
     --latent-mode true zhat zero shuffled mean \
     --zhat-json "$aam_dir/zhat_by_tick.json" \
     --horizons 1 5 10 20 --q-rollout hold-start \
     --out "$out_root/rollout_gate.json"
 
-"$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+"$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
     --root "$frozen" --model-dir "$no_latent" \
     --latent-mode true \
     --horizons 1 5 10 20 --q-rollout hold-start \
     --out "$out_root/rollout_none.json"
 
-"$python_bin" "$aam_root/tools/compare_sd_z_rollouts.py" \
+"$python_bin" "$repo_root/sd_model/evaluation/compare_sd_z_rollouts.py" \
     --candidate "$out_root/rollout_gate.json" --candidate-mode zhat \
     --control "$out_root/rollout_none.json" --control-mode true \
     --horizon 20 --out "$out_root/zhat_vs_none_h20.json"

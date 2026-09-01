@@ -20,7 +20,7 @@ fi
 # Re-score the completed v3 arms with controls constructed exclusively from
 # training runs and with both explicit future-q contracts.
 for q_protocol in recorded hold-start; do
-    "$python_bin" "$repo_root/AAM_module/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$dataset" \
         --model-dir "$encoder_dir" \
         --latent-mode true zero shuffled random mean nominal \
@@ -28,7 +28,7 @@ for q_protocol in recorded hold-start; do
         --q-rollout "$q_protocol" \
         --out "$encoder_dir/rollout_train_controls_${q_protocol}.json"
 
-    "$python_bin" "$repo_root/AAM_module/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$dataset" \
         --model-dir "$none_dir" \
         --latent-mode true \
@@ -40,7 +40,7 @@ done
 # Oracle-ceiling arm: identical v3 observation, belief, q, state-loss, and
 # curriculum protocol, but the normalized six physical factors condition the
 # SD directly instead of passing through a learned two-dimensional encoder.
-"$python_bin" "$repo_root/AAM_module/tools/train_sd_z.py" \
+"$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
     --root "$dataset" \
     --latent-source direct --latent-dim 6 --obs-drop 8,9,10,11 \
     --unroll 10 --l1-weight 1.0 --rollout-weight 1.0 --state-loss-weight 1.0 \
@@ -48,7 +48,7 @@ done
     --out "$direct_dir"
 
 for q_protocol in recorded hold-start; do
-    "$python_bin" "$repo_root/AAM_module/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$dataset" \
         --model-dir "$direct_dir" \
         --latent-mode true zero shuffled random mean nominal \
@@ -56,13 +56,13 @@ for q_protocol in recorded hold-start; do
         --q-rollout "$q_protocol" \
         --out "$direct_dir/rollout_train_controls_${q_protocol}.json"
 
-    "$python_bin" "$repo_root/AAM_module/tools/compare_sd_z_rollouts.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/compare_sd_z_rollouts.py" \
         --candidate "$direct_dir/rollout_train_controls_${q_protocol}.json" \
         --control "$none_dir/rollout_${q_protocol}.json" \
         --horizon 20 \
         --out "$v4_root/direct_true_vs_none_h20_${q_protocol}.json"
 
-    "$python_bin" "$repo_root/AAM_module/tools/compare_sd_z_rollouts.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/compare_sd_z_rollouts.py" \
         --candidate "$encoder_dir/rollout_train_controls_${q_protocol}.json" \
         --control "$none_dir/rollout_${q_protocol}.json" \
         --horizon 20 \

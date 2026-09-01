@@ -148,36 +148,7 @@ PPO_AAM_FD/scripts/train_residual_adapter.py <frozen_base.pt> \
 PPO_AAM_FD/scripts/evaluate_gates.py <frozen_base.pt> \
   --residual_checkpoint <arm>/model_399.pt --residual_alpha 0.5
 
-# rebuild the thesis
-cd thesis/thesis/hydraulic_manipulator_thesis && pdflatex main.tex
-```
 
 ---
 
-## Traps that have cost time here
 
-**Isaac Sim deadlocks on the second environment build in one process.**
-`env.close()` then `gym.make()` again wedges, with the process alive at ~109 %
-CPU and silent for 15 to 40 minutes. Never loop meshes in one process;
-`score_per_mesh.sh` runs one process per mesh and merges with `merge_gates.py`.
-
-**Silence is not progress.** Long runs print every 10 %, and
-`supervise_training.sh` treats a log that stops growing as a failure, killing and
-resuming from the newest checkpoint. Before that existed one hang cost a night.
-
-**A marginal median is not an effect size.** Between two runs identical by
-construction the marginal median moved 6.386 to 7.361 mm, which reads as +15.3 %,
-while the paired difference straddled zero. Nine hundred steps of contact
-dynamics amplify floating-point non-determinism across processes. Only the
-paired difference survives it.
-
-**Verify the perturbation reached the plant before analysing.** Read
-`mass_scale_mean` from the trace or `factors.mass_scale` from the report.
-`MULAG_MASS_BIMODAL=1.0,X` assigns half the environments to each mode from
-spawn, so it is not a purely mid-episode change; omit it entirely for a uniform
-step. One robustness conclusion was withdrawn and one dose-response reading
-corrected for want of this check.
-
-**Three meshes cannot certify a thin pass.** Ground contact varies ±0.042 across
-meshes. Treat any contact margin under about 0.05 as unresolved until it is
-measured on six.

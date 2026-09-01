@@ -47,6 +47,9 @@ import numpy as np
 import torch
 
 
+REPO = Path(__file__).resolve().parents[2]  # for sd_model.* (SD tools moved there)
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 AAM_ROOT = Path(__file__).resolve().parents[1]
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
@@ -66,7 +69,7 @@ from aam_data import (  # noqa: E402
 )
 from aam_data.frozen import CHECKSUM_FILE  # noqa: E402
 from aam_data.sd import FACTOR_KEYS  # noqa: E402
-from tools.train_sd_z import FactorEncoder  # noqa: E402
+from sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
 
 
 def load_frozen_encoder(model_dir: Path) -> tuple[torch.nn.Module, dict]:

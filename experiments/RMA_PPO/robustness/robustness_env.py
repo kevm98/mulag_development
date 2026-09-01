@@ -29,7 +29,7 @@ for extra in (REPO, REPO / "AAM_module"):
         sys.path.insert(0, str(extra))
 
 from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime  # noqa: E402
-from AAM_module.tools.train_sd_z import BeliefEncoder, SDz  # noqa: E402
+from sd_model.training.train_sd_z import BeliefEncoder, SDz  # noqa: E402
 
 from observation import VergeObservationAdapter  # noqa: E402
 from stress import Stress, StressedActuation  # noqa: E402

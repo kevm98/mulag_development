@@ -10,6 +10,12 @@ seed, same objective, same schedule, differing only in the columns supplied.
 Dropping (rather than zeroing) reduces the input dimension, so the estimator
 is sized for the contract a machine without pressure transducers could
 actually deliver.
+
+NOTE: this trains the OFFLINE AAM, which regresses z_AAM against the
+privileged target z_SD on the frozen collection. It is evidence that plant
+identity is recoverable from causal history. It is NOT the encoder deployed
+in the AF stack: that one (phi) has no target and is optimised jointly with
+the residual head under RL -- see PPO_AAM_FD/scripts/train_residual_adapter.py.
 """
 
 from __future__ import annotations

@@ -82,25 +82,25 @@ train_sd() {
         --seed 20260820
     )
     if [[ ! -e "$none_dir" || "$force" -eq 1 ]]; then
-        "$python_bin" "$aam_root/tools/train_sd_z.py" \
+        "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
             "${train_common[@]}" --latent-source none --out "$none_dir"
     fi
-    "$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$none_dir" --latent-mode zero \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$none_dir/rollout_hold-start.json"
 
     if [[ ! -e "$candidate_dir" || "$force" -eq 1 ]]; then
-        "$python_bin" "$aam_root/tools/train_sd_z.py" \
+        "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
             "${train_common[@]}" --latent-source encoder --latent-dim 2 \
             --out "$candidate_dir"
     fi
-    "$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$candidate_dir" \
         --latent-mode true zero shuffled random mean nominal \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$candidate_dir/rollout_gate.json"
-    "$python_bin" "$aam_root/tools/gate_stage31_sd.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/gate_stage31_sd.py" \
         --rollout "$candidate_dir/rollout_gate.json" \
         --metrics "$candidate_dir/metrics.json" \
         --horizon 20 --out "$candidate_dir/gate_verdict.json"
@@ -110,7 +110,7 @@ freeze_sd() {
     require_file "$candidate_dir/gate_verdict.json"
     require_file "$none_dir/rollout_hold-start.json"
     if [[ "$force" -eq 1 ]]; then freeze_sd_force=(--force); else freeze_sd_force=(); fi
-    "$python_bin" "$aam_root/tools/freeze_stage31_sd.py" \
+    "$python_bin" "$repo_root/sd_model/freezing/freeze_stage31_sd.py" \
         --src "$candidate_dir" --out "$frozen_sd" \
         --dataset-root "$frozen" \
         "${freeze_sd_force[@]}"

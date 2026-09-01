@@ -36,7 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = REPO / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 

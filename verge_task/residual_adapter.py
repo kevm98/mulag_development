@@ -61,7 +61,8 @@ class ResidualMLP(torch.nn.Module):
     """
 
     def __init__(self, base_mlp, *, base_dim, base_width, action_dim,
-                 history=20, latent_dim=8, hidden=64, alpha=0.25):
+                 history=20, latent_dim=8, hidden=64, alpha=0.25,
+                 history_feature_dim=None):
         super().__init__()
         self.base_mlp = base_mlp
         for parameter in self.base_mlp.parameters():
@@ -72,7 +73,18 @@ class ResidualMLP(torch.nn.Module):
         self.history = int(history)
         self.alpha = float(alpha)
 
-        feature_dim = self.base_dim + self.action_dim
+        # PLANT-ONLY history is the default worth using. Feeding the whole
+        # observation gives 66+4 features per step -- 1400 numbers over a 20-step
+        # window, almost all terrain and task state. A 53k-parameter head has
+        # ample room to fit that noise, which is why the benefit swung +1529% to
+        # -80% across seeds in BOTH directions.
+        #
+        # What identifies the plant is far smaller: what was COMMANDED against
+        # how the cylinders RESPONDED (extensions 12:16, velocities 16:20, plus
+        # the action). That signature is invariant to where the machine is on the
+        # terrain, which is exactly the property a plant latent needs.
+        feature_dim = int(history_feature_dim) if history_feature_dim else self.base_dim + self.action_dim
+        self.history_feature_dim = feature_dim
         self.encoder = torch.nn.Sequential(torch.nn.Linear(feature_dim, hidden), torch.nn.ELU())
         self.temporal = torch.nn.Sequential(
             torch.nn.Conv1d(hidden, hidden, kernel_size=5), torch.nn.ELU(),
@@ -94,7 +106,7 @@ class ResidualMLP(torch.nn.Module):
 
     def latent(self, flat_history):
         hist = flat_history.reshape(*flat_history.shape[:-1], self.history,
-                                    self.base_dim + self.action_dim)
+                                    self.history_feature_dim)
         z = self.encoder(hist)
         z = self.temporal(z.transpose(-1, -2))
         return self.to_latent(z.flatten(start_dim=-2))
@@ -102,7 +114,7 @@ class ResidualMLP(torch.nn.Module):
     def forward(self, latent):
         base_part = latent[..., : self.base_width]
         flat_history = latent[..., self.base_width:]
-        expected = self.history * (self.base_dim + self.action_dim)
+        expected = self.history * self.history_feature_dim
         if flat_history.shape[-1] != expected:
             raise ValueError(
                 f"expected {expected} history columns after {self.base_width} base "

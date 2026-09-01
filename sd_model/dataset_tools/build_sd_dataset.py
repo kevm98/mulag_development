@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 
 
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = Path(__file__).resolve().parents[2] / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 

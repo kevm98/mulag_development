@@ -133,6 +133,23 @@ p.add_argument(
     help="PPO epochs per rollout for trajectory-regularized PPO.",
 )
 p.add_argument(
+    "--anchor_context_dim",
+    type=int,
+    default=0,
+    help=(
+        "Evaluate the reference-KL anchor at NOMINAL context (trailing N columns "
+        "zeroed). Without it the anchor forbids context-sensitivity outright: the "
+        "reference ignores the context, so any context-dependence the policy "
+        "learns registers as KL-to-reference and is penalised -- a 1000x gradient "
+        "multiplier on those columns moved action sensitivity only 0.001% -> "
+        "0.004%. With it the anchor becomes KL(pi_ref(.|x) || pi(.|x, z=0)): the "
+        "base behaviour stays pinned, z-dependence is free. Same construction as "
+        "the modality-mask token in multisensory continual learning "
+        "(arXiv 2606.30988), and the same logic as residual policy learning "
+        "(Silver et al. 2018; Johannink et al. 2019)."
+    ),
+)
+p.add_argument(
     "--context_lr_multiplier",
     type=float,
     default=1.0,
@@ -1059,13 +1076,15 @@ def main() -> None:
                 future_coef=float(a.trajectory_future_coef),
                 max_update_kl=float(a.trajectory_max_update_kl),
                 max_reference_kl=float(a.trajectory_max_reference_kl),
+                anchor_context_dim=int(a.anchor_context_dim),
             ),
         )
         print(
             "[PPO3-1-TRAJECTORY] single-step reference PPO installed: "
             f"local={a.trajectory_local_coef:g} future={a.trajectory_future_coef:g} "
             f"update_kl<={a.trajectory_max_update_kl:g} "
-            f"reference_kl<={a.trajectory_max_reference_kl:g}; "
+            f"reference_kl<={a.trajectory_max_reference_kl:g} "
+            f"anchor_at_nominal_context={a.anchor_context_dim or 'off'}; "
             "DLS off, PPO sole controller",
             flush=True,
         )

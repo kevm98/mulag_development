@@ -33,10 +33,11 @@ for f in \
   [ -f "$f" ] && echo "$f" >> "$LIST"
 done
 # final model of every trained arm (residual_*, seed*_*)
-for d in "$CK"/residual_* "$CK"/seed*_* ; do
+for d in "$CK"/residual_* "$CK"/seed*_* "$CK"/rebal*_* "$CK"/long*_* ; do
   [ -d "$d" ] || continue
-  f="$d/model_399.pt"
-  [ -f "$f" ] && echo "$f" >> "$LIST"
+  for f in "$d/model_399.pt" "$d/model_799.pt" ; do
+    [ -f "$f" ] && echo "$f" >> "$LIST"
+  done
 done
 # tensorboard event files are small and carry the training curves
 find "$CK" -name 'events.out.tfevents.*' -size -20M 2>/dev/null >> "$LIST" || true

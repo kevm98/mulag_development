@@ -20,6 +20,12 @@ scoring.
 Usage:
     python train_aam.py --root datasets/master_v3_stage22_wide_frozen \\
         --aam-root <root>/aam/dataset --lag 5 --out outputs/aam_stage25/L5
+
+NOTE: this trains the OFFLINE AAM, which regresses z_AAM against the
+privileged target z_SD on the frozen collection. It is evidence that plant
+identity is recoverable from causal history. It is NOT the encoder deployed
+in the AF stack: that one (phi) has no target and is optimised jointly with
+the residual head under RL -- see PPO_AAM_FD/scripts/train_residual_adapter.py.
 """
 
 from __future__ import annotations

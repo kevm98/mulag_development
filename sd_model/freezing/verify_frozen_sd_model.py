@@ -42,7 +42,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = REPO / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 
@@ -52,8 +52,8 @@ from aam_data import sha256_file  # noqa: E402
 CHECKSUM_FILE = "checksums.sha256"
 REF_ROLLOUT = "evidence/rollout_gate.json"
 NONE_CONTROL = "evidence/none_rollout_hold-start.json"
-EVALUATOR = AAM_ROOT / "tools/evaluate_sd_z_rollout.py"
-COMPARER = AAM_ROOT / "tools/compare_sd_z_rollouts.py"
+EVALUATOR = REPO / "sd_model/evaluation/evaluate_sd_z_rollout.py"
+COMPARER = REPO / "sd_model/evaluation/compare_sd_z_rollouts.py"
 GATE_CHECKER = AAM_ROOT / "tools/check_stage22_gate.py"
 RTOL = 1e-4
 ATOL = 1e-9

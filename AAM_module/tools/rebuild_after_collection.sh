@@ -50,7 +50,7 @@ echo "== timebase samples =="
 $PY "$AAM_ROOT/tools/build_timebase_samples.py" --root "$FROZEN" --force
 
 echo "== SD dataset =="
-$PY "$AAM_ROOT/tools/build_sd_dataset.py" --root "$FROZEN" --force
+$PY "$AAM_ROOT/../sd_model/dataset_tools/build_sd_dataset.py" --root "$FROZEN" --force
 
 if [ "$SKIP_TRAIN" = "1" ]; then
   echo "skip-train set; pipeline ready at $FROZEN"
@@ -60,18 +60,18 @@ fi
 echo "== Stage 19 no-latent baselines (full-set retrain) =="
 for mode in su su_delta squ hist3 hist6; do
   echo "  -- $mode"
-  $PY "$AAM_ROOT/tools/train_sd_baseline.py" --root "$FROZEN" \
+  $PY "$AAM_ROOT/../sd_model/training/train_sd_baseline.py" --root "$FROZEN" \
       --input "$mode" --epochs 150 --out "$AAM_ROOT/outputs/sd_baseline_v2/$mode"
 done
 
 echo "== Stage 21 SD_z (MLP-encoder latent, dz=2, full curriculum) =="
-$PY "$AAM_ROOT/tools/train_sd_z.py" --root "$FROZEN" --latent-dim 2 \
+$PY "$AAM_ROOT/../sd_model/training/train_sd_z.py" --root "$FROZEN" --latent-dim 2 \
     --unroll 10 --l1-weight 1.0 --rollout-weight 1.0 --rollout-ramp-epochs 60 \
     --epochs 300 --patience 30 --seed 20260808 \
     --out "$AAM_ROOT/outputs/sd_z_stage21_v2/dz2_ramp60"
 
 echo "== Stage 21 SD_z (direct factors, dz=6) =="
-$PY "$AAM_ROOT/tools/train_sd_z.py" --root "$FROZEN" --latent-dim 2 \
+$PY "$AAM_ROOT/../sd_model/training/train_sd_z.py" --root "$FROZEN" --latent-dim 2 \
     --latent-source direct --unroll 10 --l1-weight 1.0 --rollout-weight 1.0 \
     --rollout-ramp-epochs 60 --epochs 300 --patience 30 --seed 20260808 \
     --out "$AAM_ROOT/outputs/sd_z_stage21_v2/direct_dz6"
@@ -79,7 +79,7 @@ $PY "$AAM_ROOT/tools/train_sd_z.py" --root "$FROZEN" --latent-dim 2 \
 echo "== Stage 22 gate ablation (z_true vs z_zero vs z_shuffled) =="
 for model in dz2_ramp60 direct_dz6; do
   for mode in true zero shuffled; do
-    $PY "$AAM_ROOT/tools/evaluate_sd_z_rollout.py" --root "$FROZEN" \
+    $PY "$AAM_ROOT/../sd_model/evaluation/evaluate_sd_z_rollout.py" --root "$FROZEN" \
         --model-dir "$AAM_ROOT/outputs/sd_z_stage21_v2/$model" \
         --latent-mode "$mode" --horizons 1 5 10 20 --device cuda \
         --out "$AAM_ROOT/outputs/sd_z_stage21_v2/$model/rollout_latent_$mode.json"

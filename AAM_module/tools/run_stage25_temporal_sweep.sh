@@ -30,7 +30,7 @@ for lag in 5 10 20 40; do
     "$python_bin" "$aam_root/tools/smooth_aam_predictions.py" \
         --input "$lag_dir/zhat_by_tick.json" --method rolling --window 20 \
         --out "$lag_dir/zhat_rolling20.json"
-    "$python_bin" "$aam_root/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$frozen_model" \
         --latent-mode zhat --zhat-json "$lag_dir/zhat_rolling20.json" \
         --horizons 1 5 10 20 --q-rollout hold-start \

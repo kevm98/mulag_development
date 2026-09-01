@@ -255,7 +255,11 @@ class OnPolicyHistoryRecorder:
 
 
 class AAMEstimator(nn.Module):
-    """phi: causal mismatch features -> context estimate."""
+    """phi: causal mismatch features -> context estimate.
+
+    This is THE deployed adaptation encoder. Do not confuse it with
+    ``online.SmokeAAMEstimator``, which is an untrained CPU test skeleton.
+    """
 
     def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int = 64,
                  context_dim: int = CONTEXT_DIM) -> None:

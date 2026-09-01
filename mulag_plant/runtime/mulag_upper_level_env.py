@@ -2210,10 +2210,26 @@ class MulagUpperLevelEnv(DirectRLEnv):
             (n,), float(getattr(self.cfg, "actuator_stress_lag_tau_s", 0.0)), device=device
         )
 
+        # CURRENT mass, not the value latched at reset. `_deployment_factor_values`
+        # is written once per episode, while a mid-episode mass step writes
+        # `_mass_step_scale_now`. Reading only the latched column made the context
+        # report the PRE-step mass for the whole episode -- after a 1.0 -> 3.0 flip
+        # it said 1.0 while the plant was at 3.0. A privileged signal that is
+        # wrong for half of every episode is worse than none, and the policy
+        # correctly learned to ignore it: context sensitivity stayed at ~0.004% of
+        # action scale regardless of the anchor or a 1000x gradient multiplier.
         mass = torch.ones(n, device=device)
         values = getattr(self, "_deployment_factor_values", None)
         if values is not None and values.shape[-1] > 4:
             mass = values[:, 4].to(device=device, dtype=torch.float32)
+        stepped = getattr(self, "_mass_step_applied", None)
+        step_now = getattr(self, "_mass_step_scale_now", None)
+        if stepped is not None and step_now is not None:
+            mass = torch.where(
+                stepped.to(device),
+                step_now.to(device=device, dtype=torch.float32),
+                mass,
+            )
 
         raw = torch.stack((alpha, tau, delay, mass), dim=-1)
         return normalized_context(raw)

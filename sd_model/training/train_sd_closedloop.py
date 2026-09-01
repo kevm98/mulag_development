@@ -49,12 +49,12 @@ from torch import nn
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = REPO / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 
 from aam_data import load_split  # noqa: E402
-from tools.train_sd_baseline import (  # noqa: E402
+from sd_model.training.train_sd_baseline import (  # noqa: E402
     CHANNEL_GROUPS,
     SD0MLP,
     input_dim_for,

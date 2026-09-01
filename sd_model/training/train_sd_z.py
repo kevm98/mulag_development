@@ -1,6 +1,19 @@
 #!/usr/bin/env python
 """Stage 20/21: privileged System Factor Encoder ``z_i = mu_psi(e_i)``.
 
+NAMING (read before touching this file): the encoders defined here belong to the
+SYSTEM-DYNAMICS SURROGATE, not to the AAM, despite living under ``AAM_module/``.
+
+  FactorEncoder  mu : e (6-D privileged factors) -> z_SD   [training only]
+  BeliefEncoder       causal (state, action) window -> belief h_t [SD-internal]
+  SDz                 the surrogate itself: an ANALYSIS model, never an actuator
+
+The AAM is a different component: it maps observable causal history -> z_AAM,
+the deployable estimate of z_SD. BeliefEncoder also reads causal history, which
+is the easiest thing to confuse with the AAM; it feeds SD_z, never a controller.
+Nothing in this file is part of any deployed control stack.
+
+
 Stage 20 spec (items 51-53):
 
 - ``e_i`` is the 6-D physical deployment factor vector
@@ -14,7 +27,7 @@ Stage 20 spec (items 51-53):
 - Latent bottleneck (item 53): ``d_z`` swept over {2, 4, 8} (2 and 4 are true
   bottlenecks below d_e=6; 8 is the reference dimension, not a bottleneck).
   The chosen latent is the SMALLEST whose held-out ROLLOUT performance stays
-  close to the best (evaluate with tools/evaluate_sd_rollout.py --z-latent).
+  close to the best (evaluate with sd_model/evaluation/evaluate_sd_rollout.py --z-latent).
 
 Stage 21 combined loss (spec item 54): when ``--unroll > 1`` the trainer
 minimises the weighted combination
@@ -78,7 +91,7 @@ from torch import nn
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = REPO / "AAM_module"  # SD tools live in sd_model/; aam_data stays under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 

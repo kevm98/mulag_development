@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Closed-loop rollout evaluation for the Stage 20-22 privileged SD_z model.
 
-Same protocol as ``tools/evaluate_sd_rollout.py`` (one-step + free-running
+Same protocol as ``sd_model/evaluation/evaluate_sd_rollout.py`` (one-step + free-running
 multi-step with the model's own state fed back, recorded commands) but for
 ``SD_z(s_t, u_t, q_t, h_t, z_i)``: the latent ``z_i`` is computed once per
 run from the run's true factor vector with the TRAIN-ONLY normalization
@@ -62,12 +62,12 @@ import torch
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-AAM_ROOT = Path(__file__).resolve().parents[1]
+AAM_ROOT = REPO / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 
 from aam_data import load_runs_info, load_split  # noqa: E402
-from tools.train_sd_z import (  # noqa: E402
+from sd_model.training.train_sd_z import (  # noqa: E402
     FACTOR_KEYS,
     BeliefEncoder,
     FactorEncoder,

@@ -28,9 +28,9 @@ if [[ -e "$none_dir/metrics.json" || -e "$none_dir/sd.pt" ]]; then
     echo "refusing to overwrite existing no-latent arm: $none_dir" >&2
     exit 2
 fi
-"$python_bin" "$repo_root/AAM_module/tools/train_sd_z.py" \
+"$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
     "${train_common[@]}" --latent-source none --out "$none_dir"
-"$python_bin" "$repo_root/AAM_module/tools/evaluate_sd_z_rollout.py" \
+"$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
     --root "$dataset" --model-dir "$none_dir" --latent-mode true \
     --horizons 1 5 10 20 --q-rollout hold-start \
     --out "$none_dir/rollout_hold-start.json"
@@ -42,16 +42,16 @@ for rank_weight in 0.25 1.0; do
         echo "refusing to overwrite existing candidate arm: $candidate_dir" >&2
         exit 2
     fi
-    "$python_bin" "$repo_root/AAM_module/tools/train_sd_z.py" \
+    "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
         "${train_common[@]}" --latent-source encoder --latent-dim 2 \
         --latent-rank-weight "$rank_weight" --latent-rank-margin 0.01 \
         --latent-rank-control both --out "$candidate_dir"
-    "$python_bin" "$repo_root/AAM_module/tools/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$dataset" --model-dir "$candidate_dir" \
         --latent-mode true zero shuffled random mean nominal \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$candidate_dir/rollout_gate.json"
-    "$python_bin" "$repo_root/AAM_module/tools/compare_sd_z_rollouts.py" \
+    "$python_bin" "$repo_root/sd_model/evaluation/compare_sd_z_rollouts.py" \
         --candidate "$candidate_dir/rollout_gate.json" \
         --control "$none_dir/rollout_hold-start.json" --horizon 20 \
         --out "$candidate_dir/true_vs_none_h20.json"

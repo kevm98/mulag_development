@@ -55,14 +55,17 @@ import numpy as np
 import torch
 from torch import nn
 
-AAM_ROOT = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+AAM_ROOT = Path(__file__).resolve().parents[2] / "AAM_module"  # SD tools live in sd_model/; aam_data and datasets stay under AAM_module
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
 
 from aam_data import load_split  # noqa: E402
 from aam_data.sample_mask import usable_rows  # noqa: E402
 from tools.train_stage31_aam import AAM  # noqa: E402
-from tools.train_sd_z import (  # noqa: E402
+from sd_model.training.train_sd_z import (  # noqa: E402
     BeliefEncoder, SDz, causal_windows_np, group_rmse,
     HYD_STATE_DIM, CMD_DIM, MECH_CONTEXT_DIM, TARGET_DIM,
 )

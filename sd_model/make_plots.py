@@ -40,7 +40,7 @@ if str(REPO) not in sys.path:
 if str(REPO / "AAM_module") not in sys.path:
     sys.path.insert(0, str(REPO / "AAM_module"))
 
-from tools.train_sd_baseline import (  # noqa: E402
+from sd_model.training.train_sd_baseline import (  # noqa: E402
     CHANNEL_GROUPS,
     SD0MLP,
     TARGET_DIM,
@@ -329,7 +329,7 @@ def main() -> None:
     plot_r2_comparison(summary, zero["all"], out_dir)
 
     # Optional: rollout + per-domain plots from data/rollout_<mode>.json files
-    # produced by tools/evaluate_sd_rollout.py.
+    # produced by sd_model/evaluation/evaluate_sd_rollout.py.
     rollout = {}
     for m in MODES:
         rpath = data_dir / f"rollout_{m}.json"

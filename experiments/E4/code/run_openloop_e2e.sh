@@ -79,7 +79,7 @@ echo "== 4/6 build the 18-feature AAM windows =="
 mkdir -p "$out"
 
 echo "== 5/6 no-latent baseline on THIS data =="
-"$py" "$aam/tools/train_sd_z.py" \
+"$py" "$repo/sd_model/training/train_sd_z.py" \
     --root "$frozen" --history-lag 6 --belief-dim 16 \
     --unroll 5 --l1-weight 1.0 --rollout-weight 1.0 \
     --state-loss-weight 1.0 --rollout-q-mode hold-start \
@@ -88,7 +88,7 @@ echo "== 5/6 no-latent baseline on THIS data =="
     --out "$out/sd_none"
 
 echo "== 6/6 joint AAM+SD, no privileged encoder =="
-"$py" "$aam/tools/train_sd_aam_e2e.py" \
+"$py" "$repo/sd_model/training/train_sd_aam_e2e.py" \
     --root "$frozen" --lag 20 --latent-dim 2 --epochs 60 --device cpu \
     --unroll 5 --rollout-weight 1.0 --l1-weight 1.0 --tf-floor 0.2 \
     --rollout-ramp-epochs 20 --out "$out/sd_aam_e2e_L20_d2_unroll5"
