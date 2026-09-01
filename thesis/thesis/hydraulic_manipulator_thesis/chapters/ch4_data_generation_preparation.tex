@@ -180,11 +180,14 @@ Section~\ref{sec:data:combining}.
 \section{Randomized Parameter Space of the Simscape Campaign}
 \label{sec:data:randomization}
 
-This section records the Simscape randomization design. No reported model is
-trained on this curriculum; it is retained as collection provenance and
-because its compliance analysis (Section~\ref{sec:data:compliance}) informed
-the IsaacLab factor design. Readers concerned only with trained models may
-continue at Section~\ref{sec:data:closed-loop}.
+This section and the next record the Simscape randomization design and the
+procedure that executed it. No reported model is trained on this curriculum. It
+is retained as collection provenance and because its compliance analysis
+(Section~\ref{sec:data:compliance}) informed the IsaacLab factor design. The
+export the actuator models are actually fitted on is a separate closed-loop
+collection on the nominal plant, described in
+Section~\ref{sec:data:combining}. Readers concerned only with trained models
+may continue at Section~\ref{sec:data:open-loop}.
 
 \subsection{Sampling Design}
 
@@ -267,8 +270,10 @@ controller cannot anticipate.
 \section{Closed-Loop Data Collection}
 \label{sec:data:closed-loop}
 
-Algorithm~\ref{alg:data:closed-loop} summarizes the procedure. The parameter
-table is fixed before simulation, and each run receives a new reference path.
+Algorithm~\ref{alg:data:closed-loop} summarizes the procedure that produced
+the curriculum of the preceding section, which no reported result uses. The
+parameter table is fixed before simulation, and each run receives a new
+reference path.
 
 \begin{algorithm}[tb]
   \small

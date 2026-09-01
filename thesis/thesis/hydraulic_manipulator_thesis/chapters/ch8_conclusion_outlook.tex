@@ -22,12 +22,13 @@ last two concern online adaptation.
 
 \textbf{The inverse and forward representation identified in Simscape transfers
 to the deployment simulation without retraining (RQ1, RQ2).} The inverse model
-was trained on randomised Simscape campaigns and evaluated on all $118$ IsaacLab
+was trained on Simscape data alone, the aligned closed-loop export of
+Section~\ref{sec:data:combining}, and evaluated on all $118$ IsaacLab
 deployment runs, drawn entirely outside that training distribution, where its
 teacher-forced one-step extension error is millimetre-scale and nearly flat
 across domains: $\unit[2.36]{mm}$ on the combined runs against
-$\unit[3.36]{mm}$ on nominal, with the held-out group no worse than the domains
-used in training. The transfer claim is made in that one-step regime, which is
+$\unit[3.36]{mm}$ on nominal, with the held-out combined-test group no worse
+than the deployment domains the estimator was fitted on. The transfer claim is made in that one-step regime, which is
 how the policy uses the model; fed its own predictions instead, the composite
 diverges in every run, for the saturation reason set out in
 Section~\ref{sec:models:id-trust}. No deployment-specific retraining was required, and
@@ -73,8 +74,9 @@ claim here rests on its position relative to the other two. Only one training
 run exists per stack, so seed variance is not estimated even for the matched
 pair. Claims about the adaptation path are carried instead by a paired within-stack
 comparison, in which three arms share the frozen base, the architecture, the
-budget, the reward and the seed, and differ only in whether the residual can see
-its history.
+budget and the reward, and differ only in whether the residual can see its
+history. At seed $17$ they share the training seed too, which is the one fully
+single-variable triple (Section~\ref{sec:eval:attribution}).
 
 \textbf{A learned policy can replace the classical controller at runtime
 (RQ4).} The damped-least-squares controller supplies privileged demonstrations
@@ -290,8 +292,8 @@ Section~\ref{sec:concl:future}.
 
 \section{Contributions}
 
-Section~\ref{sec:intro:contributions} stated five contributions. Their standing
-at the end of the work is as follows.
+Section~\ref{sec:intro:contributions} stated six contributions. Their standing
+at the end of the work is as follows, in the order they were stated.
 
 \textbf{Transferable hydraulic actuator learning} is delivered. Both
 representations were identified from Simscape and realised in IsaacLab, and the
@@ -311,26 +313,42 @@ of the high-fidelity model it replaces cannot support. The qualification stated 
 IsaacLab and is therefore the reference condition rather than an independent
 competitor to the inverse and forward pair.
 
-\textbf{Policy-only control through learned hydraulics} is delivered for both
-representations, with the classical controller absent from the deployed loop.
+\textbf{Policy-only control through learned hydraulics} is demonstrated for
+both representations, with the classical controller absent from the deployed
+loop. It is demonstrated rather than certified. On worst-mesh, worst-family
+statistics both stacks fail the lateral gate and \ppoIDFD{} fails head
+alignment badly (Section~\ref{sec:eval:tracking}), so what the evidence
+supports is that a policy can drive the task through learned hydraulics with
+useful tracking, not that either stack satisfies the whole eight-gate
+acceptance contract.
 
-The measurements of \textbf{robustness and the limits of adaptation} are
-delivered, and their main product is the discipline that produced them rather
-than any single number. Two findings exist only because of it: that a selection
+The \textbf{decision procedure for online adaptation} is delivered, and its
+main product is the discipline that produced it rather than any single number.
+Its two measurements, whether plant identity is present in the data the machine
+produces and what a privileged latent buys in the closed loop, both precede
+estimator training and either can end the effort before it is incurred. Two
+further findings exist only because of the same discipline: that a selection
 window covering $8.9$ of $26$\,m certifies a third of an episode, and that a
-quantity which is gated but not priced is traded away by the optimizer. The
-causal plant estimator and the bounded adaptation path behave as specified, with
-no privileged access, no future information, bounded output, and reversion to
-the robust actuator path on invalid input. They remain enablers of this
-contribution rather than claims in their own right.
+quantity which is gated but not priced is traded away by the optimizer.
 
-The \textbf{eight-gate promotion criterion} is delivered as the non-reward
-criterion the training loop and the checkpoint selection both use, which is the
-role it was built for and the role every result here gives it. One property is
-recorded for reuse: five of the eight gates separate the matched pair and carry
-the comparative claims, while lateral, hard impacts and tool acceleration do not
-(Section~\ref{sec:sys:gates}). Re-deriving those three against the
-widened trajectory library is specification work rather than control work.
+\textbf{Online adaptation on a saturating actuator} is the finding stated
+above: with the inverse model in the command path the estimate is informative
+and the closed-loop effect is absent, because the correction is added to a
+command already resting on its clip, and moving the correction onto the valve
+command converts the same information into a large gain on the seeds where the
+method works. It stands as a demonstrated mechanism. The median of five seeds
+does not meet the pre-registered bar, so it is not yet a general method.
+
+Two enablers are recorded rather than claimed. The causal plant estimator and
+the bounded adaptation path behave as specified, with no privileged access, no
+future information, bounded output, and reversion to the robust actuator path on
+invalid input. The eight-gate promotion criterion serves as the non-reward
+criterion the training loop and the checkpoint selection both use, and one
+property of it is worth reuse: five of the eight gates separate the matched pair
+and carry the comparative claims, while lateral, hard impacts and tool
+acceleration do not (Section~\ref{sec:sys:gates}). Re-deriving those three
+against the widened trajectory library is specification work rather than control
+work.
 
 \section{Limitations}
 \label{sec:conclusion:limitations}

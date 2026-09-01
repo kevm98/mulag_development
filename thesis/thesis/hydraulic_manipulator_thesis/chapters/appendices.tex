@@ -44,12 +44,21 @@ the reduced-order model and the identification data were sampled.
 \end{table}
 
 Two derived latencies follow from Table~\ref{tab:app:rates} and are used in
-Section~\ref{sec:eval:delay}. The AAM consumes a history of $20$ rows on the
-$\unit[50]{ms}$ grid, so its input window is exactly $\unit[1.0]{s}$ and no
-estimate at all is available for the first $\unit[1.0]{s}$ after a reset; until
-then the adapter is bypassed and the frozen inverse action is returned
-unchanged. Its output smoother averages five consecutive predictions, which adds
-a further $\unit[250]{ms}$ of group delay.
+Section~\ref{sec:eval:delay}. Both belong to the offline AAM and the ID adapter
+it fed, which is the earlier path of Section~\ref{sec:models:chain}. The AAM
+consumes a history of $20$ rows on the $\unit[50]{ms}$ grid, so its input
+window is exactly $\unit[1.0]{s}$ and no estimate at all is available for the
+first $\unit[1.0]{s}$ after a reset; until then that adapter is bypassed and the
+frozen inverse action is returned unchanged. Its output smoother averages five
+consecutive predictions, which adds a further $\unit[250]{ms}$ of group delay.
+
+The deployed \ppoAAMFD{} residual of Section~\ref{sec:ctrl:af-residual} has
+neither latency and no inverse model to fall back to. Its encoder reads $20$
+rows on the control grid, so its window is $\unit[333]{ms}$, the window is
+carried in the observation and zero-filled at start rather than gated, and no
+smoother is applied. Nothing is bypassed: the residual is exactly zero at
+construction because its head is zero-initialised, so a zero-filled window
+reproduces the frozen base rather than switching to another path.
 
 \section{Command-Path Limits}
 
@@ -60,9 +69,12 @@ advise it. They are listed in Table~\ref{tab:app:limits}.
   \centering
   \caption{Limits enforced on the command path, per cylinder where applicable.
   Valve command limits and the adapter residual bound are stored inside the
-  frozen adapter checkpoint (\texttt{command\_limits},
+  frozen ID-adapter checkpoint (\texttt{command\_limits},
   \texttt{residual\_bound}); lead caps and the c3 reserve are read from the
-  stored evaluation records.}
+  stored evaluation records. The residual bound row belongs to the ID adapter
+  of Section~\ref{sec:models:chain}. The deployed \ppoAAMFD{} residual is
+  bounded differently, by $\alpha\tanh(\cdot)$ at $\alpha = 0.5$ on the valve
+  command (Section~\ref{sec:ctrl:af-residual}).}
   \label{tab:app:limits}
   \small
   \begin{tabular}{llll}
@@ -84,10 +96,14 @@ advise it. They are listed in Table~\ref{tab:app:limits}.
 The lead cap is the mechanism by which the reference governor prevents the
 commanded target from running away from the measured state, and the c3 reserve
 is enforced by the solver while headroom is still scored against the original
-stroke, so the gate is not satisfied by moving the goalposts. The adapter
-residual bound is what makes the adaptive path fail safe: an adapter output that
-is invalid, uninitialised or late is replaced by zero, which returns the stack
-to the frozen-inverse configuration rather than to an untested one.
+stroke, so the gate is not satisfied by moving the goalposts. The ID adapter's
+residual bound is what made that path fail safe: an adapter output that is
+invalid, uninitialised or late is replaced by zero, which returns the stack to
+the frozen-inverse configuration rather than to an untested one. The deployed
+residual fails safe by the same principle at a different site. Its correction is
+bounded by $\alpha\tanh(\cdot)$ whatever the head produces, and setting
+$\alpha$ to zero at evaluation time recovers the frozen base exactly, which is
+the property the control arm of Section~\ref{sec:eval:attribution} relies on.
 
 \section{Course and Episode Geometry}
 
@@ -343,12 +359,23 @@ reader can establish whether a file on disk is the one that produced a number
 here. This matters more than usual in this project, because resumed training
 runs overwrite checkpoints in place.
 
+Two adaptive architectures appear in the table and they are not
+interchangeable. \texttt{headroom\_priced\_v1} is the earlier
+latent-conditioned policy, in which the residual corrected the inverse model's
+output. It carries the checkpoint-selection table of
+Section~\ref{sec:eval:horizon} and the latent substitution arms of
+Appendix~\ref{app:results}, and nothing else. Every adaptation result in
+Section~\ref{sec:eval:adaptation} is produced by the deployed stack instead:
+the frozen base \texttt{phase1\_init\_70.pt} wrapped by one of the residual
+checkpoints below.
+
 \begin{table}[htbp]
   \centering
   \caption{Frozen artifacts and their SHA-256 digests (first $32$ hex digits
   shown). ``Frozen'' means the file's weights were not updated by any
-  subsequent stage; the three policy checkpoints are the ones evaluated in
-  Chapter~\ref{chap:evaluation}.}
+  subsequent stage. The residual checkpoints are the trained arms of
+  Tables~\ref{tab:eval:control-arm} and~\ref{tab:eval:arms}; each is evaluated
+  on top of the frozen base above it.}
   \label{tab:app:hashes}
   \scriptsize
   \begin{tabular}{lll}
@@ -362,12 +389,27 @@ runs overwrite checkpoints in place.
     \texttt{best\_fd\_cylinder\_strict.pt} & forward model, frozen
       & \texttt{1f41e44309a8f320430a3382ca88ce5f} \\
     \midrule
-    \texttt{headroom\_priced\_v1/model\_299.pt} & \ppoAAMFD{} policy
-      & \texttt{aaf6b4bab7cfeac53fb95a3d15470cde} \\
     \texttt{rom\_s6\_aligned/model\_598.pt} & \ppoROM{} policy
       & \texttt{ce7e3ab9649b1193f123f9f91107bbf8} \\
     \texttt{idfd\_s6\_aligned/model\_598.pt} & \ppoIDFD{} policy
       & \texttt{06533b8e8614b0ad982dd8c238a17772} \\
+    \texttt{headroom\_priced\_v1/model\_299.pt} & earlier latent-conditioned
+      policy & \texttt{aaf6b4bab7cfeac53fb95a3d15470cde} \\
+    \midrule
+    \texttt{distilled\_v1/phase1\_init\_70.pt} & \ppoAAMFD{} frozen base
+      & \texttt{641e476cfcd765a8d68a17980d6cbbf2} \\
+    \texttt{rebal17\_history/model\_399.pt} & residual, seed $17$
+      & \texttt{ea39150fd2919ce96aa1acdbbdc9d65d} \\
+    \texttt{rebal23\_history/model\_399.pt} & residual, seed $23$
+      & \texttt{63da26e9b9710b2f54715d7d70e82d59} \\
+    \texttt{rebal101\_history/model\_399.pt} & residual, seed $101$
+      & \texttt{f5a400f3b7e66b46a0cca11142a67d70} \\
+    \texttt{rebal42\_history/model\_399.pt} & residual, seed $42$
+      & \texttt{5cafe571d429ea8181989ad87c2ad558} \\
+    \texttt{rebal7\_history/model\_399.pt} & residual, seed $7$
+      & \texttt{4e5c3041987c20685e928ac0d5fac192} \\
+    \texttt{rebal17\_nohistory/model\_399.pt} & zero-history control, seed $17$
+      & \texttt{c8b001b27ded55f2f32d5fe47d022a0a} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -450,12 +492,43 @@ tensors' worth of normalisation statistics included. Its feature row is the
 inverse model's $28$ inputs concatenated with the $2$ latent components, which
 is the pressure-inclusive contract discussed in
 Section~\ref{sec:eval:standing}. Its output is bounded at $0.15$ per cylinder
-(Table~\ref{tab:app:limits}) and scaled by a declared residual factor, $0.25$
-for every result reported here.
+(Table~\ref{tab:app:limits}) and scaled by a declared residual factor of
+$0.25$. That factor applies to the ID-adapter results, which are the null result
+of Section~\ref{sec:models:chain} and the latent arms of
+Appendix~\ref{app:results}. It is not the deployed residual's authority.
 
 The adapter checkpoint additionally stores the digests of the inverse and
 forward models it was fitted against, so a latent adapter cannot silently be
 paired with a different frozen actuator than the one it was trained for.
+
+\section{The Deployed Residual}
+\label{app:models:residual}
+
+The residual of Section~\ref{sec:ctrl:af-residual} is the component every
+adaptation result in Section~\ref{sec:eval:adaptation} is produced by, and it
+shares nothing with the ID adapter above except the idea of a bounded
+correction. It acts on the valve command, not on the inverse model's output,
+and there is no inverse model in the stack for it to correct.
+
+Its encoder $\phi$ reads $20$ rows of $(\text{base observation},
+\text{previous action})$ on the $\unit[60]{Hz}$ control grid, a
+$\unit[333]{ms}$ window carried in the observation vector rather than in a
+buffer held inside the module. The head $g_\psi$ is a small multilayer
+perceptron with a zero-initialised final layer, producing a per-cylinder
+correction bounded by $\alpha\tanh(\cdot)$ at $\alpha = 0.5$. Together they
+hold $53\,836$ trainable parameters against the $59\,588$-parameter frozen
+base, and the latent width is $8$.
+
+Every arm reported in Section~\ref{sec:eval:adaptation} was trained with the
+same command, differing only in the training seed and, for the control arm, in
+the flag that zeroes the history window: $256$ environments, $400$ iterations,
+history $20$, latent dimension $8$, $\alpha = 0.5$, learning rate
+$3\times10^{-4}$, and the rebalanced lateral kernel at standard deviation
+$\unit[0.09]{m}$ and weight $4.0$. The evaluation plant is the mid-episode load
+change: bimodal cutter mass at $1.0$ and $3.0$, step time $\unit[20]{s}$,
+jitter $\unit[8]{s}$. Checkpoints are listed in
+Table~\ref{tab:app:hashes}; every arm is scored at iteration $399$, its last,
+under the rule declared before the campaign.
 
 \chapter{PPO and IsaacLab Configuration}
 \label{app:ppo-config}
@@ -527,9 +600,14 @@ is not.
 
 \section{The Action}
 
-The action is four-dimensional in every stack: a desired cylinder motion, not a
-valve command. What converts it to a valve command is the actuator under test,
-which is the only free variable in the three-way comparison. The limits enforced
+The action is four-dimensional in every stack, and it does not mean the same
+quantity in all three. Under \ppoROM{} and \ppoIDFD{} it is a desired cylinder
+motion, and what converts it to a valve command is the actuator under test,
+which is the only free variable in that pair. Under \ppoAAMFD{} the same
+four-dimensional bounded action is read as the valve command itself, scaled to
+span the admissible valve range, because the inverse model was removed from the
+command path (Section~\ref{sec:ctrl:ppo-aamfd}). That difference is why no
+table ranks \ppoAAMFD{} against the other two on task error. The limits enforced
 between the action and the plant are given in Table~\ref{tab:app:limits}.
 
 \section{The Reward}
@@ -553,10 +631,15 @@ differ are exactly those discussed there.
 
 \begin{table}[htbp]
   \centering
-  \caption{PPO configuration of the three evaluated runs, from
+  \caption{PPO configuration of the three policy runs, from
   \texttt{run\_manifest.json}. A dash marks a field the manifest does not
   record. Differences between the adaptive run and the matched pair are
-  discussed in Section~\ref{sec:eval:hypotheses}.}
+  discussed in Section~\ref{sec:eval:hypotheses}. The \ppoAAMFD{} column is the
+  earlier latent-conditioned run \texttt{headroom\_priced\_v1}, which carries
+  the checkpoint selection of Section~\ref{sec:eval:horizon} and the latent arms
+  of Appendix~\ref{app:results}; its residual scale of $0.25$ is that run's
+  value. The deployed residual is trained separately on a frozen base and its
+  configuration is in Appendix~\ref{app:models:residual}.}
   \label{tab:app:ppo}
   \small
   \begin{tabular}{lccc}
@@ -680,9 +763,23 @@ estimate from both constants is not its information content but its movement.
 
 Every closed-loop number in Chapter~\ref{chap:evaluation} is produced by the
 experiment scripts stored with the project under \texttt{experiments/E1}
-through \texttt{experiments/E5}, each of which records the checkpoint, the mesh
+through \texttt{experiments/E6}, each of which records the checkpoint, the mesh
 set, the family set, the speed and the scored horizon in its own manifest. The
-model-level results come from the frozen collection of
-Appendix~\ref{app:data:frozen}. The artifacts named in
-Table~\ref{tab:app:hashes} are sufficient, together with those scripts, to
-regenerate every table in this thesis.
+adaptation arms are trained and scored by
+\texttt{PPO\_AAM\_FD/experiment\_scripts}, and the paired statistics of
+Section~\ref{sec:eval:adaptation} are recomputed from the stored
+per-environment reports under \texttt{outputs/rif\_delay} by
+\texttt{experiments/E3/code/seed\_table.py}. The model-level results come from
+the frozen collection of Appendix~\ref{app:data:frozen}.
+
+Two limits on that are stated here rather than left to be discovered. The
+artifacts of Table~\ref{tab:app:hashes} and those scripts regenerate the
+closed-loop and model-level tables from the frozen inputs, but they do not
+regenerate the inputs. The aligned Simscape export that trains the inverse,
+forward and reduced-order models predates this thesis and its collection script
+is unavailable, so that dataset is reproducible only as the frozen file it is
+(Section~\ref{sec:data:combining}). And the reports written before
+$16{:}34$ UTC on 31~August record no plant configuration, so they cannot be
+attributed to a plant. They are retained under
+\texttt{outputs/rif\_delay/archive\_unrecorded\_plant} and no number in this
+thesis is taken from them (Section~\ref{sec:eval:instrument}).

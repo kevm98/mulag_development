@@ -254,13 +254,16 @@ the command path, the estimate is informative and the closed-loop effect is
 absent, because the correction is added to a command already resting against
 its own limit for most of the scored window. Removing that model, so that the
 policy emits the valve command itself and a bounded history-conditioned
-residual acts on it, converts the same information into a measured improvement:
-cut-height error falls from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and
-lateral error from $\unit[61.155]{mm}$ to $\unit[35.371]{mm}$ against the
-stack's own frozen base under a mid-episode plant change, paired across $528$
-environments on held-out meshes. The claim is about the placement of
-adaptation on saturating actuators, not about the superiority of one actuator
-representation over another.
+residual acts on it, converts the same information into a measured improvement.
+On the better of the two seeds that replicate, cut-height error falls by
+$62.6\,\%$ and lateral error by $78.6\,\%$ against the stack's own frozen base
+under a mid-episode plant change, paired across $880$ environments on five
+held-out meshes. A capacity-matched control whose history window is zeroed does
+not deliver that gain, so it belongs to the live history rather than to the
+added parameters. It does not hold at the median of five training seeds, so
+what is demonstrated is a mechanism and not yet a reliable method. The claim is
+about the placement of adaptation on saturating actuators, not about the
+superiority of one actuator representation over another.
 
 The components on which these contributions rest, namely the causal plant
 estimator, the bounded adaptation path and the eight-gate evaluation harness,
@@ -332,15 +335,15 @@ inverse model from the adaptive command path that the preceding chapter
 motivates, and states which comparison each stack can carry.
 
 \textbf{Chapter~\ref{chap:evaluation}} reports the experimental evaluation and
-answers the last two research questions. It establishes the excitation envelope
-within which plant identity is recoverable, the sufficiency of the frozen
-inverse model, and what the inferred latent encodes. It measures latency through
-the actuation chain and the response of each stack to a commanded change, then
-compares the three deployed controllers on closed-loop tracking and control
-effort. It closes by measuring the disturbance envelope of each controller, an
-oracle reference for what plant-identity conditioning contributes within this
-architecture, and the sensitivity of each stack to the magnitude of plant
-variation.
+answers the last two research questions. It states the protocol and what each
+stack can carry, then compares the matched pair on closed-loop tracking and
+control effort, measures dead time through the actuation chain and the response
+of each stack to a commanded change, and audits how much of the randomised
+factor draw reaches each plant. It closes on online adaptation, measured within
+the adaptive stack against its own frozen base and a capacity-matched control:
+the contribution of live history, the component of the gain that tracks the
+magnitude of the plant change, the replication across five training seeds, and
+the pressure channel each stack exposes.
 
 \textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
 the work establishes and what it does not, states the design implications that
