@@ -82,44 +82,34 @@ machine difficult.
 This thesis investigates how hydraulic actuator dynamics learned from
 high-fidelity simulation can be reduced, transferred into an efficient robotic
 simulation, and used for reinforcement-learning control of a verge mowing arm.
-Two actuator representations are identified from Simscape campaigns: a modular
-chain of an inverse model, mapping desired cylinder motion to a valve command,
-and a forward model predicting the response; and a physics-structured
-reduced-order model keeping pressure, force and extension propagation explicit
-while learning covers valve realisation and loading. Both serve as the actuation
-interface for policy learning. A damped least-squares controller supplies
-privileged demonstrations and is then removed, so the distilled policy becomes
-the sole deployed controller.
+Actuator data from a high-fidelity Simscape model are used to identify a modular
+inverse and forward model chain and a physics-structured reduced-order model.
+The former maps desired cylinder motion to valve commands and predicts the
+resulting response; the latter keeps pressure, force and extension propagation
+explicit while learning valve realisation and unmodelled loading. A damped
+least-squares controller supplies privileged demonstrations and is then removed,
+leaving the distilled policy as the sole deployed controller.
 
-The inverse and forward pair transfers to the deployment simulation without
-retraining in the one-step regime the policy uses, where extension error stays
-millimetre-scale across plant domains, and the reduced-order model transfers
-with a small bounded calibration against the deployment plant. Supervised
-accuracy proves an unreliable guide to control: a forward model scored highly
-while learning to ignore the valve command, and excitation design with input
-ablation are established as the tests that expose it. Both representations
-support closed-loop terrain following, and the choice of representation changes
-the control strategy the policy learns.
+Both actuator representations transfer into the deployment simulation and
+support closed-loop terrain following. The evaluation also shows why supervised
+accuracy alone is insufficient: a model can predict motion well while ignoring
+the valve command that a controller must use. Excitation design and input
+ablation are therefore treated as necessary checks before a learned actuator
+model is admitted to control.
 
-Online adaptation is examined last, and it pays where the correction has the
-authority to act. Under the randomised plant family the trained stacks absorb
-the variation unaided, so adaptation is tested on a plant whose load changes
-mid-episode. There a policy that emits the valve command itself, with a bounded
-residual conditioned on causal history acting upon it, cuts cut-height error by
-$62.6\,\%$ and lateral error by $78.6\,\%$ against its own frozen base, paired
-across $880$ environments on five held-out meshes. A capacity-matched control
-with its history window zeroed does not deliver that gain, so it belongs to the
-live history rather than to the added parameters, and sweeping the magnitude of
-the plant change leaves a lateral component that grows with it, which is online
-adaptation in the strict sense. The same information delivered instead onto the
-inverse model's output changes nothing, and the reason is delivery rather than
-estimation: that command already rests against its limit for most of the scored
-window, so the authority to act is absent where the information arrives. The
-gain is large on the seeds where the method works and does not hold on the
-median of five. The thesis contributes a decision procedure for whether online
-adaptation is worth building on a machine, and the finding that on a saturating
-actuator the placement of the correction, not the quality of the estimate,
-decides whether adaptation pays.
+Online adaptation is examined only after transfer, control and robustness have
+been established. The trained stacks absorb much of the randomised plant
+variation without adaptation, while a more abrupt plant change exposes the
+remaining gap. A bounded residual conditioned on causal history improves
+tracking when it acts directly on a valve command with authority to change.
+A capacity-matched control without live history does not produce the same
+effect. Delivering adaptation through an inverse-model output instead produces
+no closed-loop change because the command is already saturated. The improvement
+is not consistent across all training replicates, so the evidence establishes a
+mechanism rather than a fully reliable method. The thesis contributes a
+decision procedure for testing whether online adaptation is worth building and
+shows that, on a saturating actuator, the placement of the correction can matter
+more than the quality of the estimate.
 }
 % Table of contents (plus list of figures/tables)
 \RRLABcontents

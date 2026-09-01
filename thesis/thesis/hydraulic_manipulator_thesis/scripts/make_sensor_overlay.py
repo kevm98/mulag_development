@@ -39,7 +39,6 @@ SENSORS = [
     # names, not merely near it.
     (400, 1250, "cutter contact\nand height ray", "left", EXTERO),
     (572,  819, "joint encoders\n(5 joints)", "left", PROP),
-    (667,  700, "cylinder pressure $\\Delta p$\n(4 channels)", "left", PROP),
     (1143, 1000, "cylinder extension\nand rate", "right", PROP),
     (1330, 1150, "forward height rays\nleft and right of centre", "right", EXTERO),
     (1150, 1270, "wheel contact", "right", EXTERO),
