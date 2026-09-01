@@ -27,7 +27,8 @@ except ImportError:  # macOS thesis workstation: use installed Chrome instead
 
 BASE = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[4]
-IMG = BASE / "images"
+IMG = BASE / "images" / "ch6"
+IMG.mkdir(parents=True, exist_ok=True)
 DRAWIO = BASE / "drawio"
 DRAWIO.mkdir(exist_ok=True)
 

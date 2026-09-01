@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 
 REPO = Path("/home/rrlab/rrlab_mulag")
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
+# Resolved from this file, not hardcoded: the tree moves between machines.
+OUT = Path(__file__).resolve().parents[1] / "images" / "ch5"
+OUT.mkdir(parents=True, exist_ok=True)
 OUT.mkdir(parents=True, exist_ok=True)
 
 # Okabe-Ito subset, CVD-safe, validated (exit 0) with the dataviz validator.

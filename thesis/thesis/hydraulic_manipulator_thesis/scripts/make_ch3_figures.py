@@ -10,7 +10,9 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
+# Resolved from this file, not hardcoded: the tree moves between machines.
+OUT = Path(__file__).resolve().parents[1] / "images" / "ch3"
+OUT.mkdir(parents=True, exist_ok=True)
 
 C_BLUE, C_ORANGE, C_GREEN, C_PINK = "#0072B2", "#E69F00", "#009E73", "#CC79A7"
 C_GRAY = "#666666"

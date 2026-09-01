@@ -78,10 +78,25 @@ def load(path):
     return json.loads(Path(path).read_text())
 
 
+def _chapter_dir(name):
+    """Figures live under images/<chapter>/, keyed off the chN_ name prefix.
+
+    Anything without a chapter prefix stays at the top of images/, which is
+    where the shared geometry data sits.
+    """
+    head = name.split("_", 1)[0]
+    if len(head) == 3 and head.startswith("ch") and head[2].isdigit():
+        d = IMAGES / head
+        d.mkdir(parents=True, exist_ok=True)
+        return d, f"{head}/"
+    return IMAGES, ""
+
+
 def save(fig, name):
-    fig.savefig(OUT / f"{name}.pdf")
+    out, rel = _chapter_dir(name)
+    fig.savefig(out / f"{name}.pdf")
     plt.close(fig)
-    print(f"  wrote images/{name}.pdf")
+    print(f"  wrote images/{rel}{name}.pdf")
 
 
 # --------------------------------------------------------------------------

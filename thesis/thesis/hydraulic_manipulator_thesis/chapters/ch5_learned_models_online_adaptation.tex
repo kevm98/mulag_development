@@ -69,7 +69,7 @@ sample. Predictions carry a hat, and $\Delta(\cdot)_k = (\cdot)_{k+1} -
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\textwidth]{images/models_overview}
+  \includegraphics[width=\textwidth]{images/ch5/models_overview}
   \caption{Common interface of the two alternative actuator paths. Both
   receive the desired cylinder command and measured hydraulic state, and both
   produce the same bounded PhysX cylinder target. The \ppoIDFD{} path composes
@@ -136,7 +136,7 @@ valve-command increment, which is accumulated and clipped before use.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[page=1,width=\textwidth]{images/ch5_network_architectures}
+  \includegraphics[page=1,width=\textwidth]{images/ch5/ch5_network_architectures}
   \caption{Inverse-model architecture. Current hydraulic state (16), desired
   motion (8) and the previous valve command (4) form the 28 inputs. A
   512-wide, four-block residual MLP predicts $\Delta\bm{u}_k$, which is
@@ -295,7 +295,7 @@ the shared residual trunk.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[page=2,width=\textwidth]{images/ch5_network_architectures}
+  \includegraphics[page=2,width=\textwidth]{images/ch5/ch5_network_architectures}
   \caption{Forward-model architecture. The applied valve command and cylinder
   state condition a one-step hydraulic transition through a 512-wide,
   four-block residual MLP. Its 12 outputs are extension, velocity and pressure
@@ -370,7 +370,7 @@ target~\cite{hwangbo2019learning}.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[page=3,width=\textwidth]{images/ch5_network_architectures}
+  \includegraphics[page=3,width=\textwidth]{images/ch5/ch5_network_architectures}
   \caption{Command-conditioned ROM. A recurrent neural proposal encodes a
   six-step history. Its actuation, bounded-residual and load heads condition
   the explicit hydraulic update: orifice flow, pressure, force, velocity and
@@ -455,7 +455,7 @@ internal pressure is a dynamic state, not a calibrated pressure estimate
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{images/ch5_rom_validation}
+  \includegraphics[width=\textwidth]{images/ch5/ch5_rom_validation}
   \caption{Offline validation of the command ROM on held-out runs.
   (a)~One-step $R^2$ per output group, averaged over the four cylinders, with
   the full desired command, with the command zeroed, and with the command
@@ -577,7 +577,7 @@ shown separately in Figure~\ref{fig:ctrl:aam-stack}.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[page=5,width=\textwidth]{images/ch5_network_architectures}
+  \includegraphics[page=5,width=\textwidth]{images/ch5/ch5_network_architectures}
   \caption{Earlier offline AAM and ID-adapter prototype. Four causal
   convolutional blocks map a 20-step history of 18 observable features to the
   two-value estimate $\hat{\bm{z}}$. The bounded adapter combines this estimate

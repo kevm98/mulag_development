@@ -27,9 +27,11 @@ from matplotlib.legend_handler import HandlerTuple
 
 BASE = Path(__file__).resolve().parents[1]
 REPO = BASE.parents[2]
-OUT = BASE / "images"
-DATA = (BASE / "Domain_Randomization_Data_Collection-20260720T142849Z-1-001"
-        / "Domain_Randomization_Data_Collection")
+OUT = BASE / "images" / "ch4"
+OUT.mkdir(parents=True, exist_ok=True)
+# The Simscape collections live outside the thesis tree, at the repository root,
+# so the thesis folder holds only what the document is built from.
+DATA = REPO / "simscape_source" / "domain_randomization_collection" / "Domain_Randomization_Data_Collection"
 CL_MAT = (DATA / "Randomization_closed_loop"
           / "Hydraulic_Mechanic_Dataset_Curriculum_1000.mat")
 OL_CSV = (DATA / "Randomization_open_loop" / "Excitation_Finetune_25"
