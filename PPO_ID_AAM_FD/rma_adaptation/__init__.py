@@ -20,7 +20,14 @@ from .core import (
     verify_native_mass_com_wiring,
 )
 from .modes import ContextMode, assemble_policy_observation, assert_no_context_leakage
-from .online import AAMEstimator, AAMTrainer, OnPolicyHistoryRecorder
+# NOTE: this package historically exported the CPU smoke skeleton under the
+# plain names, while PPO_AAM_FD exports the real phi from `core`. The
+# explicit names below make that divergence visible at the import site.
+from .online import (  # noqa: F401
+    SmokeAAMEstimator as AAMEstimator,
+    SmokeAAMTrainer as AAMTrainer,
+    OnPolicyHistoryRecorder,
+)
 from .metrics import (
     delta_adapt,
     opportunity_grid,

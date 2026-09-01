@@ -1,4 +1,12 @@
-"""On-policy history and a deliberately untrained CPU AAM skeleton."""
+"""On-policy history and a deliberately untrained CPU AAM skeleton.
+
+NOTE ON NAMING: the estimator/trainer here are CPU smoke-test scaffolding and
+are NOT the deployed adaptation encoder. The real encoder (phi) is
+``core.AAMEstimator``. These were previously both named ``AAMEstimator``, so an
+import could silently return either one depending on the module path; they are
+now ``SmokeAAMEstimator`` / ``SmokeAAMTrainer``, with the old names kept as
+aliases for backwards compatibility.
+"""
 
 from __future__ import annotations
 
@@ -56,8 +64,9 @@ class OnPolicyHistoryRecorder:
         return causal_mismatch_features(data["obs_t"], data["action_t"], data["obs_tp1"])
 
 
-class AAMEstimator(nn.Module):
-    """Small causal GRU estimator; weights are intentionally uninitialized for training."""
+class SmokeAAMEstimator(nn.Module):
+    """CPU smoke-test GRU skeleton; intentionally uninitialized. NOT the deployed
+    encoder -- see ``core.AAMEstimator`` for phi."""
 
     def __init__(self, *, obs_dim: int, action_dim: int = 4, hidden_dim: int = 64, context_dim: int = CONTEXT_DIM):
         super().__init__()
@@ -74,10 +83,10 @@ class AAMEstimator(nn.Module):
         return self.head(sequence[:, -1]), hidden
 
 
-class AAMTrainer:
+class SmokeAAMTrainer:
     """CPU smoke trainer for synthetic tensors, never an old-dataset loader."""
 
-    def __init__(self, estimator: AAMEstimator, *, learning_rate: float = 1.0e-3):
+    def __init__(self, estimator: SmokeAAMEstimator, *, learning_rate: float = 1.0e-3):
         self.estimator = estimator.to("cpu")
         self.optimizer = torch.optim.Adam(self.estimator.parameters(), lr=learning_rate)
 
@@ -92,3 +101,8 @@ class AAMTrainer:
         loss.backward()
         self.optimizer.step()
         return float(loss.detach())
+
+
+# Backwards-compatible aliases (see module docstring).
+AAMEstimator = SmokeAAMEstimator
+AAMTrainer = SmokeAAMTrainer
