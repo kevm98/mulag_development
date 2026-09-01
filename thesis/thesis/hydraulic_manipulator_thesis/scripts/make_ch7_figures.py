@@ -39,7 +39,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -125,7 +124,14 @@ def fig_e1_paths(smooth=150, half=0.62, lw=2.0):
     # Gaussian slalom scores marginally better than the lane change but its
     # reference is visually a sine, so its panel would repeat the one above it.
     best = ["straight", "lateral_sine", "lane_change_hold"]
-    halo_w = (lw + 0.9, lw - 0.4)
+    # Figure-local, colour-vision-safe palette. The wider blue trace is drawn
+    # first and the narrower orange trace second, so both remain visible where
+    # the paths nearly coincide. The reference stays neutral and dashed.
+    path_style = {
+        "ppo_rom": dict(label="R (PPO-ROM)", color="#2F6B95", width=2.6),
+        "ppo_id_fd": dict(label="IF (PPO-ID-FD)", color="#D28A2E", width=1.5),
+    }
+    reference_color = "#3F464D"
 
     fig, axes = plt.subplots(len(best), 2, figsize=(FULLW, 1.85 * len(best) + 1.0),
                              sharex=True)
@@ -135,22 +141,23 @@ def fig_e1_paths(smooth=150, half=0.62, lw=2.0):
         o = np.argsort(ref["x"][:, env])
         xs = ref["x"][o, env] - ref["x"][:, env].min()
         axL, axR = axes[r, 0], axes[r, 1]
-        halo = [pe.Stroke(linewidth=2.1 + 1.6, foreground="white"), pe.Normal()]
-        axL.plot(xs, ref["ref"][o, env], "--", color="#000000", lw=2.1,
-                 label="reference", zorder=7, path_effects=halo)
-        axR.plot(xs, _roll(ref["refz"][o, env], smooth), "--", color="#000000",
-                 lw=2.1, label="reference", zorder=7, path_effects=halo)
-        for i, (st, label, col) in enumerate(PAIR):
+        axL.plot(xs, ref["ref"][o, env], color=reference_color, lw=1.6,
+                 ls=(0, (5, 2.5)), label="reference", zorder=6)
+        axR.plot(xs, _roll(ref["refz"][o, env], smooth),
+                 color=reference_color, lw=1.6, ls=(0, (5, 2.5)),
+                 label="reference", zorder=6)
+        for i, (st, _, _) in enumerate(PAIR):
             d = D[st]
             oi = np.argsort(d["x"][:, env])
             xx = d["x"][oi, env] - d["x"][:, env].min()
-            w = halo_w[i]
-            hl = [pe.Stroke(linewidth=w + 1.5, foreground="white"), pe.Normal()]
-            axL.plot(xx, _roll(d["y"][oi, env], smooth), color=col, lw=w,
-                     label=label, zorder=4 + i, path_effects=hl,
+            style = path_style[st]
+            axL.plot(xx, _roll(d["y"][oi, env], smooth),
+                     color=style["color"], lw=style["width"],
+                     label=style["label"], zorder=3 + i,
                      solid_capstyle="round")
-            axR.plot(xx, _roll(d["z"][oi, env], smooth), color=col, lw=w,
-                     label=label, zorder=4 + i, path_effects=hl,
+            axR.plot(xx, _roll(d["z"][oi, env], smooth),
+                     color=style["color"], lw=style["width"],
+                     label=style["label"], zorder=3 + i,
                      solid_capstyle="round")
         midy = float(np.median(ref["ref"][o, env]))
         midz = float(np.median(ref["refz"][o, env]))
@@ -164,11 +171,14 @@ def fig_e1_paths(smooth=150, half=0.62, lw=2.0):
         axL.set_ylabel("lateral (m)")
         axR.set_ylabel("height (m)")
         for a in (axL, axR):
-            a.grid(True)
+            a.set_axisbelow(True)
+            a.grid(True, color="#D5DADF", linewidth=.45, alpha=.65)
+            for spine in a.spines.values():
+                spine.set_color("#7C8791")
         name = f.replace("_", " ")
-        axL.set_title(f"({'abc'[r]}) {name} — horizontal "
+        axL.set_title(f"({'abc'[r]}) {name}: horizontal "
                       f"(lateral {lat*1000:.0f} mm)", loc="left", fontsize=8.6)
-        axR.set_title(f"{name} — vertical (cut height {cut*1000:.0f} mm)",
+        axR.set_title(f"{name}: vertical (cut height {cut*1000:.0f} mm)",
                       loc="left", fontsize=8.6)
 
     for c in (0, 1):
@@ -205,14 +215,18 @@ def fig_e1_tracking():
 
     fig, (axa, axb) = plt.subplots(
         1, 2, figsize=(FULLW, 3.4), gridspec_kw=dict(width_ratios=[1.85, 1]))
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels = {"ppo_rom": "R (PPO-ROM)", "ppo_id_fd": "IF (PPO-ID-FD)"}
+    markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
     y = np.arange(len(order))
     for i, f in enumerate(order):
         v = [per[s][f] for s, _, _ in PAIR]
-        axa.plot([min(v), max(v)], [i, i], color="#B9C2C9", lw=2.2, zorder=1,
+        axa.plot([min(v), max(v)], [i, i], color="#CDD3D8", lw=1.8, zorder=1,
                  solid_capstyle="round")
-    for s, label, col in PAIR:
-        axa.scatter([per[s][f] for f in order], y, s=42, color=col, zorder=3,
-                    edgecolor="white", linewidth=.8, label=label)
+    for s, _, _ in PAIR:
+        axa.scatter([per[s][f] for f in order], y, s=43,
+                    color=colors[s], marker=markers[s], zorder=3,
+                    edgecolor="white", linewidth=.8, label=labels[s])
     axa.set_yticks(y)
     axa.set_yticklabels([f.replace("_", " ") for f in order], fontsize=8.5)
     axa.invert_yaxis()
@@ -223,8 +237,9 @@ def fig_e1_tracking():
     axa.set_xlim(0.015, 0.95)
     axa.set_ylim(len(order) - 0.4, -1.35)      # headroom for the legend
     axa.set_xlabel("mean absolute lateral error (m)")
-    axa.grid(axis="x")
-    axa.set_title("(a) by trajectory family, easiest first", loc="left")
+    axa.set_axisbelow(True)
+    axa.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    axa.set_title("(a) lateral error by family, easiest first", loc="left")
     axa.legend(fontsize=7.8, loc="upper right", ncol=2, columnspacing=1.0,
                handletextpad=.4)
 
@@ -235,8 +250,8 @@ def fig_e1_tracking():
     # and the outlier runs to the edge carrying its own value.
     lim = 92.0
     axb.barh(y, np.clip(d, -lim, lim),
-             color=[C_AMBER if v < 0 else C_RED for v in d], height=.62,
-             alpha=.9)
+             color=[colors["ppo_id_fd"] if v < 0 else colors["ppo_rom"]
+                    for v in d], height=.58, alpha=.96)
     for i, v in enumerate(d):
         if abs(v) > lim:
             # Inside the bar, not beyond it: an off-scale label placed outside
@@ -245,17 +260,22 @@ def fig_e1_tracking():
                          xytext=(6 if v < 0 else -6, 0),
                          textcoords="offset points", va="center",
                          ha="left" if v < 0 else "right", fontsize=7.4,
-                         color="white", weight="bold")
-    axb.axvline(0, color="#111111", lw=1.0)
+                         color="#1F2933" if v < 0 else "white",
+                         weight="bold")
+    axb.axvline(0, color="#3F464D", lw=1.0)
     axb.set_yticks(y)
     axb.set_yticklabels([])
     axb.set_ylim(len(order) - 0.4, -1.35)
     axb.set_xlim(-lim * 1.05, lim * 1.05)
     axb.set_xticks([-75, 0, 75])
-    axb.set_xlabel("ID-FD $-$ ROM (mm)")
-    axb.grid(axis="x")
+    axb.set_xlabel("IF $-$ R lateral error (mm)")
+    axb.set_axisbelow(True)
+    axb.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
     better = int((d < 0).sum())
-    axb.set_title(f"(b) ID-FD better in {better} of {len(order)}", loc="left")
+    axb.set_title(f"(b) IF lower on {better} of {len(order)} families", loc="left")
+    for a in (axa, axb):
+        for spine in a.spines.values():
+            spine.set_color("#7C8791")
     fig.subplots_adjust(left=.205, right=.985, top=.915, bottom=.125, wspace=.09)
     save(fig, "ch7_e1_tracking")
     print(f"     ID-FD better on {better}, worse on {len(order) - better}")
@@ -264,6 +284,10 @@ def fig_e1_tracking():
 def fig_e1_gates():
     """Gate margins as a dot chart against a shaded failing half-plane."""
     fig, ax = plt.subplots(figsize=(FULLW * 0.88, 3.0))
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)"}
+    markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
     labels = [g[0] for g in GATES]
     y = np.arange(len(labels))
     marg = {}
@@ -276,27 +300,35 @@ def fig_e1_gates():
 
     lo = min(float(np.nanmin(m)) for m in marg.values())
     hi = max(float(np.nanmax(m)) for m in marg.values())
-    ax.axvspan(lo * 1.22, 0, color=C_RED, alpha=.07, lw=0)
+    xlo, xhi = lo * 1.22, hi * 1.10
+    ax.axvspan(xlo, 0, color="#FAF1EF", lw=0, zorder=0)
+    ax.axvspan(0, xhi, color="#F4F8F5", lw=0, zorder=0)
     for i in y:
         v = [marg[s][i] for s, _, _ in PAIR]
-        ax.plot([min(v), max(v)], [i, i], color="#B9C2C9", lw=2.2, zorder=1,
+        ax.plot([min(v), max(v)], [i, i], color="#CDD3D8", lw=1.8, zorder=1,
                 solid_capstyle="round")
-    for s, label, col in PAIR:
-        ax.scatter(marg[s], y, s=46, color=col, zorder=3, edgecolor="white",
-                   linewidth=.8, label=label)
-    ax.axvline(0, color="#111111", lw=1.2)
-    ax.set_xlim(lo * 1.22, hi * 1.10)
+    for s, _, _ in PAIR:
+        ax.scatter(marg[s], y, s=47, color=colors[s], marker=markers[s],
+                   zorder=3, edgecolor="white", linewidth=.8,
+                   label=labels_by_stack[s])
+    ax.axvline(0, color="#3F464D", lw=1.15, zorder=2)
+    ax.set_xlim(xlo, xhi)
     # Room above the first row for the verdict labels and the legend, so
     # neither lands on a data point.
     ax.set_ylim(len(labels) - 0.4, -1.25)
-    ax.annotate("fails", (0, -0.95), xytext=(-6, 0), textcoords="offset points",
-                ha="right", va="center", fontsize=8.2, color=C_RED)
-    ax.annotate("passes", (0, -0.95), xytext=(6, 0), textcoords="offset points",
-                ha="left", va="center", fontsize=8.2, color="#2E7355")
+    ax.annotate("FAIL", (0, -0.95), xytext=(-7, 0), textcoords="offset points",
+                ha="right", va="center", fontsize=8.0, weight="bold",
+                color="#A6534D")
+    ax.annotate("PASS", (0, -0.95), xytext=(7, 0), textcoords="offset points",
+                ha="left", va="center", fontsize=8.0, weight="bold",
+                color="#39745A")
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlabel("gate margin, in units of the gate's own threshold")
-    ax.grid(axis="x")
+    ax.set_xlabel("normalized gate margin (positive passes)")
+    ax.set_axisbelow(True)
+    ax.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    for spine in ax.spines.values():
+        spine.set_color("#7C8791")
     ax.legend(fontsize=8, loc="upper left", ncol=2, columnspacing=1.2,
               handletextpad=.4)
     fig.subplots_adjust(left=.21, right=.985, top=.965, bottom=.135)
@@ -401,33 +433,41 @@ def fig_chain_by_stack():
             "command $\\rightarrow$ cyl. velocity",
             "cyl. velocity $\\rightarrow$ joint velocity"]
     fig, ax = plt.subplots(figsize=(FULLW * 0.92, 2.9))
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)"}
     y = np.arange(len(links))
     h = 0.3
     step_ms = 1000.0 / FS
     # The mechanical link is the control: a static linkage cannot delay, so the
     # row must read the resolution floor of one control step. Shade that row and
     # say what the floor is, rather than claiming it must read zero.
-    ax.axhspan(len(links) - 1 - 0.5, len(links) - 1 + 0.5, color="#EDF1F4", lw=0,
+    ax.axhspan(len(links) - 1 - 0.5, len(links) - 1 + 0.5, color="#F1F4F6", lw=0,
                zorder=0)
-    for i, (s, label, col) in enumerate(PAIR):
+    for i, (s, _, _) in enumerate(PAIR):
         vals = [d[JSON_KEY[s]][k]["median_ms"] for k in links]
-        ax.barh(y + (i - 0.5) * h, vals, height=h * 0.88, color=col, alpha=.92,
-                label=label, zorder=2)
+        ax.barh(y + (i - 0.5) * h, vals, height=h * 0.84,
+                color=colors[s], alpha=.97, label=labels_by_stack[s], zorder=2)
         for j, v in enumerate(vals):
-            ax.annotate(f"{v:.0f}", (v, y[j] + (i - 0.5) * h), xytext=(4, 0),
+            ax.annotate(f"{v:.0f}", (max(v, 0), y[j] + (i - 0.5) * h),
+                        xytext=(5, 0),
                         textcoords="offset points", va="center", fontsize=7.8,
-                        color=col, zorder=3)
-    ax.axvline(step_ms, color=C_RULE, lw=1.0, ls=":", zorder=1)
-    ax.annotate("control: cylinder and joint are coupled by a static linkage,\n"
-                "so this row must read the resolution floor of one control step",
-                xy=(0.985, len(links) - 1 + 0.02), xycoords=("axes fraction", "data"),
-                ha="right", va="center", fontsize=7.2, color=C_RULE)
+                        color="#3F464D", zorder=3)
+    ax.axvline(step_ms, color="#7C8791", lw=1.0, ls=":", zorder=1)
+    ax.annotate("one control step: 17 ms", (step_ms, -0.67), xytext=(5, 0),
+                textcoords="offset points", ha="left", va="center",
+                fontsize=7.3, color="#5F6C76")
+    ax.annotate("static-linkage control", (505, len(links) - 1),
+                ha="right", va="center", fontsize=7.3, color="#5F6C76")
     ax.set_yticks(y)
     ax.set_yticklabels(nice, fontsize=8.6)
     ax.invert_yaxis()
     ax.set_xlim(0, 520)
     ax.set_xlabel("cross-correlation lag (ms)")
-    ax.grid(axis="x")
+    ax.set_axisbelow(True)
+    ax.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    for spine in ax.spines.values():
+        spine.set_color("#7C8791")
     ax.set_ylim(len(links) - 0.45, -1.05)
     ax.legend(fontsize=8, loc="upper right", ncol=2, columnspacing=1.2,
               handletextpad=.4)
@@ -459,60 +499,73 @@ def fig_ref_step():
     stats = load(EXP / "E2/results/reference_step_response.json")["stacks"]
     fig, (ax, axb) = plt.subplots(1, 2, figsize=(FULLW, 3.0),
                                   gridspec_kw=dict(width_ratios=[1.45, 1]))
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)"}
+    widths = {"ppo_rom": 2.2, "ppo_id_fd": 1.7}
     pre, post = 30, 300
     t = np.arange(-pre, post) / FS
-    ax.axhline(1.0, color="#111111", lw=1.1, ls="--")
-    ax.axhline(0.0, color="#999999", lw=.8)
-    ax.axvline(0.0, color="#111111", lw=1.0, ls=":")
-    ax.axvspan(0, PLANT_MS / 1000, color="#8899A6", alpha=.22, lw=0)
-    for key, lab, col in PAIR:
+    ax.axhline(1.0, color="#4B555D", lw=1.0, ls=(0, (4, 2)))
+    ax.axhline(0.0, color="#89939B", lw=.75)
+    ax.axvline(0.0, color="#4B555D", lw=.9, ls=":")
+    ax.axvspan(0, PLANT_MS / 1000, color="#B8C4CC", alpha=.28, lw=0)
+    for key, _, _ in PAIR:
         s = _step_curves(key, pre, post)
-        ax.plot(t, np.median(s, 0), color=col, lw=1.9, label=lab)
+        col = colors[key]
+        ax.plot(t, np.median(s, 0), color=col, lw=widths[key],
+                label=labels_by_stack[key], solid_capstyle="round", zorder=3)
         ax.fill_between(t, np.percentile(s, 25, 0), np.percentile(s, 75, 0),
-                        color=col, alpha=.13, lw=0)
-    ax.annotate(f"the hydraulics alone\nneed {PLANT_MS:.0f} ms",
-                (PLANT_MS / 1000, 1.86), xytext=(7, 0),
-                textcoords="offset points", va="top", fontsize=7.4,
-                color="#5A6B78")
+                        color=col, alpha=.12, lw=0, zorder=1)
+    ax.annotate(f"hydraulic dead time: {PLANT_MS:.0f} ms",
+                (PLANT_MS / 1000, 1.84), xytext=(6, 0),
+                textcoords="offset points", va="top", fontsize=7.3,
+                color="#5F6C76")
+    ax.annotate("commanded step", (3.92, 1.0), xytext=(-2, 4),
+                textcoords="offset points", ha="right", va="bottom",
+                fontsize=7.2, color="#5F6C76")
     ax.set_xlim(-0.4, 4.0)
     ax.set_ylim(-0.55, 2.0)
-    ax.set_xlabel("time since the commanded step (s)")
-    ax.set_ylabel("response, in units of the step")
-    ax.set_title("(a) response to a 100 mm step in the commanded line",
+    ax.set_xlabel("time from commanded step (s)")
+    ax.set_ylabel("normalized response")
+    ax.set_title("(a) response to the 100 mm command step",
                  loc="left", fontsize=8.6)
-    ax.grid(True)
+    ax.set_axisbelow(True)
+    ax.grid(True, color="#D5DADF", linewidth=.45, alpha=.65)
     ax.legend(loc="lower right", fontsize=7.8)
 
     names = ["dead_time_ms", "rise_ms", "settle_ms"]
     nice = ["dead time", "rise", "settled"]
     y = np.arange(len(names))
     off = np.linspace(-.17, .17, len(PAIR))
-    for i, (key, lab, col) in enumerate(PAIR):
+    for i, (key, _, _) in enumerate(PAIR):
+        col = colors[key]
         vals = [stats[JSON_KEY[key]][n] for n in names]
         axb.barh(y + off[i], vals, height=.28, color=col, edgecolor="white",
-                 linewidth=.6, alpha=.92)
+                 linewidth=.6, alpha=.97, label=labels_by_stack[key], zorder=2)
         for j, v in enumerate(vals):
-            axb.annotate(f"{v:.0f}", (v, y[j] + off[i]), xytext=(3, 0),
+            axb.annotate(f"{v:.0f}", (v, y[j] + off[i]), xytext=(4, 0),
                          textcoords="offset points", va="center", fontsize=7.2,
-                         color=col)
-    # Two reference lines. Labelling them on separate rows is the whole point:
-    # in the previous version both labels sat on the same baseline and
-    # overprinted each other.
-    axb.axvline(PLANT_MS, color=C_RULE, lw=1.1, ls="--")
-    axb.axvline(RATE_MS, color="#111111", lw=1.0, ls=":")
-    axb.annotate(f"plant dead time {PLANT_MS:.0f} ms", (PLANT_MS, -0.62),
+                         color="#3F464D", zorder=3)
+    axb.axvline(PLANT_MS, color="#7C8791", lw=1.0, ls="--", zorder=1)
+    axb.axvline(RATE_MS, color="#4B555D", lw=1.0, ls=":", zorder=1)
+    axb.annotate(f"plant: {PLANT_MS:.0f} ms", (PLANT_MS, -0.83),
                  xytext=(4, 0), textcoords="offset points", va="center",
-                 fontsize=7.2, color=C_RULE)
-    axb.annotate(f"rate-limit floor {RATE_MS:.0f} ms", (RATE_MS, -0.30),
+                 fontsize=7.1, color="#68747D")
+    axb.annotate(f"rate limit: {RATE_MS:.0f} ms", (RATE_MS, -0.50),
                  xytext=(4, 0), textcoords="offset points", va="center",
-                 fontsize=7.2, color="#333333")
+                 fontsize=7.1, color="#3F464D")
     axb.set_yticks(y)
     axb.set_yticklabels(nice, fontsize=8.5)
-    axb.set_ylim(len(names) - 0.45, -0.85)
-    axb.set_xlabel("ms")
+    axb.set_ylim(len(names) - 0.45, -1.05)
+    axb.set_xlabel("response time (ms)")
     axb.set_xlim(0, 3300)
-    axb.grid(axis="x")
-    axb.set_title("(b) summary, against the two bounds", loc="left", fontsize=8.6)
+    axb.set_axisbelow(True)
+    axb.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    axb.set_title("(b) measured times and physical limits", loc="left",
+                  fontsize=8.6)
+    for a in (ax, axb):
+        for spine in a.spines.values():
+            spine.set_color("#7C8791")
     fig.subplots_adjust(left=.095, right=.985, top=.90, bottom=.155, wspace=.28)
     save(fig, "ch7_ref_step")
 
@@ -522,40 +575,52 @@ def fig_control_effort():
     d = load(EXP / "E1/results/control_effort.json")
     fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.85),
                                    gridspec_kw=dict(width_ratios=[1, 1.1]))
-    for key, lab, col in PAIR:
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)"}
+    markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
+    for key, _, _ in PAIR:
+        col = colors[key]
         r = d[JSON_KEY[key]]
         axa.scatter(1000 * r["mean_abs_lateral_m"], r["rms_command"], s=64,
-                    color=col, zorder=3, edgecolor="white", linewidth=.8)
+                    color=col, marker=markers[key], zorder=3,
+                    edgecolor="white", linewidth=.8)
         # Labels to the right of their point: centred under the leftmost point
         # they run off the axis.
-        axa.annotate(lab, (1000 * r["mean_abs_lateral_m"], r["rms_command"]),
+        axa.annotate(labels_by_stack[key],
+                     (1000 * r["mean_abs_lateral_m"], r["rms_command"]),
                      xytext=(9, -4), textcoords="offset points", ha="left",
-                     va="top", fontsize=7.6, color=col)
-    axa.annotate("better", (10, 0.585), xytext=(36, 0.685), fontsize=7.6,
-                 color="#7A8B99",
-                 arrowprops=dict(arrowstyle="->", color="#7A8B99", lw=.9))
+                     va="top", fontsize=7.5, color="#3F464D")
+    axa.annotate("lower is better", (10, 0.585), xytext=(34, 0.685),
+                 fontsize=7.4, color="#68747D",
+                 arrowprops=dict(arrowstyle="->", color="#7C8791", lw=.9))
     axa.set_xlim(0, 170)
     axa.set_ylim(0.50, 0.92)
     axa.set_xlabel("mean absolute lateral error (mm)")
     axa.set_ylabel("RMS valve command")
-    axa.grid(True)
+    axa.set_axisbelow(True)
+    axa.grid(True, color="#D5DADF", linewidth=.45, alpha=.65)
     axa.set_title("(a) what the effort buys", loc="left")
 
     y = np.arange(len(PAIR))
-    for i, (key, lab, col) in enumerate(PAIR):
+    for i, (key, _, _) in enumerate(PAIR):
+        col = colors[key]
         v = d[JSON_KEY[key]]["reversals_per_s"]
-        axb.barh(i, v, height=.42, color=col, alpha=.92)
+        axb.barh(i, v, height=.42, color=col, alpha=.97)
         axb.annotate(f"{v:.1f}", (v, i), xytext=(4, 0),
                      textcoords="offset points", va="center", fontsize=8.2,
-                     color=col)
+                     color="#3F464D")
     axb.set_yticks(y)
     axb.set_yticklabels([SHORT[k] for k, _, _ in PAIR], fontsize=8.5)
     axb.set_ylim(len(PAIR) - 0.35, -0.65)
     axb.set_xlim(0, 47)
     axb.set_xlabel("command reversals per second")
-    axb.grid(axis="x")
-    axb.set_title("(b) chatter, which the RMS does not reveal", loc="left",
-                  fontsize=8.6)
+    axb.set_axisbelow(True)
+    axb.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    axb.set_title("(b) command reversals", loc="left", fontsize=8.6)
+    for a in (axa, axb):
+        for spine in a.spines.values():
+            spine.set_color("#7C8791")
     fig.subplots_adjust(left=.105, right=.985, top=.90, bottom=.165, wspace=.42)
     save(fig, "ch7_control_effort")
 
@@ -573,58 +638,70 @@ def _e5_family(stack, scale, key):
 
 
 def fig_e5_robustness():
-    """Per-trajectory distributions at each randomisation scale.
-
-    An earlier version plotted the mean over families as a line, which reported
-    PPO-ID-FD's single-trajectory excursion at scale 1 as a breakdown of the
-    population. Showing the distribution makes level, spread and outliers
-    readable at once.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(FULLW, 3.0))
+    """Large median-and-range panels across the randomisation sweep."""
+    fig, axes = plt.subplots(2, 1, figsize=(FULLW, 4.75), sharex=True)
+    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)"}
+    markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
     panels = [("mean_abs_lateral_error_m", "lateral error (m)",
                "(a) lateral tracking"),
               ("mean_abs_cut_height_error_m", "cut-height error (m)",
                "(b) cut height")]
-    width = 0.30
+    x = np.arange(len(SCALES), dtype=float)
+    offset = {"ppo_rom": -0.045, "ppo_id_fd": 0.045}
     for ax, (key, ylabel, title) in zip(axes, panels):
-        for si, (stack, label, col) in enumerate(PAIR):
-            pos = np.arange(len(SCALES)) + (si - 0.5) * width
+        for stack, _, _ in PAIR:
+            col = colors[stack]
             data = [_e5_family(stack, sc, key) for sc in SCALES]
-            bp = ax.boxplot(data, positions=pos, widths=width * 0.82,
-                            patch_artist=True, showfliers=True,
-                            manage_ticks=False,
-                            medianprops=dict(color="#111111", lw=1.2),
-                            whiskerprops=dict(color=col, lw=1.0),
-                            capprops=dict(color=col, lw=1.0),
-                            flierprops=dict(marker="o", ms=3.0, mfc="white",
-                                            mec=col, mew=1.0, alpha=.95))
-            for box in bp["boxes"]:
-                box.set(facecolor=col, alpha=.5, edgecolor=col, linewidth=1.1)
-        ax.set_xticks(np.arange(len(SCALES)))
+            lo = np.array([np.min(v) for v in data])
+            q25 = np.array([np.percentile(v, 25) for v in data])
+            med = np.array([np.median(v) for v in data])
+            q75 = np.array([np.percentile(v, 75) for v in data])
+            hi = np.array([np.max(v) for v in data])
+
+            # The band and large line show the population. Thin capped ranges
+            # retain the extreme families without making them the main shape.
+            ax.fill_between(x, q25, q75, color=col, alpha=.16, lw=0, zorder=1)
+            ax.errorbar(x + offset[stack], med,
+                        yerr=np.vstack((med - lo, hi - med)), fmt="none",
+                        ecolor=col, elinewidth=.9, capsize=3.2, capthick=.9,
+                        alpha=.42, zorder=2)
+            ax.plot(x, med, color=col, lw=2.1, marker=markers[stack], ms=7.0,
+                    mfc=col, mec="white", mew=.9, solid_capstyle="round",
+                    label=labels_by_stack[stack], zorder=4)
+        ax.set_xticks(x)
         ax.set_xticklabels(SCALES)
-        ax.set_xlim(-0.62, len(SCALES) - 0.38)
+        ax.set_xlim(-0.28, len(SCALES) - 0.72)
         ax.set_yscale("log")
-        ax.set_xlabel("randomisation scale")
         ax.set_ylabel(ylabel)
-        ax.grid(axis="y")
-        ax.set_title(title, loc="left")
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#D5DADF", linewidth=.55, alpha=.7)
+        ax.set_title(title, loc="left", fontsize=9.3)
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
+    axes[1].set_xlabel("randomisation scale")
 
     # The one point the section argues about, annotated on its own panel and
     # inside it, with a leader rather than a floating caption across the figure.
     ax = axes[0]
     out = _e5_family("ppo_id_fd", "1.0", "mean_abs_lateral_error_m").max()
-    ax.set_ylim(top=out * 2.6)
-    ax.annotate("one trajectory,\nnot the population",
-                xy=(2 + 0.5 * width, out), xytext=(16, -4),
-                textcoords="offset points", ha="left", va="top", fontsize=7.3,
-                color=C_AMBER,
-                arrowprops=dict(arrowstyle="->", color=C_AMBER, lw=.9,
+    ax.set_ylim(top=out * 2.25)
+    ax.scatter(2 + offset["ppo_id_fd"], out, s=42, marker="D",
+               facecolor="white", edgecolor=colors["ppo_id_fd"],
+               linewidth=1.2, zorder=5)
+    ax.annotate("single family; median stays flat",
+                xy=(2 + offset["ppo_id_fd"], out), xytext=(18, -2),
+                textcoords="offset points", ha="left", va="top", fontsize=8.0,
+                color=colors["ppo_id_fd"],
+                arrowprops=dict(arrowstyle="->", color=colors["ppo_id_fd"], lw=1.0,
                                 shrinkB=4))
-    h = [plt.Line2D([], [], marker="s", ls="", ms=7, mfc=col, mec=col,
-                    alpha=.75, label=lab) for _, lab, col in PAIR]
+    h = [plt.Line2D([], [], marker=markers[key], ls="-", lw=2.1, ms=7.0,
+                    color=colors[key], mfc=colors[key], mec="white",
+                    label=labels_by_stack[key]) for key, _, _ in PAIR]
     fig.legend(handles=h, ncol=2, loc="upper center", bbox_to_anchor=(.5, 1.0),
-               fontsize=8.5, frameon=False, columnspacing=2.2)
-    fig.subplots_adjust(left=.095, right=.985, top=.845, bottom=.145, wspace=.30)
+               fontsize=9.0, frameon=False, columnspacing=2.5)
+    fig.subplots_adjust(left=.105, right=.985, top=.91, bottom=.11, hspace=.27)
     save(fig, "ch7_e5_robustness")
 
 
@@ -875,9 +952,9 @@ def fig_four_latents():
 # ==========================================================================
 PRESS = OUTPUTS / "ch7_pressure"
 W = 300                       # +-5 s at 60 Hz, the matched window
-ARMS = [("af_base", "base (frozen policy)", C_GRAY, "-"),
-        ("af_control", "control (history zeroed)", C_ORANGE, "-"),
-        ("af_adaptive", "adaptive (history live)", C_BLUE, "-")]
+ARMS = [("af_base", "base: frozen policy", "#687078", "-"),
+        ("af_control", "control: history zeroed", "#D5A11E", "-"),
+        ("af_adaptive", "adaptive: history live", "#2F6B95", "-")]
 # The four actuated cylinders, in the order the traces record them.
 CYLINDERS = ["slew", "boom I", "boom II", "head swivel"]
 
@@ -916,6 +993,7 @@ def fig_af_arms():
     panels = [("lateral_error", "(a) lateral error"),
               ("cut_height_error", "(b) cut-height error")]
     for ax, (key, title) in zip(axes, panels):
+        ax.axvspan(0, t[-1], color="#F1F4F6", alpha=.55, lw=0, zorder=0)
         for name, label, col, ls in ARMS:
             d = np.load(PRESS / f"{name}_m1337_early.npz")
             v = np.abs(d[key][:, :, 0])
@@ -924,16 +1002,20 @@ def fig_af_arms():
             # reports. The median of an absolute error sits near zero on cut
             # height and would draw three flat lines.
             m = 1000 * np.mean(al, axis=0)
-            ax.plot(t, _roll(m, 21), color=col, lw=1.5, label=label, ls=ls)
-        ax.axvline(0, color=C_RED, lw=1.0, ls="--")
+            ax.plot(t, _roll(m, 21), color=col, lw=1.7, label=label, ls=ls,
+                    solid_capstyle="round", zorder=2)
+        ax.axvline(0, color="#7C8791", lw=1.0, ls="--", zorder=1)
         ax.set_xlim(t[0], t[-1])
         ax.set_xlabel("time relative to the change of load (s)")
         ax.set_ylabel("mean absolute error (mm)")
-        ax.grid(True)
+        ax.set_axisbelow(True)
+        ax.grid(True, color="#D5DADF", linewidth=.45, alpha=.65)
         ax.set_title(title, loc="left")
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
     axes[1].annotate("load change", (0, axes[1].get_ylim()[1]), xytext=(4, -4),
                      textcoords="offset points", va="top", fontsize=7.4,
-                     color=C_RED)
+                     color="#5F6C76")
     h, l = axes[0].get_legend_handles_labels()
     fig.legend(h, l, ncol=3, loc="upper center", bbox_to_anchor=(.5, 1.0),
                fontsize=8, frameon=False, columnspacing=1.8, handlelength=1.9)
@@ -952,47 +1034,156 @@ def fig_pressure_stacks():
     """
     flip, keep, N = _flip_window()
     t = np.arange(-W, W) / FS
-    files = {"ppo_rom": "rom", "ppo_id_fd": "idfd", "ppo_aam_id_fd": "af_adaptive"}
-    fig, axes = plt.subplots(1, 4, figsize=(FULLW, 2.5))
+    files = {"ppo_rom": "rom", "ppo_id_fd": "idfd",
+             "ppo_aam_id_fd": "af_adaptive"}
+    colors = {"ppo_rom": "#C44E52", "ppo_id_fd": "#D5A11E",
+              "ppo_aam_id_fd": "#3F8F8C"}
+    labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
+                       "ppo_id_fd": "IF (PPO-ID-FD)",
+                       "ppo_aam_id_fd": "AF (PPO-AAM-FD)"}
+    fig, axes_grid = plt.subplots(2, 2, figsize=(FULLW, 5.0), sharex=True)
+    axes = axes_grid.ravel()
     CLIP = 1500.0                       # numerical guard in the command ROM
     for c, ax in enumerate(axes):
         clipped = []
-        for key, label, col in STACKS:
+        for key, _, _ in STACKS:
+            col = colors[key]
+            label = labels_by_stack[key]
             dp = np.load(PRESS / f"{files[key]}_m1337_early.npz")["chain_dP"] / 1e5
             al = _aligned(dp[:, :, c], flip, keep)
             med = np.median(al, axis=0)
-            ax.plot(t, med, color=col, lw=1.3, label=label)
+            ax.plot(t, med, color=col, lw=1.55, label=label,
+                    solid_capstyle="round", zorder=2)
             if np.mean(np.abs(np.abs(dp[:, :, c]) - CLIP) < 1e-3) > 0.01:
                 clipped.append(label)
-        for s in (+1, -1):
-            ax.axhline(s * 340, color=C_RULE, lw=.8, ls=":")
-        ax.axvline(0, color=C_RED, lw=1.0, ls="--")
+        ax.axhline(0, color="#C3C9CE", lw=.8, zorder=1)
+        ax.axvline(0, color="#7C8791", lw=1.0, ls="--", zorder=1)
         ax.set_xlim(t[0], t[-1])
         ax.set_xticks([-4, 0, 4])
-        ax.set_xlabel("time (s)")
-        ax.grid(True, axis="y")
-        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left", fontsize=8.2)
+        if c >= 2:
+            ax.set_xlabel("time from load change (s)")
+        ax.set_axisbelow(True)
+        ax.grid(True, axis="y", color="#D5DADF", linewidth=.45, alpha=.65)
+        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left", fontsize=8.8)
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
         if clipped:
-            ax.annotate("ROM on its\n$\\pm$1500 bar guard",
-                        xy=(0.04, 0.04), xycoords="axes fraction", fontsize=6.5,
-                        color=C_RED, va="bottom")
+            ax.annotate("R reaches its $\\pm$1500 bar guard",
+                        xy=(0.04, 0.05), xycoords="axes fraction", fontsize=7.3,
+                        color="#5F6C76", va="bottom")
     axes[0].set_ylabel(r"median $\Delta p$ (bar)")
+    axes[2].set_ylabel(r"median $\Delta p$ (bar)")
     h, l = axes[0].get_legend_handles_labels()
-    h.append(plt.Line2D([], [], color=C_RULE, lw=.8, ls=":"))
-    l.append("$\\pm$340 bar nominal supply")
+    h.append(plt.Line2D([], [], color="#7C8791", lw=1.0, ls="--"))
+    l.append("load change")
     fig.legend(h, l, ncol=4, loc="upper center", bbox_to_anchor=(.5, 1.0),
-               fontsize=7.6, frameon=False, columnspacing=1.5, handlelength=1.7)
-    # The per-panel scaling is stated in the caption; repeating it here at 6.8pt
-    # only adds a line of type too small to read.
-    fig.subplots_adjust(left=.095, right=.99, top=.80, bottom=.20, wspace=.42)
+               fontsize=7.8, frameon=False, columnspacing=1.25,
+               handlelength=1.7)
+    fig.subplots_adjust(left=.105, right=.985, top=.90, bottom=.11,
+                        wspace=.25, hspace=.32)
     save(fig, "ch7_pressure_stacks")
 
 
 # Figures the chapter currently uses.
+
+
+# ==========================================================================
+# 7.5  Dose response: does the benefit scale with the plant change?
+# ==========================================================================
+RIF = OUTPUTS / "rif_delay"
+DOSE_MESHES = ("1337", "17")
+DOSES = [("1_0", 1.0), ("1_5", 1.5), ("2_0", 2.0), ("2_5", 2.5), ("3_0", 3.0)]
+
+
+def _dose_pool(tag, key="per_env_lateral_m"):
+    v = []
+    for m in DOSE_MESHES:
+        d = load(RIF / f"{tag}_m{m}.json")
+        for _, r in d["per_mesh"].items():
+            v += [x * 1000.0 for x in r[key]]
+    return v
+
+
+def fig_dose_response():
+    """The plant gets harder and the adaptive arm barely notices.
+
+    (a) is the whole story in one picture: the frozen base degrades steadily as
+    the mid-episode mass flip grows, and the adaptive arm stays nearly flat, so
+    the gap between them widens. (b) splits that gap into the part present when
+    the mass never moves at all and the part that only appears because it did.
+    """
+    base, adapt, gain, doses = [], [], [], []
+    for tag, x in DOSES:
+        b = _dose_pool(f"dose_base_{tag}")
+        a = _dose_pool(f"dose_adapt_{tag}")
+        base.append(float(np.median(b)))
+        adapt.append(float(np.median(a)))
+        # The estimator is the median of the PAIRED differences, which is not
+        # the difference of the medians. Panel (a) draws levels; panel (b) has
+        # to draw the statistic the result is stated on.
+        n = min(len(b), len(a))
+        gain.append(float(np.median([x - y for x, y in zip(b[:n], a[:n])])))
+        doses.append(x)
+    sham = gain[0]                       # dose 1.0: the flip fires, mass does not
+    excess = [g - sham for g in gain]
+
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.9),
+                                   gridspec_kw=dict(width_ratios=[1, 1]))
+
+    axa.fill_between(doses, adapt, base, color=C_GRN, alpha=.13, lw=0)
+    axa.plot(doses, base, "-o", color=C_GRAY, lw=1.8, ms=5, mec="white", mew=.8,
+             label="frozen base")
+    axa.plot(doses, adapt, "-o", color=C_GRN, lw=1.8, ms=5, mec="white", mew=.8,
+             label="adaptive")
+    axa.annotate("the gap the residual buys",
+                 xy=(2.5, (base[3] + adapt[3]) / 2), xytext=(-4, 0),
+                 textcoords="offset points", ha="right", va="center",
+                 fontsize=7.4, color="#4E7A5E")
+    axa.annotate("sham:\nflip fires,\nmass does not", (1.0, base[0]),
+                 xytext=(6, 8), textcoords="offset points", fontsize=6.9,
+                 color="#6B7780", va="bottom")
+    axa.set_xticks(doses)
+    axa.set_xticklabels([f"{d:.1f}" for d in doses])
+    axa.set_xlim(0.85, 3.2)
+    axa.set_ylim(0, 72)
+    axa.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
+    axa.set_ylabel("lateral error (mm)")
+    axa.grid(axis="y")
+    axa.legend(fontsize=8, loc="lower left")
+    axa.set_title("(a) the plant gets harder; the adaptive arm holds", loc="left",
+                  fontsize=8.4)
+
+    x = np.arange(1, len(doses))
+    axb.bar(x, [sham] * len(x), width=.62, color="#B9C2C9",
+            label="present even when the mass never moves")
+    axb.bar(x, excess[1:], width=.62, bottom=[sham] * len(x), color=C_GRN,
+            alpha=.9, label="only when the mass actually changes")
+    for i, e in zip(x, excess[1:]):
+        axb.annotate(f"{e:.1f}", (i, sham + e), xytext=(0, 3),
+                     textcoords="offset points", ha="center", fontsize=7.6,
+                     color="#1B843F")
+    axb.set_xticks(x)
+    axb.set_xticklabels([f"{d:.1f}" for d in doses[1:]])
+    axb.set_xlim(0.4, len(doses) - 0.4)
+    axb.set_ylim(0, 30)
+    axb.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
+    axb.set_ylabel("error the residual removes (mm)")
+    axb.grid(axis="y")
+    axb.legend(fontsize=7.2, loc="upper left", labelspacing=.3)
+    axb.set_title("(b) and more of what it removes is adaptation", loc="left",
+                  fontsize=8.4)
+    fig.subplots_adjust(left=.095, right=.985, top=.895, bottom=.165, wspace=.30)
+    save(fig, "ch7_dose_response")
+    for d, b, a, g, e in zip(doses, base, adapt, gain, excess):
+        print(f"     dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
+              f"gain {g:6.3f}  excess {e:+6.3f}")
+
+
+
 FIGURES = [fig_e1_paths, fig_e1_tracking, fig_e1_gates,
            fig_delay_response, fig_delay_summary, fig_chain_by_stack,
            fig_ref_step, fig_control_effort, fig_e5_robustness,
-           fig_af_arms, fig_pressure_stacks]
+           fig_dose_response, fig_af_arms, fig_pressure_stacks]
 
 # Generated on request, for the withdrawn identifiability section. Run
 #   python3 scripts/make_ch7_figures.py --withdrawn

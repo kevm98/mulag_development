@@ -1183,9 +1183,24 @@ entirely. Read as a baseline to subtract, it separates the two mechanisms.
   \end{tabular}
 \end{table}
 
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7_dose_response}
+  \caption{The result in one picture. (a)~As the mid-episode load change grows,
+  the frozen base degrades steadily while the adaptive arm stays close to flat,
+  so the gap between them widens: the plant gets harder and the adaptive arm
+  largely does not notice. The leftmost point is the sham, where the flip fires
+  and the mass never moves. (b)~That gap split in two. The grey part is present
+  even in the sham and is improved tracking; the green part appears only because
+  the mass actually changed, and it grows with how much it changed. Bars are the
+  median paired difference over $352$ environments.}
+  \label{fig:eval:dose}
+\end{figure}
+
 A benefit that grows with the magnitude of the plant change it is supposed to
 answer is the signature of adaptation, and on lateral error it is present,
-monotone and resolved at every dose. At the largest flip the decomposition is
+monotone and resolved at every dose (Figure~\ref{fig:eval:dose}). At the
+largest flip the decomposition is
 $\unit[16.557]{mm}$ of dose-independent tracking improvement and
 $\unit[7.410]{mm}$ that scales with the perturbation, so $31\,\%$ of the lateral
 gain is attributable to the plant change and $69\,\%$ is not.
@@ -1370,12 +1385,11 @@ stacks, on the same plant and aligned on the same event.
   \centering
   \includegraphics[width=\textwidth]{images/ch7_pressure_stacks}
   \caption{Median differential pressure per cylinder through the change of
-  load, $151$ environments aligned on their own flip instant. The dotted lines
-  are $\pm$ the $\unit[340]{bar}$ nominal supply. The quantity is each stack's
-  own actuator-model state, internal to the command ROM for \ppoROM{} and the
-  forward model's recursive state for the other two, so the panels show what
-  each controller believes about the hydraulics rather than a common
-  measurement, and each panel therefore carries its own scale. The slew and
+  load, $151$ environments aligned on their own flip instant. The quantity is
+  each stack's own actuator-model state, internal to the command ROM for
+  \ppoROM{} and the forward model's recursive state for the other two, so the
+  panels show what each controller believes about the hydraulics rather than a
+  common measurement, and each panel carries its own scale. The slew and
   boom~I panels mark where \ppoROM{} sits on its $\unit[1500]{bar}$ numerical
   guard.}
   \label{fig:eval:pressure-stacks}
@@ -1384,13 +1398,15 @@ stacks, on the same plant and aligned on the same event.
 Three properties of these traces bear on the rest of the chapter, and the first
 two are limitations of the signal rather than results.
 
-The pressure state is not a calibrated pressure on any stack. Against the
-model's own nominal supply of $\unit[340]{bar}$ the median differential pressure
-sits well outside it in magnitude on most cylinders, in both directions, and the
-peaks reach several times it. On \ppoROM{} the excursions are clipped by a
-numerical guard at $\unit[1500]{bar}$, and that clip binds on the slew and the
-first boom cylinder and not on the other two, so those panels show a flattened
-trace where the guard is active. On the inverse and forward path no such clip is
+The pressure state is not a calibrated pressure on any stack, and it is
+reported per cylinder for that reason: there is no common physical level the
+four panels could sensibly be read against. The model's nominal supply is such a
+level in name only, since the states here run to several times it in both
+directions, so drawing it would invite a comparison that means nothing. On
+\ppoROM{} the excursions are clipped by a numerical guard at
+$\unit[1500]{bar}$, and that clip binds on the slew and the first boom cylinder
+and not on the other two, so those panels show a flattened trace where the guard
+is active. On the inverse and forward path no such clip is
 applied, so the two stacks are not bounded in the same way and their absolute
 levels are not directly comparable. What is comparable, and what the figure is
 for, is the \emph{shape} of the response either side of the change.

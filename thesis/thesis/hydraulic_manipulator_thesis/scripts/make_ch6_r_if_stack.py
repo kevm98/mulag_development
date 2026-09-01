@@ -57,7 +57,10 @@ def build():
         out.append(rect(x, y, w, h, "#FFFFFF", INK, 2.6))
         out.append(text(x + w / 2, y + 43, title, 34, INK, "bold"))
         for index, line in enumerate(lines):
-            out.append(text(x + w / 2, y + 88 + 37 * index, line, 30))
+            # The IF policy card is intentionally narrow. Keep its descriptive
+            # label inside the border without changing the rest of the figure.
+            line_size = 22 if line == "motion command" else 30
+            out.append(text(x + w / 2, y + 88 + 37 * index, line, line_size))
 
     out.append(rect(20, 78, 1360, 278, PANEL, RULE, 1.6, 0))
     out.append(rect(38, 102, 120, 226, "#FFFFFF", INK, 2.6))
