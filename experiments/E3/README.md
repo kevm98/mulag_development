@@ -1,7 +1,9 @@
 # E3 — Mid-episode plant change
 
-**Defends:** *Online Adaptation* · **Covers:** all three stacks
-**Status:** first run CLOSED and reinterpreted (thesis §7.6.5); replacement SPECIFIED, not run
+**Defends:** *Online Adaptation* · **Covers:** PPO-AAM-FD, within-stack
+**Status:** complete, including the 2026-09-01 correction · thesis §7.5. The
+first dose sweep confounded the mid-episode change with static mass; the
+uniform-step rerun isolates it and resolves a component on both metrics.
 
 The causal demonstration the thesis title rests on: the plant changes at a known
 time inside the scored window, and the question is whether the adaptive stack

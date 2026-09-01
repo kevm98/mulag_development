@@ -1,7 +1,9 @@
 # E4 — Latent ablation
 
-**Defends:** *Online Adaptation* · **Covers:** all three stacks (substitution on AAM; the other two are reference rows)
-**Status:** model level complete; closed loop outstanding; thesis §7.4
+**Defends:** *Online Adaptation* · **Covers:** PPO-AAM-FD, one checkpoint
+**Status:** model level complete · thesis Appendix E only. The arms ran on the
+retired architecture, so they are a recorded measurement rather than a result
+about the deployed stack.
 
 ## Model-level result (settled, n=5 seeds)
 

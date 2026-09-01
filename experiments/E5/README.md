@@ -1,7 +1,8 @@
 # E5 — Plant robustness envelope
 
-**Defends:** *Hydraulic Manipulator* · **Covers:** all three stacks
-**Status:** superseded sweep CLOSED (thesis §7.4); replacement SPECIFIED, not run
+**Defends:** *Hydraulic Manipulator* · **Covers:** PPO-ROM (ladder), all three (audit)
+**Status:** factor sweep withdrawn, actuator-authority ladder reported · thesis
+§7.4, §7.4.1.
 
 ## What the first sweep did, and why its result was withdrawn
 

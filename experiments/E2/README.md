@@ -1,7 +1,8 @@
 # E2 — Plant characterisation: transport delay and identifiability
 
-**Defends:** *Hydraulic Manipulator* · **Covers:** all three stacks (plant property)
-**Status:** delay complete; nonlinearity outstanding; thesis §7.6, §7.2
+**Defends:** *Hydraulic Manipulator* · **Covers:** plant property, not a stack
+**Status:** dead time complete · thesis §7.3.1. The nonlinearity probe was
+specified and never run.
 
 ## Run
 

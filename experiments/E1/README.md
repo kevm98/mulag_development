@@ -1,7 +1,9 @@
 # E1 — Closed-loop task performance
 
-**Defends:** *Control* · **Covers:** PPO-ROM, PPO-ID-FD, PPO-(AAM)-ID-FD
-**Status:** rollouts complete; thesis §7.8
+**Defends:** *Control* · **Covers:** PPO-ROM, PPO-ID-FD
+**Status:** complete for the matched pair · thesis §7.2, §7.3.5. The
+PPO-AAM-FD rows were scored on the retired ID-adapter architecture and are
+withdrawn rather than reported (§7.1.3).
 
 Every other result in the thesis is model-level prediction error. This is the
 only measurement of control.

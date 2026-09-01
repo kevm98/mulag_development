@@ -1,7 +1,8 @@
 # E6 — Latent bandwidth sweep
 
-**Defends:** *Online Adaptation* · **Covers:** PPO-(AAM)-ID-FD, one checkpoint
-**Status:** complete 2026-08-19 · thesis §7.9, §8.2 · **verdict: mechanism NOT supported**
+**Defends:** *Online Adaptation* · **Covers:** PPO-AAM-FD, one checkpoint
+**Status:** complete 2026-08-19 · **verdict: mechanism NOT supported** · not
+cited in the thesis. Kept as the record of a question asked and answered.
 
 ## The question
 
