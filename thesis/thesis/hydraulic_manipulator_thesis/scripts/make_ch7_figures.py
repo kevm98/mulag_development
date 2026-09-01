@@ -638,7 +638,7 @@ def _e5_family(stack, scale, key):
 
 
 def fig_e5_robustness():
-    """Large median-and-range panels across the randomisation sweep."""
+    """Large median-and-spread panels across the randomisation sweep."""
     fig, axes = plt.subplots(2, 1, figsize=(FULLW, 4.75), sharex=True)
     colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
     labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
@@ -654,22 +654,21 @@ def fig_e5_robustness():
         for stack, _, _ in PAIR:
             col = colors[stack]
             data = [_e5_family(stack, sc, key) for sc in SCALES]
-            lo = np.array([np.min(v) for v in data])
             q25 = np.array([np.percentile(v, 25) for v in data])
             med = np.array([np.median(v) for v in data])
             q75 = np.array([np.percentile(v, 75) for v in data])
             hi = np.array([np.max(v) for v in data])
 
-            # The band and large line show the population. Thin capped ranges
-            # retain the extreme families without making them the main shape.
-            ax.fill_between(x, q25, q75, color=col, alpha=.16, lw=0, zorder=1)
-            ax.errorbar(x + offset[stack], med,
-                        yerr=np.vstack((med - lo, hi - med)), fmt="none",
-                        ecolor=col, elinewidth=.9, capsize=3.2, capthick=.9,
-                        alpha=.42, zorder=2)
+            # The median and middle half carry the result. Open markers retain
+            # the hardest family at each scale without a full-range whisker
+            # dominating the panel.
+            ax.fill_between(x, q25, q75, color=col, alpha=.18, lw=0, zorder=1)
             ax.plot(x, med, color=col, lw=2.1, marker=markers[stack], ms=7.0,
                     mfc=col, mec="white", mew=.9, solid_capstyle="round",
                     label=labels_by_stack[stack], zorder=4)
+            ax.scatter(x + offset[stack], hi, s=34, marker=markers[stack],
+                       facecolor="white", edgecolor=col, linewidth=1.05,
+                       alpha=.9, zorder=3)
         ax.set_xticks(x)
         ax.set_xticklabels(SCALES)
         ax.set_xlim(-0.28, len(SCALES) - 0.72)
@@ -690,7 +689,7 @@ def fig_e5_robustness():
     ax.scatter(2 + offset["ppo_id_fd"], out, s=42, marker="D",
                facecolor="white", edgecolor=colors["ppo_id_fd"],
                linewidth=1.2, zorder=5)
-    ax.annotate("single family; median stays flat",
+    ax.annotate("one IF family; median stays flat",
                 xy=(2 + offset["ppo_id_fd"], out), xytext=(18, -2),
                 textcoords="offset points", ha="left", va="top", fontsize=8.0,
                 color=colors["ppo_id_fd"],
@@ -699,8 +698,11 @@ def fig_e5_robustness():
     h = [plt.Line2D([], [], marker=markers[key], ls="-", lw=2.1, ms=7.0,
                     color=colors[key], mfc=colors[key], mec="white",
                     label=labels_by_stack[key]) for key, _, _ in PAIR]
-    fig.legend(handles=h, ncol=2, loc="upper center", bbox_to_anchor=(.5, 1.0),
-               fontsize=9.0, frameon=False, columnspacing=2.5)
+    h.append(plt.Line2D([], [], marker="o", ls="", ms=5.8,
+                        markerfacecolor="white", markeredgecolor="#68747D",
+                        label="hardest family"))
+    fig.legend(handles=h, ncol=3, loc="upper center", bbox_to_anchor=(.5, 1.0),
+               fontsize=8.6, frameon=False, columnspacing=2.0)
     fig.subplots_adjust(left=.105, right=.985, top=.91, bottom=.11, hspace=.27)
     save(fig, "ch7_e5_robustness")
 
@@ -1105,51 +1107,61 @@ def fig_rom_authority():
     brk = d["functional_breakdown_alpha"]
     m = a > 0                      # alpha = 0 cannot sit on a log axis
 
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.9))
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 3.0))
+    mean_col = "#6F4C9B"
+    worst_col = "#2A9D8F"
+    gate_col = "#C44E52"
+    lateral_col = "#E07A3F"
 
-    axa.axhspan(0.5, gate, color=C_RED, alpha=.07, lw=0)
-    axa.axhline(gate, color=C_RED, lw=1.0, ls="--")
-    axa.plot(a[m], contact[m], "-o", color=C_RED, lw=1.8, ms=4.5, mec="white",
-             mew=.8, label="mean over meshes")
-    axa.plot(a[m], worst[m], "--s", color="#8C9BA5", lw=1.2, ms=3.6,
-             mec="white", mew=.6, label="worst mesh")
-    axa.plot([a[m].min() * 0.55], [contact[~m][0]], "o", color=C_RED,
-             mfc="white", ms=5, mew=1.3)
+    axa.axhspan(0.5, gate, color=gate_col, alpha=.085, lw=0)
+    axa.axhline(gate, color=gate_col, lw=1.15, ls="--", zorder=2)
+    axa.plot(a[m], contact[m], "-o", color=mean_col, lw=2.0, ms=5.2,
+             mec="white", mew=.8, label="mean over meshes", zorder=4)
+    axa.plot(a[m], worst[m], "--s", color=worst_col, lw=1.45, ms=4.1,
+             mec="white", mew=.7, label="worst mesh", zorder=3)
+    axa.plot([a[m].min() * 0.55], [contact[~m][0]], "o", color=mean_col,
+             mfc="white", ms=5.8, mew=1.4, zorder=4)
     axa.annotate("0", (a[m].min() * 0.55, contact[~m][0]), xytext=(0, -11),
                  textcoords="offset points", ha="center", fontsize=7.2,
-                 color=C_RED)
+                 color=mean_col)
     axa.annotate(f"gate {gate:.2f}", (1.15, gate), xytext=(0, 3),
                  textcoords="offset points", ha="right", fontsize=7.4,
-                 color=C_RED)
+                 color=gate_col)
     axa.annotate(f"holds to $\\alpha = {brk:g}$", (brk, gate), xytext=(7, -16),
                  textcoords="offset points", fontsize=7.4, color="#3B4A55",
                  arrowprops=dict(arrowstyle="->", color="#3B4A55", lw=.9))
+    axa.annotate("failure", (0.97, 0.575), ha="right", va="bottom",
+                 fontsize=7.1, color=gate_col)
     axa.set_xscale("log")
     axa.set_xlim(a[m].min() * 0.42, 1.35)
     axa.set_ylim(0.55, 1.0)
-    axa.set_xlabel(r"actuator authority $\alpha$ (fraction of nominal)")
+    axa.set_xlabel(r"actuator authority $\kappa$ (fraction of nominal)")
     axa.set_ylabel("ground contact")
-    axa.grid(axis="y")
-    axa.legend(fontsize=7.4, loc="lower right")
-    axa.set_title("(a) contact holds until authority is nearly gone", loc="left",
-                  fontsize=8.4)
+    axa.set_axisbelow(True)
+    axa.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
+    axa.legend(fontsize=7.5, loc="lower right")
+    axa.set_title("(a) contact reveals the authority limit", loc="left",
+                  fontsize=8.7)
 
-    axb.plot(a[m], 1000 * lateral[m], "-o", color=C_AMBER, lw=1.8, ms=4.5,
-             mec="white", mew=.8)
-    axb.plot([a[m].min() * 0.55], [1000 * lateral[~m][0]], "o", color=C_AMBER,
-             mfc="white", ms=5, mew=1.3)
+    axb.plot(a[m], 1000 * lateral[m], "-o", color=lateral_col, lw=2.0,
+             ms=5.2, mec="white", mew=.8, zorder=3)
+    axb.plot([a[m].min() * 0.55], [1000 * lateral[~m][0]], "o",
+             color=lateral_col, mfc="white", ms=5.8, mew=1.4, zorder=3)
     axb.set_xscale("log")
     axb.set_xlim(a[m].min() * 0.42, 1.35)
     axb.set_ylim(0, 160)
-    axb.set_xlabel(r"actuator authority $\alpha$ (fraction of nominal)")
+    axb.set_xlabel(r"actuator authority $\kappa$ (fraction of nominal)")
     axb.set_ylabel("lateral error (mm)")
-    axb.grid(axis="y")
-    axb.annotate("deviation metrics do not degrade:\na starved arm is stiller,\n"
-                 "so contact is the metric that\nreports the failure",
-                 xy=(0.03, 0.06), xycoords="axes fraction", fontsize=7.2,
-                 color="#6B7780", va="bottom")
-    axb.set_title("(b) and lateral error does not report it", loc="left",
-                  fontsize=8.4)
+    axb.set_axisbelow(True)
+    axb.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
+    axb.annotate("lower error is misleading:\na starved arm barely moves",
+                 xy=(0.04, 0.07), xycoords="axes fraction", fontsize=7.5,
+                 color="#5F6C76", va="bottom")
+    axb.set_title("(b) lateral error hides the failure", loc="left",
+                  fontsize=8.7)
+    for ax in (axa, axb):
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
     fig.subplots_adjust(left=.095, right=.985, top=.895, bottom=.165, wspace=.30)
     save(fig, "ch7_rom_authority")
     print(f"     breakdown at alpha={brk:g}; contact {contact[a==1][0]:.3f} at "
@@ -1200,51 +1212,61 @@ def fig_dose_response():
     sham = gain[0]                       # dose 1.0: the flip fires, mass does not
     excess = [g - sham for g in gain]
 
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.9),
-                                   gridspec_kw=dict(width_ratios=[1, 1]))
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 3.05),
+                                   gridspec_kw=dict(width_ratios=[1.12, 1]))
+    base_col = "#59636B"
+    adapt_col = "#2A8C57"
+    sham_col = "#B9C2C9"
 
-    axa.fill_between(doses, adapt, base, color=C_GRN, alpha=.13, lw=0)
-    axa.plot(doses, base, "-o", color=C_GRAY, lw=1.8, ms=5, mec="white", mew=.8,
-             label="frozen base")
-    axa.plot(doses, adapt, "-o", color=C_GRN, lw=1.8, ms=5, mec="white", mew=.8,
-             label="adaptive")
-    axa.annotate("the gap the residual buys",
+    axa.axvspan(0.88, 1.12, color="#EEF1F3", alpha=.95, lw=0, zorder=0)
+    axa.fill_between(doses, adapt, base, color=adapt_col, alpha=.16, lw=0,
+                     zorder=1)
+    axa.plot(doses, base, "-o", color=base_col, lw=2.1, ms=5.8,
+             mec="white", mew=.8, label="frozen base", zorder=3)
+    axa.plot(doses, adapt, "-D", color=adapt_col, lw=2.1, ms=5.6,
+             mec="white", mew=.8, label="adaptive", zorder=3)
+    axa.annotate("gain from the residual",
                  xy=(2.5, (base[3] + adapt[3]) / 2), xytext=(-4, 0),
                  textcoords="offset points", ha="right", va="center",
-                 fontsize=7.4, color="#4E7A5E")
-    axa.annotate("sham:\nflip fires,\nmass does not", (1.0, base[0]),
-                 xytext=(6, 8), textcoords="offset points", fontsize=6.9,
-                 color="#6B7780", va="bottom")
+                 fontsize=7.6, color="#376B4B")
+    axa.annotate("sham\n(no mass change)", (1.0, base[0]),
+                 xytext=(7, 7), textcoords="offset points", fontsize=7.1,
+                 color="#5F6C76", va="bottom")
     axa.set_xticks(doses)
     axa.set_xticklabels([f"{d:.1f}" for d in doses])
     axa.set_xlim(0.85, 3.2)
     axa.set_ylim(0, 72)
     axa.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
     axa.set_ylabel("lateral error (mm)")
-    axa.grid(axis="y")
+    axa.set_axisbelow(True)
+    axa.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
     axa.legend(fontsize=8, loc="lower left")
-    axa.set_title("(a) the plant gets harder; the adaptive arm holds", loc="left",
-                  fontsize=8.4)
+    axa.set_title("(a) adaptive performance holds as the load grows", loc="left",
+                  fontsize=8.6)
 
-    x = np.arange(1, len(doses))
-    axb.bar(x, [sham] * len(x), width=.62, color="#B9C2C9",
-            label="present even when the mass never moves")
-    axb.bar(x, excess[1:], width=.62, bottom=[sham] * len(x), color=C_GRN,
-            alpha=.9, label="only when the mass actually changes")
+    x = np.array(doses[1:])
+    axb.bar(x, [sham] * len(x), width=.32, color=sham_col,
+            label="tracking gain (also present in sham)")
+    axb.bar(x, excess[1:], width=.32, bottom=[sham] * len(x), color=adapt_col,
+            alpha=.95, label="adaptation gain (dose-dependent)")
     for i, e in zip(x, excess[1:]):
-        axb.annotate(f"{e:.1f}", (i, sham + e), xytext=(0, 3),
+        axb.annotate(f"+{e:.1f}", (i, sham + e), xytext=(0, 3),
                      textcoords="offset points", ha="center", fontsize=7.6,
-                     color="#1B843F")
+                     color="#276B44")
     axb.set_xticks(x)
-    axb.set_xticklabels([f"{d:.1f}" for d in doses[1:]])
-    axb.set_xlim(0.4, len(doses) - 0.4)
+    axb.set_xticklabels([f"{d:.1f}" for d in x])
+    axb.set_xlim(1.25, 3.25)
     axb.set_ylim(0, 30)
     axb.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
     axb.set_ylabel("error the residual removes (mm)")
-    axb.grid(axis="y")
-    axb.legend(fontsize=7.2, loc="upper left", labelspacing=.3)
-    axb.set_title("(b) and more of what it removes is adaptation", loc="left",
-                  fontsize=8.4)
+    axb.set_axisbelow(True)
+    axb.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
+    axb.legend(fontsize=7.0, loc="upper left", labelspacing=.3)
+    axb.set_title("(b) the gain separates into two components", loc="left",
+                  fontsize=8.6)
+    for ax in (axa, axb):
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
     fig.subplots_adjust(left=.095, right=.985, top=.895, bottom=.165, wspace=.30)
     save(fig, "ch7_dose_response")
     for d, b, a, g, e in zip(doses, base, adapt, gain, excess):

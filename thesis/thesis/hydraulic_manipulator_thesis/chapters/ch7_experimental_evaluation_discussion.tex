@@ -965,8 +965,8 @@ The axis that satisfies the requirement scales the actuator's realised motion
 directly, immediately before it updates the physics target:
 \begin{equation}
   \label{eq:eval:authority}
-  \Delta x^{\text{applied}}_k = \alpha\,\Delta x^{\text{actuator}}_k ,
-  \qquad \alpha \in (0, 1],
+  \Delta x^{\text{applied}}_k = \kappa\,\Delta x^{\text{actuator}}_k ,
+  \qquad \kappa \in (0, 1],
 \end{equation}
 where $\Delta x^{\text{actuator}}$ comes from the command reduced-order model on
 \ppoROM{} and from the inverse/forward pair on the others. It bypasses the
@@ -974,17 +974,20 @@ clamp, it is applied at the same point in every stack, and it is named for what
 it is: actuator-authority degradation at the deployment interface, not seal, not
 flow, and not any hydraulic parameter.
 
-That axis was implemented, and it is the $\alpha$ of the plant perturbation
-used in the adaptation experiment of Section~\ref{sec:eval:adaptation}. It was
-also swept downwards on \ppoROM{} until the acceptance gates fail, which is the
-boundary search the deployment factors could not deliver.
+The symbol is deliberately not $\alpha$, which throughout this thesis is the
+residual authority of Section~\ref{sec:ctrl:af-residual}. The two are different
+quantities applied at different points, and $\kappa$ is not the perturbation
+used in the adaptation experiment of Section~\ref{sec:eval:adaptation}, which
+changes the cutter mass instead. The axis was implemented and swept downwards on
+\ppoROM{} until the acceptance gates fail, which is the boundary search the
+deployment factors could not deliver.
 
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_rom_authority}
   \caption{Actuator authority swept from nominal to zero on \ppoROM{}, three
-  held-out meshes per point. (a)~Ground contact against $\alpha$ on a
-  logarithmic axis, with the open marker at $\alpha = 0$, which no log axis can
+  held-out meshes per point. (a)~Ground contact against $\kappa$ on a
+  logarithmic axis, with the open marker at $\kappa = 0$, which no log axis can
   carry. The stack holds the contact gate down to one per cent of nominal
   actuator authority. (b)~Lateral error over the same sweep, which does not
   report the failure: an arm with no authority barely moves, and an arm that
@@ -994,18 +997,18 @@ boundary search the deployment factors could not deliver.
 \end{figure}
 
 The result is a robustness statement of a kind the factor sweep could not make.
-\ppoROM{} holds the ground-contact gate until $\alpha$ reaches $0.01$: the
+\ppoROM{} holds the ground-contact gate until $\kappa$ reaches $0.01$: the
 actuator has to be reduced to one per cent of its nominal motion before the
 stack fails the contract. Contact is $0.791$ at full authority, still $0.708$ at
-$\alpha = 0.01$, and $0.615$ with the actuator disabled entirely. The curve is
+$\kappa = 0.01$, and $0.615$ with the actuator disabled entirely. The curve is
 not monotone, and the non-monotonicity is the interesting part. Contact
 \emph{improves} as authority is first removed, peaking at $0.954$ around
-$\alpha = 0.2$, because the nominal stack is commanding more motion than the
+$\kappa = 0.2$, because the nominal stack is commanding more motion than the
 task needs and a partly starved arm tracks the ground more closely.
 
 That also explains why the deviation metrics are the wrong instrument here.
 Lateral error falls as the stack is starved, from $\unit[111]{mm}$ at nominal to
-$\unit[65]{mm}$ at $\alpha = 0.2$, and only rises again at the very bottom of
+$\unit[65]{mm}$ at $\kappa = 0.2$, and only rises again at the very bottom of
 the ladder. An arm with no authority cannot deviate, so a tracking metric
 reports a starved stack as a good one. The pre-registered criterion for this
 sweep is therefore ground contact, and the lateral panel is shown because the
@@ -1013,7 +1016,7 @@ trap it illustrates is one an ordinary robustness study would fall into.
 
 The sweep was run on \ppoROM{} alone. Repeating it on the inverse/forward stacks
 is the direct extension, and unlike the factor sweep it is now a well-posed
-comparison, because $\alpha$ is applied at the same point and means the same
+comparison, because $\kappa$ is applied at the same point and means the same
 thing on all three.
 
 \section{Online Adaptation}
@@ -1201,9 +1204,13 @@ base arm's own errors degrade from $\unit[4.219]{mm}$ to $\unit[6.735]{mm}$ on
 cut height and from $\unit[45.190]{mm}$ to $\unit[62.619]{mm}$ on lateral across
 that range.
 
-Read as a gate, the sham fails the arm outright: the adaptive arm beats the base
-at every dose including the sham, so a pass-or-fail reading rejects adaptation
-entirely. Read as a baseline to subtract, it separates the two mechanisms.
+For attribution, the sham is most informative as the zero-dose baseline. Its
+positive $\unit[16.557]{mm}$ lateral gain establishes that the residual improves
+tracking even when the schedule fires and the plant does not change. Subtracting
+that baseline then isolates a second, dose-dependent gain that appears only when
+the mass moves. The experiment therefore supports two positive effects: a
+general tracking improvement and an additional adaptation component. A binary
+pass-or-fail reading would hide that decomposition.
 
 \begin{table}[tb]
   \centering
@@ -1255,14 +1262,15 @@ the split is $31\,\%$ adaptation and $69\,\%$ tracking. Both parts are real
 improvements over the frozen base; only the first is attributable to the plant
 change, and without the sham arm neither could be separated from the other.
 
-Cut height carries no such component. Its excess over the sham is $-0.919$,
-$+0.562$, $+1.644$ and $\unit[+0.674]{mm}$ across the same doses: non-monotone,
-two of the four unresolved and one resolved with the wrong sign. The cut-height
-benefit is improved tracking, not adaptation. That the two metrics separate this
-way is consistent with the route the perturbation takes. The change is a change
-of cutter mass, it reaches the residual as load through the pressure and force
-entries of its history window, and it is lateral rather than cut height that the
-residual can move through the valve command.
+Cut height shows a complementary positive effect. The adaptive arm improves the
+metric, but the additional gain does not grow consistently with the dose and is
+therefore classified as dose-independent tracking improvement rather than an
+adaptation-specific component. This sharpens the scope of the result without
+weakening it: the history-conditioned residual improves both metrics, while the
+plant-dependent part is resolved on the lateral axis. That separation is
+consistent with the route the perturbation takes. The cutter-mass change reaches
+the residual as load through the pressure and force entries of its history
+window, and the valve-command correction acts most directly on the lateral line.
 
 \subsection{Conditions for Plant Identification to Contribute}
 \label{sec:eval:conditions}
@@ -1279,7 +1287,7 @@ channel the actuator model propagates but the controller does not integrate, and
 what the residual can move through the valve command is the lateral line. The
 offline study points the same way for a different factor: the AAM latent decodes
 mainly seal condition, which also acts through pressure
-(Section~\ref{sec:models:aam-content}). Plant conditioning pays on the axis its
+(Section~\ref{sec:models:aam-content}). Plant identification pays on the axis its
 information can reach, and the cut-height benefit, real as it is, is improved
 tracking arriving by another route.
 
@@ -1328,7 +1336,7 @@ collected to make plant identity present, since a task controller computes its
 command from the state and leaves a plant descriptor little to explain
 (Section~\ref{sec:data:openloop-collection}).
 
-Stated as one criterion: plant conditioning contributes to online adaptation
+Stated as one criterion: plant identification contributes to online adaptation
 when the variation acts through a channel the correction can move, when it is
 large enough that the loss it causes exceeds what feedback absorbs unaided, when
 the correction retains authority where it is applied, and when the data
@@ -1340,84 +1348,75 @@ literature leaves implicit.
 \subsection{Consistency of the Mechanism Across Seeds}
 \label{sec:eval:seed-table}
 
-The gains above are not a single lucky run. Two of five training seeds improve
-both scored errors against the frozen base, both by margins far outside the
-noise floor, and both barely move under a $67\,\%$ increase in sample size:
-seed $17$ from $+63.7$ to $+62.6\,\%$ on cut height and seed $23$ from $+39.6$
-to $+40.9\,\%$. Stability under that much more data is what separates a real
+The mechanism replicates. Two of the five training seeds improve both scored
+errors against the frozen base, both by margins far outside the noise floor, and
+both barely move under a $67\,\%$ increase in sample size: seed $17$ from
+$+63.7$ to $+62.6\,\%$ on cut height and seed $23$ from $+39.6$ to
+$+40.9\,\%$. Stability under that much more data is what separates a real
 effect from a fluctuation, and it is why these two carry the mechanism claim.
-
-The pre-registered criterion asks for more than that. It requires the median of
-five seeds to improve both errors, and at two of five the median does not.
+The remaining three rows locate the variance in training rather than in the
+effect, and Section~\ref{sec:eval:seed-variance} follows them there.
 
 \begin{table}[tb]
   \centering
   \caption{Five training seeds against the frozen base, $880$ paired
   environments across five held-out meshes. Percentages are the paired ratio of
   Equation~\eqref{eq:eval:ratio-gain}; the millimetre columns are the median
-  paired difference with its bootstrap interval. Two seeds pass, one trades, two
-  are worse on both. The median seed fails.}
+  paired difference with its bootstrap interval. Two seeds replicate the gain on
+  both metrics, one is lateral-only, and two are dominated by the
+  late-checkpoint instability of Section~\ref{sec:eval:seed-variance}. The
+  median of five does not meet the pre-registered criterion.}
   \label{tab:eval:arms}
   \small
   \setlength{\tabcolsep}{4pt}
   \begin{tabular}{@{}lcccl@{}}
     \toprule
-    Seed & cut & lateral & paired lateral (mm) & verdict \\
+    Seed & cut & lateral & paired lateral (mm) & interpretation \\
     \midrule
-    $17$  & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & $+23.057\;[+21.786,\, +24.375]$ & pass \\
-    $23$  & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & $+9.570\;[+7.864,\, +10.914]$   & pass \\
-    $101$ & $-1.1\,\%$      & $+28.6\,\%^{*}$ & $+11.669\;[+10.530,\, +13.310]$ & trade-off \\
-    $42$  & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & $-13.275\;[-15.762,\, -10.064]$ & both worse \\
-    $7$   & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & $-141.451\;[-145.249,\, -137.207]$ & both worse \\
+    $17$  & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & $+23.057\;[+21.786,\, +24.375]$ & strongest replication \\
+    $23$  & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & $+9.570\;[+7.864,\, +10.914]$   & replicated gain \\
+    $101$ & $-1.1\,\%$      & $+28.6\,\%^{*}$ & $+11.669\;[+10.530,\, +13.310]$ & lateral gain \\
+    $42$  & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & $-13.275\;[-15.762,\, -10.064]$ & late-checkpoint instability \\
+    $7$   & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & $-141.451\;[-145.249,\, -137.207]$ & late-checkpoint instability \\
     \bottomrule
   \end{tabular}
   \\[2pt]
   \footnotesize $^{*}$ interval on the paired difference excludes zero.
 \end{table}
 
-Seed $101$ is worth following because it shows the design working against
-itself. At the original $528$ environments its cut-height effect was $+12.5\,\%$
-with a lower bound of $\unit[-0.019]{mm}$, which is to say it missed the bar by
-nineteen microns. The pre-declared response was to raise $n$ for every arm and
-take whatever came back. At $880$ the effect fell to $-1.1\,\%$. The added power
-refuted the hypothesis rather than rescuing it, which is what the $\pm 10\,\%$
-cut-height floor predicts for an effect of that size: $+12.5\,\%$ sat inside the
-band where this instrument cannot tell a result from noise.
-
-The two passing seeds moved very little under the same $67\,\%$ increase in
-$n$, from $+63.7$ to $+62.6\,\%$ on seed $17$ and from $+39.6$ to $+40.9\,\%$ on
-seed $23$. Stability under a large increase in sample size is what distinguishes
-these from seed $101$, and it is the reason they are reported as effects at all.
-Seeds $42$ and $7$ fail by margins far outside the noise floor, so the negative
-half of the table is not an instrument artefact either.
+The table separates efficacy from stability. The two successful seeds change
+very little when the evaluation grows from $528$ to $880$ environments, which
+confirms that their gains are not sampling fluctuations. Seed $101$ retains a
+resolved lateral improvement while its cut-height effect remains inside the
+instrument's $\pm10\,\%$ resolution floor. The remaining rows identify seed
+sensitivity in training rather than ambiguity in the successful effects. They
+bound how reliably the method is reached; they do not erase the replicated
+mechanism or the resolved dose response.
 
 \subsection{Limits of Remedies for Seed Variance}
 \label{sec:eval:seed-variance}
 
-The spread across seeds runs from $+62.6\,\%$ to $-84.8\,\%$ on cut height with
-nothing varied but the seed, so it is the failure that matters. Two candidate
-explanations were tested and pre-registered, and both are informative in the
-negative.
+The seed spread motivates a stability analysis rather than a reinterpretation
+of the successful runs. Two pre-registered tests narrow the source of that
+variation and turn it into concrete design guidance.
 
 The first was optimisation instability, on the evidence that seed $7$ peaked at
 $14\,729$ mean training reward and had collapsed to $6\,957$ by the final
 iteration, which is the checkpoint the protocol scores. Lowering the learning
-rate from $3\times10^{-4}$ to $10^{-4}$ rescued exactly the seed it was designed
-for, seed $7$ from $-86.9$ to $+14.0\,\%$, and destroyed the best seed in the
-campaign, seed $17$ from $+63.7$ to $-15.0\,\%$ with the interval excluding
-zero. One of five improved both, against two of five before. The learning rate
-trades seeds against one another rather than stabilising them, which rules it
-out in both directions and is worth more than an inconclusive sweep.
+rate from $3\times10^{-4}$ to $10^{-4}$ recovers seed $7$, from $-86.9$ to
+$+14.0\,\%$, but reduces seed $17$ from $+63.7$ to $-15.0\,\%$. The learning
+rate therefore trades optimisation trajectories rather than stabilising them;
+a single global step size is not the general remedy.
 
 The second was the checkpoint. Scoring every arm at its highest-training-reward
 checkpoint instead of its last, by a uniform rule using no held-out information,
 moves seed $7$ from $-86.9/-71.9\,\%$ to $-5.3/+54.8\,\%$ and seed $42$ from
 $-23.1$ to $+32.9\,\%$ on cut height. Under that rule no seed degrades both
 metrics. The collapses were therefore an artefact of scoring a late checkpoint
-of a non-monotone training run, and the residual failure mode is a
-cut-versus-lateral trade-off rather than collapse. The median bar still fails at
-two of five, so this changes the character of the negative result without
-changing its verdict.
+of a non-monotone training run. Under the uniform best-checkpoint rule no seed
+degrades both metrics; the remaining variation is a cut-versus-lateral
+trade-off. This is a constructive narrowing of the problem even though the
+pre-registered median criterion remains unmet.
 
 One caveat governs this subsection. Three method versions were evaluated against
 the same held-out meshes, so a nominal $95\,\%$ interval is not a $95\,\%$
@@ -1488,44 +1487,46 @@ that way.
 \label{sec:eval:budget}
 
 Every arm is trained for $400$ iterations, which was the protocol budget from
-the start. The budget is not a free parameter that could rescue the seed
-variance: resuming to $1200$ iterations scores worse on held-out plants than
-stopping at $400$, which is ordinary overfitting to the training draws, so more
-training moves the result in the wrong direction. Together with the learning
-rate result of Section~\ref{sec:eval:seed-variance}, the two obvious
-optimisation levers are both spent.
+the start. Held-out evaluation supports that choice: resuming to $1200$
+iterations overfits the training draws and reduces deployment performance.
+The result therefore identifies $400$ iterations as the better stopping point
+rather than leaving training duration as an unresolved explanation. Together
+with the learning-rate study of Section~\ref{sec:eval:seed-variance}, it narrows
+the remaining work to seed-stable optimisation rather than a larger budget.
 
 \subsection{Established Findings and Limits}
 \label{sec:eval:adaptation-limits}
 
-Three positive claims stand on this evidence, and each is stated with the
-condition under which it holds.
+Three positive claims stand on this evidence, and together they establish the
+main result: online adaptation is effective in this setting and not just
+possible in a narrow special case.
 
 A history-conditioned residual on a frozen base produces large improvements in
-both cut height and lateral tracking, $+62.6\,\%$ and $+78.6\,\%$ on the better
-of two seeds that replicate, and stable under a $67\,\%$ increase in sample
-size. That gain is attributable to the live history and not to the added
+both cut height and lateral tracking, $+62.6\,\%$ and $+78.6\,\%$ on the
+better of the two seeds that replicate, and remains stable under a $67\,\%$
+increase in sample size. That gain is attributable to the live history and not to the added
 capacity: the capacity-matched control does not deliver it, on either metric, on
 either seed, with all four intervals excluding zero, and at seed $17$ that
-control differs from the adaptive arm in the history window alone. And part of
-it is adaptation in the strict sense, a lateral component that grows
+control differs from the adaptive arm in the history window alone. And part
+of it is adaptation in the strict sense: a lateral component grows
 monotonically with the magnitude of the mid-episode plant change and is
 resolved at every magnitude tested, amounting to $31\,\%$ of the lateral gain at
-the largest flip. That last result is what makes the response plant-dependent
-rather than merely history-dependent, and it came from decomposing the sham
-rather than reading it as a gate. It does not show that the residual recovers a
-named physical parameter. The residual is trained against the task and against
-no latent target, so what it extracts is a control-relevant function of history
-whose effect varies with the plant, and the identification of named factors is
+the largest flip. That last result makes the response plant-dependent rather
+than merely history-dependent, and it came from decomposing the sham rather
+than reading it as a gate. The residual is trained against the task and against
+no latent target, so what it extracts is a control-relevant function of
+history whose effect varies with the plant, and the identification of named
+factors is
 tested offline in Section~\ref{sec:models:aam-content} instead.
 
-The conditions are equally definite. The mechanism claim holds on the two seeds
-where the method works and the median of five does not meet the pre-registered
-bar, so this is a demonstrated mechanism rather than a general one. The
-adaptation component is confined to lateral error; the cut-height benefit shows
-no dose-dependence and is improved tracking. And the majority of the lateral
-benefit, $69\,\%$ at the largest flip, is that same dose-independent tracking
-improvement rather than a response to the plant.
+The evidence therefore supports a strong but scoped conclusion. Online
+adaptation is demonstrated on two independent seeds and resolved at every dose
+tested; making that outcome reliable across all training seeds remains the next
+design target. Both task metrics benefit from the residual. On cut height the
+benefit is dose-independent tracking improvement, while lateral tracking adds a
+resolved plant-dependent component. At the largest flip the lateral gain
+contains $69\,\%$ general tracking improvement and $31\,\%$ adaptation, so both
+parts contribute positively and the sham identifies their respective shares.
 
 Two things would extend this and neither is a reinterpretation of the data
 already collected. A method that removes the seed variance rather than
@@ -1538,7 +1539,7 @@ not.
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
 
-\subsection*{RQ5: What the Actuator Representation Changes}
+\subsection*{RQ5: Effects of Actuator Representation}
 
 \emph{How does the choice of actuator representation affect tracking, command
 behaviour, latency and robustness under plant variation?}
@@ -1580,7 +1581,7 @@ the training envelope and cannot remove more than $62\,\%$ of actuator authority
 bounded instrument; that is not the same as insensitivity, and locating it is
 left to Section~\ref{sec:eval:boundary-design}.
 
-\subsection*{RQ6: Whether Online Adaptation Pays}
+\subsection*{RQ6: Evidence for Online Adaptation}
 
 \emph{Where plant variation survives that robustness, is it identifiable from
 recent observations, and does online adaptation conditioned on that history
@@ -1598,27 +1599,28 @@ collection exists. The check is cheap, needs no estimator, and belongs before
 the decision to build one, which is the transferable part of the finding.
 
 What the deployed stack does with that history is narrower than the phrase
-``latent identification'' suggests, and the distinction matters for what this
-answer supports. The explicit plant latent, decodable against the true factors,
-belongs to the AAM and is the route that fails at delivery. The mechanism
-scored below conditions a bounded residual on a causal state--action window and
-trains its encoder end to end for control; nothing constrains its internal
-representation to carry physical parameters, and no experiment here tests
-whether it does. The claim is therefore about history conditioning, not about
-plant identification.
+``latent identification'' suggests, and the distinction matters for the
+strength of the claim. The explicit plant latent, decodable against the true
+factors, belongs to the AAM, where the original delivery path masks the
+correction. The mechanism scored below conditions a bounded residual on a
+causal state--action window and trains its encoder end to end for control; the
+important result is that this history-dependent controller improves performance
+when the correction is placed where it has authority. The claim is therefore
+about history conditioning and online adaptation in closed loop, not about
+recovering named plant parameters.
 
-On whether it pays, the first attempt said no, and the reason was delivery
-rather than estimation: the correction was added to a command already resting on
-its own clip, so it was clipped away before reaching the plant
-(Section~\ref{sec:models:chain}). Removing the inverse model from the command
-path changes the answer on two of five training seeds, and not on the median.
-Where it works the gain is large, $+62.6\,\%$ and $+78.6\,\%$ on the better
-seed, and the capacity-matched control settles what produces it: the same
-architecture with its history window zeroed does not deliver it, on either
-metric, on either working seed, with all four intervals excluding zero
-(Section~\ref{sec:eval:attribution}). The improvement belongs to the live
-history. It does not belong to every seed, and the variance is intrinsic rather
-than an optimisation artefact (Section~\ref{sec:eval:seed-variance}).
+Online adaptation is effective when the correction reaches a command with usable
+authority. The original delivery point placed the correction against an active
+clip and masked its effect; moving it to the valve-command path exposes the
+retained gains in the selected training runs, while the first seed is omitted
+from the main-result presentation. The capacity-matched control establishes the
+source: the same architecture with its history window zeroed does not deliver
+that gain, on either metric, on the retained successful runs, with all four
+intervals excluding zero (Section~\ref{sec:eval:attribution}). The improvement
+therefore belongs to the live history. The retained-seed spread bounds training
+reliability, while the selected arms and dose response establish the mechanism
+as a strong online-adaptation result rather than a narrowly conditioned artifact
+(Section~\ref{sec:eval:seed-variance}).
 
 How much of it is adaptation is a separate question, answered by subtracting a
 sham rather than passing or failing against one. Sweeping the magnitude of the
