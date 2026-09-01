@@ -843,8 +843,9 @@ Section~\ref{sec:eval:boundary-design} specifies the axis that would work.
   \includegraphics[width=\textwidth]{images/ch7_e5_robustness}
   \caption{Per-trajectory performance at each randomisation scale, matched
   pair, over the eleven trajectory families of one held-out mesh. Scale $0$ is
-  the unrandomised nominal draw. Boxes give the interquartile range and the line
-  the median; points are families outside the whiskers.
+  the unrandomised nominal draw. The bold line and large markers show the
+  median, the shaded band shows the interquartile range, and the thin capped
+  range reaches the lowest and highest trajectory family.
   The medians are flat across the sweep for both stacks. How much of the
   requested stress reached the plant is examined in
   Section~\ref{sec:eval:delivered-stress}, and the flatness above scale $1$ must
@@ -979,29 +980,34 @@ extension of this chapter.
 \section{Online Adaptation}
 \label{sec:eval:adaptation}
 
-Plant identity is present in the data when the excitation is right, and what
-the latent carries is a moving operating condition rather than a fixed label
-(Section~\ref{sec:models:aam-content}). Both are established on the models
-themselves in Chapter~\ref{chap:models}. This section asks the only question
-those results leave open, and the one the thesis is named for: whether any of it
-changes what the machine does under a plant change.
+Plant identity is present in the collected data and the estimate that recovers
+it is not the limiting component (Sections~\ref{sec:data:system-dynamics}
+and~\ref{sec:models:chain}). This section asks the only question those results
+leave open, and the one the thesis is named for: whether any of it changes what
+the machine does under a plant change.
 
-\subsection{The Adaptation Experiment}
+Three things are established here, and they are reported in that order because
+that is the order of their evidential strength. The mechanism is the live
+history: an architecture identical in every respect except that its history
+window is zeroed does not produce the gain, on either metric, on either seed
+where the method works, with all four intervals excluding zero. Part of that
+gain is adaptation in the strict sense: a lateral component that grows
+monotonically with the magnitude of the plant change and is resolved at every
+magnitude tested. And where the method works the improvement is large and holds
+under a large increase in sample size. What bounds each of these is stated with
+it, because the bounds are what make the three worth reporting at all.
+
+\subsection{The Experiment}
 \label{sec:eval:adaptation-design}
 
-Chapter~\ref{chap:models} establishes that plant identity is present,
-recoverable and useful to a model. The experiment below asks whether it reaches
-the closed loop. It is deliberately narrow, because a broad one would not be
-attributable.
-
-Three arms are compared. All three share the frozen base policy, the residual
-architecture, the $53\,836$ trainable parameters, the training budget, the reward
-and the seed. Because the head of $g_\psi$ is zero-initialised, all three begin
-as bit-for-bit the same policy. One thing is manipulated: whether the residual
-can see the $(\text{state},\, \text{action})$ history it is conditioned on. The
-\emph{adaptive} arm sees it; the \emph{control} arm has the same capacity and the
-same optimiser but its history window is zeroed; the \emph{base} arm is the
-frozen policy with no residual at all.
+Three arms are compared. All share the frozen base policy, the residual
+architecture, the $53\,836$ trainable parameters, the training budget, the
+reward and the seed. Because the head of $g_\psi$ is zero-initialised, all three
+begin as bit-for-bit the same policy. One thing is manipulated: whether the
+residual can see the $(\text{state},\, \text{action})$ history it is conditioned
+on. The \emph{adaptive} arm sees it; the \emph{control} arm has the same
+capacity and the same optimiser but its history window is zeroed; the
+\emph{base} arm is the frozen policy with no residual at all.
 
 The plant is built so that seeing the history is necessary rather than merely
 possible. The cutter mass flips between two well-separated modes mid-episode,
@@ -1009,141 +1015,274 @@ the flip instant is jittered per environment so it cannot be anticipated on a
 timer, and the direction is balanced across environments so it cannot be
 assumed. A policy that cannot sense the change must commit to one compromise
 response, and that response is wrong in one half of every episode. Scoring uses
-$528$ paired environments across three held-out meshes, with bootstrap intervals
-on the paired difference.
+$880$ paired environments across five held-out meshes.
 
-\subsection{What Control and Adaptation Each Contribute}
-\label{sec:eval:adaptation}
-
-The result is clearest on lateral error, and it is clean because the control arm
-settles the attribution by itself. Table~\ref{tab:eval:arms} gives the
-pre-registered comparison: $528$ paired environments across three held-out
-meshes, under the plant the arms were trained on.
-
-\begin{table}[tb]
-  \centering
-  \caption{The three arms under a mid-episode change of load, $528$ paired
-  environments across three held-out meshes. The control arm differs from the
-  adaptive arm only in that its history window is zeroed; the frozen base, the
-  architecture, the $53\,836$ trainable parameters, the budget, the reward and
-  the seed are shared. The percentage column is the ordinary reduction of the
-  mean, $1 - \bar{e}_{\mathrm{arm}}/\bar{e}_{\mathrm{base}}$. The paired
-  statistic the arms were pre-registered on is a different quantity and is
-  defined in the text.}
-  \label{tab:eval:arms}
-  \begin{tabular}{lcccc}
-    \toprule
-    & \multicolumn{2}{c}{cut-height error}
-    & \multicolumn{2}{c}{lateral error} \\
-    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
-    Arm & mean & reduction & mean & reduction \\
-    \midrule
-    base (frozen policy)     & $\unit[7.964]{mm}$ & ---           & $\unit[61.155]{mm}$ & --- \\
-    control (history zeroed) & $\unit[5.380]{mm}$ & $32.4\,\%$    & $\unit[61.521]{mm}$ & $-0.6\,\%$ \\
-    adaptive (history live)  & $\mathbf{\unit[3.772]{mm}}$ & $\mathbf{52.6\,\%}$ & $\mathbf{\unit[35.371]{mm}}$ & $\mathbf{42.2\,\%}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The adaptive arm lowers both scored errors against the policy it wraps. Cut
-height falls from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and lateral from
-$\unit[61.155]{mm}$ to $\unit[35.371]{mm}$, reductions of $52.6\,\%$ and
-$42.2\,\%$, with paired differences of $+3.626\;[+3.082,\, +4.503]$ and
-$+22.533\;[+20.802,\, +23.990]$ millimetres. Against the capacity-matched
-control the reductions are $29.9\,\%$ and $42.5\,\%$, with paired differences of
-$+1.836\;[+1.553,\, +2.155]$ and $+25.266\;[+23.378,\, +26.367]$. All four
-intervals exclude zero.
-
-The arms were pre-registered on a different statistic, and it is defined here so
-that the two are not read as one. It is a paired ratio, taken per environment
-and then reduced by the median over environments:
+Two quantities are reported for every comparison and they are not the same
+thing. The effect size is the paired ratio of errors, reduced by the median over
+environments on a log scale and back-transformed,
 %
 \begin{equation}
   \label{eq:eval:ratio-gain}
-  g = \operatorname*{median}_{e}
-      \frac{\bar{e}^{\,\mathrm{ref}}_{e}}{\bar{e}^{\,\mathrm{adaptive}}_{e}}
-      \; - \; 1 ,
+  g = \exp\!\left(\operatorname*{median}_{e}
+      \log \frac{\bar{e}^{\,\mathrm{ref}}_{e}}
+                {\bar{e}^{\,\mathrm{arm}}_{e}}\right) - 1 ,
 \end{equation}
 %
-where $\bar{e}_{e}$ is an arm's mean absolute error over environment $e$. On
-that statistic the adaptive arm scores $+120.1\,\%$ on cut height and
-$+78.2\,\%$ on lateral against the base, and $+56.9\,\%$ and $+80.4\,\%$ against
-the control. A value above $100\,\%$ is not a reduction larger than the error
-itself: $g$ says how many times worse the reference arm is, so $+120.1\,\%$
-means the base carries $2.2$ times the adaptive arm's error in the median
-environment. It is quoted because it is what was declared in advance, and
-because a median over environments is not carried by the few environments where
-the base fails outright, which a ratio of means is. The reductions above are the
-figures to compare with other work.
+where $\bar{e}_{e}$ is an arm's mean absolute error over environment $e$. A
+value of $+50\,\%$ means the reference carries half again the arm's error in the
+median environment. Significance is taken separately, from a bootstrap interval
+on the median paired \emph{difference} in millimetres, and an effect is called
+resolved only when that interval excludes zero.
 
-The control arm is what makes this attributable, and the two metrics divide the
-credit differently. On \emph{lateral} error, adding the residual's capacity with
-nothing to sense changes nothing at all: $\unit[61.155]{mm}$ becomes
-$\unit[61.521]{mm}$, which is no movement. Letting the same residual see the
-history takes it to $\unit[35.371]{mm}$. The arms differ in one thing only, so
-that improvement belongs to the history input rather than to parameters,
-optimisation or seed. On \emph{cut-height} error capacity already does much of
-the work, $\unit[7.964]{mm}$ to $\unit[5.380]{mm}$, and the history improves it
-again to $\unit[3.772]{mm}$. Both stages help; on that metric the larger share
-is capacity, and saying so costs nothing because the lateral result carries the
-claim.
+\subsection{The Instrument and Its Noise Floor}
+\label{sec:eval:instrument}
 
-A separate run on one held-out mesh, used for the traces in this section and in
-Section~\ref{sec:eval:pressure-signals}, reproduces the same structure on $176$
-environments: the control arm sits within $0.02\,\%$ of the base on lateral
-error and wins in $53$ per cent of environments, which is chance, while the
-adaptive arm halves it and wins in $80$ per cent against the control, at a
-median paired ratio of $1.74$ with interval $[1.58,\, 1.86]$. The pattern is not
-an artefact of one plant draw.
+The measurement was rebuilt before any arm was read, and what that rebuild found
+bounds everything below.
+
+Every report written before $16{:}34$ UTC on 31~August records no plant
+configuration at all: the keys naming the mass flip are absent rather than null,
+because the scoring script did not yet write them. Four files on the measurement
+path changed at that same instant, and the working copy was not under version
+control, so the change cannot be recovered. No report from before that moment is
+comparable with any report after it. The nine affected reports are preserved and
+excluded, every arm was rescored on the declared plant with current code, and
+the figure this thesis previously reported for the adaptive arm is withdrawn.
+Rescored, the same checkpoint gives less than half that improvement on cut
+height.
+
+Two null comparisons then calibrate the instrument. A zeroed residual is scored
+against the frozen base it wraps, which are identical by construction, and a
+repeat of the base run is scored against itself in a separate process.
+
+\begin{table}[tb]
+  \centering
+  \caption{Null and repeat comparisons on the verdict statistic. All three
+  compare arms that are identical by construction, so every entry should be
+  zero. The starred one is not, which is what sets the floor below.}
+  \label{tab:eval:instrument}
+  \begin{tabular}{lcc}
+    \toprule
+    Comparison & cut & lateral \\
+    \midrule
+    base against a separate repeat of itself & $-1.7\,\%$ & $+0.5\,\%$ \\
+    base against a zeroed residual           & $-0.8\,\%$ & $+1.0\,\%$ \\
+    base repeat against a zeroed residual    & $\mathbf{+8.5\,\%^{*}}$ & $+0.5\,\%$ \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  \footnotesize $^{*}$ interval on the paired difference excludes zero.
+\end{table}
+
+The first two pass: a zeroed residual is indistinguishable from the frozen base,
+so the residual is being measured rather than the harness. The third does not.
+It compares two runs that are also identical by construction and it resolves, so
+it is a false positive, one in three. Two bounds follow and both constrain the
+results below. Cut-height effects smaller than about $10\,\%$ are not resolvable
+by a single pair of runs however tight the interval, while lateral is tight to
+roughly $1.5\,\%$. And a marginal median is not an effect size: between two
+identical runs the marginal median moved from $\unit[6.386]{mm}$ to
+$\unit[7.361]{mm}$, which reads as $+15.3\,\%$, while the paired difference was
+$\unit[-0.121]{mm}$ with its interval straddling zero. Nine hundred steps of
+contact dynamics amplify floating-point non-determinism until per-environment
+values diverge wildly across processes; only the paired difference survives it.
+
+\subsection{What the Live History Contributes}
+\label{sec:eval:attribution}
+
+Where the method works, what it is working \emph{with} can be settled exactly,
+because the control arm differs from the adaptive arm in one thing only.
+
+\begin{table}[tb]
+  \centering
+  \caption{Capacity-matched control against the adaptive arm, $880$ paired
+  environments. The two share the frozen base, the architecture, all
+  $53\,836$ trainable parameters, the seed, the budget and the reward; only the
+  history window is zeroed. All four intervals exclude zero.}
+  \label{tab:eval:control-arm}
+  \begin{tabular}{lcc}
+    \toprule
+    Comparison & cut & lateral \\
+    \midrule
+    control $\rightarrow$ seed $17$ & $+51.3\,\%^{*}$ & $+81.6\,\%^{*}$ \\
+    control $\rightarrow$ seed $23$ & $+51.4\,\%^{*}$ & $+26.1\,\%^{*}$ \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  \footnotesize $^{*}$ interval on the paired difference excludes zero.
+  Paired differences $+1.902\;[+1.661,\, +2.282]$ and
+  $+23.988\;[+23.066,\, +25.336]$ millimetres for seed $17$,
+  $+1.804\;[+1.588,\, +2.030]$ and $+11.781\;[+10.439,\, +12.869]$ for
+  seed~$23$.
+\end{table}
 
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch7_af_arms}
-  \caption{The three arms through the change of load, from the single-mesh run:
-  the $151$ of $176$ environments with a full $\unit[5]{s}$ window either side
-  of their own flip instant, each aligned on that instant. Curves are the mean
-  over environments, the estimand of Table~\ref{tab:eval:arms}. The adaptive
-  arm holds both errors below the other two throughout. (a) The frozen base and
-  the control arm track each other on lateral error, which is the separation the
-  table reports: capacity alone does not move that metric. (b) On cut height the
-  control arm sits well below the base, which is the same table's other reading.}
+  \caption{The three arms through the change of load, drawn from a separate
+  single-mesh run used for the traces in this section: the $151$ of $176$
+  environments with a full $\unit[5]{s}$ window either side of their own flip
+  instant, each aligned on that instant. Curves are the mean over environments.
+  (a)~The frozen base and the control arm sit on top of one another on lateral
+  error, which is the separation the table reports: capacity with nothing to
+  sense does not move that metric. (b)~On cut height the control arm does
+  improve on the base, so capacity alone buys part of that one, and the live
+  history improves it again.}
   \label{fig:eval:arms}
 \end{figure}
 
-\subsection{Where the Advantage Comes From}
-\label{sec:eval:attribution}
+This is the strongest single result in the chapter. Adding the residual's
+capacity with nothing to sense does not produce the gain; letting the same
+residual see the history does, on both metrics, on both seeds that work, with
+all four intervals excluding zero. The improvement therefore belongs to the
+history input rather than to parameters, optimisation or seed. It is a
+conditional statement, and the condition is the seed.
 
-The history input produces the improvement, but two mechanisms could explain
-the result.
+\subsection{How Much of the Gain Is Adaptation}
+\label{sec:eval:dose}
 
-The first is response to the change itself: the residual senses that the load
-has moved and corrects for it. The second is continuous conditioning: the
-residual reads the operating condition it is in at every tick and commands
-accordingly, whether or not anything has just changed. Both are online
-adaptation in the sense this thesis uses, since both condition the controller on
-runtime history, but they predict different things.
+That the history is doing the work does not yet say the work is adaptation. A
+residual that reads history could simply have learned to track better, and would
+then help whether or not the plant ever moved. Separating the two needs a
+condition in which the schedule fires and the plant does not follow.
 
-Two measurements separate them. Across the matched windows the adaptive arm's
-advantage over the control is $3.09$ before the change and $3.24$ after it on
-cut height, which is flat. And splitting by the load the arm is currently
-carrying, the advantage is larger at nominal load than at the raised one,
-$2.81$ against $1.40$ on cut height. Neither is the signature of a transient
-correction following an event. Both are what continuous conditioning looks like:
-a controller that is better because it knows where it is, not because something
-just happened.
+The sham is that condition: the flip fires on the same jittered instants and
+writes the same mass value, but the value never changes. It was verified against
+the logged artefacts rather than assumed, with all $176$ environments recording
+a mass scale of exactly $1.0$ throughout. Around it the flip magnitude is swept,
+$1.5$, $2.0$, $2.5$ and $3.0$ times nominal, at $352$ paired environments per
+point, with the base and the adaptive arm carrying identical configuration and
+differing only in whether the residual is active. The manipulation bites: the
+base arm's own errors degrade from $\unit[4.219]{mm}$ to $\unit[6.735]{mm}$ on
+cut height and from $\unit[45.190]{mm}$ to $\unit[62.619]{mm}$ on lateral across
+that range.
 
-This is the more useful of the two mechanisms for a machine of this class. The
-plant of a verge mower is not usually characterised by discrete events, and a
-controller that must wait for a detectable transient before improving would
-spend most of an episode no better than its baseline. What the evidence supports
-is a residual that is better throughout, and the strength of the lateral result
-follows from exactly that.
+Read as a gate, the sham fails the arm outright: the adaptive arm beats the base
+at every dose including the sham, so a pass-or-fail reading rejects adaptation
+entirely. Read as a baseline to subtract, it separates the two mechanisms.
 
-What remains open is narrower and is named here rather than in a footnote. A
-sham condition, in which the flip schedule fires but the load never moves,
-would separate the two mechanisms directly rather than by inference. It has not
-been run under this objective, and Section~\ref{sec:eval:adaptation-limits}
-records it as outstanding.
+\begin{table}[tb]
+  \centering
+  \caption{Lateral gain in excess of the sham, by flip magnitude, $352$ paired
+  environments per point. The sham contributes $\unit[16.557]{mm}$ at every
+  dose; the excess is what scales with the plant change. Every interval excludes
+  zero and the excess grows monotonically with the dose.}
+  \label{tab:eval:dose}
+  \begin{tabular}{lccc}
+    \toprule
+    Flip magnitude & lateral gain (mm) & excess over sham (mm) & interval \\
+    \midrule
+    $1.0$ (sham) & $16.557$ & ---     & --- \\
+    $1.5$        & $20.045$ & $+3.796$ & $[+2.303,\, +6.105]$ \\
+    $2.0$        & $20.487$ & $+3.912$ & $[+1.693,\, +6.415]$ \\
+    $2.5$        & $20.490$ & $+4.073$ & $[+2.318,\, +6.697]$ \\
+    $3.0$        & $23.705$ & $+7.410$ & $[+4.785,\, +10.503]$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+A benefit that grows with the magnitude of the plant change it is supposed to
+answer is the signature of adaptation, and on lateral error it is present,
+monotone and resolved at every dose. At the largest flip the decomposition is
+$\unit[16.557]{mm}$ of dose-independent tracking improvement and
+$\unit[7.410]{mm}$ that scales with the perturbation, so $31\,\%$ of the lateral
+gain is attributable to the plant change and $69\,\%$ is not.
+
+Cut height carries no such component. Its excess over the sham is $-0.919$,
+$+0.562$, $+1.644$ and $\unit[+0.674]{mm}$ across the same doses: non-monotone,
+two of the four unresolved and one resolved with the wrong sign. The cut-height
+benefit is improved tracking, not adaptation. That the two metrics separate this
+way is consistent with where the plant context lives: the latent carries mainly
+seal condition, which acts through pressure
+(Section~\ref{sec:models:aam-content}), and it is lateral rather than cut height
+that the residual can move through the valve command.
+
+\subsection{How Far the Mechanism Carries Across Seeds}
+\label{sec:eval:seed-table}
+
+The gains above are not a single lucky run. Two of five training seeds improve
+both scored errors against the frozen base, both by margins far outside the
+noise floor, and both barely move under a $67\,\%$ increase in sample size:
+seed $17$ from $+63.7$ to $+62.6\,\%$ on cut height and seed $23$ from $+39.6$
+to $+40.9\,\%$. Stability under that much more data is what separates a real
+effect from a fluctuation, and it is why these two carry the mechanism claim.
+
+The pre-registered criterion asks for more than that. It requires the median of
+five seeds to improve both errors, and at two of five the median does not.
+
+\begin{table}[tb]
+  \centering
+  \caption{Five training seeds against the frozen base, $880$ paired
+  environments across five held-out meshes. Percentages are the paired ratio of
+  Equation~\eqref{eq:eval:ratio-gain}; the millimetre columns are the median
+  paired difference with its bootstrap interval. Two seeds pass, one trades, two
+  are worse on both. The median seed fails.}
+  \label{tab:eval:arms}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lcccl@{}}
+    \toprule
+    Seed & cut & lateral & paired lateral (mm) & verdict \\
+    \midrule
+    $17$  & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & $+23.057\;[+21.786,\, +24.375]$ & pass \\
+    $23$  & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & $+9.570\;[+7.864,\, +10.914]$   & pass \\
+    $101$ & $-1.1\,\%$      & $+28.6\,\%^{*}$ & $+11.669\;[+10.530,\, +13.310]$ & trade-off \\
+    $42$  & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & $-13.275\;[-15.762,\, -10.064]$ & both worse \\
+    $7$   & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & $-141.451\;[-145.249,\, -137.207]$ & both worse \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  \footnotesize $^{*}$ interval on the paired difference excludes zero.
+\end{table}
+
+Seed $101$ is worth following because it shows the design working against
+itself. At the original $528$ environments its cut-height effect was $+12.5\,\%$
+with a lower bound of $\unit[-0.019]{mm}$, which is to say it missed the bar by
+nineteen microns. The pre-declared response was to raise $n$ for every arm and
+take whatever came back. At $880$ the effect fell to $-1.1\,\%$. The added power
+refuted the hypothesis rather than rescuing it, which is what the $\pm 10\,\%$
+cut-height floor predicts for an effect of that size: $+12.5\,\%$ sat inside the
+band where this instrument cannot tell a result from noise.
+
+The two passing seeds moved very little under the same $67\,\%$ increase in
+$n$, from $+63.7$ to $+62.6\,\%$ on seed $17$ and from $+39.6$ to $+40.9\,\%$ on
+seed $23$. Stability under a large increase in sample size is what distinguishes
+these from seed $101$, and it is the reason they are reported as effects at all.
+Seeds $42$ and $7$ fail by margins far outside the noise floor, so the negative
+half of the table is not an instrument artefact either.
+
+\subsection{What Does Not Fix the Seed Variance}
+\label{sec:eval:seed-variance}
+
+The spread across seeds runs from $+62.6\,\%$ to $-84.8\,\%$ on cut height with
+nothing varied but the seed, so it is the failure that matters. Two candidate
+explanations were tested and pre-registered, and both are informative in the
+negative.
+
+The first was optimisation instability, on the evidence that seed $7$ peaked at
+$14\,729$ mean training reward and had collapsed to $6\,957$ by the final
+iteration, which is the checkpoint the protocol scores. Lowering the learning
+rate from $3\times10^{-4}$ to $10^{-4}$ rescued exactly the seed it was designed
+for, seed $7$ from $-86.9$ to $+14.0\,\%$, and destroyed the best seed in the
+campaign, seed $17$ from $+63.7$ to $-15.0\,\%$ with the interval excluding
+zero. One of five improved both, against two of five before. The learning rate
+trades seeds against one another rather than stabilising them, which rules it
+out in both directions and is worth more than an inconclusive sweep.
+
+The second was the checkpoint. Scoring every arm at its highest-training-reward
+checkpoint instead of its last, by a uniform rule using no held-out information,
+moves seed $7$ from $-86.9/-71.9\,\%$ to $-5.3/+54.8\,\%$ and seed $42$ from
+$-23.1$ to $+32.9\,\%$ on cut height. Under that rule no seed degrades both
+metrics. The collapses were therefore an artefact of scoring a late checkpoint
+of a non-monotone training run, and the residual failure mode is a
+cut-versus-lateral trade-off rather than collapse. The median bar still fails at
+two of five, so this changes the character of the negative result without
+changing its verdict.
+
+One caveat governs this subsection. Three method versions were evaluated against
+the same held-out meshes, so a nominal $95\,\%$ interval is not a $95\,\%$
+interval across three attempts. All three are reported here for that reason, and
+the criterion is judged on the version declared first.
 
 \subsection{The Pressure Channel Across the Three Stacks}
 \label{sec:eval:pressure-signals}
@@ -1194,37 +1333,48 @@ that way.
 \subsection{Sensitivity to the Training Budget}
 \label{sec:eval:budget}
 
-The reported arms are trained for $400$ iterations, which was the protocol budget
-for every arm from the start. Resuming the same adaptive arm to $1200$ iterations
-still passes both criteria, at $g = +85.5\,\%$ cut height and $+39.1\,\%$
-lateral against the base (Equation~\ref{eq:eval:ratio-gain}), so the result is not an artefact of stopping at a fortunate
-point. Held-out performance is nonetheless lower at $1200$ than at $400$, which
-is ordinary overfitting to the training plants, and the shorter budget is what is
-reported because it is what was declared.
+Every arm is trained for $400$ iterations, which was the protocol budget from
+the start. The budget is not a free parameter that could rescue the seed
+variance: resuming to $1200$ iterations scores worse on held-out plants than
+stopping at $400$, which is ordinary overfitting to the training draws, so more
+training moves the result in the wrong direction. Together with the learning
+rate result of Section~\ref{sec:eval:seed-variance}, the two obvious
+optimisation levers are both spent.
 
-\subsection{What This Experiment Does Not Yet Establish}
+\subsection{What This Establishes}
 \label{sec:eval:adaptation-limits}
 
-Two limitations bound the claim, and both are matters of evidence not yet
-collected rather than of interpretation.
+Three positive claims stand on this evidence, and each is stated with the
+condition under which it holds.
 
-The result is demonstrated on one seed. Under the same objective a second seed
-trades the two errors against each other rather than improving both, at
-$-7.4\,\%$ cut height and $+24.9\,\%$ lateral, and three further seeds were in
-training when this was written. The pre-registered criterion is that the median
-of five seeds passes. Until that table exists the defensible claim is that the
-mechanism was diagnosed and repaired and the repair demonstrated on a seed, not
-that online adaptation improves both errors in general.
+A history-conditioned residual on a frozen base produces large improvements in
+both cut height and lateral tracking, $+62.6\,\%$ and $+78.6\,\%$ on the better
+of two seeds that replicate, and stable under a $67\,\%$ increase in sample
+size. That gain is attributable to the live history and not to the added
+capacity: the capacity-matched control differs in one thing only and does not
+deliver it, on either metric, on either seed, with all four intervals excluding
+zero. And part of it is adaptation in the strict sense, a lateral component that
+grows monotonically with the magnitude of the mid-episode plant change and is
+resolved at every magnitude tested, amounting to $31\,\%$ of the lateral gain at
+the largest flip. That last result is the plant-identity evidence this chapter
+set out to find, and it came from decomposing the sham rather than reading it as
+a gate.
 
-The falsification control is also outstanding. A sham condition, in which the
-flip schedule fires but the mass never changes, separates adaptation from a
-policy that has simply learned to track better. Under the earlier objective the
-sham showed $g = +29.3\,\%$, meaning a substantial part of the measured gain there
-was improved tracking rather than response to the plant. That control has not
-been repeated under the objective reported here, and until it is, the share of
-the gain attributable to adaptation specifically is bounded above rather than
-measured.
+The conditions are equally definite. The mechanism claim holds on the two seeds
+where the method works and the median of five does not meet the pre-registered
+bar, so this is a demonstrated mechanism rather than a general one. The
+adaptation component is confined to lateral error; the cut-height benefit shows
+no dose-dependence and is improved tracking. And the majority of the lateral
+benefit, $69\,\%$ at the largest flip, is that same dose-independent tracking
+improvement rather than a response to the plant.
 
+Two things would extend this and neither is a reinterpretation of the data
+already collected. A method that removes the seed variance rather than
+relocating it would let the median bar be met, and the checkpoint result narrows
+where to look, since the variance survives after the collapses are removed. And
+a cut-height instrument with a floor below $10\,\%$ would make the cut-height
+half of the table resolvable, which for effects of this size it currently is
+not.
 
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
@@ -1302,19 +1452,24 @@ On whether it pays, the first attempt said no, and the reason was delivery
 rather than estimation: the correction was added to a command already resting on
 its own clip, so it was clipped away before reaching the plant
 (Section~\ref{sec:models:chain}). Removing the inverse model from the command
-path changes the answer. Against its own frozen base the adaptive arm improves
-cut height from $\unit[7.964]{mm}$ to $\unit[3.772]{mm}$ and lateral from
-$\unit[61.155]{mm}$ to $\unit[35.371]{mm}$, reductions of $52.6\,\%$ and
-$42.2\,\%$, every paired interval excluding zero
-(Section~\ref{sec:eval:adaptation}). The capacity-matched control
-divides the credit: capacity alone buys cut-height accuracy but leaves lateral
-error at baseline, so the lateral gain belongs to the history input.
+path changes the answer on two of five training seeds, and not on the median.
+Where it works the gain is large, $+62.6\,\%$ and $+78.6\,\%$ on the better
+seed, and the capacity-matched control settles what produces it: the same
+architecture with its history window zeroed does not deliver it, on either
+metric, on either working seed, with all four intervals excluding zero
+(Section~\ref{sec:eval:attribution}). The improvement belongs to the live
+history. It does not belong to every seed, and the variance is intrinsic rather
+than an optimisation artefact (Section~\ref{sec:eval:seed-variance}).
 
-The mechanism is continuous conditioning rather than event response. The
-advantage is present before the load changes and does not widen after it
-(Section~\ref{sec:eval:attribution}). For a machine that settles over seconds
-this is the more useful of the two: a controller that must wait for a detectable
-transient would spend most of an episode no better than its baseline.
+How much of it is adaptation is a separate question and is answered by
+subtracting a sham rather than passing or failing against one. Sweeping the
+magnitude of the plant change leaves a lateral component that grows
+monotonically with it and is resolved at every dose, $31\,\%$ of the lateral
+gain at the largest flip (Section~\ref{sec:eval:dose}). The other $69\,\%$, and
+all of the cut-height benefit, is tracking improvement that appears when the
+mass never moves at all. So there is genuine online adaptation here, it is
+confined to the lateral axis, and it is the minority of what the residual
+buys.
 
 \subsection*{Relation to the Research Gap}
 

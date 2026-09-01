@@ -15,8 +15,10 @@ both closed-loop operation and open-loop valve excitation were required. This
 chapter develops the learned representations that consume them: the
 inverse-dynamics (ID) and forward-dynamics (FD) networks of the \ppoIDFD{}
 actuator path, the command-conditioned reduced-order model (ROM) that replaces
-them in \ppoROM, and the Arm Adaptation Module (AAM) that estimates plant
-context at runtime.
+them in \ppoROM, and an offline Arm Adaptation Module (AAM) study that tests
+whether plant context can be recovered from causal history. This offline AAM
+and its ID adapter are diagnostic prototypes. The deployed AF encoder and
+residual are trained jointly under PPO in Chapter~\ref{chap:control}.
 
 The chapter continues one evidence chain. Section~\ref{sec:data:system-dynamics}
 established the first link on the data itself: a compact plant context exists
@@ -483,10 +485,12 @@ frozen. The gate sets the correction to zero for a commanded hold.
 
 The calibrated command ROM serves as the deployment plant in
 Section~\ref{sec:sys:rom-is-plant}. Unlike the ID--FD path, it has seen PhysX
-data. It is frozen and has no latent input; adaptation modifies only the inverse
-path.
+data. It is frozen and has no latent input. The earlier prototype assessed in
+Sections~\ref{sec:models:aam} and~\ref{sec:models:adapter} modifies the inverse
+path. Final AF instead omits the inverse model and corrects the frozen actor's
+valve command, as described in Section~\ref{sec:ctrl:ppo-aamfd}.
 
-\section{Arm Adaptation Module}
+\section{Offline Arm Adaptation Module Study}
 \label{sec:models:aam}
 
 This section describes the encoder trained offline against the plant context
@@ -500,7 +504,7 @@ the reinforcement objective and without a latent target
 (Section~\ref{sec:ctrl:af-encoder}). The results below measure the information
 in the history; they do not describe the deployed component.
 
-The AAM estimates $\latenthat=\mathrm{AAM}(\bm{H}_t)$ from deployment
+The offline AAM estimates $\latenthat=\mathrm{AAM}(\bm{H}_t)$ from deployment
 history. Each row contains five joint positions, five joint velocities, four
 cylinder pressure differences and four previous valve commands. A four-layer,
 width-64 causal convolution processes 20 rows ($\unit[1.0]{s}$, 360 values).
@@ -513,12 +517,13 @@ Validation selected the shortest competitive history from $5$, $10$, $20$ and
 $40$ ticks. Latent RMSE is $0.802$ on validation and $0.734$ on reserved test.
 
 Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop. The
-adapter is bypassed until 20 rows are available. A causal five-prediction rolling
-mean adds $\unit[250]{ms}$ lag. Results reported for this route use that online
-smoother, not the earlier non-causal full-run average. The smoother belongs to
-this encoder and not to \ppoAAMFD, whose residual consumes its history window
-directly; the latency stated here therefore does not apply to the adaptive
-result of Chapter~\ref{chap:evaluation}.
+prototype ID adapter is bypassed until 20 rows are available. A causal
+five-prediction rolling mean adds $\unit[250]{ms}$ lag. Results reported for
+this route use that online smoother, not the earlier non-causal full-run
+average. The smoother belongs to this offline encoder and not to \ppoAAMFD,
+whose residual consumes its history window directly. The latency stated here
+therefore does not apply to the adaptive result of
+Chapter~\ref{chap:evaluation}.
 
 \subsection{Information Content of the Estimated Latent}
 \label{sec:models:aam-content}
@@ -537,14 +542,14 @@ through pressure, which the controller does not integrate. Estimating named
 physical quantities would improve interpretation but requires an explicit
 plant model~\cite{hu2026bayesian}.
 
-\section{Latent-Conditioned Inverse-Model Adapter}
+\section{Earlier ID-Adapter Prototype}
 \label{sec:models:adapter}
 
-The first implementation applies the correction to the inverse model's output.
+The earlier prototype applies the correction to the inverse model's output.
 This is the direct adaptation point while the inverse model remains in the
 command path, but the closed-loop evidence below shows that it has too little
-authority. That limitation determines the redesign in
-Section~\ref{sec:ctrl:ppo-aamfd}.
+authority. The prototype is retained here because that result determines the
+redesign in Section~\ref{sec:ctrl:ppo-aamfd}; it is not the deployed AF stack.
 
 The frozen ID produces $\bm{u}_{\mathrm{base}}=\mathrm{ID}(\bm{s},\bm{r})$.
 The adapter adds a bounded latent-conditioned residual:
@@ -558,24 +563,27 @@ The adapter adds a bounded latent-conditioned residual:
 %
 Training minimises valve-command MSE at the exact ROM tick, with the residual
 bounded to $0.15$. The ID, FD and policy are frozen during adapter training.
-The policy of this route is separately latent-conditioned, so disabling the
-residual restores the baseline actuator path but not the baseline actor, and
-the ablation is single-variable in the actuator only. That residual asymmetry
-is one of the things the redesign of Section~\ref{sec:ctrl:ppo-aamfd} removes:
-under \ppoAAMFD{} the base policy is frozen and unmodified, so disabling the
-residual recovers the baseline in full.
+This earlier route uses a separately trained 68-input, latent-conditioned
+policy. Disabling the ID residual therefore restores the baseline actuator
+path but not the baseline actor. Final AF removes this asymmetry: its base
+actor retains the 66-channel input, the history-conditioned residual acts on
+the actor's valve command, and setting that residual to zero recovers the
+frozen base in full.
 
 Figure~\ref{fig:models:aam-architecture} shows the causal convolutional stack
-and the bounded adapter that consumes its estimate. The upper part is the AAM;
-the lower part shows where adaptation enters the frozen inverse-model path.
+and the bounded adapter that consumes its estimate. It documents the earlier
+prototype, not the final AF architecture. The final history-residual path is
+shown separately in Figure~\ref{fig:ctrl:aam-stack}.
 
 \begin{figure}[H]
   \centering
   \includegraphics[page=5,width=\textwidth]{images/ch5_network_architectures}
-  \caption{AAM and bounded ID adapter. Four causal convolutional blocks map a
-  20-step history of 18 observable features to the compact latent
-  $\hat{\bm{z}}\in\mathbb{R}^2$. The adapter combines this estimate with the ID
-  inputs and adds a limited, bounded correction to the frozen valve command.}
+  \caption{Earlier offline AAM and ID-adapter prototype. Four causal
+  convolutional blocks map a 20-step history of 18 observable features to the
+  two-value estimate $\hat{\bm{z}}$. The bounded adapter combines this estimate
+  with the ID inputs and corrects the frozen ID valve command. This prototype
+  is retained as diagnostic evidence; deployed AF omits the inverse model and
+  trains its history encoder and actor residual jointly under PPO.}
   \label{fig:models:aam-architecture}
 \end{figure}
 
@@ -652,9 +660,9 @@ what the sequence implies for adaptation on saturating actuators generally.
 Adaptation data are split $82/20/16$ into training, validation and reserved
 test by complete run and factor configuration; windows do not cross run
 boundaries. The 16 test runs are not used for model or hyperparameter selection.
-$SD_z$ and $SD_0$ are selected on validation rollout, the AAM on downstream
-rollout, and the adapter on validation command error. Table~\ref{tab:models:frozen}
-records the selected checkpoints.
+$SD_z$ and $SD_0$ are selected on validation rollout, the offline AAM on
+downstream rollout, and the earlier ID adapter on validation command error.
+Table~\ref{tab:models:frozen} records the selected checkpoints.
 
 \begin{table}[H]
   \centering
@@ -671,13 +679,13 @@ records the selected checkpoints.
     Command ROM           & frozen  & PhysX-calibrated, Section~\ref{sec:models:rom-calibration} \\
     $SD_0$ (no latent)    & scratch & epoch $58$ \\
     $SD_z$ + encoder      & scratch & epoch $48$, frozen after the gate \\
-    AAM                   & scratch & epoch $73$, $\unit[1.0]{s}$ causal CNN \\
-    Latent adapter        & scratch & epoch $116$ \\
+    Offline AAM           & scratch & epoch $73$, $\unit[1.0]{s}$ causal CNN \\
+    Earlier ID adapter    & scratch & epoch $116$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The latent adapter of this chapter is trained and selected on recorded
+The earlier ID adapter of this chapter is trained and selected on recorded
 valve-command error. This avoids the objective mismatch of an earlier
 next-state-loss variant. Each component is evaluated on its stated training
 contract.
