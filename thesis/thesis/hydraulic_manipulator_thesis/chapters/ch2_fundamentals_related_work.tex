@@ -123,23 +123,82 @@ address that remaining gap.
   {Model-Based and Conventional Control\\Approaches}
 \label{sec:fund:conventional-control}
 
-Industrial systems commonly map joystick input directly to valve current.
-Fixed-gain position--velocity or position--pressure cascades improve on this
-practice~\cite{jelali2003hydraulic}, but tuning across large changes in valve
-gain and linkage leverage produces either weak response or oscillation.
+Three families of conventional control are relevant here: fixed-gain cascades,
+nonlinear cancellation, and online parameter estimation. Each of them works on
+hydraulic manipulators. Each also carries a maintenance or excitation cost, and
+those costs are the reason this thesis learns the actuator instead.
 
-Nonlinear model-based control instead cancels known rigid-body dynamics
-~\cite{slotine1991applied}, estimates uncertain parameters online
-~\cite{astrom1995adaptive}, or bounds their effect. Yang et
-al.~\cite{yang2026stateconstrained}, for example, combine state constraints
-with explicit valve dead-band inversion. Such methods can track accurately,
-but depend on valve, friction and inertia models that are costly to maintain on
-a commercial implement~\cite{mattila2017survey}.
+\subsection{Fixed-Gain Cascades}
 
-This thesis therefore retains reliable structure and learns the uncertain
-part. The DLS kinematic controller acts as teacher and data-collection
-controller; learning covers the mapping from cylinder command to realized
-motion and the policy that issues that command
+Industrial implements commonly map joystick input directly to valve current.
+The standard improvement is a cascade in which an outer position loop sets a
+velocity or pressure reference and a fast inner loop tracks
+it~\cite{jelali2003hydraulic}. The construction is cheap, needs no plant model
+beyond a few tuned gains, and is what a commercial machine realistically ships
+with.
+
+The cost is that the gains are tuned around one operating point. The orifice
+law makes command-to-velocity gain scale with the square root of the pressure
+margin, so it changes with load and with direction of travel, and the linkage
+lever arm changes with configuration. A gain set tuned at the stiff end of that
+range responds weakly at the compliant end; tuned at the compliant end it
+oscillates at the stiff end. Scheduling the gains over configuration and load
+recovers some of the range, but the schedule is machine and attachment
+specific and has to be remeasured whenever either changes.
+
+\subsection{Nonlinear Cancellation}
+
+Nonlinear model-based control removes the dependence on an operating point by
+cancelling the known dynamics rather than tuning around
+them~\cite{slotine1991applied}. For a hydraulic actuator the cancellation has
+to span the orifice nonlinearity, chamber compressibility and the rigid-body
+load, which places the valve command several integrations away from the
+position error and makes backstepping the usual
+construction~\cite{jelali2003hydraulic}. The survey of Mattila et
+al.~\cite{mattila2017survey} reports this line, together with virtual
+decomposition control, as the state of the art for heavy-duty hydraulic arms,
+and it does deliver accurate tracking on instrumented machines.
+
+Cancellation is only as good as the model it inverts, and the terms it depends
+on are the terms that drift. Bulk modulus, leakage and seal friction change
+with temperature and wear over a working day. Some of the structure is
+non-smooth and cannot be cancelled at all: valve overlap produces a dead zone
+that has to be inverted explicitly, as Yang et
+al.~\cite{yang2026stateconstrained} do alongside state constraints. The learned
+actuator models of Chapter~\ref{chap:models} carry an explicit dead-zone term
+for the same reason. Maintaining this identification per machine, season and
+attachment is what makes the family expensive on a commercial
+implement~\cite{mattila2017survey}, not any weakness in the control law.
+
+\subsection{Online Parameter Estimation}
+
+Adaptive control estimates the uncertain parameters during operation instead of
+fixing them in advance~\cite{astrom1995adaptive}. Adaptive robust control pairs
+that estimator with a robust feedback term so that transient tracking does not
+wait for the estimate to converge, and it is the established result for
+single-rod hydraulic actuators~\cite{yao2000adaptive}. On the face of it this
+is the closest classical answer to the problem of this thesis, because it
+targets exactly the drifting parameters just described.
+
+Two properties of the task limit it. Parameter convergence requires persistent
+excitation, and mowing supplies smooth, low-bandwidth commands that do not
+provide it; the redundancy between command and state that
+Section~\ref{sec:fund:identifiability} describes for learned models constrains
+a recursive estimator in the same way. The valve also saturates for much of the
+scored window on this machine (Section~\ref{sec:models:adapter}), where the
+regressor stops reflecting the applied input and adaptation has to be suspended
+or explicitly compensated~\cite{sofrony2024antiwindup}. Both limits belong to
+the task rather than to the estimator, so they carry over to the learned
+adaptation of this thesis. They are measured there
+(Section~\ref{sec:models:adapter-null}) rather than assumed away.
+
+\subsection{What Is Retained}
+
+The classical methods are not replaced wholesale. Kinematics is reliable and is
+kept: the DLS controller of Section~\ref{sec:fund:kinematics} acts as teacher
+and as the data-collection controller. What is learned is the part the
+model-based families struggle to maintain: the mapping from cylinder command to
+realized motion, and the policy that issues that command
 (Section~\ref{sec:fund:rl-residual}).
 
 \section{Data-Driven System Identification and Learned Dynamics}
@@ -239,10 +298,28 @@ Teacher--student methods encode known simulation factors into a privileged
 latent and train an estimator to recover it from observable history. Lee et
 al.~\cite{lee2020learning} used this construction for hidden terrain
 properties; Kumar et al.~\cite{kumar2021rma} developed rapid motor adaptation.
+Both assume that the factor directions the estimator retains are the directions
+the controller needs. Liu et al.~\cite{liu2025frma} report the failure when it
+does not hold, where a low-dimensional adapter drops factors that act through
+separate channels, and add training phases to recover them. The same mismatch appears here in a sharper
+form. What the estimate carries is mainly seal condition, which acts through
+pressure, and pressure is the one channel the controller does not integrate
+(Section~\ref{sec:models:aam-content}). Further adapter phases would not close
+that gap, because the loss is at delivery rather than at estimation.
+
 Unlike classical online parameter estimation~\cite{astrom1995adaptive}, the
-learned latent need not have a direct physical interpretation. It can also
-condition a dynamics model rather than a policy, as in the contextual neural
-ODE of Yu et al.~\cite{yu2026context}.
+learned latent need not have a direct physical interpretation. It can be given
+one. Hu et al.~\cite{hu2026bayesian} estimate named physical quantities on an
+excavator arm with Bayesian reinforcement learning, which buys interpretation
+at the price of the explicit plant model that
+Section~\ref{sec:fund:conventional-control} identified as the maintenance
+burden. The latent used here is anonymous and is therefore audited for content
+rather than read as parameters. A latent can also condition a dynamics model
+instead of a policy, as in the contextual neural ODE of Yu et
+al.~\cite{yu2026context}. That is the nearest relative of the route taken here,
+with one difference that decides the outcome: in \ppoAAMFD{} the conditioning
+enters the command path rather than the predictor, because a better prediction
+helps only if something downstream acts on it.
 
 The adaptation module in Chapter~\ref{chap:models} encodes one second of
 causal observable history. In \ppoAAMFD, that encoding conditions a bounded
@@ -300,15 +377,30 @@ reward while degrading the physical tracking criterion
 
 \subsection{Reinforcement Learning on Hydraulic Machines}
 
-Deep RL has reached full-size hydraulic excavators in simulation-to-machine
-tracking \cite{egli2020towards} and general automation
-\cite{egli2022general}. Spinelli et al. \cite{spinelli2024rl} extended it to
-commercial material handlers with underactuated tools. Maitan et
-al. \cite{maitan2026contraction} learned force control on a physical cylinder,
-using a contraction-metric filter to bound exploration. These studies establish
-scale and feasibility, but do not combine a randomised plant family, online
-actuator adaptation, a privileged kinematic teacher and a matched comparison of
-actuator representations.
+Deep RL has reached full-size hydraulic machines. Egli and
+Hutter~\cite{egli2020towards} trained an excavator-arm policy in simulation and
+transferred it to the machine, then generalised the construction across
+excavation tasks~\cite{egli2022general}. Spinelli et
+al.~\cite{spinelli2024rl} carried it to a commercial material handler whose
+tool is underactuated, so the policy has to exploit passive tool dynamics
+rather than command them. These studies settle scale and feasibility. In each
+of them the actuator representation is a fixed design choice inside the stack
+rather than a variable, so none separates the transfer result from the
+representation that produced it. That separation is criterion V below.
+
+Maitan et al.~\cite{maitan2026contraction} take the opposite position and train
+on the physical cylinder, bounding exploration with a contraction-metric
+filter. Training on hardware removes the transfer question outright. The result
+is force control on a single actuator on a test bench, and it does not obviously
+scale to a multi-link boom on a moving carrier, where the exploration the policy
+needs is the exploration the filter has to prevent.
+
+None of these stacks varies the plant within a deployment. They are trained for
+robustness across one machine and its payload or soil conditions, and a plant
+that changes during a run is outside the construction. What remains open is the
+combination: a randomised plant family, online actuator adaptation, a
+privileged kinematic teacher, and a matched comparison of actuator
+representations under one protocol.
 
 A policy can also compensate for a poor actuator model. Chapter
 ~\ref{chap:evaluation} therefore reports rollout error, command magnitude and
@@ -326,13 +418,19 @@ robots; and hydraulic RL studies do not isolate actuator representation under
 a matched protocol. Table~\ref{tab:fund:positioning} summarises this position.
 
 The five criteria are: (I) learned hydraulic actuation, (II) data audited for
-causal input identifiability, (III) online latent adaptation, (IV) a structured
-controller retained as a bounded prior, and (V) a matched actuator comparison.
-Parenthesized marks denote partial or implicit coverage.
+causal input identifiability, (III) online adaptation to plant variation at
+deployment, (IV) a structured controller retained as a bounded prior, and
+(V) a matched actuator comparison.
 
 \begin{table}[H]
   \centering
-  \caption{Positioning against the reviewed lines of work.}
+  \caption{Positioning against the reviewed lines of work. Parenthesized marks
+  denote partial or implicit coverage. Column III is parenthesized for this
+  thesis because the deployed route is history-conditioned residual control
+  rather than the identified-latent adaptation of
+  \cite{lee2020learning,kumar2021rma}, and because the plant-dependent part of
+  its benefit is isolated in the lateral channel only
+  (Section~\ref{sec:eval:adaptation}).}
   \label{tab:fund:positioning}
   \small
   \setlength{\tabcolsep}{3pt}
@@ -357,23 +455,29 @@ Parenthesized marks denote partial or implicit coverage.
       & --- & --- & --- & $\checkmark$ & --- \\
     \midrule
     This thesis (\ppoROM{} / \ppoIDFD{} / \ppoAAMFD)
-      & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ \\
+      & $\checkmark$ & $\checkmark$ & ($\checkmark$) & $\checkmark$ & $\checkmark$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Column III is claimed in full, and the qualification it once carried is worth
-stating because it was earned rather than assumed. Causal recovery of the
-latent was established first; the closed-loop benefit was not, and on the
-inverse-model path it could not be, for the saturation reason developed in
-Section~\ref{sec:ctrl:af-no-id}. It is claimed here because the adaptive
-residual is measured against its own frozen base under a paired protocol and
-separates from it. The contribution remains the complete experimental
-chain: identifiable cylinder data, physics-structured models fast enough for
-parallel training, online adaptation and a common evaluation protocol. It is
-not an unqualified claim that adaptation always improves control; the
-conditions under which it does not are reported alongside those under which it
-does. The three tested stacks are:
+Column III carries a parenthesis, and the reason is specific. Causal recovery
+of the latent was established (Section~\ref{sec:models:chain}). The closed-loop benefit of that
+latent was not, and on the inverse-model path it could not be, for the
+saturation reason developed in Section~\ref{sec:ctrl:af-no-id}. What
+\ppoAAMFD{} deploys is therefore not identified-latent adaptation but a bounded
+residual on the valve command, conditioned on one second of observable history.
+That residual separates from its own frozen base under a paired protocol, and a
+sham-controlled dose experiment isolates a lateral component that grows with
+the size of the plant change (Section~\ref{sec:eval:adaptation}). A
+capacity-matched control shows that residual capacity accounts for much of the
+remainder, so the gain cannot be assigned to live history alone. Online
+adaptation is demonstrated, in a narrower channel than a full mark would claim.
+
+The contribution remains the complete experimental chain: identifiable cylinder
+data, physics-structured models fast enough for parallel training, online
+adaptation and a common evaluation protocol. It is not an unqualified claim
+that adaptation always improves control; the conditions under which it does not
+are reported alongside those under which it does. The three tested stacks are:
 
 \begin{description}
   \item[\ppoROM.] A command-conditioned ROM realizes the policy's desired
