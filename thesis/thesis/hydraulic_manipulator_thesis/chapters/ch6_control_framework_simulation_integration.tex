@@ -1304,16 +1304,17 @@ parameters, the training budget and the reward. Because the head of $g_\psi$ is
 zero-initialised and $\tanh(0)=0$, every arm begins as bit-for-bit the same
 policy, verified at a maximum absolute action difference of $0.0$. The single
 manipulated variable is whether the residual may see the
-$(\text{state},\, \text{action})$ history it is conditioned on. That holds
-exactly at seed $17$, where all three arms share the training seed; only one
-capacity-matched control was trained, so the second replicating seed is read
-against the seed-$17$ control and differs from it in the training seed as well
+$(\text{state},\, \text{action})$ history it is conditioned on. A
+capacity-matched control is trained at every seed, so the comparison is made
+within a seed rather than across one at all five
 (Section~\ref{sec:eval:attribution}).
 
 The arms are therefore paired environment by environment, so scenario variation
-is differenced out rather than averaged over, and any separation is attributable
-to online sensing rather than to added parameters, a different optimiser
-trajectory or a different checkpoint. The result is reported on this basis in
+is differenced out rather than averaged over, and any separation between the
+control and the adaptive arm is attributable to online sensing rather than to
+added parameters, a different optimiser trajectory or a different checkpoint.
+Every arm is scored at the peak of its own training-reward curve by one parser,
+which uses no held-out information. The result is reported on this basis in
 Section~\ref{sec:eval:adaptation}.
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}

@@ -128,19 +128,21 @@ closed-loop effect, and the reason was delivery rather than estimation: that
 command already rested on its own clip for most of the scored window, so the
 correction was removed before it reached the plant. Rebuilding the stack so that
 the policy emits the valve command itself, with the residual acting on that
-command, changes the outcome on two of five training seeds. Where it works the
-improvement is large and stable under a $67\,\%$ increase in sample size,
-$+62.6\,\%$ cut height and $+78.6\,\%$ lateral on the better seed against the
-frozen base it wraps. The median seed does not improve both, so the
-pre-registered bar is not met and the result stands as a demonstrated mechanism
-rather than a general one (H3, Section~\ref{sec:eval:adaptation}).
+command, changes the outcome on four of five training seeds. No seed degrades
+both metrics, the strongest improves cut height by $74.7\,\%$, and the median
+seed meets the pre-registered bar (H3, Section~\ref{sec:eval:adaptation}).
 
-A capacity-matched control arm, identical but for a zeroed history window,
-settles what produces it. Against that control the adaptive arm improves both
-errors on both working seeds, by $51.3\,\%$ and $81.6\,\%$ on one and
-$51.4\,\%$ and $26.1\,\%$ on the other, with all four intervals excluding zero.
-The gain therefore belongs to the live history rather than to the added
-parameters (H4). This is the strongest single result of the strand.
+A capacity-matched control arm, identical but for a zeroed history window and
+trained once per seed, shows that this is mostly not the sensing. That control
+captures between $+63.9$ and $+95.0\,\%$ of the cut-height gain on four seeds
+without reading anything, and on cut height it beats the adaptive arm on three
+of them. Only seed $42$, the one seed where added capacity bought nothing,
+shows live history improving on its own matched control on both metrics. The
+gain therefore belongs to the residual architecture, and its attribution to the
+live history is not established (H4). The useful form of the question is not
+whether the residual beats the base but when sensing beats a fixed hedge of the
+same size, and seed $42$ indicates where that is: where one hedge cannot cover
+the plant.
 
 How much of it is adaptation is answered by subtracting a sham rather than
 passing or failing against one. Sweeping the magnitude of the mid-episode change

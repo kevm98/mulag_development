@@ -243,14 +243,15 @@ command path the estimate is informative and the closed-loop effect is absent,
 because the correction is added to a command already resting against its own
 limit for most of the scored window. Removing that model, so that the policy
 emits the valve command itself and a bounded history-conditioned residual acts
-on it, converts the same information into a measured improvement. On the better
-of the two seeds that replicate, cut-height error falls by $62.6\,\%$ and
-lateral error by $78.6\,\%$ against the stack's own frozen base under a
-mid-episode plant change, paired across $880$ environments on five held-out
-meshes. A capacity-matched control whose history window is zeroed does not
-deliver that gain, so it belongs to the live history rather than to the added
-parameters. It does not hold at the median of five training seeds, so what is
-demonstrated is a mechanism and not yet a reliable method.
+on it, converts the same information into a measured improvement. Four of five
+training seeds improve on the stack's own frozen base under a mid-episode plant
+change, by up to $74.7\,\%$ on cut height and $84.9\,\%$ on lateral error,
+paired across $880$ environments on five held-out meshes, and the median seed
+meets the pre-registered criterion. What the improvement is attributable to is
+less settled: a capacity-matched control whose history window is zeroed
+reproduces most of the cut-height gain by itself, so the result establishes the
+architecture rather than the sensing, and identifying when live history beats
+matched capacity is left open.
 
 The causal plant estimator, the bounded adaptation path and the eight-gate
 evaluation harness are described where they are used, as technical enablers
