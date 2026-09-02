@@ -4,11 +4,17 @@ __pycache__/
 # Ignore all directories containing ".egg-info"
 *.egg-info/
 
-# Ignore log files
-logs/
+# Ignore log files, except the *.pt checkpoints inside them. The directories
+# themselves must stay un-ignored or git never descends far enough to see the
+# files; see the "Logs and cache" block below for the matching rules.
+logs/**
+!logs/**/
+!logs/**/*.pt
 
 # Ignore output files
-outputs/
+outputs/**
+!outputs/**/
+!outputs/**/*.pt
 # Exception, tracked by force: outputs/rif_delay holds the 234 scored reports
 # behind Section 7.5 of the thesis. It is evidence for published claims, not
 # scratch, and experiments/E3/code/seed_table.py reads it from this path. Git is
@@ -22,6 +28,8 @@ archive/checkpoints_*/*
 !archive/checkpoints_*/MANIFEST.tsv
 archive/outputs_retired_*/*
 !archive/outputs_retired_*/MANIFEST.tsv
+!archive/outputs_retired_*/**/
+!archive/outputs_retired_*/**/*.pt
 
 # Ignore files beginning with .nfs
 .nfs*
@@ -62,8 +70,9 @@ miniconda3/
 conda/
 
 # Large ML / simulation files
-*.pt
-*.pth
+# *.pt and *.pth are deliberately NOT ignored: the trained checkpoints are
+# irreplaceable and the repo is their only backup. The promoted ROM policy
+# model_7364.pt was lost precisely because this rule kept it out of git.
 *.onnx
 *.mat
 *.h5
@@ -73,10 +82,17 @@ conda/
 *.zip
 *.tar.gz
 
-# Logs and cache
+# Logs and cache. The bulk stays out of git, but *.pt checkpoints inside these
+# trees are kept: they are irreplaceable and this repo is their only backup.
+# Re-including needs the directories themselves un-ignored first, or git never
+# descends far enough to see the files.
 *.log
-logs/
-outputs/
+logs/**
+!logs/**/
+!logs/**/*.pt
+outputs/**
+!outputs/**/
+!outputs/**/*.pt
 runs/
 wandb/
 .cache/
