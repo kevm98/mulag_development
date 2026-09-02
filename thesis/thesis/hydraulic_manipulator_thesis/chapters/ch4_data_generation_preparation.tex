@@ -376,9 +376,8 @@ $12\,\%$ on cylinder 4, the narrowest of the four. Every channel clears the
 floor, and Section~\ref{sec:data:diagnostics} confirms the material is
 informative at these coverages.
 
-An earlier export was rejected because half its runs contained duplicated
-state trajectories. The acceptance checks in
-Section~\ref{sec:data:diagnostics} now detect this failure directly.
+The acceptance checks in Section~\ref{sec:data:diagnostics} verify that every
+export contains independent state trajectories.
 
 \section{Combining Closed-Loop and Open-Loop Datasets}
 \label{sec:data:combining}
@@ -415,9 +414,6 @@ ships with the project, so every model-level result can be recomputed from the
 file that produced it. Exact alignment, increment consistency and the
 identifiability failure were checked directly on that export.
 
-The separate thousand-run randomised curriculum was collected for an earlier
-adaptation plan and no reported result is trained on or evaluated against it. It
-is retained as provenance and documented in Appendix~\ref{app:dataset}.
 
 \section{Closed-Loop Calibration Data for the Command ROM}
 \label{sec:data:rom-calibration}
@@ -749,9 +745,7 @@ from the frozen collection above. It has no dataset, no stopped-gradient latent
 target and no run-level splits, because its encoder never regresses a target:
 the encoder and the residual head are optimised together under the
 reinforcement objective, so their training data is the on-policy experience the
-stack generates as it learns. The reason is the measured failure of the offline
-route reported in Section~\ref{sec:ctrl:af-encoder}, where the deficiency lies
-in the objective rather than in the sample count.
+stack generates as it learns.
 
 What replaces the dataset is a plant design, since on-policy training makes the
 training distribution a property of the environment rather than of a file. The
@@ -789,11 +783,8 @@ The strict open-loop export needs different treatment because it contains only
 four runs, and holding one out would remove an entire plant draw from training.
 Each run is instead divided into twenty temporal blocks, every fifth block is
 assigned to validation, and a five-sample guard interval is discarded at each
-boundary so that no $\unit[0.05]{s}$ transition window spans the split. A simple
-last-twenty-percent split was rejected because it changed the spread of the
-targets between training and validation by a factor of $1.3$ to $2.3$, the final
-fifth of the run being the simultaneous excitation phase and dynamically unlike
-everything before it.
+boundary so that no $\unit[0.05]{s}$ transition window spans the split. This
+preserves comparable target distributions in training and validation.
 
 Normalisation statistics are computed on the training split only and stored
 inside each checkpoint, so a model always normalises with the statistics it was

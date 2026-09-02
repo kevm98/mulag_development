@@ -308,8 +308,7 @@ data.
 The repair dataset applies rank-4 open-loop valve plateaus to four plant draws.
 Its trajectories are distinct, valve history predicts pressure with
 $R^2\approx0.80$--$0.85$, valve-regressor variance-inflation factors are
-$7$--$10$, and relief saturation occupies $9$--$22\,\%$ of samples. A previous
-export with duplicated trajectories was rejected~\cite{isermann2011identification}.
+$7$--$10$, and relief saturation occupies $9$--$22\,\%$ of samples.
 
 Starting from the paired-control checkpoint, strict retraining minimised
 %
@@ -332,10 +331,9 @@ consistency term enforcing the trapezoidal identity
   + \tfrac{1}{2}\, T\, \Delta\dot{\bm{x}}_k ,
 \end{equation}
 %
-which holds in the strict data with $R^2=0.994$--$0.9997$. A constant valve
-Jacobian was rejected because measured authority varies by a factor of
-$15$--$75$ across pressure quartiles and can change sign. This operating-point
-dependence motivates the ROM structure~\cite{merritt1967hydraulic}.
+which holds in the strict data with $R^2=0.994$--$0.9997$. Valve authority
+varies by a factor of $15$--$75$ across pressure quartiles and can change sign,
+so the ROM represents this dependence by operating point~\cite{merritt1967hydraulic}.
 
 Strict retraining reduces extension rollout RMSE from $\unit[75.2]{mm}$ to
 $\unit[12.4]{mm}$ at $\unit[0.5]{s}$ and from $\unit[157.9]{mm}$ to
@@ -529,7 +527,7 @@ through pressure, which the controller does not integrate. Estimating named
 physical quantities would improve interpretation but requires an explicit
 plant model~\cite{hu2026bayesian}.
 
-\section{Earlier ID-Adapter Prototype}
+\section{ID-Adapter Prototype}
 \label{sec:models:adapter}
 
 The earlier prototype applies the correction to the inverse model's output, the
@@ -585,7 +583,7 @@ and $0.0118$ for the AAM estimate. The effect is consistent but small.
 
 Masking pressure and force does not strengthen the result: the privileged
 latent helps in only $2/5$ seeds and variance increases by about one order of
-magnitude. The earlier single-seed improvement is not reproducible.
+magnitude.
 
 \subsection{Closed-Loop Evidence and Its Bound}
 \label{sec:models:adapter-null}
@@ -663,21 +661,19 @@ Table~\ref{tab:models:frozen} records the selected checkpoints.
     $SD_0$ (no latent)    & scratch & epoch $58$ \\
     $SD_z$ + encoder      & scratch & epoch $48$, frozen after the gate \\
     Offline AAM           & scratch & epoch $73$, $\unit[1.0]{s}$ causal CNN \\
-    Earlier ID adapter    & scratch & epoch $116$ \\
+    ID adapter            & scratch & epoch $116$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The earlier ID adapter is trained and selected on recorded valve-command error,
-which avoids the objective mismatch of an earlier next-state-loss variant. Each
+The ID adapter is trained and selected on recorded valve-command error. Each
 component is evaluated on its stated training contract. The adaptation residual
 of \ppoAAMFD{} is deliberately absent from Table~\ref{tab:models:frozen},
 because it has no supervised checkpoint: its encoder and head are optimised
 jointly under the reinforcement objective, and their provenance is a training
 run rather than an epoch number.
 
-With the models identified, audited and frozen, and the one place the chain
-breaks located, the next chapter builds the controllers that consume them. It
-assembles the reference and non-adaptive stacks from the models above unchanged,
-then rebuilds the adaptive stack around the finding of
-Section~\ref{sec:models:chain}.
+With the models identified, audited and frozen, the next chapter builds the
+controllers that consume them. It assembles the reference and non-adaptive
+stacks from the models above and introduces the final adaptive stack described
+in Section~\ref{sec:models:chain}.

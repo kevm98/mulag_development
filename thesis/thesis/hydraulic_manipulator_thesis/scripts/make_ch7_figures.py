@@ -215,8 +215,10 @@ def fig_e1_tracking():
     fams = sorted(per["ppo_rom"])
     order = sorted(fams, key=lambda f: np.mean([per[s][f] for s, _, _ in PAIR]))
 
+    # Stack the panels so the family-level result and the paired contrast are
+    # both readable at full thesis width.
     fig, (axa, axb) = plt.subplots(
-        1, 2, figsize=(FULLW, 3.4), gridspec_kw=dict(width_ratios=[1.85, 1]))
+        2, 1, figsize=(FULLW, 6.25), sharey=True)
     colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
     labels = {"ppo_rom": "R (PPO-ROM)", "ppo_id_fd": "IF (PPO-ID-FD)"}
     markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
@@ -230,11 +232,11 @@ def fig_e1_tracking():
                     color=colors[s], marker=markers[s], zorder=3,
                     edgecolor="white", linewidth=.8, label=labels[s])
     axa.set_yticks(y)
-    axa.set_yticklabels([f.replace("_", " ") for f in order], fontsize=8.5)
+    axa.set_yticklabels([f.replace("_", " ") for f in order], fontsize=9)
     axa.invert_yaxis()
     axa.set_xscale("log")
     axa.set_xticks([0.02, 0.05, 0.1, 0.2, 0.5])
-    axa.set_xticklabels(["0.02", "0.05", "0.10", "0.20", "0.50"], fontsize=8.5)
+    axa.set_xticklabels(["0.02", "0.05", "0.10", "0.20", "0.50"], fontsize=9)
     axa.xaxis.set_minor_formatter(plt.NullFormatter())
     axa.set_xlim(0.015, 0.95)
     axa.set_ylim(len(order) - 0.4, -1.35)      # headroom for the legend
@@ -242,7 +244,7 @@ def fig_e1_tracking():
     axa.set_axisbelow(True)
     axa.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
     axa.set_title("(a) lateral error by family, easiest first", loc="left")
-    axa.legend(fontsize=7.8, loc="upper right", ncol=2, columnspacing=1.0,
+    axa.legend(fontsize=8.4, loc="upper right", ncol=2, columnspacing=1.0,
                handletextpad=.4)
 
     d = 1000 * np.array([per["ppo_id_fd"][f] - per["ppo_rom"][f] for f in order])
@@ -266,7 +268,7 @@ def fig_e1_tracking():
                          weight="bold")
     axb.axvline(0, color="#3F464D", lw=1.0)
     axb.set_yticks(y)
-    axb.set_yticklabels([])
+    axb.set_yticklabels([f.replace("_", " ") for f in order], fontsize=9)
     axb.set_ylim(len(order) - 0.4, -1.35)
     axb.set_xlim(-lim * 1.05, lim * 1.05)
     axb.set_xticks([-75, 0, 75])
@@ -278,7 +280,7 @@ def fig_e1_tracking():
     for a in (axa, axb):
         for spine in a.spines.values():
             spine.set_color("#7C8791")
-    fig.subplots_adjust(left=.205, right=.985, top=.915, bottom=.125, wspace=.09)
+    fig.subplots_adjust(left=.205, right=.985, top=.94, bottom=.085, hspace=.30)
     save(fig, "ch7_e1_tracking")
     print(f"     ID-FD better on {better}, worse on {len(order) - better}")
 

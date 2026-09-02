@@ -434,6 +434,47 @@ show that history conditioning improves every plant change or every task metric.
 It shows that the lateral correction contains a measurable component that scales
 with the mass change.
 
+\subsection{The Pressure Channel Through the Load Change}
+\label{sec:eval:pressure-signals}
+
+The latent carries mainly seal condition
+(Section~\ref{sec:models:aam-content}), and seal condition acts through
+pressure, so the pressure the actuator model carries is where any conditioning
+should first be visible. Figure~\ref{fig:eval:pressure-stacks} shows it per
+cylinder for all three stacks, on the same plant and aligned on the same event.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\textwidth]{images/ch7/ch7_pressure_stacks}
+  \caption{Median differential pressure per cylinder through the change of load,
+  $151$ environments aligned on their own flip instant. The quantity is each
+  stack's own actuator-model state, internal to the command ROM for \ppoROM{}
+  and the forward model's recursive state for the other two, so the panels show
+  what each controller believes about the hydraulics rather than a common
+  measurement, and each panel carries its own scale. The slew and boom~I panels
+  mark where \ppoROM{} sits on its \unit[1500]{bar} numerical guard.}
+  \label{fig:eval:pressure-stacks}
+\end{figure}
+
+Two properties of the signal govern how the figure is read. The pressure state
+is not a calibrated pressure on any stack: in this window the medians run to
+\unit[2295]{bar} and the peaks to \unit[3784]{bar}, which is past what a
+cylinder of this size could develop. The rod-force channel carries no supervised
+weight and pressure-increment accuracy is only $R^2 = 0.06$ to $0.09$
+(Section~\ref{sec:models:rom}). On \ppoROM{} the excursions are additionally
+clipped by the \unit[1500]{bar} numerical guard, which binds on the slew and
+the first boom cylinder and not on the other two. There is therefore no common
+physical level the panels can be read against, and each cylinder is drawn on its
+own scale. What the figure supports is the shape of the response either side of
+the change, not the level.
+
+Read that way, the traces are consistent with
+Section~\ref{sec:eval:attribution}. The pressure state moves at the change of
+load on every stack, so the information the residual would need is present in
+the channel it reads. The advantage of the adaptive arm does not appear as a
+transient following that movement; it is already present before it. The channel
+carries the operating condition continuously, and the residual uses it that way.
+
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
 

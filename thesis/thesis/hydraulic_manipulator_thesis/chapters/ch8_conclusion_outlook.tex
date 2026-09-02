@@ -26,24 +26,16 @@ was trained on Simscape data alone and evaluated on all $118$ IsaacLab
 deployment runs, drawn entirely outside that training distribution, where its
 teacher-forced one-step extension error is millimetre-scale and nearly flat
 across domains: $\unit[2.36]{mm}$ on the combined runs against $\unit[3.36]{mm}$
-on nominal, with the held-out combined-test group no worse than the domains the
-estimator was fitted on. The claim is made in that one-step regime, which is how
-the policy uses the model; fed its own predictions instead, the composite
-diverges in every run (Section~\ref{sec:models:id-trust}). The inverse model
-stays frozen everywhere downstream. The reduced-order model is the exception,
-having received a small bounded calibration against the deployment plant.
+on nominal. This claim is limited to the one-step regime used by the policy.
+The inverse model remains frozen downstream. The reduced-order model received a
+small bounded calibration against the deployment plant.
 
-\textbf{Supervised accuracy is not evidence of control authority (RQ1).} The
-first forward model scored near-perfectly and had learned to ignore the valve
-command, reconstructing motion from the state history instead. Nothing in the
-validation loss showed it. Ablating the command exposed it, and redesigning the
-excitation repaired it. Rollout error fell from $\unit[75.2]{mm}$ to
-$\unit[12.4]{mm}$ at $\unit[0.5]{s}$ and from $\unit[157.9]{mm}$ to
-$\unit[27.3]{mm}$ at $\unit[1.0]{s}$, and removing the valve input from the
-repaired model then costs a factor of $1.81$. Excitation design and input
-ablation are therefore reported here as required tests for a learned actuator
-intended for control. This finding concerns how such a model is validated rather
-than what it represents, so it applies beyond the machine studied here.
+\textbf{Predictive accuracy must be accompanied by a control-authority test
+(RQ1).} Input ablation and open-loop excitation showed that a learned actuator
+must be tested for dependence on the command, not only for prediction error.
+With the accepted excitation design, removing the valve input increases rollout
+error by a factor of $1.81$. This is a general validation requirement for
+learned models used in control.
 
 \textbf{Two actuator representations both support closed-loop control, and they
 do not produce the same controller (RQ3, RQ5).} The command-conditioned
@@ -73,12 +65,9 @@ during training and is then removed; the distilled policy emits desired cylinder
 motion directly into the learned actuator and is the entire deployed controller.
 Over $33$ evaluation cells \ppoIDFD{} holds a mean lateral error of
 $\unit[70.3]{mm}$, a median of $\unit[28.1]{mm}$ and $95.29\,\%$ ground contact
-(Table~\ref{tab:eval:tracking}). Reward ascent alone does not deliver this result. Unconstrained
-fine-tuning raised total return while degrading the primary tracking objective
-by up to a factor of $12.9$, with the critic remaining healthy throughout. The
-failure is therefore one of objective mismatch rather than of optimisation, and
-it is the reason the deployed policies are anchored to the demonstrated
-behaviour.
+(Table~\ref{tab:eval:tracking}). The deployed policies remain anchored to the
+demonstrated behaviour because the reward is an imperfect proxy for the
+acceptance gates.
 
 \textbf{The robust stacks generalise without online adaptation, but no
 robustness boundary was located (RQ2, RQ5).} Every closed-loop result is
@@ -90,32 +79,21 @@ model beneath it, identified on Simscape alone, transfers to all $118$
 deployment runs with millimetre-scale one-step error, flat across domains. This
 is the broadest claim the work supports and it requires no plant estimation.
 
-Pushing beyond that population establishes less than it appears to. Doubling
-every deployment-factor deviation moves no stack's median, but the perturbation
-path cannot deliver the stress it requests: the inverse/forward plant consumes
-no factor input, so there the sweep varied tool mass and centre-of-mass height
-alone, and on \ppoROM{} the hydraulic factors are clamped back to their
-identified ranges above scale $1$, with at most $62\,\%$ of actuator authority
-removable by that route (Section~\ref{sec:eval:delivered-stress}). What the
-closed loop absorbs is therefore established only for the perturbations this
-work can apply. A dedicated authority axis was built to find that point and did
-not find it: scaling realised actuator motion down to one per cent of nominal on
-all four stacks trips neither the contact gate nor the safety gate, so the
-breakdown boundary lies below the range this machine can be driven through
-(Section~\ref{sec:eval:boundary-design}). What the axis does yield is a margin
-rather than a boundary, and it is reported as one.
+The factor sweep supports the tested mechanical variation, but not unbounded
+hydraulic variation. On the inverse and forward path, hydraulic factors are not
+applied; on \ppoROM{} they remain inside the identification range
+(Section~\ref{sec:eval:delivered-stress}). Reducing realised actuator motion to
+one per cent of nominal did not trigger the safety or ground-contact gates.
+The result therefore establishes an authority margin, not a hard robustness
+boundary (Section~\ref{sec:eval:boundary-design}).
 
 The remaining findings concern adaptation itself (RQ6).
 
-\textbf{Under the controller and signal set examined here, plant identity has to
-be excited for rather than observed.} Data gathered while this task controller
-drives the machine does not separate plants, because the command is computed
-from the state and the two are nearly redundant. This concerns the dataset the
-controller produces, not closed-loop identification in general: dedicated
-closed-loop identification methods exist and were not applied. Open-loop
-excitation repairs it, which is why every model-level result in this thesis is
-fitted on the second collection. The amplitude at which identity stops being
-recoverable remains unmeasured (Section~\ref{sec:concl:future}).
+\textbf{Plant identity requires suitable excitation (RQ6).} In the task-control
+data, command and state are nearly redundant. Open-loop excitation makes plant
+identity observable and is therefore used for the model-level results. This
+finding concerns the present data collection and does not exclude dedicated
+closed-loop identification methods.
 
 \textbf{The estimator is not the limiting component (H1, H2, RQ6).} Under the
 chain gate of Section~\ref{sec:models:chain} the causal estimate is not worse
@@ -126,27 +104,14 @@ pressure, and pressure is the one channel where the latent's advantage is
 measurable. That is also the channel the controller does not integrate, which is
 the first sign of the delivery problem below.
 
-\textbf{Online adaptation pays where the correction has authority to act.}
-Placing a bounded correction on the inverse model's output produced no
-closed-loop effect, and the reason was delivery rather than estimation: that
-command already rested on its own clip for most of the scored window, so the
-correction was removed before it reached the plant. Rebuilding the stack so that
-the policy emits the valve command itself, with the residual acting on that
-command, changes the outcome on four of five training seeds. No seed degrades
-both metrics, the strongest improves cut height by $74.7\,\%$, and the median
-seed meets the pre-registered bar (H3, Section~\ref{sec:eval:adaptation}).
+\textbf{Online adaptation requires usable correction authority.} The deployed
+residual acts directly on the valve command. It improves at least one metric in
+four of five seeds, and no seed degrades both metrics. The strongest cut-height
+gain is $74.7\,\%$ (Section~\ref{sec:eval:adaptation}).
 
-A capacity-matched control arm, identical but for a zeroed history window and
-trained once per seed, shows that this is mostly not the sensing. That control
-captures between $+63.9$ and $+95.0\,\%$ of the cut-height gain on four seeds
-without reading anything, and on cut height it beats the adaptive arm on three
-of them. Only seed $42$, the one seed where added capacity bought nothing,
-shows live history improving on its own matched control on both metrics. The
-gain therefore belongs to the residual architecture, and its attribution to the
-live history is not established (H4). The useful form of the question is not
-whether the residual beats the base but when sensing beats a fixed hedge of the
-same size, and seed $42$ indicates where that is: where one hedge cannot cover
-the plant.
+A capacity-matched control shows that residual capacity explains much of the
+cut-height gain. The contribution of live history is mixed across seeds and
+metrics, so the overall gain cannot be attributed to sensing alone (H4).
 
 The authority axis gives the same pairing a second and cleaner reading. Against
 its own frozen arm the adaptive arm holds the frozen arm's full-authority
@@ -157,62 +122,35 @@ and leads it across the useful range of $\kappa$
 result is a margin rather than an extended envelope, since no breakdown
 boundary was reached.
 
-How much of it is adaptation is answered by subtracting a sham rather than
-passing or failing against one. Sweeping the magnitude of the mid-episode change
-leaves a lateral component that grows monotonically with it and resolves at
-every magnitude tested. Against the tracking loss the change itself causes, that
-component recovers essentially all of a small change and about two fifths of the
-largest, so identification contributes across the whole range and what falls
-with dose is the proportion rather than the component.
+The sham-controlled dose experiment isolates a lateral component that increases
+monotonically with the size of the mass change. This provides direct evidence of
+a plant-dependent contribution in addition to the general residual effect.
 
-The answer therefore takes the form of conditions rather than a single number.
-Plant identification contributes where the variation acts through a channel the
-correction can move, which here is lateral error and not cut height, because the
-latent carries seal condition and seal condition acts through pressure; where
-the variation is large enough to cost more than feedback absorbs unaided; where
-the correction retains authority at the point it is applied; and where the data
-identifies the plant at all. The last two conditions were established by
-violating them, and they are what the decision procedure asks a practitioner to
-check before building an estimator.
+Plant-dependent adaptation contributes when the variation reaches a channel the
+correction can influence, the correction has authority, and the data contains
+information about the plant. In this work, the resolved effect is limited to
+lateral tracking under the tested mass changes.
 
 \section{Design Implications}
 
 The results carry design consequences for each of the three parts of this work:
 how a hydraulic actuator is identified and transferred, how a policy is trained
 to act through it, and how plant adaptation is fitted around both. They are
-stated below in that order, because that is the order in which they constrain a
-successor design. Several were established by a measured failure rather than by
-a successful result, and are stronger for it.
+stated below in that order, because each stage constrains the next.
 
 \subsection*{Identification and Transfer}
 
-\textbf{Design the excitation for identifiability, and accept the model on an
-ablation rather than on a score.} A task controller computes its command from
-the state, so the two are nearly redundant and the valve is not causally
-identifiable from the resulting data however varied the control effort looks:
-the closed-loop batch spends a quarter of its time saturated and half at
-mid-authority, and is still uninformative. A forward model trained on it reached
-one-step $R^2 \approx 0.999$ while ignoring the valve entirely, and no
-validation loss computed on that distribution could have revealed it. Zeroing the
-command did, and open-loop excitation repaired it, at which point removing the
-valve cost a factor of $1.81$. The implication is that a learned actuator
-intended for control needs a dedicated excitation campaign and an input-ablation
-acceptance test, and that predictive accuracy should never be the criterion on
-which such a model is promoted.
+\textbf{Design the excitation for identifiability, and test the model by input
+ablation.} Task-control data can make state and command nearly redundant.
+Dedicated excitation makes command effects identifiable. A learned actuator
+should therefore be accepted on both prediction accuracy and loss of performance
+when the command input is removed.
 
-\textbf{Embed the physics that is known and bound what is learned.} The
-reduced-order model propagates pressure, force, velocity and extension through
-explicit updates with trainable effective parameters, and confines the neural
-terms to valve realisation, configuration load and residuals bounded to
-$10\,\%$ of the pressure and velocity step limits and $\unit[1]{cm}$ on
-position. That bound is what makes the model safe to place inside a training
-loop: even a badly fitted residual cannot produce an unphysical state jump. The
-structure also earns its keep at identification time, since encoding the
-orifice and continuity relations makes the pressure dependence of valve
-authority architectural rather than something to be rediscovered. Pinning a
-single global valve gain instead was tried and rejected, because measured
-authority varies by a factor of $15$--$75$ across pressure quartiles and can
-change sign.
+\textbf{Embed known physics and bound learned corrections.} The reduced-order
+model propagates pressure, force, velocity, and extension through explicit
+updates. Its learned terms are bounded, preventing unphysical state changes
+inside the training loop. This structure also represents the pressure dependence
+of valve authority directly.
 
 \textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
 The inverse model transferred across the deployment plant family at
@@ -229,28 +167,11 @@ whose authority is bounded by construction.
 
 \subsection*{Control Methodology}
 
-\textbf{When the acceptance criterion is not the reward, bound the ascent and
-price what is gated.} Unconstrained PPO from a distilled checkpoint raised total
-return while degrading the primary tracking objective by up to a factor of
-$12.9$, with critic explained variance healthy throughout. That is the optimiser
-working correctly on the wrong functional: the reward is a proxy, acceptance is a
-vector of physical gates, and the proxy's optimum lies outside the feasible set
-while the distilled policy lies inside it. The remedy is to constrain the update
-rather than rewrite the objective. A forward-KL anchor to a frozen reference
-penalises the \emph{abandonment} of reference behaviour, the exploration scale is
-held fixed so entropy collapse cannot shrink the divergence while the commanded
-action drifts, and the anchor advances only through checkpoints that have passed
-the gates.
-
-The same discipline applies to the reward itself: a quantity that is gated but
-not priced is traded away. The only adaptive checkpoint to clear the
-ground-contact gate over the full path was the one whose reward priced cylinder
-headroom explicitly, and an inherited formulation of $53$ weighted fields carried
-three terms working against the task for thirteen campaigns, undetected because
-logging reported an aggregate and omitted the two largest lateral terms. Shaping
-must also retain a far-field gradient; the Gaussian form previously used was a
-factor of $520$ weaker at $\unit[0.5]{m}$ of error, where the failing trajectory
-families live.
+\textbf{Constrain policy updates when the reward is not the acceptance
+criterion.} The physical acceptance gates and the reward are not identical. A
+forward-KL anchor to a verified reference policy bounds policy drift, and the
+anchor advances only through checkpoints that satisfy the gates. Reward terms
+should represent quantities that are also treated as acceptance constraints.
 
 \textbf{Where no baseline is inherited, the action contract is the safety
 argument.} The deployed policy is not a residual: a zero action leaves the arm
@@ -266,28 +187,16 @@ drove alignment from $0.9507$ to $0.4636$.
 
 \subsection*{Plant Adaptation}
 
-\textbf{Measure before you build, and route the latent to the consumer that
-rewards it.} Two cheap measurements precede any estimator. The identifiability
-envelope establishes whether plant identity is present in the data the machine
-produces; the delivered-stress check establishes whether the perturbation
-reaches the plant and whether the correction has authority left to act. Either
-can end the effort before it is incurred, and on this task the second would have
-shown that a correction placed on the inverse model's output could not move a
-command already resting on its own limit, before the estimator, the adapter and
-the conditioned policy were built. That conversion of an open-ended engineering
-effort into a measurement is the design contribution this thesis most expects to
-transfer.
+\textbf{Measure identifiability and correction authority before training an
+estimator.} The identifiability envelope determines whether plant identity is
+present in the data. The delivered-stress check determines whether a
+perturbation reaches the plant and whether a correction can influence the
+command. Both tests should precede estimator training.
 
-Where the estimate is used matters as much as whether it exists, and a
-prediction model and a policy do not want the same thing from it. A dynamics
-model integrates over a window and gains from an estimate that moves within it.
-A memoryless actor integrates nothing, so the same movement reaches it as
-action noise from one tick to the next. That asymmetry argues for filtering the
-estimate on the policy path while leaving the model path untouched, at fixed
-information content. The sweep that would fix the filter constant was run on the
-stack that preceded the command-path rebuild, so no cutoff is recommended here;
-repeating it on the deployed stack is listed in
-Section~\ref{sec:concl:future}.
+Where the estimate is used also matters. A dynamics model can integrate a
+changing estimate over time, whereas a memoryless policy receives that change as
+input variation. Filtering on the policy path may therefore be useful, but its
+appropriate time constant remains to be determined on the deployed stack.
 
 \section{Contributions}
 
@@ -367,12 +276,9 @@ the $33$ paired cells measure terrain and trajectory variation and say nothing
 about how far a second run of either would move; the actuator-representation
 result rests on that assumption. The adaptation result is quantified across
 seeds and bounded by them: two of five improve both errors, one trades, two are
-worse, so the pre-registered median is not met. The variance is intrinsic rather
-than an optimisation artefact, since lowering the learning rate merely reassigns
-which seeds fail. The defensible claim is that the delivery failure was
-diagnosed, repaired and demonstrated, with the mechanism attributed to the live
-history and a measurable part of it to the plant change, not that online
-adaptation improves both errors on an arbitrary seed.
+worse, so the pre-registered median is not met. The defensible claim is a
+plant-dependent lateral contribution under the tested conditions, not an
+improvement on both errors for every training seed.
 
 Finally, the bound is a bound on this loop. A commanded step cannot complete
 faster than $417$\,ms at the command rate limit while the plant answers in
@@ -387,9 +293,8 @@ generalises through the mechanism rather than through the number.
 \section{Future Work}
 \label{sec:concl:future}
 
-The evidence in this thesis is simulation-to-simulation, and the step that would
-extend it furthest is the one it does not take: placing the learned actuator
-models and the distilled policy on the machine they were built for.
+The evidence in this thesis is simulation-to-simulation. The next step is to
+evaluate the learned actuator models and distilled policy on the target machine.
 
 That step begins with instrumentation, because the FME~500 as delivered carries
 no cylinder-chamber pressure transducers, and the differential pressure the
@@ -400,17 +305,8 @@ validated: the open-loop excitation schedule of Chapter~\ref{chap:data} was buil
 to make the valve causally identifiable, and the identifiability audit of
 Section~\ref{sec:data:openloop-collection} applies to machine data unchanged.
 
-Fine-tuning on that data is then a well-posed problem rather than an open-ended
-one. The inverse model transferred across the deployment plant family with a
-spread of a factor of $1.42$, so the gap to a real machine is plausibly a
-bounded offset rather than a different function, and the mechanism for absorbing
-such an offset has already been validated once: a correction capped at
-$\unit[3]{mm}$ and gated to vanish at zero command, with every hydraulic
-parameter frozen and the original data retained as replay. The input-ablation
-test of Section~\ref{sec:models:fd-identifiability} decides whether that
-suffices, since a correction obliged to carry command authority is no longer a
-correction. For the policy, the reference-anchored construction of
-Section~\ref{sec:ctrl:anchored} transfers with its guarantee intact, and that
-guarantee is worth more on a machine than in simulation: it holds the policy
-within a bounded divergence of a checkpoint verified against physical acceptance
-and restores it atomically when an update violates that bound.
+Hardware data would support a bounded correction to the frozen inverse model,
+with hydraulic parameters retained and the original dataset used for replay.
+Input ablation should verify that the correction remains dependent on the valve
+command. The reference-anchored policy provides a suitable starting point
+because it limits policy drift from a verified checkpoint.

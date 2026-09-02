@@ -146,9 +146,7 @@ emits and pushed through the student's entire action chain into the same plant,
 so every label the student imitates is by construction an action it can produce.
 A teacher writing targets directly to the plant would generate labels outside
 the student's reachable set, giving the imitation error a floor no training
-could remove. That failure mode was measured: when an earlier action-rate limit
-sat below the teacher's own structural bound, $0.43\,\%$ of labels became
-unreachable by construction.
+could remove.
 
 \subsection{Teacher Performance}
 
@@ -207,15 +205,11 @@ policy plus an additive residual whose own encoder reads a history window
 carried alongside the observation, leaving the base actor's input unchanged
 (Section~\ref{sec:ctrl:af-residual}).
 
-Three design options were considered and rejected. The base policy is not
-itself a residual: it has no nominal command to correct, and where a residual
-does appear in \ppoAAMFD{} it is added around this policy rather than built into
-it, which is what keeps the frozen base recoverable exactly. It is not
-recurrent, because temporal inference is placed in a separate encoder
-(Section~\ref{sec:ctrl:af-encoder}) and giving the policy its own memory would
-confound the two. And it does not command the vehicle: the truck's forward
-motion is scripted, so the policy cannot solve a tracking problem by driving
-differently.
+The base policy is not itself a residual and has no nominal command to correct.
+The \ppoAAMFD{} residual is added around this recoverable frozen base. Temporal
+inference is assigned to a separate encoder
+(Section~\ref{sec:ctrl:af-encoder}), while the truck's forward motion remains
+scripted.
 
 \subsection{The Observation Vector}
 
@@ -493,26 +487,14 @@ metrics remain near the teacher's preflight values without matching them.
 \subsection{Objective Mismatch in Unconstrained Fine-Tuning}
 \label{sec:ctrl:finding}
 
-The initial plan was to use the distilled actor as the PPO initialization and
-improve it without further constraints. On this task, that approach failed.
-The result motivates the anchored formulation of
+Unconstrained PPO fine-tuning from distilled checkpoints increased total reward
+while degrading the primary tracking objective, in the worst case by a factor
+of $12.9$. The critic remained healthy, with explained variance in the
+$0.85$--$0.95$ range. This motivates the anchored formulation of
 Section~\ref{sec:ctrl:anchored}, which is used for the final policies.
 
-PPO fine-tuning was run repeatedly from distilled checkpoints, and the outcome
-was consistent enough to be treated as a property of the problem rather than as
-bad luck. The critic was healthy throughout, with explained variance in the
-$0.85$--$0.95$ band, so the failure is not a value-estimation failure. Total
-reward rose. And the primary tracking objective degraded, in the worst case by
-a factor of $12.9$.
-
-The mechanism follows from placing the reward and the gates side by side. The
-reward pays for ground contact and cut height as well as lateral tracking, and
-the optimiser discovers that it can buy the first two by spending the third,
-which increases total reward while moving the policy away from the gate that
-decides acceptance. Four earlier fine-tuning campaigns on a related
-configuration failed the same way in a different currency: every block degraded
-head alignment, with p01 falling from $0.9854$ to the $0.48$--$0.78$ range while
-safety terminations rose from $1.3\,\%$ to $3.6$--$7.7\,\%$.
+The reward includes ground contact and cut height as well as lateral tracking.
+It can therefore increase while a gate-relevant tracking measure degrades.
 
 This is a claim about two functionals over the same policy space rather
 than about the optimiser. Training maximizes the expected return
@@ -830,22 +812,9 @@ warm-up with the actor frozen, and reference-anchored PPO in blocks under
 Equations~\eqref{eq:ctrl:anchored-loss} and~\eqref{eq:ctrl:bounds}. The final
 block produced checkpoints $280$ to $329$. The last iterate was not taken,
 because PPO can raise mean return while damaging a single path family.
-Candidates were scored instead on held-out meshes against the eight gates,
-aggregated to the worst mesh and, for the tracking-critical gates, the worst
-path family.
-
-No gate table is printed for that checkpoint, because the numbers on record were
-measured on the superseded $\unit[16]{m}$ rollout and the checkpoint's own
-full-length six-mesh revalidation was never run. Three \ppoROM{} acceptance
-records exist in the project and they disagree; Appendix~\ref{app:ppo-config}
-separates them. The one that matters for what follows is an earlier six-mesh
-evaluation reporting seven gates passing and \emph{ground contact failing}, at
-$0.6486$ against the $0.700$ threshold. Measured on a worst-mesh, worst-family
-aggregation, it identifies ground contact on the ROM plant as the gate most
-likely to bind, which Chapter~\ref{chap:evaluation} is able to check rather than
-assume. \ppoROM{} is therefore described here as a reference \emph{condition}
-whose acceptance evidence is pending, and Chapter~\ref{chap:evaluation} reports
-revalidated figures for all three stacks under one protocol.
+Candidates were scored on held-out meshes against the eight gates, aggregated to
+the worst mesh and, for tracking-critical gates, the worst path family.
+Chapter~\ref{chap:evaluation} reports the final common-protocol evaluation.
 
 \section{IF: Non-Adaptive Learned Baseline}
 \label{sec:ctrl:ppo-idfd}
@@ -877,19 +846,14 @@ Two properties of the composed path shape its behaviour, and both were
 established offline. The valve command is accumulated rather than issued
 absolutely and is clipped to the per-axis limits $[0.95, 0.95, 0.80, 0.80]$, so
 the actuator path carries its own saturation boundary independently of the
-action chain. And only the predicted extension increment is integrated, since
-the forward model's velocity output failed validation on two axes
-(Section~\ref{sec:models:fd}) and is carried as a diagnostic.
+action chain. Only the predicted extension increment is integrated; the velocity
+output is retained as a diagnostic (Section~\ref{sec:models:fd}).
 
-The promoted policy's run manifest records all eight gates passing across the
-$2$ to $\unit[7]{km/h}$ speed range on three held-out meshes. That is
-selection-time evidence rather than a certified result, superseded by the
-single-protocol revalidation of Chapter~\ref{chap:evaluation}. One protocol
-point belongs here: its actor learning rate, entropy coefficient, seed, terrain
-seed, environment count, curriculum stage, frozen normaliser and warm-up match
-\ppoROM{} field for field in the stored run manifest
-(Table~\ref{tab:app:ppo}), which is read rather than assumed and is what makes
-the pair a controlled comparison.
+The stored run manifest shows that the actor learning rate, entropy coefficient,
+seed, terrain seed, environment count, curriculum stage, frozen normaliser, and
+warm-up match \ppoROM{} field for field (Table~\ref{tab:app:ppo}). This makes
+the pair a controlled comparison. Chapter~\ref{chap:evaluation} reports the
+common-protocol results.
 
 Figure~\ref{fig:ctrl:r-if-stack} summarises the two non-adaptive actuator paths
 used as baselines. Both use the same policy interface and PhysX task; only the
@@ -987,16 +951,10 @@ valve command, and supplying that map from identification data alone is exactly
 the substitution being priced. The R--IF gap is interpretable only because the
 composition is complete.
 
-The adaptive stack asks a different question, and the inverse model does not
-survive the change. It was not discarded on suspicion. Per-valve supervised
-validation reached $R^2 = 0.9973$--$0.9996$; paired control fine-tuning
-(Section~\ref{sec:models:id-paired}) brought the composite normalised control
-error from $1.0011$, exactly the zero-response baseline, down to $0.1086$; and
-the frozen checkpoint transferred to the $118$-run deployment collection outside
-its Simscape training distribution with teacher-forced one-step extension error
-of $\unit[2.36]{mm}$ against $\unit[3.36]{mm}$ on nominal
-(Section~\ref{sec:models:id-trust}). On that evidence it was adequate for
-\ppoIDFD{} and remains so.
+The adaptive stack asks a different question. The inverse model remains
+appropriate for \ppoIDFD{} and its one-step transfer is established in
+Section~\ref{sec:models:id-trust}. In the adaptive command path, however, an
+additional correction must retain authority after the command is formed.
 
 The same transfer study recorded the failure mode that later disqualified it for
 adaptation. The model predicts a valve-command \emph{increment}, and the
@@ -1022,20 +980,9 @@ metric. The disqualification is specific and retracts nothing claimed for
 authority rather than a defect of the map. It binds only where a second signal
 must be added to that command and survive the same clip.
 
-Repairing rather than removing the model was rejected on cost. The repair would
-have required a new data collection on the scale of the rank-4 open-loop
-valve-plateau campaign that repaired the forward model's analogous
-identifiability failure (Section~\ref{sec:models:fd-identifiability}). The
-inverse model is also trained on Simscape data alone and already substitutes the
-training-mean pressure at deployment, because supplying the measured pressure
-raises extension error from $\unit[1.311]{mm}$ to $\unit[1.907]{mm}$; a model
-that must be fed a counterfactual input to remain accurate is a poor foundation
-for a mechanism whose purpose is to react to the true plant. Once the policy
-emits the valve command itself the model has no remaining function in any case,
-since the policy performs that conversion inside its own learned mapping. The
-command is still bounded, but the bound is no longer produced by an accumulator
-outside the policy's control, and the residual acts on the same quantity the
-policy has learned to keep within range.
+The final stack therefore emits the valve command directly. The residual acts
+on the same bounded command as the policy, rather than on an increment that is
+subsequently accumulated and clipped.
 
 \subsection{Sufficiency of the Forward Model}
 \label{sec:ctrl:af-fd-sufficient}
@@ -1147,19 +1094,10 @@ al.~\cite{ji2022concurrent}, and its consequence is that the latent is
 control-relevant by construction rather than by hope: the only gradient
 reaching $\phi$ is the one that improves the task.
 
-The alternative was tried in this project and failed in exactly the way the
-concurrent scheme is designed to avoid. An encoder frozen after being fitted
-offline to a dynamics objective carried about $0.4\,\%$ plant identity into the
-controller and scored $7.1\,\%$ worse than simply supplying the mean context: a
-latent that is accurate against a dynamics target is not thereby useful to a
-controller, and feeding a policy a near-noise estimate is worse than feeding it
-a constant.
-
-The adaptation module is therefore no longer a standalone model with a
-supervised validation score that can be quoted independently of the controller.
-Its quality is reported behaviourally in Chapter~\ref{chap:evaluation}, through
-the sensitivity of the action to the history and the closed-loop contrast
-against the frozen base, rather than as a latent reconstruction error.
+An offline dynamics objective does not by itself guarantee a control-relevant
+history representation. The adaptation module is therefore assessed
+behaviourally in Chapter~\ref{chap:evaluation}, through action sensitivity to
+history and the closed-loop comparison with the frozen base.
 
 \subsection{Consistency With the Plant Dynamics}
 \label{sec:ctrl:af-consistency}

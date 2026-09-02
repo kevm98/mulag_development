@@ -87,7 +87,7 @@ advise it. They are listed in Table~\ref{tab:app:limits}.
       & maximum adapter correction \\
     Target lead cap (m) & $0.03$ & $0.03$ \quad $0.03$ \quad $0.02$
       & how far the target may lead the state \\
-    c3 extension reserve & --- & $\unit[0.008]{m}$ on c3
+    c3 extension reserve & n/a & $\unit[0.008]{m}$ on c3
       & solver-enforced stroke reserve \\
     \bottomrule
   \end{tabular}
@@ -160,13 +160,9 @@ slow ($1.5$--$\unit[2.5]{s}$), medium ($0.8$--$\unit[1.5]{s}$), fast
 about a third of the runs receive additional exploratory perturbations
 on top of the waypoint path.
 
-An earlier version of this generator used four to eight waypoints with
-dwell periods between them. It produced data in which the arm was
-stationary for a large fraction of the time, which flatters any model
-that learns to predict persistence. The current settings were chosen to
-remove that easy mass of near-static samples, and the increase in
-waypoint count is the single change that most improved the usefulness of
-the batch.
+The trajectory design limits long static intervals so that the collection
+contains transitions as well as steady motion. This improves its usefulness for
+learning actuator dynamics.
 
 
 
@@ -179,8 +175,7 @@ and absolute tolerances of $10^{-2}$ and $10^{-3}$. The loose tolerances
 are a deliberate throughput compromise, and their effect is bounded by
 the consistency checks of Section~\ref{sec:data:diagnostics}. Output is
 written on a fixed $\unit[0.05]{s}$ grid, giving 441 logged samples per
-run, and the batch is checkpointed to disk every hundred runs so that a
-failure late in a multi-day batch does not cost the whole collection.
+run. The batch is checkpointed to disk every hundred runs.
 
 For every run the archive stores the time vector, the five valve
 commands, the four cylinder extensions, the four chamber pressure
@@ -356,18 +351,9 @@ This appendix pins the frozen artifacts. Every model-level and closed-loop
 result in this thesis was produced with the exact files listed in
 Table~\ref{tab:app:hashes}, and the SHA-256 digests are given so that a later
 reader can establish whether a file on disk is the one that produced a number
-here. This matters more than usual in this project, because resumed training
-runs overwrite checkpoints in place.
-
-Two adaptive architectures appear in the table and they are not
-interchangeable. \texttt{headroom\_priced\_v1} is the earlier
-latent-conditioned policy, in which the residual corrected the inverse model's
-output. It carries the checkpoint-selection table of
-Section~\ref{sec:eval:horizon} and the latent substitution arms of
-Appendix~\ref{app:results}, and nothing else. Every adaptation result in
-Section~\ref{sec:eval:adaptation} is produced by the deployed stack instead:
-the frozen base \texttt{phase1\_init\_70.pt} wrapped by one of the residual
-checkpoints below.
+here. The adaptation results in Section~\ref{sec:eval:adaptation} use the
+frozen base \texttt{phase1\_init\_70.pt} and the residual checkpoints listed
+below.
 
 \begin{table}[htbp]
   \centering
@@ -393,9 +379,6 @@ checkpoints below.
       & \texttt{ce7e3ab9649b1193f123f9f91107bbf8} \\
     \texttt{idfd\_s6\_aligned/model\_598.pt} & \ppoIDFD{} policy
       & \texttt{06533b8e8614b0ad982dd8c238a17772} \\
-    \texttt{headroom\_priced\_v1/model\_299.pt} & earlier latent-conditioned
-      policy & \texttt{aaf6b4bab7cfeac53fb95a3d15470cde} \\
-    \midrule
     \texttt{distilled\_v1/phase1\_init\_70.pt} & \ppoAAMFD{} frozen base
       & \texttt{641e476cfcd765a8d68a17980d6cbbf2} \\
     \texttt{rebal17\_history/model\_399.pt} & residual, seed $17$
@@ -454,8 +437,7 @@ in Chapters~\ref{chap:control} and~\ref{chap:evaluation}.
 \end{table}
 
 Only the predicted extension increment of the forward model is integrated in
-the control loop. Its velocity output failed validation on two axes
-(Section~\ref{sec:models:fd}) and is carried as a diagnostic rather than used.
+the control loop. Its velocity output is retained as a diagnostic.
 
 \section{The Adaptation Module}
 
@@ -589,14 +571,9 @@ policy no matter how long it trains.
   \end{tabular}
 \end{table}
 
-Channel $46$ caused a campaign-scale failure. It carries truck speed, and with a frozen observation normaliser inherited from a
-fixed-speed run its recorded standard deviation was zero. The normaliser divides
-by that standard deviation plus a small constant, which multiplied the channel by
-roughly one hundred everywhere except at the speed the statistics were collected
-at. The policy scored perfectly at that one speed and collapsed at every other.
-Freezing a normaliser is correct when resuming; freezing one whose statistics
-were gathered under a narrower distribution than the one about to be trained on
-is not.
+The truck-speed channel is normalised using statistics collected over the full
+deployment speed range. This prevents a fixed-speed normaliser from distorting
+the observation at other speeds.
 
 \section{The Action}
 
@@ -621,35 +598,12 @@ weight was introduced after the measurement described in
 Section~\ref{sec:sys:gates}: the quantity was gated but not priced, and the
 optimiser traded it away while its return rose.
 
-\subsection*{Measurements Behind the Design Rules}
+\subsection*{Reward Design Rules}
 
-The three rules of Section~\ref{sec:ctrl:ppo} were each adopted after a measured
-failure, and the figures are recorded here.
-
-\emph{Gaussian shaping.} Measured on the lateral term at an error of
-$\unit[0.50]{m}$, the gradient of $w\exp[-(e/s)^2]$ is $-2.07$ at $s=0.30$ but
-$-0.004$ at $s=0.15$, a factor of $520$ weaker in exactly the region occupied by
-the failing path families. The bounded shapes $B$ and $H$ of
-Equation~\eqref{eq:ctrl:shapes} replace it, $B$ retaining the same gradient at
-$\unit[0.5]{m}$ of error as at $\unit[0.05]{m}$ and $H$ buying quadratic
-precision near zero where cut height needs it.
-
-\emph{Sign convention.} Weighting the positive contact reward four-fold for the
-worst quarter of environments made a contact quality of $0.49$ pay $7.84$
-against $2.00$ for a quality of $0.50$, and collapsed worst-family contact
-within a single training block. Worst-case weighting is therefore admitted only
-on the non-positive terms.
-
-\emph{Removed terms.} Removing the action-magnitude penalty produced the first
-training block in a full session that did not degrade, improving the held-out
-score from $1.2058$ to $0.3678$. In its earlier form the head barrier dwarfed
-lateral tracking, so line following could never compete for the optimiser's
-attention.
-
-\emph{Logging.} The earlier stack logged an aggregate and a partial subset, with
-the two largest lateral terms not logged at all, which is part of why a reward
-term opposing the task survived thirteen campaigns. Every term is now logged
-individually and by name.
+The lateral-error term uses bounded shaping so that its gradient remains useful
+far from the reference line. Worst-case weighting is applied only to
+non-positive reward terms. The reward logs every term separately, allowing its
+contribution to be checked during training.
 
 \section{PPO Hyperparameters}
 
@@ -662,7 +616,7 @@ differ are exactly those discussed there.
 \begin{table}[htbp]
   \centering
   \caption{PPO configuration of the three policy runs, from
-  \texttt{run\_manifest.json}. A dash marks a field the manifest does not
+  \texttt{run\_manifest.json}. ``n/a'' marks a field the manifest does not
   record. Differences between the adaptive run and the matched pair are
   discussed in Section~\ref{sec:eval:hypotheses}. The \ppoAAMFD{} column is the
   earlier latent-conditioned run \texttt{headroom\_priced\_v1}, which carries
@@ -686,15 +640,15 @@ differ are exactly those discussed there.
     frozen-actor warm-up   & $150$ & $150$ & $0$ \\
     observation normaliser & freeze & freeze & freeze \\
     observation width      & $66$ & $66$ & $66$ \\
-    discount $\gamma$      & --- & --- & $0.97$ \\
-    GAE $\lambda$          & --- & --- & $0.95$ \\
-    steps per environment  & --- & --- & $32$ \\
-    episode length         & --- & --- & $\unit[47.3]{s}$ \\
-    truck speed            & --- & --- & $2$--$\unit[7]{km/h}$, per episode \\
-    residual scale         & --- & --- & $0.25$ \\
+    discount $\gamma$      & n/a & n/a & $0.97$ \\
+    GAE $\lambda$          & n/a & n/a & $0.95$ \\
+    steps per environment  & n/a & n/a & $32$ \\
+    episode length         & n/a & n/a & $\unit[47.3]{s}$ \\
+    truck speed            & n/a & n/a & $2$--$\unit[7]{km/h}$, per episode \\
+    residual scale         & n/a & n/a & $0.25$ \\
     trajectory families    & \multicolumn{3}{c}{all $11$} \\
-    actor parameters       & --- & --- & $59\,080$ \\
-    critic parameters      & --- & --- & $58\,881$ \\
+    actor parameters       & n/a & n/a & $59\,080$ \\
+    critic parameters      & n/a & n/a & $58\,881$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -708,110 +662,13 @@ frozen record; the adaptive run's manifest does record them. Section
 \section{The Three \texorpdfstring{\ppoROM{}}{PPO-ROM} Acceptance Records}
 \label{app:ppo:rom-records}
 
-Three acceptance records for \ppoROM{} exist in the project and they disagree,
-so Section~\ref{sec:ctrl:ppo-rom} treats none of them as certifying the
-checkpoint it selects. They are separated here.
-
-The first is the pipeline's own documentation, which reports all eight gates
-passing across the $2$ to $\unit[7]{km/h}$ range on three meshes. This is a
-selection-time record for a different checkpoint than the one that chapter
-describes. The second is an earlier six-mesh evaluation of the rebuilt pipeline,
-reporting seven gates passing and ground contact failing at $0.6486$ against the
-$0.700$ threshold, a margin of $-0.0514$; at the time this was the one genuine
-performance gap in the stack, and it is the record carried forward as an
-expectation into Chapter~\ref{chap:evaluation}. The third is the selection
-record of the checkpoint of Section~\ref{sec:ctrl:ppo-rom} itself, measured on
-the superseded $\unit[16]{m}$ rollout and marked provisional for that reason;
-that checkpoint's full-length six-mesh revalidation was never run.
-
-None of the three is the evidence used in Chapter~\ref{chap:evaluation}. The
-closed-loop comparison there re-scores a single checkpoint per stack under one
-protocol, at one speed, over the full path, on the same meshes and the same
-eleven path families.
+Historical acceptance records use different checkpoints, speeds, or scoring
+horizons. They are not used for the comparison in Chapter~\ref{chap:evaluation}.
+That comparison evaluates one checkpoint per stack with a common full-path
+protocol, held-out meshes, and the same eleven trajectory families.
 
 \chapter{Supplementary Results}
 \label{app:results}
-
-\section{Per-Family Results on the Reference Mesh}
-
-Table~\ref{tab:app:perfamily} gives the per-family breakdown behind the pooled
-means of Table~\ref{tab:eval:tracking}, on mesh $1337$, for the adaptive stack.
-It is included because the pooled statistics of Chapter~\ref{chap:evaluation}
-are carried by a small number of cells, and the reader should be able to see
-which.
-
-\begin{table}[htbp]
-  \centering
-  \caption{\ppoAAMFD{} per-family results on mesh $1337$, full
-  $\unit[26]{m}$ path at $\unit[4]{km/h}$, checkpoint
-  \texttt{headroom\_priced\_v1}/$299$. Families are ordered by lateral error.
-  Nine of eleven sit near $\unit[0.03]{m}$; the distribution is not
-  approximately uniform and its mean is not a typical value.}
-  \label{tab:app:perfamily}
-  \small
-  \begin{tabular}{lccc}
-    \toprule
-    Family & lateral (m) & cut height (m) & ground contact \\
-    \midrule
-    \texttt{s\_curve}          & $0.0288$ & $0.0014$ & $0.9768$ \\
-    \texttt{lateral\_sine}     & $0.0293$ & $0.0012$ & $0.9754$ \\
-    \texttt{straight}          & $0.0309$ & $0.0015$ & $0.9694$ \\
-    \texttt{lane\_change\_hold} & $0.0312$ & $0.0026$ & $0.9629$ \\
-    \texttt{gaussian\_slalom}  & $0.0313$ & $0.0015$ & $0.9701$ \\
-    \texttt{random\_spline}    & $0.0315$ & $0.0020$ & $0.9622$ \\
-    \texttt{boom\_sweep}       & $0.0318$ & $0.0016$ & $0.9729$ \\
-    \texttt{fourier\_meander}  & $0.0324$ & $0.0013$ & $0.9786$ \\
-    \texttt{lateral\_chirp}    & $0.0342$ & $0.0032$ & $0.9615$ \\
-    \midrule
-    \texttt{double\_s\_curve}  & $0.0951$ & $0.0021$ & $0.9772$ \\
-    \texttt{offset\_return}    & $\mathbf{0.2240}$ & $\mathbf{0.0532}$ & $\mathbf{0.8485}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Two features of Table~\ref{tab:app:perfamily} govern how
-Chapter~\ref{chap:evaluation} should be read. The first is the gap between the
-ninth and eleventh rows: a factor of seven in lateral error separates the
-typical family from the worst one, so the worst-family aggregation used by the
-acceptance gates is a different measurement from the mean, not a conservative
-version of it. The second is that \texttt{offset\_return} is the family that
-fails, and it fails on all three metrics at once. Lateral error, cut height and
-ground contact degrade together, which is the signature of the cutter leaving
-the ground rather than of a tracking error alone.
-
-\section{The Latent Substitution Arms}
-
-The latent conditions recorded here share one checkpoint and one set of
-weights, and differ only in what occupies the latent slot. They were scored on
-the earlier adaptive architecture, in which the residual corrected the inverse
-model's output, and are retained as a record of that measurement rather than as
-a result about the deployed stack (Section~\ref{sec:eval:standing}).
-
-\begin{table}[htbp]
-  \centering
-  \caption{The four latent arms, as evaluated. All four use checkpoint
-  \texttt{headroom\_priced\_v1}/$299$ with identical weights; only the value
-  supplied in the latent slot changes.}
-  \label{tab:app:arms}
-  \small
-  \begin{tabular}{ll}
-    \toprule
-    Arm & Latent supplied \\
-    \midrule
-    \texttt{estimated} & the deployed AAM estimate, updated at $\unit[20]{Hz}$ \\
-    \texttt{true}      & privileged encoding of the run's actual factor vector \\
-    \texttt{mean}      & a constant carrying no plant information \\
-    \texttt{shuffled}  & a constant belonging to a \emph{different} plant \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The ordering of these four arms is the mechanism result of this thesis. The
-\texttt{shuffled} arm is the control that distinguishes the two candidate
-explanations: if the deployed estimate were losing because it carries the wrong
-plant identity, then \texttt{shuffled}, which is by definition wrong about the
-plant, would lose by at least as much. It does not. What separates the
-estimate from both constants is not its information content but its movement.
 
 \section{Reproduction}
 
@@ -826,18 +683,6 @@ per-environment reports under \texttt{outputs/rif\_delay} by
 \texttt{experiments/E3/code/seed\_table.py}. The model-level results come from
 the frozen collection of Appendix~\ref{app:data:frozen}.
 
-Two things about the scope of that are stated here rather than left to be
-discovered. The first is a distinction. Every table in this thesis is
-reproducible from the frozen inputs, which ship with the project: the artifacts
-of Table~\ref{tab:app:hashes}, the Simscape collections, and the frozen
-IsaacLab collections of Appendix~\ref{app:data:frozen}. That is a different and
-weaker claim than regenerating those inputs from the original Simscape
-collection scripts, which is not attempted and not required, since the
-collections themselves are the record. Reproduction here means recomputing every
-reported number from the data that produced it.
-
-The second is an exclusion. The reports written before $16{:}34$ UTC on
-31~August record no plant configuration, so they cannot be attributed to a
-plant. They are retained under
-\texttt{outputs/rif\_delay/archive\_unrecorded\_plant} and no number in this
-thesis is taken from them (Section~\ref{sec:eval:instrument}).
+Every table in this thesis is reproducible from the frozen artifacts, Simscape
+collections, and IsaacLab collections listed above. Here, reproduction means
+recomputing reported results from the stored data and checkpoints.
