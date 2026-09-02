@@ -8,7 +8,7 @@ leave half the figures stale.
 
 Produces, in chapter order:
 
-    ch7_e1_paths          7.2  reference against tracked path, three families
+    ch7_e1_paths          7.1  reference against tracked path, three families
     ch7_e1_tracking       7.2  lateral error by family, and the paired contrast
     ch7_e1_gates          7.2  gate margins in units of each threshold
     ch7_delay_response    7.3  when each stage of the chain starts to move
@@ -125,12 +125,13 @@ def fig_e1_paths(smooth=150, half=0.62, lw=2.0):
     # Gaussian slalom scores marginally better than the lane change but its
     # reference is visually a sine, so its panel would repeat the one above it.
     best = ["straight", "lateral_sine", "lane_change_hold"]
-    # Figure-local, colour-vision-safe palette. The wider blue trace is drawn
-    # first and the narrower orange trace second, so both remain visible where
-    # the paths nearly coincide. The reference stays neutral and dashed.
+    # The chapter's stack colours: R is red, IF is green, here lightened so the
+    # wider red trace stays readable beneath it. The wide trace is drawn first
+    # and the narrow one second, so both remain visible where the paths nearly
+    # coincide. The reference stays neutral and dashed.
     path_style = {
-        "ppo_rom": dict(label="R (PPO-ROM)", color="#2F6B95", width=2.6),
-        "ppo_id_fd": dict(label="IF (PPO-ID-FD)", color="#D28A2E", width=1.5),
+        "ppo_rom": dict(label="R (PPO-ROM)", color=C_RED, width=2.6),
+        "ppo_id_fd": dict(label="IF (PPO-ID-FD)", color="#6ABF69", width=1.8),
     }
     reference_color = "#3F464D"
 
@@ -574,9 +575,9 @@ def fig_ref_step():
 def fig_control_effort():
     """(a) effort against the error it buys; (b) command reversals per second."""
     d = load(EXP / "E1/results/control_effort.json")
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 2.85),
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 3.25),
                                    gridspec_kw=dict(width_ratios=[1, 1.1]))
-    colors = {"ppo_rom": "#2F6B95", "ppo_id_fd": "#D5A11E"}
+    colors = {"ppo_rom": "#1F4E79", "ppo_id_fd": "#2F80C3"}
     labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
                        "ppo_id_fd": "IF (PPO-ID-FD)"}
     markers = {"ppo_rom": "o", "ppo_id_fd": "D"}
@@ -591,16 +592,16 @@ def fig_control_effort():
         axa.annotate(labels_by_stack[key],
                      (1000 * r["mean_abs_lateral_m"], r["rms_command"]),
                      xytext=(9, -4), textcoords="offset points", ha="left",
-                     va="top", fontsize=7.5, color="#3F464D")
+                     va="top", fontsize=7.5, color="#274F70")
     axa.annotate("lower is better", (10, 0.585), xytext=(34, 0.685),
-                 fontsize=7.4, color="#68747D",
-                 arrowprops=dict(arrowstyle="->", color="#7C8791", lw=.9))
+                 fontsize=7.4, color="#416A88",
+                 arrowprops=dict(arrowstyle="->", color="#6F8DA5", lw=.9))
     axa.set_xlim(0, 170)
     axa.set_ylim(0.50, 0.92)
     axa.set_xlabel("mean absolute lateral error (mm)")
     axa.set_ylabel("RMS valve command")
     axa.set_axisbelow(True)
-    axa.grid(True, color="#D5DADF", linewidth=.45, alpha=.65)
+    axa.grid(True, color="#D8E6F0", linewidth=.45, alpha=.65)
     axa.set_title("(a) what the effort buys", loc="left")
 
     y = np.arange(len(PAIR))
@@ -610,18 +611,18 @@ def fig_control_effort():
         axb.barh(i, v, height=.42, color=col, alpha=.97)
         axb.annotate(f"{v:.1f}", (v, i), xytext=(4, 0),
                      textcoords="offset points", va="center", fontsize=8.2,
-                     color="#3F464D")
+                     color="#274F70")
     axb.set_yticks(y)
     axb.set_yticklabels([SHORT[k] for k, _, _ in PAIR], fontsize=8.5)
     axb.set_ylim(len(PAIR) - 0.35, -0.65)
     axb.set_xlim(0, 47)
     axb.set_xlabel("command reversals per second")
     axb.set_axisbelow(True)
-    axb.grid(axis="x", color="#D5DADF", linewidth=.45, alpha=.65)
+    axb.grid(axis="x", color="#D8E6F0", linewidth=.45, alpha=.65)
     axb.set_title("(b) command reversals", loc="left", fontsize=8.6)
     for a in (axa, axb):
         for spine in a.spines.values():
-            spine.set_color("#7C8791")
+            spine.set_color("#6F8DA5")
     fig.subplots_adjust(left=.105, right=.985, top=.90, bottom=.165, wspace=.42)
     save(fig, "ch7_control_effort")
 
