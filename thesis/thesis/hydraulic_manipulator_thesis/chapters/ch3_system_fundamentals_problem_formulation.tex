@@ -79,6 +79,36 @@ channels used throughout the model.
   \label{fig:sys:topology}
 \end{figure}
 
+Figure~\ref{fig:sys:link-catalog} separates the rigid bodies that form the
+assembled mechanism. The catalog makes the L0--L5 body assignment explicit
+and shows the representative barrel--rod geometry used for cylinders C1--C4.
+
+\begin{figure}[htbp]
+  \centering
+  \newcommand{\partcell}[4]{%
+    \begin{minipage}[t]{.225\textwidth}
+      \centering
+      \textbf{\textcolor{#4}{#1}}\par
+      \includegraphics[width=.96\linewidth]{images/links/#2}\par
+      \vspace{-1mm}\small #3
+    \end{minipage}}
+  \partcell{L0}{link_frontrahmen}{Front frame}{cbblue}\hfill
+  \partcell{L1}{link_drehzapfen}{Slew column}{cbblue}\hfill
+  \partcell{L2}{link_ausleger_i}{Inner boom}{cbblue}\hfill
+  \partcell{L3}{link_ausleger_ii}{Outer boom}{cbblue}
+
+  \vspace{3mm}
+  \makebox[\textwidth][c]{%
+    \partcell{L4}{link_messerkopf_schwenk}{Head carrier}{cbblue}\hspace{.025\textwidth}%
+    \partcell{L5}{link_messerkopf}{Mowing head}{cbblue}\hspace{.025\textwidth}%
+    \partcell{C1--C4}{link_cylinder}{Double-acting cylinder}{cborange}}
+  \caption{Individual CAD-derived bodies of the MULAG FME~500 shown at a
+  common orthographic scale. L0--L5 are the front frame, slew column, inner
+  boom, outer boom, head carrier, and mowing head. The C1--C4 panel shows the
+  representative double-acting cylinder barrel--rod pair.}
+  \label{fig:sys:link-catalog}
+\end{figure}
+
 Manufacturer CAD supplies the link geometry, joint locations, masses, centers
 of mass, and inertia tensors through Phobos~\cite{vonszadkowski2020phobos}.
 The same CAD-derived bodies and joint frames form the mechanical basis of the

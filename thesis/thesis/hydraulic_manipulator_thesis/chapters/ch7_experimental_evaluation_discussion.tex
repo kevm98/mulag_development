@@ -1,15 +1,19 @@
 \chapter{Experimental Evaluation and Discussion}
 \label{chap:evaluation}
 
-This chapter evaluates the closed-loop control stacks introduced in
-Chapter~\ref{chap:control}. It addresses the final two research questions:
+This chapter evaluates the closed-loop stacks defined in
+Chapter~\ref{chap:control}. The assessment has two parts.
+Sections~\ref{sec:eval:tracking}--\ref{sec:eval:robustness} compare the matched
+stacks \ppoROM{} and \ppoIDFD{}, which differ only in the actuator
+representation. Section~\ref{sec:eval:adaptation} examines online adaptation
+inside \ppoAAMFD{}, where the action contract is different and only within-stack
+comparisons are valid. Section~\ref{sec:eval:discussion} draws the two parts
+together.
 
-\begin{description}
-  \item[RQ5] How does the actuator representation affect tracking, command
-  behaviour, latency, and robustness under plant variation?
-  \item[RQ6] Can recent observations support online adaptation when plant
-  variation affects closed-loop performance?
-\end{description}
+The first part concerns tracking, command behaviour, response time, and
+robustness under the reserved plant configurations. The second part concerns
+whether a history-conditioned residual improves on a frozen base when cutter
+mass changes during the episode.
 
 \section{Experimental Protocol}
 \label{sec:eval:hypotheses}
@@ -19,10 +23,10 @@ Chapter~\ref{chap:control}. It addresses the final two research questions:
 
 All closed-loop results use held-out terrain meshes, eleven trajectory families,
 a truck speed of \unit[4]{km/h}, a \unit[26]{m} scoring window, and sixteen
-reserved plant configurations. The matched comparison for RQ5 is between
-\ppoROM{} and \ppoIDFD{}. These stacks use the same training configuration and
-differ in their actuator representation. RQ6 is evaluated within \ppoAAMFD{}
-by comparing a frozen base policy, a capacity-matched residual without history,
+reserved plant configurations. The matched comparison is between \ppoROM{} and
+\ppoIDFD{}. These stacks share the training configuration and differ in the
+actuator representation. Adaptation is assessed only inside \ppoAAMFD{}, by
+comparing a frozen base policy, a capacity-matched residual without history,
 and a history-conditioned residual.
 
 The results are paired by environment or by mesh and trajectory family. Error
@@ -48,6 +52,9 @@ than a shorter selection window.
 \section{Closed-Loop Task Performance}
 \label{sec:eval:tracking}
 
+The first comparison reports closed-loop tracking of \ppoROM{} and \ppoIDFD{}
+on the held-out meshes and trajectory families.
+
 The task is scored on two independent error channels, drawn side by side in
 Figure~\ref{fig:eval:paths}: lateral error is deviation from the planned
 cutting line in the horizontal plane, and cut-height error is deviation from the
@@ -71,12 +78,9 @@ acceleration are reported alongside them as checks on motion quality.
 \end{figure}
 
 Table~\ref{tab:eval:tracking} compares the matched pair over $33$ held-out
-(mesh, family) conditions. \ppoIDFD{} reduces mean lateral error from
-\unit[0.1026]{m} to \unit[0.0703]{m} and mean cut-height error from
-\unit[8.4]{mm} to \unit[6.3]{mm}. Median errors are low for both stacks. The
-mean difference is driven mainly by difficult trajectory families rather than
-by routine tracking. The p95 values show the same pattern, indicating that the
-improvement also reduces larger tracking deviations.
+(mesh, family) conditions. Median errors are low for both stacks, and the p95
+values move in the same direction as the means, so the improvement also reduces
+the larger tracking deviations rather than only the average.
 
 \begin{table}[tbp]
   \centering
@@ -107,16 +111,19 @@ improvement also reduces larger tracking deviations.
   \label{fig:eval:tracking}
 \end{figure}
 
-Figure~\ref{fig:eval:tracking} shows that neither stack is best on every
-trajectory. \ppoIDFD{} is better on six of the eleven families, while
-\ppoROM{} is better on five. The largest difference occurs on the double
-S-curve, where \ppoIDFD{} has substantially lower error. Thus, the inverse and
-forward model improves average tracking, but the advantage is trajectory
-dependent. Both stacks follow the simpler trajectories closely. The difficult
-families provide the clearer test of the actuator representation.
+Figure~\ref{fig:eval:tracking} resolves the aggregate by trajectory family.
+\ppoIDFD{} reduces mean lateral error from \unit[0.103]{m} to \unit[0.070]{m}
+and mean cut-height error from \unit[8.4]{mm} to \unit[6.3]{mm} over the $33$
+paired conditions. The advantage is not uniform: \ppoIDFD{} is better on six of
+the eleven families and \ppoROM{} on five, with the largest difference on the
+double S-curve. The difference is concentrated on the more demanding families.
+Both stacks follow the simpler paths closely.
 
 \section{Actuator Representation and Dynamic Response}
 \label{sec:eval:delay}
+
+The same matched pair is now examined in the actuation channel: transport
+delay, closed-loop step response, and command effort.
 
 \subsection{Plant Delay and Step Response}
 \label{sec:eval:delay-plant}
@@ -170,16 +177,15 @@ error remains within \unit[20]{mm} for \unit[0.5]{s}.
 \end{table}
 
 \ppoIDFD{} settles about \unit[0.45]{s} earlier, whereas \ppoROM{} has lower
-overshoot. Both responses are much slower than the hydraulic delay. The command
-rate limit alone requires at least \unit[417]{ms} to complete this step, and
-both stacks require more than \unit[2]{s} to settle. Closed-loop policy dynamics
-and command limits therefore dominate the response time. The actuator path
-changes the shape of the response, but it does not determine the main settling
-time.
+overshoot. The command rate limit alone requires at least \unit[417]{ms} to
+complete this step, and both stacks require more than \unit[2]{s} to settle.
+Reducing hydraulic delay alone would therefore not remove the observed settling
+time; the command rate, the policy response and the reference handling would
+have to change with it.
 
-This distinction is important for control design. Reducing hydraulic delay alone
-would not remove the observed settling time. Improvements to the command rate,
-policy response, and reference handling are also required.
+Closed-loop settling is much slower than the hydraulic delay. Command-rate
+limits and policy dynamics dominate the response time. The actuator path changes
+the shape of the step, not the main settling time.
 
 \subsection{Control Effort}
 \label{sec:eval:effort}
@@ -208,19 +214,22 @@ policy response, and reference handling are also required.
   \label{fig:eval:effort}
 \end{figure}
 
-\ppoROM{} uses a smaller command magnitude but reverses direction almost four
-times as often as \ppoIDFD{}. The reversal count identifies rapid changes in
-command direction that are not evident from the RMS magnitude alone.
-\ppoIDFD{} uses more actuation and achieves lower tracking error with smoother
-command direction. The actuator representation therefore affects both tracking
-and command behaviour.
+The reversal count identifies rapid changes in command direction that the
+root-mean-square magnitude does not reveal, and
+Figure~\ref{fig:eval:effort} pairs each stack's effort with the tracking error
+it buys. A lower RMS command is not preferable when it comes with frequent
+reversals and larger path error.
 
-The effort values should be read together with the tracking error.
-Figure~\ref{fig:eval:effort} draws that pairing: a lower RMS command is not
-preferable when it is accompanied by frequent reversals and larger path error.
+\ppoROM{} uses a smaller command magnitude but reverses almost four times as
+often. \ppoIDFD{} uses more actuation, reverses less, and tracks more closely.
+Effort is therefore reported together with the tracking it buys.
 
 \section{Generalisation and Robustness}
 \label{sec:eval:robustness}
+
+The preceding sections use the held-out evaluation set. This section records
+what that set does and does not establish, and then applies a common authority
+reduction to all stacks.
 
 The matched stacks generalise to the held-out meshes, trajectory families, and
 reserved plant configurations used in this chapter. The randomisation sweep
@@ -282,16 +291,22 @@ individual factor parameterisations.
   \end{tabular}
 \end{table}
 
-No stack reached the predefined safety or ground-contact limit over the tested
-authority range. A hard robustness boundary was therefore not observed. The
-adaptive residual maintained the frozen residual's nominal lateral error down
-to $\kappa=0.30$, which indicates an authority margin within \ppoAAMFD{}.
-\ppoIDFD{} had the lowest lateral error across the cross-stack comparison. The
-authority result should therefore be read as an improvement over the frozen
-adaptive baseline, rather than as a claim of overall superiority.
+A hard robustness boundary was not observed over the tested authority range,
+and \ppoIDFD{} had the lowest lateral error at every rung of the cross-stack
+comparison.
+
+No stack reached the contact or safety gate. Within \ppoAAMFD{}, the adaptive
+residual holds the frozen residual's nominal lateral error down to
+$\kappa=0.30$. This is an authority margin inside \ppoAAMFD{}. It is not a
+ranking of \ppoAAMFD{} against \ppoROM{} or \ppoIDFD{}.
 
 \section{Online Adaptation}
 \label{sec:eval:adaptation}
+
+The following experiments remain inside \ppoAAMFD{}. They test whether a
+residual on the valve command improves on the frozen base when cutter mass
+changes during the episode, and how much of any gain depends on live history
+and on the size of the plant change.
 
 \subsection{Experiment and Measurement}
 \label{sec:eval:instrument}
@@ -334,16 +349,14 @@ trajectory, and mass-change condition.
   \end{tabular}
 \end{table}
 
-The adaptive residual improves at least one metric in four of five seeds, and
-no seed degrades both metrics. The size of the improvement varies across seeds,
-so the result supports a beneficial but variable effect. The trade-off at seed
-$42$ also shows why lateral and cut-height errors are not combined into one
-score.
-
 The percentages compare paired environments. A positive value means that the
 adaptive arm has lower error than the frozen base for the median paired
 environment. The bootstrap marker indicates that the paired difference is
 resolved by the stated statistical test.
+
+The adaptive residual improves at least one metric in four of five seeds. No
+seed is worse on both metrics. The size of the effect varies, including a
+trade-off on seed $42$, which is why the two error channels are not combined.
 
 \subsection{Contribution of History}
 \label{sec:eval:attribution}
@@ -372,16 +385,14 @@ effect of the history it receives.
   \end{tabular}
 \end{table}
 
-The residual capacity alone accounts for most of the cut-height improvement in
-four seeds. The effect of live history is mixed across seeds and metrics. Thus,
-the residual improves on the frozen base, but the full average gain cannot be
-attributed to history alone. This comparison is necessary because a larger
-residual can improve control even when it receives no information about the
-current plant.
+This comparison is necessary because a larger residual can improve control even
+when it receives no information about the current plant. The control arm has
+the same trainable capacity and the same optimisation conditions as the adaptive
+arm, so the difference between them is the live history and nothing else.
 
-The control arm is not a weaker adaptive arm. It has the same trainable capacity
-and optimisation conditions. It isolates the effect of live history from the
-effect of adding residual capacity.
+Residual capacity accounts for most of the cut-height gain in four seeds. The
+additional effect of live history is mixed. The control arm is therefore not a
+weaker adaptive arm; it isolates history from capacity.
 
 \subsection{Plant-Dependent Contribution}
 \label{sec:eval:dose}
@@ -419,20 +430,17 @@ increased with the mass change.
   \label{fig:eval:dose}
 \end{figure}
 
-The additional lateral gain rises from \unit[3.796]{mm} at a $1.5$-fold mass
-change to \unit[7.410]{mm} at a $3.0$-fold change. This trend is monotonic and
-resolved at every tested magnitude. It shows that part of the lateral benefit is
-plant dependent. At the largest change, this component represents about
-$31\,\%$ of the total lateral gain. The corresponding cut-height benefit does
-not vary consistently with mass-change magnitude and is therefore interpreted
-as a general residual effect rather than a plant-dependent effect. The
-experiment therefore separates a general improvement from the smaller component
-that responds to the change in plant mass.
+The trend is monotonic and resolved at every tested magnitude. The result is
+limited to the perturbation and channel tested here: it does not show that
+history conditioning improves every plant change or every task metric, only
+that the lateral correction contains a measurable component that scales with
+the mass change.
 
-The result is limited to the perturbation and channel tested here. It does not
-show that history conditioning improves every plant change or every task metric.
-It shows that the lateral correction contains a measurable component that scales
-with the mass change.
+Lateral gain beyond the sham rises from \unit[3.8]{mm} at a $1.5$-fold mass
+change to \unit[7.4]{mm} at a $3.0$-fold change. That component is
+plant-dependent. It is about $31\,\%$ of the total lateral gain at the largest
+change. The cut-height gain does not scale in the same way and is treated as a
+general residual effect.
 
 \subsection{The Pressure Channel Through the Load Change}
 \label{sec:eval:pressure-signals}
@@ -469,16 +477,15 @@ own scale. What the figure supports is the shape of the response either side of
 the change, not the level.
 
 Read that way, the traces are consistent with
-Section~\ref{sec:eval:attribution}. The pressure state moves at the change of
-load on every stack, so the information the residual would need is present in
-the channel it reads. The advantage of the adaptive arm does not appear as a
-transient following that movement; it is already present before it. The channel
-carries the operating condition continuously, and the residual uses it that way.
+Section~\ref{sec:eval:attribution}. Pressure state moves at the load change on
+every stack, so the residual has access to a channel that reacts to the event.
+The adaptive advantage is already present before the event, which is consistent
+with continuous conditioning rather than a one-shot transient correction.
 
 \section{Integrated Discussion}
 \label{sec:eval:discussion}
 
-\subsection*{RQ5: Effects of Actuator Representation}
+\subsection*{Actuator Representation}
 
 The inverse and forward actuator representation improved average tracking in
 the matched comparison. It also reduced command reversals substantially.
@@ -493,7 +500,7 @@ residual retained the frozen residual's nominal tracking at lower actuator
 authority. This is an authority-margin result, not evidence that it is the best
 cross-stack controller.
 
-\subsection*{RQ6: Evidence for Online Adaptation}
+\subsection*{Online Adaptation}
 
 The history-conditioned residual improved on the frozen base in most training
 seeds. The capacity-matched comparison shows that residual capacity explains a
@@ -507,11 +514,10 @@ tested mass changes. Its contribution depends on plant variation reaching a
 channel that the correction can influence and on the correction retaining
 usable command authority. These conditions define the scope of the result.
 
-\subsection*{Relation to the Research Gap}
+\subsection*{Scope}
 
-The results show that history-conditioned control should be evaluated separately
-from added model capacity. A sham-controlled perturbation is useful because it
-distinguishes a general performance improvement from a response that scales with
-plant variation. For the hydraulic manipulator studied here, the measurable
+History-conditioned control has to be separated from added residual capacity. A
+sham-controlled change is required to distinguish a general improvement from a
+response that scales with the plant. For this manipulator, the measurable
 plant-dependent benefit is limited to lateral tracking under the tested load
 changes.
