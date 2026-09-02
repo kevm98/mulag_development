@@ -79,36 +79,6 @@ channels used throughout the model.
   \label{fig:sys:topology}
 \end{figure}
 
-Figure~\ref{fig:sys:link-catalog} separates the rigid bodies that form the
-assembled mechanism. The catalog makes the L0--L5 body assignment explicit
-and shows the representative barrel--rod geometry used for cylinders C1--C4.
-
-\begin{figure}[htbp]
-  \centering
-  \newcommand{\partcell}[4]{%
-    \begin{minipage}[t]{.225\textwidth}
-      \centering
-      \textbf{\textcolor{#4}{#1}}\par
-      \includegraphics[width=.96\linewidth]{images/links/#2}\par
-      \vspace{-1mm}\small #3
-    \end{minipage}}
-  \partcell{L0}{link_frontrahmen}{Front frame}{cbblue}\hfill
-  \partcell{L1}{link_drehzapfen}{Slew column}{cbblue}\hfill
-  \partcell{L2}{link_ausleger_i}{Inner boom}{cbblue}\hfill
-  \partcell{L3}{link_ausleger_ii}{Outer boom}{cbblue}
-
-  \vspace{3mm}
-  \makebox[\textwidth][c]{%
-    \partcell{L4}{link_messerkopf_schwenk}{Head carrier}{cbblue}\hspace{.025\textwidth}%
-    \partcell{L5}{link_messerkopf}{Mowing head}{cbblue}\hspace{.025\textwidth}%
-    \partcell{C1--C4}{link_cylinder}{Double-acting cylinder}{cborange}}
-  \caption{Individual CAD-derived bodies of the MULAG FME~500 shown at a
-  common orthographic scale. L0--L5 are the front frame, slew column, inner
-  boom, outer boom, head carrier, and mowing head. The C1--C4 panel shows the
-  representative double-acting cylinder barrel--rod pair.}
-  \label{fig:sys:link-catalog}
-\end{figure}
-
 Manufacturer CAD supplies the link geometry, joint locations, masses, centers
 of mass, and inertia tensors through Phobos~\cite{vonszadkowski2020phobos}.
 The same CAD-derived bodies and joint frames form the mechanical basis of the
@@ -429,45 +399,9 @@ fed by a variable-speed, fixed-displacement pump
   \label{fig:sys:schematic}
 \end{figure}
 
-Figure~\ref{fig:sys:actuator-channel} identifies the cylinder chambers,
-piston, seal, and rod used in the actuator model.
-
-\begin{figure}[htbp]
-  \centering
-  \begin{tikzpicture}
-    \node[inner sep=0] (cylinder) {\includegraphics[width=.98\textwidth]{images/ch3/ch3_double_acting_cylinder_cutaway}};
-    % Color-coded callouts follow the electrical--hydraulic--mechanical
-    % annotation language used in Figure~\ref{fig:fund:chain}.
-    \node[draw=cbblue,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north west] (caplabel)
-      at ([xshift=2mm,yshift=-2mm]cylinder.north west) {Cap-side chamber ($p_A,Q_A$)};
-    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north] (pistonlabel)
-      at ([xshift=-18mm,yshift=-2mm]cylinder.north) {Piston};
-    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north] (seallabel)
-      at ([xshift=12mm,yshift=-2mm]cylinder.north) {Piston seal};
-    \node[draw=cbblue,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north east] (rodlabel)
-      at ([xshift=-2mm,yshift=-2mm]cylinder.north east) {Rod-side chamber ($p_B,Q_B$)};
-    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=south east] (strokelabel)
-      at ([xshift=-2mm,yshift=2mm]cylinder.south east) {Piston rod; stroke $x$};
-    \draw[cbblue,semithick,-{Latex[length=1.8mm]}] (caplabel.south east) --
-      ([xshift=15mm,yshift=-36mm]cylinder.north west);
-    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (pistonlabel.south) --
-      ([xshift=-17mm,yshift=-42mm]cylinder.north);
-    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (seallabel.south) --
-      ([xshift=-14mm,yshift=-26mm]cylinder.north);
-    \draw[cbblue,semithick,-{Latex[length=1.8mm]}] (rodlabel.south west) --
-      ([xshift=-60mm,yshift=-29mm]cylinder.north east);
-    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (strokelabel.north west) --
-      ([xshift=-38mm,yshift=39mm]cylinder.south east);
-  \end{tikzpicture}
-  \caption{Annotated cutaway of an asymmetric double-acting hydraulic
-  cylinder. The cap-side and rod-side chamber pressures generate the piston
-  force and rod stroke.}
-  \label{fig:sys:actuator-channel}
-\end{figure}
-
-The 4/3 valve in Figure~\ref{fig:sys:schematic} meters flow to the cylinder
-chambers. The
-chamber pressures follow
+The 4/3 valve in Figure~\ref{fig:sys:schematic} meters flow to the two chambers
+of each asymmetric double-acting cylinder, cap side ($p_1,Q_1$) and rod side
+($p_2,Q_2$). The chamber pressures follow
 %
 \begin{equation}
   \label{eq:sys:continuity}
@@ -496,16 +430,91 @@ uses a variable-step implicit solver, which prevents RL-time simulation.
 \subsection{Validated Scope of the Model}
 \label{sec:sys:simscape-validation}
 
-Validation uses a fixed integral-backstepping controller at $\unit[0.01]{s}$
-while sweeping $\beta\in\{0.5,1.0,1.5,2.0\}\,\mathrm{GPa}$. Slew-axis delay
-falls from about $\unit[0.85]{s}$ to $\unit[0.65]{s}$, the system delay index
-from $\unit[0.45]{s}$ to $\unit[0.35]{s}$, and task-space tracking error by
-about 11\,\%. The improvement saturates beyond $\unit[1.5]{GPa}$.
+Two checks fix what this model may be used for. The first is a parameter
+sensitivity study carried out in the preceding master project. Under a fixed
+integral-backstepping controller at $\unit[0.01]{s}$, sweeping
+$\beta\in\{0.5,1.0,1.5,2.0\}\,\mathrm{GPa}$ moves slew-axis delay from about
+$\unit[0.85]{s}$ to $\unit[0.65]{s}$, the system delay index from
+$\unit[0.45]{s}$ to $\unit[0.35]{s}$, and task-space tracking error by about
+11\,\%, with the improvement saturating beyond $\unit[1.5]{GPa}$. The model
+responds to bulk modulus in the direction and with the saturation that the
+compressibility term of \eqref{eq:sys:bulk} predicts.
 
-The model represents one machine and omits thermal dynamics. The logged
-rod-force channel is not carried into the learned actuator models: force is
-generated internally by the PhysX plant at deployment, and the logged channel
-also fails the piston-area consistency audit (Section~\ref{sec:models:rom}). Chapter~\ref{chap:data} introduces variation
+The second check asks whether the exported behaviour is what the configured
+plant should produce. It runs on the strict open-loop excitation export that
+identifies the forward model (Chapter~\ref{chap:data}): four runs, $25\,600$
+rows on a $\unit[100]{Hz}$ grid, $93.7\,\%$ of rows valid. The reference is the
+collector's own declared parameter set, so the check tests the assembled model
+rather than the parameter file. Table~\ref{tab:sys:simscape-checks} reports it.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Behavioural checks on the strict open-loop excitation export against
+  the parameters the collector configures. Values are pooled over the four runs;
+  ranges span the four cylinders. The last two rows are the limits of the
+  validated scope, not passes.}
+  \label{tab:sys:simscape-checks}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}p{.27\textwidth}p{.28\textwidth}p{.34\textwidth}@{}}
+    \toprule
+    Property & Measured & Expected \\
+    \midrule
+    Motion onset after command onset
+      & within two log samples, $\leq\unit[20]{ms}$
+      & the nominal $\unit[8]{ms}$ spool constant plus transport \\
+    Rise to $63\,\%$ of peak velocity
+      & $\unit[30]{ms}$--$\unit[80]{ms}$
+      & spool constant plus chamber fill \\
+    Velocity sign follows command
+      & $100\,\%$ above $\unit[0.05]{m/s}$, $\geq 95.8\,\%$ above
+        $\unit[0.01]{m/s}$
+      & no inversion once the cylinder moves \\
+    Speed against rising load at $|u|>0.5$
+      & falls by two orders of magnitude across $|\Delta p|$ terciles
+      & orifice law: flow follows the pressure margin \\
+    \midrule
+    Stroke visited
+      & $13\,\%$--$34\,\%$ of the configured stroke
+      & bounded by the assembled linkage, not by the valve \\
+    $|\Delta p|$ ceiling
+      & $\unit[116]{MPa}$--$\unit[122]{MPa}$, repeatable per channel
+      & relief valve set at $\unit[27.6]{MPa}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Timing, direction and load dependence hold. Motion starts within two log
+samples of the command, velocity reaches most of its plateau inside
+$\unit[80]{ms}$, the velocity sign never inverts against the command once the
+cylinder is actually moving, and speed collapses as the pressure the cylinder
+works against rises. That last property is the orifice law acting through the
+pressure margin, and it is the reason a fixed command gain does not describe
+this plant. These are the behaviours the learned actuator models have to
+reproduce, and the export has them.
+
+Two properties are outside the validated scope. Stroke coverage is narrow: the
+excitation visits $13\,\%$ to $34\,\%$ of the configured cylinder stroke because
+the assembled linkage cannot reach the rest, and the head pivot is the narrowest
+channel. Chapter~\ref{chap:data} carries that forward, and it is the channel the
+strict forward model predicts least well (Section~\ref{sec:models:fd}).
+
+Absolute pressure is not validated at all. Differential pressure does clip at a
+ceiling that repeats per channel, which is the signature of a relief valve, but
+the ceiling is $\unit[116]{MPa}$ to $\unit[122]{MPa}$ against a configured
+setting of $\unit[27.6]{MPa}$, and about half of the valid rows sit above twice
+that setting. The pressure signal has the right shape and the wrong level, and
+the level is inherited from this source rather than introduced by the learned
+models. No result in this thesis is stated in absolute pressure units: every
+learned model consumes $\Delta p$ through a fitted normaliser
+(Appendix~\ref{app:models}), and Section~\ref{sec:eval:pressure-signals} reads
+the deployed pressure state for shape only, for this reason.
+
+Beyond these checks the model represents one machine and omits thermal
+dynamics. The logged rod-force channel is not carried into the learned actuator
+models: force is generated internally by the PhysX plant at deployment, and the
+logged channel also fails the piston-area consistency audit
+(Section~\ref{sec:models:rom}). Chapter~\ref{chap:data} introduces variation
 through parameter randomisation.
 
 \section{IsaacLab Environment}
@@ -520,30 +529,15 @@ cylinder targets.
 \subsection{Simulation and Control Rates}
 \label{sec:sys:timing}
 
-Table~\ref{tab:sys:rates} lists the four simulation clocks. PhysX runs at
-$\unit[120]{Hz}$ and the policy at $\unit[60]{Hz}$. The learned actuator models
-and AAM update every three policy steps ($\unit[0.05]{s}$); their prediction is
-held across the intervening PhysX updates. Data collection uses this same
-$\unit[50]{ms}$ grid.
-
-\begin{table}[htbp]
-  \centering
-  \caption{The four rates of the simulated system. They are reported
-  separately throughout the thesis; ``the control frequency'' is not a
-  well-defined quantity here.}
-  \label{tab:sys:rates}
-  \small
-  \begin{tabular}{lll}
-    \toprule
-    Layer & Step & Rate \\
-    \midrule
-    PhysX physics                & $\unit[1/120]{s}$   & $\unit[120]{Hz}$ \\
-    Policy / control (decimation 2) & $\unit[1/60]{s}$ & $\unit[60]{Hz}$ \\
-    Learned actuator model (3 control steps) & $\unit[0.05]{s}$ & $\unit[20]{Hz}$ \\
-    AAM latent update            & $\unit[0.05]{s}$    & $\unit[20]{Hz}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+Four clocks run concurrently. PhysX integrates at $\unit[120]{Hz}$ and the
+policy acts at $\unit[60]{Hz}$ under a decimation of two. The learned actuator
+models and the AAM update every three policy steps, on the $\unit[20]{Hz}$ grid
+at which the identification data were sampled, and their prediction is held
+across the intervening PhysX updates. Data collection uses that same
+$\unit[50]{ms}$ grid. ``The control frequency'' is therefore not a well-defined
+quantity for this system and no scalar rate is reported for it.
+Table~\ref{tab:app:rates} lists every rate with the configuration key it is
+read from.
 
 \subsection{Environment Configuration Details}
 
