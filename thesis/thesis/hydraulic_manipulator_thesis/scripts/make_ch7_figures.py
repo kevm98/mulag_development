@@ -17,6 +17,7 @@ Produces, in chapter order:
     ch7_ref_step          7.3  response to a 100 mm step in the commanded line
     ch7_control_effort    7.3  effort against the tracking it buys
     ch7_e5_robustness     7.4  per-trajectory error across the randomisation sweep
+    ch7_kappa_stacks      7.4  actuator authority swept on all four stacks
     ch7_af_arms           7.5  the three residual arms through a change of load
     ch7_pressure_stacks   7.5  differential pressure per cylinder, three stacks
 
@@ -1169,6 +1170,94 @@ def fig_rom_authority():
           f"{contact[~m][0]:.3f} at zero")
 
 
+KAPPA_KS = ["1.0", "0.8", "0.6", "0.5", "0.4", "0.3",
+            "0.2", "0.1", "0.05", "0.03", "0.02", "0.01"]
+KAPPA_ARMS = [("R", "R \u2014 PPO-ROM", C_RED, "-"),
+              ("IF", "IF \u2014 PPO-ID-FD", C_AMBER, "-"),
+              ("AFf", "AF frozen", C_GRAY, "--"),
+              ("AFa", "AF adaptive", C_GRN, "-")]
+
+
+def _kappa_row(stack, k):
+    """One scored point: median lateral in mm, and worst-family contact."""
+    f = OUTPUTS / "kappa" / f"{stack}_k{k}_m1337.json"
+    if not f.exists():
+        return None
+    r = list(load(f)["per_mesh"].values())[0]
+    return (float(np.median([x * 1000 for x in r["per_env_lateral_m"]])),
+            float(r["worst_family_ground_contact_fraction"]))
+
+
+def fig_kappa_stacks():
+    """Actuator authority swept on all four stacks at the trained speed.
+
+    Supersedes fig_rom_authority, which swept ROM alone over the 2-7 km/h
+    range where R and IF are already broken before kappa is applied. Every
+    point here is scored at 4.0 km/h; the 48 reports are in outputs/kappa.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(FULLW, 2.8))
+    axa, axb = axes
+    for stack, label, col, ls in KAPPA_ARMS:
+        ks, lat, con = [], [], []
+        for k in KAPPA_KS:
+            v = _kappa_row(stack, k)
+            if v is None:
+                continue
+            ks.append(float(k)); lat.append(v[0]); con.append(v[1])
+        axa.plot(ks, lat, color=col, ls=ls, marker="o", ms=2.5,
+                 label=label, zorder=3)
+        axb.plot(ks, con, color=col, ls=ls, marker="o", ms=2.5,
+                 label=label, zorder=3)
+
+    # Iso-performance: the adaptive arm holds the frozen arm's full-authority
+    # tracking down to kappa = 0.30, which is the 3.3x authority saving.
+    nom = _kappa_row("AFf", "1.0")[0]
+    cross = _kappa_row("AFa", "0.3")[0]
+    axa.axhline(nom, color=C_GRAY, lw=0.7, ls=":", zorder=1)
+    axa.plot([0.30], [cross], marker="o", ms=6.5, mfc="none",
+             mec=C_GRN, mew=1.3, zorder=4)
+    axa.annotate(f"AF frozen at $\\kappa=1$ ({nom:.0f} mm)",
+                 (0.011, nom), xytext=(0, 4), textcoords="offset points",
+                 fontsize=7.2, color=C_GRAY, va="bottom")
+    axa.annotate("$\\kappa=0.30$", (0.30, cross), xytext=(0, -9),
+                 textcoords="offset points", fontsize=7.2, color=C_GRN,
+                 ha="center", va="top")
+
+    # The pre-declared breakdown gate, which no stack ever reaches.
+    axb.axhline(0.700, color=C_RULE, lw=0.9, ls="--", zorder=2)
+    axb.annotate("breakdown gate, $0.700$ \u2014 never reached",
+                 (0.011, 0.700), xytext=(0, 4), textcoords="offset points",
+                 fontsize=7.2, color=C_RULE, va="bottom")
+
+    axa.set_ylabel("median lateral error (mm)")
+    axb.set_ylabel("worst-family ground contact")
+    axa.set_title("(a) tracking degrades monotonically", loc="left",
+                  fontsize=8.7)
+    axb.set_title("(b) no stack trips the contact gate", loc="left",
+                  fontsize=8.7)
+    axb.set_ylim(0.66, 1.0)
+    for ax in (axa, axb):
+        ax.set_xscale("log")
+        ax.set_xlim(0.0085, 1.18)
+        ax.set_xlabel("actuator authority $\\kappa$ (log scale)")
+        ax.grid(True, which="major", color="#D5DADF", linewidth=.45, alpha=.7)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_color("#7C8791")
+    h, l = axa.get_legend_handles_labels()
+    fig.legend(h, l, ncol=4, loc="upper center", bbox_to_anchor=(.5, 1.0),
+               fontsize=7.6, frameon=False, columnspacing=1.5,
+               handlelength=1.8)
+    fig.subplots_adjust(left=.092, right=.985, top=.845, bottom=.165,
+                        wspace=.32)
+    save(fig, "ch7_kappa_stacks")
+    for stack, label, _, _ in KAPPA_ARMS:
+        hi, lo = _kappa_row(stack, "1.0"), _kappa_row(stack, "0.01")
+        if hi and lo:
+            print(f"     {label:18} lateral {hi[0]:6.2f} -> {lo[0]:6.2f} mm, "
+                  f"contact {hi[1]:.4f} -> {lo[1]:.4f}")
+
+
 # Figures the chapter currently uses.
 
 
@@ -1278,7 +1367,7 @@ def fig_dose_response():
 FIGURES = [fig_e1_paths, fig_e1_tracking, fig_e1_gates,
            fig_delay_response, fig_delay_summary, fig_chain_by_stack,
            fig_ref_step, fig_control_effort, fig_e5_robustness,
-           fig_rom_authority, fig_dose_response, fig_af_arms,
+           fig_kappa_stacks, fig_dose_response, fig_af_arms,
            fig_pressure_stacks]
 
 # Generated on request, for the withdrawn identifiability section. Run

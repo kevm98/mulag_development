@@ -940,45 +940,87 @@ The symbol is deliberately not $\alpha$, which throughout this thesis is the
 residual authority of Section~\ref{sec:ctrl:af-residual}, and $\kappa$ is not
 the perturbation used in the adaptation experiment of
 Section~\ref{sec:eval:adaptation}, which changes the cutter mass. The axis was
-swept downwards on \ppoROM{} until the acceptance gates fail, which is the
+swept downwards on all four stacks until the acceptance gates fail, which is the
 boundary search the deployment factors could not deliver.
 
 \begin{figure}[tb]
   \centering
-  \includegraphics[width=\textwidth]{images/ch7/ch7_rom_authority}
-  \caption{Actuator authority swept from nominal to zero on \ppoROM{}, three
-  held-out meshes per point. (a)~Ground contact against $\kappa$ on a
-  logarithmic axis, with the open marker at $\kappa = 0$, which no log axis can
-  carry. The stack holds the contact gate down to one per cent of nominal
-  actuator authority. (b)~Lateral error over the same sweep, which does not
-  report the failure: an arm with no authority barely moves, and an arm that
-  barely moves deviates little, so the deviation metrics improve as the stack
-  fails. Contact is the metric that sees it.}
-  \label{fig:eval:rom-authority}
+  \includegraphics[width=\textwidth]{images/ch7/ch7_kappa_stacks}
+  \caption{Actuator authority swept from nominal to one per cent of nominal on
+  all four stacks, $48$ evaluations on mesh $1337$, $176$ environments and
+  $900$ steps each, at the trained speed. (a)~Median lateral error against
+  $\kappa$ on a logarithmic axis. The dotted line is the frozen residual arm's
+  full-authority tracking, which the adaptive arm still matches at
+  $\kappa = 0.30$. (b)~Worst-family ground contact over the same sweep against
+  the pre-declared breakdown gate of $0.700$, which no stack reaches at any
+  $\kappa$ tested. The frozen and adaptive arms differ only in whether the
+  residual reads its history, so the separation between them is within one
+  stack; the comparison across stacks is a separate reading.}
+  \label{fig:eval:kappa-stacks}
 \end{figure}
 
-The result is a robustness statement of a kind the factor sweep could not make.
-\ppoROM{} holds the ground-contact gate until $\kappa$ reaches $0.01$: the
-actuator has to be reduced to one per cent of its nominal motion before the
-stack fails the contract. Contact is $0.791$ at full authority, still $0.708$ at
-$\kappa = 0.01$, and $0.615$ with the actuator disabled entirely. The curve is
-not monotone, and the non-monotonicity is the interesting part. Contact
-\emph{improves} as authority is first removed, peaking at $0.954$ around
-$\kappa = 0.2$, because the nominal stack is commanding more motion than the
-task needs and a partly starved arm tracks the ground more closely.
+Every point is scored at $\unit[4.0]{km/h}$, the trained speed. Over the full
+$2.0$ to $\unit[7.0]{km/h}$ range \ppoROM{} and \ppoIDFD{} sit at $910$ and
+$\unit[1014]{mm}$ lateral, already outside their envelope before $\kappa$ is
+applied, against $41$ and $\unit[24]{mm}$ at the fixed speed. A boundary search
+on a stack that is already broken measures the speed rather than the authority,
+so the operating point is fixed and the superseded runs are kept beside the
+sweep as the reason it is fixed.
 
-That also explains why the deviation metrics are the wrong instrument here.
-Lateral error falls as the stack is starved, from $\unit[111]{mm}$ at nominal to
-$\unit[65]{mm}$ at $\kappa = 0.2$, and only rises again at the very bottom of
-the ladder. An arm with no authority cannot deviate, so a tracking metric
-reports a starved stack as a good one. The pre-registered criterion for this
-sweep is therefore ground contact, and the lateral panel is shown because the
-trap it illustrates is one an ordinary robustness study would fall into.
+The pre-declared gate is ground contact below $0.700$ or safety termination
+above $0.080$, fixed in the E5 design before any curve existed. \textbf{No stack
+reaches it.} Contact never falls below $0.72$ and safety never exceeds its
+bound, down to $\kappa = 0.01$. A critical authority is therefore undefined for
+all four stacks: the machine tolerates a hundredfold cut in commanded actuator
+motion without failing the contract. That is a null result on the question this
+axis was built to answer, and it is the vacuous-gate trap the E5 design names in
+advance, now measured rather than anticipated. The gate is not wrong; it is not
+binding on this axis at this operating point.
 
-The sweep was run on \ppoROM{} alone. Repeating it on the inverse/forward stacks
-is the direct extension, and unlike the factor sweep it is now a well-posed
-comparison, because $\kappa$ is applied at the same point and means the same
-thing on all three.
+What the sweep does resolve is graceful degradation. Table~\ref{tab:eval:kappa}
+reports where each stack's median lateral error first reaches $1.5$ times its
+own full-authority value.
+
+\begin{table}[tb]
+  \centering
+  \caption{Degradation onset on the authority axis. The bar is $1.5$ times each
+  stack's own nominal error, so a stack with better nominal tracking is held to
+  a stricter absolute bar. Read literally the metric favours the frozen arm; it
+  measures relative degradation, not envelope, and it penalises the better
+  controller for being better. Reported as measured.}
+  \label{tab:eval:kappa}
+  \begin{tabular}{lccc}
+    \toprule
+    Stack & nominal (mm) & bar (mm) & onset $\kappa$ \\
+    \midrule
+    \ppoROM{}            & $40.69$ & $61.04$ & $0.10$ \\
+    \ppoIDFD{}           & $23.66$ & $35.49$ & $0.20$ \\
+    \ppoAAMFD{} frozen   & $45.18$ & $67.78$ & $0.10$ \\
+    \ppoAAMFD{} adaptive & $27.03$ & $40.55$ & $0.30$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The usable result is an iso-performance one. The adaptive arm holds the frozen
+arm's full-authority tracking of $\unit[45.18]{mm}$ all the way down to
+$\kappa = 0.30$, a $3.3$-fold saving in actuator authority for the same
+tracking, and it leads the frozen arm at every rung from $\kappa = 1.0$ to
+$0.2$, converges at $0.1$ and is marginally behind at $0.01$. This crossing was
+proposed from the partial curve before the full table existed, so it is not
+fitted to the answer, but it is an added analysis rather than a pre-registered
+one and is reported as such. E5 declared the breakdown gate and the degradation
+onset; it did not declare this.
+
+Two limits bound the reading. \ppoIDFD{} is the strongest stack on this axis,
+best at nominal and clearly best under degradation, $\unit[44.83]{mm}$ at
+$\kappa = 0.1$ against roughly $\unit[72]{mm}$ for the other three, and the
+adaptive arm does not beat it at any rung. The adaptation result here is a
+within-stack comparison of the frozen and adaptive arms, not a claim that the
+adaptive stack is the most robust controller. And because no boundary was
+reached, the sweep supports an authority-margin claim and not an
+envelope-extension one: online adaptation buys a $3.3$-fold authority margin
+over its own frozen baseline, and nothing here establishes that it extends the
+closed-loop robustness envelope, because no envelope edge was found.
 
 \section{Online Adaptation}
 \label{sec:eval:adaptation}
