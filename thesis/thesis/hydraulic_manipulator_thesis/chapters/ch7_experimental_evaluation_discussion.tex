@@ -1,19 +1,15 @@
-\chapter{Experimental Evaluation and Discussion}
+\chapter{Experimental Evaluation: Representation, Robustness, and the Value of Adaptation}
 \label{chap:evaluation}
+\chaptermark{Experimental Evaluation: Representation, Robustness, and the Value of Adaptation}
+\fancyhead[RE]{\headfont\small\nouppercase{\leftmark}}
 
-This chapter evaluates the closed-loop stacks defined in
-Chapter~\ref{chap:control}. The assessment has two parts.
-Sections~\ref{sec:eval:tracking}--\ref{sec:eval:robustness} compare the matched
-stacks \ppoROM{} and \ppoIDFD{}, which differ only in the actuator
-representation. Section~\ref{sec:eval:adaptation} examines online adaptation
-inside \ppoAAMFD{}, where the action contract is different and only within-stack
-comparisons are valid. Section~\ref{sec:eval:discussion} draws the two parts
-together.
-
-The first part concerns tracking, command behaviour, response time, and
-robustness under the reserved plant configurations. The second part concerns
-whether a history-conditioned residual improves on a frozen base when cutter
-mass changes during the episode.
+This chapter evaluates the closed-loop stacks defined in Chapter~\ref{chap:control}
+as an evidence chain. Sections~7.2 to~7.4 first ask whether the actuator
+representation matters in closed loop and how much plant variation the trained
+controllers already absorb. Section~7.5 then asks what remains for a residual to
+recover inside \ppoAAMFD{}, whether live history explains that recovery, and
+whether any component varies with cutter mass. Section~7.6 states the conditions
+under which the evidence supports online adaptation.
 
 \section{Experimental Protocol}
 \label{sec:eval:hypotheses}
@@ -24,10 +20,9 @@ mass changes during the episode.
 All closed-loop results use held-out terrain meshes, eleven trajectory families,
 a truck speed of \unit[4]{km/h}, a \unit[26]{m} scoring window, and sixteen
 reserved plant configurations. The matched comparison is between \ppoROM{} and
-\ppoIDFD{}. These stacks share the training configuration and differ in the
-actuator representation. Adaptation is assessed only inside \ppoAAMFD{}, by
-comparing a frozen base policy, a capacity-matched residual without history,
-and a history-conditioned residual.
+\ppoIDFD{}. Adaptation is assessed only inside \ppoAAMFD{}, by comparing a
+frozen base, a capacity-matched residual without history, and a
+history-conditioned residual.
 
 The results are paired by environment or by mesh and trajectory family. Error
 metrics are reported separately for lateral tracking and cut height because the
@@ -47,7 +42,9 @@ results are interpreted only through within-stack comparisons.
 \label{sec:eval:horizon}
 
 All reported closed-loop results use the full \unit[26]{m} trajectory rather
-than a shorter selection window.
+than a shorter selection window. The earlier \unit[8.9]{m} selection window
+covered only about one third of an episode and is therefore treated as an
+evaluation-protocol limitation, not as evidence about adaptation.
 
 \section{Closed-Loop Task Performance}
 \label{sec:eval:tracking}
@@ -227,9 +224,9 @@ Effort is therefore reported together with the tracking it buys.
 \section{Generalisation and Robustness}
 \label{sec:eval:robustness}
 
-The preceding sections use the held-out evaluation set. This section records
-what that set does and does not establish, and then applies a common authority
-reduction to all stacks.
+The preceding sections use the held-out evaluation set. This section establishes
+the robustness already present before adaptation is considered, and then applies
+a common authority reduction to all stacks.
 
 The matched stacks generalise to the held-out meshes, trajectory families, and
 reserved plant configurations used in this chapter. The randomisation sweep
@@ -266,7 +263,7 @@ motion delivered to the plant. The same perturbation is applied after each
 stack's actuator representation, which makes the comparison independent of the
 individual factor parameterisations.
 
-\begin{figure}[tbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_kappa_stacks}
   \caption{Lateral tracking and ground contact as actuator authority is reduced.
@@ -291,22 +288,35 @@ individual factor parameterisations.
   \end{tabular}
 \end{table}
 
-A hard robustness boundary was not observed over the tested authority range,
-and \ppoIDFD{} had the lowest lateral error at every rung of the cross-stack
-comparison.
+The learned controllers retain a broad margin under authority loss. A hard
+failure boundary was not reached within the tested range, so the experiment
+establishes an authority margin rather than a breakdown threshold. \ppoIDFD{}
+has the lowest lateral error at every rung of the cross-stack comparison.
 
 No stack reached the contact or safety gate. Within \ppoAAMFD{}, the adaptive
 residual holds the frozen residual's nominal lateral error down to
 $\kappa=0.30$. This is an authority margin inside \ppoAAMFD{}. It is not a
 ranking of \ppoAAMFD{} against \ppoROM{} or \ppoIDFD{}.
 
-\section{Online Adaptation}
+\subsection{What Robustness Leaves for Adaptation}
+\label{sec:eval:robustness-residual}
+
+The robustness result sets the scale for the following experiment. The frozen
+controllers already absorb substantial variation, and the authority sweep does
+not reach a contact or safety failure. The adaptation study therefore measures
+residual performance differences beyond a robust learned controller. Modest,
+channel-specific, or seed-dependent gains are compatible with this setting
+because the baseline leaves only a limited deficit to recover.
+
+\section{Online Adaptation Beyond the Robust Baseline}
 \label{sec:eval:adaptation}
 
-The following experiments remain inside \ppoAAMFD{}. They test whether a
-residual on the valve command improves on the frozen base when cutter mass
-changes during the episode, and how much of any gain depends on live history
-and on the size of the plant change.
+The following experiments remain inside \ppoAAMFD{} and use the identified
+forward model from Chapter~\ref{chap:models}. They measure three distinct
+effects: improvement over the frozen base, improvement due to live history
+beyond matched residual capacity, and variation of the residual advantage with
+cutter mass. Keeping these effects separate prevents additional model capacity
+from being interpreted as online identification.
 
 \subsection{Experiment and Measurement}
 \label{sec:eval:instrument}
@@ -317,34 +327,41 @@ share the frozen base policy, residual architecture, training budget, and
 reward. The base has no residual, the control has a residual with a zeroed
 history window, and the adaptive arm receives recent state-action history.
 
-Changing mass during an episode creates a condition that cannot be addressed by
-one fixed response. The varying change time prevents the residual from relying
-on a fixed event schedule.
+The primary plant configuration assigns nominal and heavy cutter masses across
+the environment batch and changes the assignment at a jittered time. The varying
+event time prevents the residual from relying on one fixed schedule. Since the
+history-conditioned residual is active throughout the episode, this experiment
+tests continuous conditioning on the operating point as well as the response to
+the event.
 
 Results use $880$ paired environments across five held-out meshes. Lateral and
 cut-height effects are evaluated separately. Cut-height effects smaller than
 approximately $10\,\%$ are treated as unresolved because of the measurement
 resolution; the corresponding lateral threshold is approximately $1.5\,\%$.
 The paired design ensures that each arm is assessed under the same terrain,
-trajectory, and mass-change condition.
+trajectory, and mass condition. The pre-registered primary criterion requires
+both error channels to improve with paired intervals excluding zero. Outcomes
+that improve one channel while leaving the other unresolved are reported as
+secondary trade-offs; they do not change the primary criterion.
 
-\subsection{Performance Across Seeds}
+\subsection{Primary Result Across Training Seeds}
 
 \begin{table}[tbp]
   \centering
-  \caption{History-conditioned residual against the frozen base over five
-  training seeds. An asterisk indicates that the paired bootstrap interval
-  excludes zero.}
+  \caption{Pre-registered final-checkpoint comparison of the
+  history-conditioned residual with the frozen base over five training seeds
+  and $880$ paired environments. An asterisk indicates that the paired
+  bootstrap interval excludes zero.}
   \label{tab:eval:arms}
   \begin{tabular}{lccc}
     \toprule
     Seed & cut-height gain & lateral gain & interpretation \\
     \midrule
-    $17$ & $+39.1\,\%^{*}$ & $+84.9\,\%^{*}$ & improvement \\
-    $23$ & $+35.5\,\%^{*}$ & $+4.0\,\%^{*}$ & improvement \\
-    $101$ & $+74.7\,\%^{*}$ & $+5.9\,\%^{*}$ & improvement \\
-    $42$ & $+43.4\,\%^{*}$ & $-16.1\,\%^{*}$ & trade-off \\
-    $7$ & $+4.5\,\%$ & $+55.7\,\%^{*}$ & lateral improvement \\
+    $17$ & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & primary success \\
+    $23$ & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & primary success \\
+    $101$ & $-1.1\,\%$ & $+28.6\,\%^{*}$ & lateral only \\
+    $42$ & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & both worse \\
+    $7$ & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & both worse \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -354,11 +371,22 @@ adaptive arm has lower error than the frozen base for the median paired
 environment. The bootstrap marker indicates that the paired difference is
 resolved by the stated statistical test.
 
-The adaptive residual improves at least one metric in four of five seeds. No
-seed is worse on both metrics. The size of the effect varies, including a
-trade-off on seed $42$, which is why the two error channels are not combined.
+Two of five seeds meet the primary criterion, so the median seed does not pass.
+Seed~$101$ has a resolved lateral improvement and an unresolved cut-height
+effect. Seeds~$42$ and~$7$ degrade both channels at the final checkpoint. The
+method-level result is therefore seed-dependent even though the two successful
+seeds show large, resolved effects.
 
-\subsection{Contribution of History}
+An exploratory checkpoint analysis applies one uniform rule that selects the
+saved checkpoint nearest each run's peak training reward, without using
+held-out performance. Under that later rule, three seeds improve both channels,
+seed~$42$ trades a cut-height gain for a lateral loss, and seed~$7$ improves
+lateral tracking while its cut-height effect remains unresolved. The rule was
+adopted after the primary result and was evaluated on already inspected meshes.
+It is therefore a secondary stability analysis and does not replace the
+pre-registered result in Table~\ref{tab:eval:arms}.
+
+\subsection{Capacity Versus Live History}
 \label{sec:eval:attribution}
 
 The capacity-matched control separates the effect of the residual from the
@@ -366,21 +394,18 @@ effect of the history it receives.
 
 \begin{table}[tbp]
   \centering
-  \caption{Decomposition of the adaptive gain. The control and adaptive arms
-  have the same capacity; only the adaptive arm receives live history.}
+  \caption{Capacity-matched control against the adaptive arm at the
+  pre-registered final checkpoints for the two successful seeds. The arms share
+  the frozen base, architecture, trainable capacity, budget, and reward; only
+  the adaptive arm receives live history.}
   \label{tab:eval:control-arm}
   \small
-  \begin{tabular}{lcccc}
+  \begin{tabular}{lcc}
     \toprule
-    & \multicolumn{2}{c}{base $\rightarrow$ control} & \multicolumn{2}{c}{control $\rightarrow$ adaptive} \\
-    \cmidrule(lr){2-3}\cmidrule(lr){4-5}
-    Seed & cut & lateral & cut & lateral \\
+    Seed & cut-height gain & lateral gain \\
     \midrule
-    $17$ & $+63.9\,\%^{*}$ & $-1.2\,\%$ & $-21.1\,\%^{*}$ & $+80.3\,\%^{*}$ \\
-    $23$ & $+77.2\,\%^{*}$ & $+42.2\,\%^{*}$ & $-21.2\,\%^{*}$ & $-22.8\,\%^{*}$ \\
-    $101$ & $+90.9\,\%^{*}$ & $+56.2\,\%^{*}$ & $-5.2\,\%$ & $-29.9\,\%^{*}$ \\
-    $42$ & $+1.3\,\%$ & $-62.2\,\%^{*}$ & $+38.4\,\%^{*}$ & $+124.9\,\%^{*}$ \\
-    $7$ & $+95.0\,\%^{*}$ & $+39.7\,\%^{*}$ & $-46.0\,\%^{*}$ & $+12.2\,\%^{*}$ \\
+    $17$ & $+51.3\,\%^{*}$ & $+81.6\,\%^{*}$ \\
+    $23$ & $+51.4\,\%^{*}$ & $+26.1\,\%^{*}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -390,27 +415,35 @@ when it receives no information about the current plant. The control arm has
 the same trainable capacity and the same optimisation conditions as the adaptive
 arm, so the difference between them is the live history and nothing else.
 
-Residual capacity accounts for most of the cut-height gain in four seeds. The
-additional effect of live history is mixed. The control arm is therefore not a
-weaker adaptive arm; it isolates history from capacity.
+At the primary endpoint, live history explains the improvement on the two seeds
+that meet the primary criterion: all four comparisons with the zero-history
+control are positive and resolved. The exploratory reward-peak analysis gives a
+different attribution. With one control trained per seed at those selected
+checkpoints, residual capacity accounts for most of the cut-height gain on four
+seeds and the incremental effect of history is mixed. The evidence therefore
+shows that history can produce a control benefit, while the fraction attributable
+to history is sensitive to the training seed and checkpoint rule.
 
-\subsection{Plant-Dependent Contribution}
+\subsection{Dependence on Cutter-Mass Dose}
 \label{sec:eval:dose}
 
-To isolate plant-dependent adaptation, the mass-change magnitude was varied and
-compared with a sham condition in which the event occurred without a change in
-mass. The sham measures the benefit of the residual under the same event
-schedule but without plant variation. The lateral benefit beyond the sham
-increased with the mass change.
+The cutter-mass dose was varied and compared with the $1.0$ condition, in which
+the event schedule runs but the mass does not change. In the higher-dose runs,
+half of the environments start at the heavier mass and the later flip exchanges
+the nominal and heavy assignments. The dose therefore changes both the starting
+mass distribution and the event magnitude. This experiment measures dependence
+on cutter mass; it does not isolate a transient response to the mid-episode
+change.
 
 \begin{table}[tbp]
   \centering
-  \caption{Lateral gain beyond the sham condition. Every interval excludes
+  \caption{Lateral residual advantage across cutter-mass dose. The last two
+  columns compare each dose with the $1.0$ condition. Every interval excludes
   zero.}
   \label{tab:eval:dose}
   \begin{tabular}{lccc}
     \toprule
-    Mass-change magnitude & total gain (mm) & gain beyond sham (mm) & interval (mm) \\
+    Cutter-mass dose & total gain (mm) & gain above $1.0$ (mm) & interval (mm) \\
     \midrule
     $1.0$ (sham) & $16.557$ & n/a & n/a \\
     $1.5$ & $20.045$ & $3.796$ & $[2.303, 6.105]$ \\
@@ -421,37 +454,68 @@ increased with the mass change.
   \end{tabular}
 \end{table}
 
-\begin{figure}[tbp]
+\begin{table}[tbp]
+  \centering
+  \caption{Cut-height residual advantage across cutter-mass dose. The total gain
+  excludes zero at every dose. The excess above the $1.0$ condition does not:
+  it is negative at $1.5$ and unresolved at $2.0$ and $3.0$.}
+  \label{tab:eval:dose-cut}
+  \begin{tabular}{lccc}
+    \toprule
+    Cutter-mass dose & total gain (mm) & gain above $1.0$ (mm) & interval (mm) \\
+    \midrule
+    $1.0$ (sham) & $1.393$ & n/a & n/a \\
+    $1.5$ & $0.474$ & $-0.919$ & $[-1.419, -0.345]$ \\
+    $2.0$ & $1.958$ & $0.562$ & $[-0.131, 1.192]$ \\
+    $2.5$ & $3.016$ & $1.644$ & $[1.093, 2.282]$ \\
+    $3.0$ & $2.005$ & $0.674$ & $[-0.078, 1.833]$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_dose_response}
-  \caption{Lateral performance across mass-change magnitudes. The sham
-  condition separates general residual improvement from the contribution that
-  increases with the plant change.}
+  \caption{Task performance across cutter-mass dose on both metrics. The $1.0$
+  condition measures the residual advantage at nominal mass. The additional
+  component at higher doses includes static mass dependence and any response to
+  the later mass exchange, which this design varies together. The lateral gap in
+  panel~(a) widens with every step of the dose; the cut-height gap in panel~(b)
+  does not, and the two panels carry their own scales. Panel~(c) places the two
+  separately estimated lateral components beside each other rather than implying
+  an exact additive decomposition.}
   \label{fig:eval:dose}
 \end{figure}
 
-The trend is monotonic and resolved at every tested magnitude. The result is
-limited to the perturbation and channel tested here: it does not show that
-history conditioning improves every plant change or every task metric, only
-that the lateral correction contains a measurable component that scales with
-the mass change.
+The lateral advantage above the $1.0$ condition rises from \unit[3.8]{mm} at a
+$1.5$ dose to \unit[7.4]{mm} at a $3.0$ dose. At the largest dose this component
+is about $31\,\%$ of the total lateral gain. The result establishes a
+plant-dependent component of the residual advantage. It does not identify that
+component uniquely with live history or with the mid-episode event.
 
-Lateral gain beyond the sham rises from \unit[3.8]{mm} at a $1.5$-fold mass
-change to \unit[7.4]{mm} at a $3.0$-fold change. That component is
-plant-dependent. It is about $31\,\%$ of the total lateral gain at the largest
-change. The cut-height gain does not scale in the same way and is treated as a
-general residual effect.
+Cut height behaves differently, and Table~\ref{tab:eval:dose-cut} reports it on
+the same design. The residual improves cut-height tracking at every dose and all
+five paired gains exclude zero, so the benefit itself is not in question. The
+part above the $1.0$ condition is: it is negative at a $1.5$ dose, unresolved at
+$2.0$ and $3.0$, and resolved only at $2.5$. Panel~(b) of
+Figure~\ref{fig:eval:dose} shows the same behaviour in the levels, where the
+adaptive arm gives up most of its nominal margin at the $1.5$ dose and the gap
+does not then widen with the dose. The cut-height gain is therefore treated as a
+general residual effect rather than as a mass-dependent one. The two axes also
+carry different amounts of error to remove: the frozen base runs at \unit[45]{mm}
+to \unit[63]{mm} laterally against \unit[4.2]{mm} to \unit[6.7]{mm} in cut
+height, so a dose term of the lateral size could not appear on this channel.
 
 \subsection{The Pressure Channel Through the Load Change}
 \label{sec:eval:pressure-signals}
 
-The latent carries mainly seal condition
-(Section~\ref{sec:models:aam-content}), and seal condition acts through
-pressure, so the pressure the actuator model carries is where any conditioning
-should first be visible. Figure~\ref{fig:eval:pressure-stacks} shows it per
-cylinder for all three stacks, on the same plant and aligned on the same event.
+The pressure-state analysis is mechanistic support only. It verifies that the
+internal hydraulic state changes across the load event; it is not used to
+quantify adaptation performance or hydraulic accuracy. Figure~\ref{fig:eval:pressure-stacks}
+shows the internal state per cylinder for all three stacks on the same plant and
+aligned on the same event.
 
-\begin{figure}[tbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_pressure_stacks}
   \caption{Median differential pressure per cylinder through the change of load,
@@ -476,48 +540,42 @@ physical level the panels can be read against, and each cylinder is drawn on its
 own scale. What the figure supports is the shape of the response either side of
 the change, not the level.
 
-Read that way, the traces are consistent with
-Section~\ref{sec:eval:attribution}. Pressure state moves at the load change on
-every stack, so the residual has access to a channel that reacts to the event.
-The adaptive advantage is already present before the event, which is consistent
-with continuous conditioning rather than a one-shot transient correction.
+Read that way, the traces show that the model-derived pressure state responds
+through the event. The adaptive advantage is already present before it, which is
+consistent with continuous conditioning on the operating point. The uncalibrated
+state is not evidence for the magnitude or cause of the tracking improvement.
 
-\section{Integrated Discussion}
+\section{Conditions for Useful Online Adaptation}
 \label{sec:eval:discussion}
 
-\subsection*{Actuator Representation}
+The experiments identify four conditions that govern whether online adaptation
+adds value beyond a robust learned controller.
 
-The inverse and forward actuator representation improved average tracking in
-the matched comparison. It also reduced command reversals substantially.
-Although the hydraulic transport delay was short, both stacks responded to a
-reference step on a much longer time scale. Command limits and policy dynamics,
-rather than the hydraulic delay, dominated closed-loop settling.
+\textbf{A control-relevant deficit must remain.} The transferred controllers
+already absorb substantial plant variation and retain a broad authority margin.
+Adaptation has little to recover when that robustness keeps the tracking error
+nearly unchanged.
 
-The tested stacks transferred to held-out terrain, trajectories, and plant
-configurations. The authority experiment showed graceful degradation but did
-not identify a hard safety boundary. Within \ppoAAMFD{}, the history-conditioned
-residual retained the frozen residual's nominal tracking at lower actuator
-authority. This is an authority-margin result, not evidence that it is the best
-cross-stack controller.
+\textbf{The relevant variation must be observable.} The identifiability results
+of Chapters~\ref{chap:data} and~\ref{chap:models} show that plant information is
+present only under suitable excitation. A history encoder cannot recover a
+factor that the measured trajectory does not reveal.
 
-\subsection*{Online Adaptation}
+\textbf{The correction path must retain authority.} The earlier explicit
+latent adapter produced no closed-loop effect because clipping removed the
+correction before it reached the plant. The residual on the valve path has
+bounded authority and can change the realised command.
 
-The history-conditioned residual improved on the frozen base in most training
-seeds. The capacity-matched comparison shows that residual capacity explains a
-large part of this result, so the overall gain cannot be assigned to history
-alone. However, the sham-controlled dose experiment provides direct evidence
-of a plant-dependent lateral contribution: the benefit increased with the size
-of the mass change.
+\textbf{History must add value beyond residual capacity.} At the primary
+endpoint, live history improves both channels on the two successful seeds. The
+secondary checkpoint analysis shows that a fixed residual can explain much of
+the cut-height gain on other selections. History is therefore useful
+conditionally, and estimator quality alone does not establish a closed-loop
+benefit.
 
-Online adaptation is therefore supported for the lateral channel under the
-tested mass changes. Its contribution depends on plant variation reaching a
-channel that the correction can influence and on the correction retaining
-usable command authority. These conditions define the scope of the result.
-
-\subsection*{Scope}
-
-History-conditioned control has to be separated from added residual capacity. A
-sham-controlled change is required to distinguish a general improvement from a
-response that scales with the plant. For this manipulator, the measurable
-plant-dependent benefit is limited to lateral tracking under the tested load
-changes.
+The chapter supports an architecture-level result: a history-conditioned
+residual can produce a resolved plant-dependent correction on a command path
+with remaining authority. The method-level result is weaker because the primary
+criterion is met by two of five seeds. Robustness, observability, residual
+capacity, and correction authority must therefore be evaluated together before
+online adaptation is justified.

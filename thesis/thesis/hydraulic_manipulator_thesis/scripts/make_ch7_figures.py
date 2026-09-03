@@ -1042,15 +1042,18 @@ def fig_pressure_stacks():
     t = np.arange(-W, W) / FS
     files = {"ppo_rom": "rom", "ppo_id_fd": "idfd",
              "ppo_aam_id_fd": "af_adaptive"}
-    colors = {"ppo_rom": "#C44E52", "ppo_id_fd": "#D5A11E",
-              "ppo_aam_id_fd": "#3F8F8C"}
+    # Reuse the chapter's stack palette directly. A small amount of
+    # transparency softens the three saturated hues without changing their
+    # R/IF/AF identities used in the preceding figures.
+    colors = {key: color for key, _, color in STACKS}
     labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
                        "ppo_id_fd": "IF (PPO-ID-FD)",
-                       "ppo_aam_id_fd": "AF (PPO-AAM-FD)"}
-    fig, axes_grid = plt.subplots(2, 2, figsize=(FULLW, 5.0), sharex=True)
+                       "ppo_aam_id_fd": "AF (Adaptive Forward)"}
+    fig, axes_grid = plt.subplots(2, 2, figsize=(FULLW, 6.25), sharex=True)
     axes = axes_grid.ravel()
     CLIP = 1500.0                       # numerical guard in the command ROM
     for c, ax in enumerate(axes):
+        ax.set_facecolor("#FBFCFD")
         clipped = []
         for key, _, _ in STACKS:
             col = colors[key]
@@ -1058,35 +1061,36 @@ def fig_pressure_stacks():
             dp = np.load(PRESS / f"{files[key]}_m1337_early.npz")["chain_dP"] / 1e5
             al = _aligned(dp[:, :, c], flip, keep)
             med = np.median(al, axis=0)
-            ax.plot(t, med, color=col, lw=1.55, label=label,
-                    solid_capstyle="round", zorder=2)
+            ax.plot(t, med, color=col, lw=2.0, alpha=.90, label=label,
+                    solid_capstyle="round", zorder=3)
             if np.mean(np.abs(np.abs(dp[:, :, c]) - CLIP) < 1e-3) > 0.01:
                 clipped.append(label)
-        ax.axhline(0, color="#C3C9CE", lw=.8, zorder=1)
-        ax.axvline(0, color="#7C8791", lw=1.0, ls="--", zorder=1)
+        ax.axhline(0, color=C_RULE, lw=.8, alpha=.24, zorder=1)
+        ax.axvline(0, color=C_RULE, lw=1.0, ls="--", alpha=.72, zorder=2)
         ax.set_xlim(t[0], t[-1])
         ax.set_xticks([-4, 0, 4])
         if c >= 2:
             ax.set_xlabel("time from load change (s)")
         ax.set_axisbelow(True)
-        ax.grid(True, axis="y", color="#D5DADF", linewidth=.45, alpha=.65)
-        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left", fontsize=8.8)
+        ax.grid(True, axis="y", color=C_RULE, linewidth=.45, alpha=.16)
+        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left", fontsize=9.4)
         for spine in ax.spines.values():
-            spine.set_color("#7C8791")
+            spine.set_color(C_RULE)
+            spine.set_alpha(.58)
         if clipped:
             ax.annotate("R reaches its $\\pm$1500 bar guard",
-                        xy=(0.04, 0.05), xycoords="axes fraction", fontsize=7.3,
-                        color="#5F6C76", va="bottom")
+                        xy=(0.04, 0.05), xycoords="axes fraction", fontsize=7.8,
+                        color=C_RULE, va="bottom")
     axes[0].set_ylabel(r"median $\Delta p$ (bar)")
     axes[2].set_ylabel(r"median $\Delta p$ (bar)")
     h, l = axes[0].get_legend_handles_labels()
-    h.append(plt.Line2D([], [], color="#7C8791", lw=1.0, ls="--"))
+    h.append(plt.Line2D([], [], color=C_RULE, lw=1.0, ls="--", alpha=.72))
     l.append("load change")
     fig.legend(h, l, ncol=4, loc="upper center", bbox_to_anchor=(.5, 1.0),
-               fontsize=7.8, frameon=False, columnspacing=1.25,
-               handlelength=1.7)
-    fig.subplots_adjust(left=.105, right=.985, top=.90, bottom=.11,
-                        wspace=.25, hspace=.32)
+               fontsize=8.4, frameon=False, columnspacing=1.35,
+               handlelength=1.9)
+    fig.subplots_adjust(left=.105, right=.985, top=.915, bottom=.085,
+                        wspace=.25, hspace=.27)
     save(fig, "ch7_pressure_stacks")
 
 
@@ -1175,9 +1179,9 @@ def fig_rom_authority():
 
 KAPPA_KS = ["1.0", "0.8", "0.6", "0.5", "0.4", "0.3",
             "0.2", "0.1", "0.05", "0.03", "0.02", "0.01"]
-KAPPA_ARMS = [("R", "R \u2014 PPO-ROM", C_RED, "-"),
-              ("IF", "IF \u2014 PPO-ID-FD", C_AMBER, "-"),
-              ("AFf", "AF frozen", C_GRAY, "--"),
+KAPPA_ARMS = [("R", "R: PPO-ROM", C_RED, "-"),
+              ("IF", "IF: PPO-ID-FD", C_AMBER, "-"),
+              ("AFf", "AF frozen", C_GRN, "--"),
               ("AFa", "AF adaptive", C_GRN, "-")]
 
 
@@ -1198,7 +1202,9 @@ def fig_kappa_stacks():
     range where R and IF are already broken before kappa is applied. Every
     point here is scored at 4.0 km/h; the 48 reports are in outputs/kappa.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(FULLW, 2.8))
+    # Stack the panels so that each plot receives the full text width. This
+    # makes the four traces, annotations and log-scale ticks readable in print.
+    fig, axes = plt.subplots(2, 1, figsize=(FULLW, 5.7))
     axa, axb = axes
     for stack, label, col, ls in KAPPA_ARMS:
         ks, lat, con = [], [], []
@@ -1207,37 +1213,37 @@ def fig_kappa_stacks():
             if v is None:
                 continue
             ks.append(float(k)); lat.append(v[0]); con.append(v[1])
-        axa.plot(ks, lat, color=col, ls=ls, marker="o", ms=2.5,
+        axa.plot(ks, lat, color=col, ls=ls, marker="o", ms=3.5,
                  label=label, zorder=3)
-        axb.plot(ks, con, color=col, ls=ls, marker="o", ms=2.5,
+        axb.plot(ks, con, color=col, ls=ls, marker="o", ms=3.5,
                  label=label, zorder=3)
 
     # Iso-performance: the adaptive arm holds the frozen arm's full-authority
     # tracking down to kappa = 0.30, which is the 3.3x authority saving.
     nom = _kappa_row("AFf", "1.0")[0]
     cross = _kappa_row("AFa", "0.3")[0]
-    axa.axhline(nom, color=C_GRAY, lw=0.7, ls=":", zorder=1)
+    axa.axhline(nom, color=C_GRN, lw=0.7, ls=":", alpha=.75, zorder=1)
     axa.plot([0.30], [cross], marker="o", ms=6.5, mfc="none",
              mec=C_GRN, mew=1.3, zorder=4)
     axa.annotate(f"AF frozen at $\\kappa=1$ ({nom:.0f} mm)",
                  (0.011, nom), xytext=(0, 4), textcoords="offset points",
-                 fontsize=7.2, color=C_GRAY, va="bottom")
+                 fontsize=7.2, color=C_GRN, va="bottom")
     axa.annotate("$\\kappa=0.30$", (0.30, cross), xytext=(0, -9),
                  textcoords="offset points", fontsize=7.2, color=C_GRN,
                  ha="center", va="top")
 
     # The pre-declared breakdown gate, which no stack ever reaches.
     axb.axhline(0.700, color=C_RULE, lw=0.9, ls="--", zorder=2)
-    axb.annotate("breakdown gate, $0.700$ \u2014 never reached",
+    axb.annotate("breakdown gate: $0.700$ (never reached)",
                  (0.011, 0.700), xytext=(0, 4), textcoords="offset points",
                  fontsize=7.2, color=C_RULE, va="bottom")
 
     axa.set_ylabel("median lateral error (mm)")
     axb.set_ylabel("worst-family ground contact")
     axa.set_title("(a) tracking degrades monotonically", loc="left",
-                  fontsize=8.7)
+                  fontsize=9.2)
     axb.set_title("(b) no stack trips the contact gate", loc="left",
-                  fontsize=8.7)
+                  fontsize=9.2)
     axb.set_ylim(0.66, 1.0)
     for ax in (axa, axb):
         ax.set_xscale("log")
@@ -1251,8 +1257,8 @@ def fig_kappa_stacks():
     fig.legend(h, l, ncol=4, loc="upper center", bbox_to_anchor=(.5, 1.0),
                fontsize=7.6, frameon=False, columnspacing=1.5,
                handlelength=1.8)
-    fig.subplots_adjust(left=.092, right=.985, top=.845, bottom=.165,
-                        wspace=.32)
+    fig.subplots_adjust(left=.105, right=.985, top=.915, bottom=.085,
+                        hspace=.40)
     save(fig, "ch7_kappa_stacks")
     for stack, label, _, _ in KAPPA_ARMS:
         hi, lo = _kappa_row(stack, "1.0"), _kappa_row(stack, "0.01")
@@ -1284,87 +1290,107 @@ def _dose_pool(tag, key="per_env_lateral_m"):
 def fig_dose_response():
     """The plant gets harder and the adaptive arm barely notices.
 
-    (a) is the whole story in one picture: the frozen base degrades steadily as
-    the mid-episode mass flip grows, and the adaptive arm stays nearly flat, so
-    the gap between them widens. (b) splits that gap into the part present when
-    the mass never moves at all and the part that only appears because it did.
+    (a) and (b) are the same picture on the two task metrics: the frozen base
+    degrades steadily as the cutter-mass dose grows, and the adaptive arm stays
+    nearer flat, so the gap between them widens. It widens monotonically on the
+    lateral axis and irregularly on cut height. (c) splits the lateral gap into
+    the part present when the mass never moves at all and the part that only
+    appears because it did.
     """
-    base, adapt, gain, doses = [], [], [], []
-    for tag, x in DOSES:
-        b = _dose_pool(f"dose_base_{tag}")
-        a = _dose_pool(f"dose_adapt_{tag}")
-        base.append(float(np.median(b)))
-        adapt.append(float(np.median(a)))
-        # The estimator is the median of the PAIRED differences, which is not
-        # the difference of the medians. Panel (a) draws levels; panel (b) has
-        # to draw the statistic the result is stated on.
-        n = min(len(b), len(a))
-        gain.append(float(np.median([x - y for x, y in zip(b[:n], a[:n])])))
-        doses.append(x)
-    sham = gain[0]                       # dose 1.0: the flip fires, mass does not
-    excess = [g - sham for g in gain]
+    def curve(key):
+        base, adapt, gain, doses = [], [], [], []
+        for tag, x in DOSES:
+            b = _dose_pool(f"dose_base_{tag}", key)
+            a = _dose_pool(f"dose_adapt_{tag}", key)
+            base.append(float(np.median(b)))
+            adapt.append(float(np.median(a)))
+            # The estimator is the median of the PAIRED differences, which is
+            # not the difference of the medians. The level panels draw levels;
+            # panel (c) has to draw the statistic the result is stated on.
+            n = min(len(b), len(a))
+            gain.append(float(np.median([x - y for x, y in zip(b[:n], a[:n])])))
+            doses.append(x)
+        return base, adapt, gain, doses
 
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(FULLW, 3.05),
-                                   gridspec_kw=dict(width_ratios=[1.12, 1]))
-    base_col = "#59636B"
-    adapt_col = "#2A8C57"
+    lat_base, lat_adapt, lat_gain, doses = curve("per_env_lateral_m")
+    cut_base, cut_adapt, cut_gain, _ = curve("per_env_cut_error_m")
+    sham = lat_gain[0]                   # dose 1.0: the flip fires, mass does not
+    # These are the paired dose-versus-sham estimates reported with their
+    # bootstrap intervals in Table 7.10. They are estimated separately from
+    # the per-dose total gains, so panel (c) must not imply exact additivity.
+    plant_component = [0.0, 3.796, 3.912, 4.073, 7.410]
+
+    fig = plt.figure(figsize=(FULLW, 5.9))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, .88], hspace=.40,
+                          wspace=.26)
+    axa = fig.add_subplot(gs[0, 0])
+    axc = fig.add_subplot(gs[0, 1])
+    axb = fig.add_subplot(gs[1, :])
+    base_col = C_GRAY
+    adapt_col = C_BLUE
     sham_col = "#B9C2C9"
 
-    axa.axvspan(0.88, 1.12, color="#EEF1F3", alpha=.95, lw=0, zorder=0)
-    axa.fill_between(doses, adapt, base, color=adapt_col, alpha=.16, lw=0,
-                     zorder=1)
-    axa.plot(doses, base, "-o", color=base_col, lw=2.1, ms=5.8,
-             mec="white", mew=.8, label="frozen base", zorder=3)
-    axa.plot(doses, adapt, "-D", color=adapt_col, lw=2.1, ms=5.6,
-             mec="white", mew=.8, label="adaptive", zorder=3)
-    axa.annotate("gain from the residual",
-                 xy=(2.5, (base[3] + adapt[3]) / 2), xytext=(-4, 0),
+    for ax, base, adapt, ylim, ylab, title in (
+            (axa, lat_base, lat_adapt, 72, "lateral error (mm)",
+             "(a) lateral tracking across cutter-mass dose"),
+            (axc, cut_base, cut_adapt, 8.4, "cut-height error (mm)",
+             "(b) cut-height tracking across cutter-mass dose")):
+        ax.axvspan(0.88, 1.12, color="#EEF1F3", alpha=.95, lw=0, zorder=0)
+        ax.fill_between(doses, adapt, base, color=adapt_col, alpha=.16, lw=0,
+                        zorder=1)
+        ax.plot(doses, base, "-o", color=base_col, lw=2.25, ms=6.4,
+                mec="white", mew=.8, label="frozen base", zorder=3)
+        ax.plot(doses, adapt, "-D", color=adapt_col, lw=2.25, ms=6.1,
+                mec="white", mew=.8, label="adaptive", zorder=3)
+        ax.annotate("sham", (1.0, ylim * .93), fontsize=7.6,
+                    color="#5F6C76", ha="center", va="center")
+        ax.set_xticks(doses)
+        ax.set_xticklabels([f"{d:.1f}" for d in doses])
+        ax.set_xlim(0.85, 3.2)
+        ax.set_ylim(0, ylim)
+        ax.set_xlabel("cutter-mass dose ($\\times$ nominal)")
+        ax.set_ylabel(ylab)
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
+        ax.set_title(title, loc="left", fontsize=9.0)
+    axa.annotate("gain from\nthe residual",
+                 xy=(2.5, (lat_base[3] + lat_adapt[3]) / 2), xytext=(-4, 0),
                  textcoords="offset points", ha="right", va="center",
-                 fontsize=7.6, color="#376B4B")
-    axa.annotate("sham\n(no mass change)", (1.0, base[0]),
-                 xytext=(7, 7), textcoords="offset points", fontsize=7.1,
-                 color="#5F6C76", va="bottom")
-    axa.set_xticks(doses)
-    axa.set_xticklabels([f"{d:.1f}" for d in doses])
-    axa.set_xlim(0.85, 3.2)
-    axa.set_ylim(0, 72)
-    axa.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
-    axa.set_ylabel("lateral error (mm)")
-    axa.set_axisbelow(True)
-    axa.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
-    axa.legend(fontsize=8, loc="lower left")
-    axa.set_title("(a) adaptive performance holds as the load grows", loc="left",
-                  fontsize=8.6)
+                 fontsize=8.0, color="#005A8C")
+    axa.legend(fontsize=8.2, loc="lower left")
 
     x = np.array(doses[1:])
-    axb.bar(x, [sham] * len(x), width=.32, color=sham_col,
-            label="tracking gain (also present in sham)")
-    axb.bar(x, excess[1:], width=.32, bottom=[sham] * len(x), color=adapt_col,
-            alpha=.95, label="adaptation gain (dose-dependent)")
-    for i, e in zip(x, excess[1:]):
-        axb.annotate(f"+{e:.1f}", (i, sham + e), xytext=(0, 3),
-                     textcoords="offset points", ha="center", fontsize=7.6,
-                     color="#276B44")
+    axb.bar(x - .13, [sham] * len(x), width=.24, color=sham_col,
+            label="general residual gain")
+    axb.bar(x + .13, plant_component[1:], width=.24, color=adapt_col,
+            alpha=.95, label="plant-dependent residual component")
+    for i, e in zip(x, plant_component[1:]):
+        axb.annotate(f"+{e:.1f}", (i + .13, e), xytext=(0, 3),
+                     textcoords="offset points", ha="center", fontsize=8.1,
+                     color="#005A8C")
     axb.set_xticks(x)
     axb.set_xticklabels([f"{d:.1f}" for d in x])
     axb.set_xlim(1.25, 3.25)
-    axb.set_ylim(0, 30)
-    axb.set_xlabel("size of the mid-episode load change ($\\times$ nominal)")
-    axb.set_ylabel("error the residual removes (mm)")
+    axb.set_ylim(0, 22)
+    axb.set_xlabel("cutter-mass dose ($\\times$ nominal)")
+    axb.set_ylabel("paired residual gain (mm)")
     axb.set_axisbelow(True)
     axb.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
-    axb.legend(fontsize=7.0, loc="upper left", labelspacing=.3)
-    axb.set_title("(b) the gain separates into two components", loc="left",
-                  fontsize=8.6)
-    for ax in (axa, axb):
+    axb.legend(fontsize=8.2, loc="upper left", labelspacing=.35)
+    axb.set_title("(c) separately estimated lateral residual components",
+                  loc="left", fontsize=9.0)
+    for ax in (axa, axb, axc):
         for spine in ax.spines.values():
             spine.set_color("#7C8791")
-    fig.subplots_adjust(left=.095, right=.985, top=.895, bottom=.165, wspace=.30)
+    fig.subplots_adjust(left=.098, right=.985, top=.955, bottom=.082)
     save(fig, "ch7_dose_response")
-    for d, b, a, g, e in zip(doses, base, adapt, gain, excess):
-        print(f"     dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
+    for d, b, a, g, e in zip(doses, lat_base, lat_adapt, lat_gain,
+                             plant_component):
+        print(f"     lateral dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
               f"gain {g:6.3f}  excess {e:+6.3f}")
-
+    for d, b, a, g in zip(doses, cut_base, cut_adapt, cut_gain):
+        print(f"     cut     dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
+              f"gain {g:6.3f}")
 
 
 FIGURES = [fig_e1_paths, fig_e1_tracking, fig_e1_gates,
