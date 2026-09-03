@@ -99,19 +99,20 @@ ablation are therefore treated as necessary checks before a learned actuator
 model is admitted to control.
 
 The transferred models and trained policies already absorb much of the tested
-plant variation. Online adaptation is therefore evaluated as a bounded residual
-on a valve-command path with remaining authority. Under the pre-registered
-checkpoint rule and success criterion the residual improves tracking on four of
-five training seeds, so the median seed passes, and the fixed final checkpoint
-preserves that direction. Capacity-matched controls then locate the gain: a
-residual of equal capacity reading zeroed history improves tracking on four of
-five seeds as well, and live history separates from it on one seed of five. A cutter-mass dose study
-resolves a lateral component whose magnitude depends on the plant condition,
-although the design does not separate the starting mass from the later mass
-change. An earlier latent-conditioned correction on a saturated inverse command
-has no closed-loop effect. Adaptation utility therefore depends jointly on
-observability, a control-relevant deficit, residual capacity, and correction
-authority.
+plant variation. A bounded residual is therefore added on the valve-command
+path, where correction authority remains. Under the pre-registered checkpoint
+rule and success criterion the residual improves tracking on four of five
+training seeds; three of those seeds improve both channels, and the median seed
+still passes at the fixed final checkpoint. A capacity-matched residual reading
+zeroed history reproduces most of that gain, so added residual capacity rather
+than live history accounts for the median improvement. Live history separates
+from the zero-history control on one seed, and a cutter-mass dose study resolves
+an additional lateral component that grows with plant load. An earlier
+latent-conditioned correction on a saturated inverse command has no closed-loop
+effect. Online adaptation is therefore useful here as a bounded residual with
+remaining authority; attributing the median gain to plant identification
+requires the history-versus-capacity split, which is resolved only on particular
+seeds.
 }
 % Table of contents (plus list of figures/tables)
 \RRLABcontents

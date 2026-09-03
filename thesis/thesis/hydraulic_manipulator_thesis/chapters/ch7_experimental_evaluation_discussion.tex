@@ -38,6 +38,13 @@ the held-out set.
 different action contract and is therefore not ranked against that pair. Its
 results are interpreted only through within-stack comparisons.
 
+One training run exists per stack, so the cross-stack numbers describe two
+deployed controllers and carry no estimate of policy-training variance. The
+matched pair differs only in the actuator path, which is what supports the
+representation claim; the seed-level statements in
+Section~\ref{sec:eval:adaptation} come from five runs of a single stack and are
+paired within seed.
+
 \subsection{Scoring Horizon}
 \label{sec:eval:horizon}
 
@@ -189,12 +196,14 @@ the shape of the step, not the main settling time.
 
 \begin{table}[tbp]
   \centering
-  \caption{Control effort on a held-out mesh. Lateral error is in millimetres;
-  commands are in normalised units.}
+  \caption{Control effort on a held-out mesh. The command and its rate are in
+  normalised command units, so only their ratio between stacks is meaningful.
+  Bold marks the better value of the pair.}
   \label{tab:eval:effort}
   \begin{tabular}{lcccc}
     \toprule
-    Stack & RMS command & rate RMS & reversals/s & lateral error \\
+    Stack & RMS command & command-rate RMS & reversals & lateral error \\
+     & (norm.) & (norm.\,s$^{-1}$) & (s$^{-1}$) & (mm) \\
     \midrule
     \ppoROM{} & $0.586$ & $7.55$ & $40.0$ & $120.1$ \\
     \ppoIDFD{} & $0.827$ & $10.68$ & $\mathbf{10.6}$ & $\mathbf{26.8}$ \\
@@ -487,13 +496,6 @@ $10\,\%$ bound, seed~$23$ is worse on both channels, and seed~$101$ shows no
 resolved improvement. One of five seeds succeeds on this axis, so the median
 seed fails it.
 
-The two results have to be stated together, because the second constrains what
-the first means. The residual improves the median training run, and at this
-checkpoint the part of that improvement attributable to reading live history
-rather than zeros is not resolved. A network fed real data should not
-systematically lose to the same network fed zeros, and on cut height it does so
-on three seeds, which is not the shape of a null result either.
-
 The final-checkpoint analysis does not overturn this and is not uniform.
 On the full mesh set only seed~$17$ carries a scored control arm there, where
 live history improves both channels by $51.3$ and $81.6\,\%$. On the
@@ -501,7 +503,7 @@ three-mesh subset all five are available and again one of five succeeds:
 seed~$17$ improves both channels, seeds~$23$ and~$42$ trade cut height for
 lateral tracking, and seeds~$101$ and~$7$ are worse on both. Live history
 therefore produces a resolved closed-loop benefit on particular combinations of
-seed and checkpoint, and not as a property of the method as trained here.
+seed and checkpoint.
 
 One mechanism is a candidate and is not settled by these data. Every arm in this
 table conditions on the full observation over the window, $70$ features per step
@@ -512,6 +514,16 @@ encoder with the policy gradient, fitting it instead by regression onto a
 low-dimensional privileged vector~\cite{kumar2021rma}. Restricting the encoder
 input to plant-relevant channels is the direct test and is left to future work
 (Section~\ref{sec:concl:future}).
+
+The two statements the section supports are therefore separate. Added residual
+capacity reproduces the median gain against the frozen base, so live history is
+not required for that median result. Live history is required for seed~$42$ at
+the selected checkpoint, for seed~$17$ at the final checkpoint, and for the
+additional lateral term in the dose study of Section~\ref{sec:eval:dose}. The
+method-level statement is that a bounded residual on the valve path improves
+tracking. The adaptation-specific statement is that live history is not the
+source of the median gain under this encoder, and is the source of the gain on
+particular seeds and on the load-dependent lateral channel.
 
 \subsection{Dependence on Cutter-Mass Dose}
 \label{sec:eval:dose}
@@ -600,44 +612,10 @@ carry different amounts of error to remove: the frozen base runs at \unit[45]{mm
 to \unit[63]{mm} laterally against \unit[4.2]{mm} to \unit[6.7]{mm} in cut
 height, so a dose term of the lateral size could not appear on this channel.
 
-\subsection{The Pressure Channel Through the Load Change}
-\label{sec:eval:pressure-signals}
-
-The pressure-state analysis is mechanistic support only. It verifies that the
-internal hydraulic state changes across the load event; it is not used to
-quantify adaptation performance or hydraulic accuracy. Figure~\ref{fig:eval:pressure-stacks}
-shows the internal state per cylinder for all three stacks on the same plant and
-aligned on the same event.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\textwidth]{images/ch7/ch7_pressure_stacks}
-  \caption{Median differential pressure per cylinder through the change of load,
-  $151$ environments aligned on their own flip instant. The quantity is each
-  stack's own actuator-model state, internal to the command ROM for \ppoROM{}
-  and the forward model's recursive state for the other two, so the panels show
-  what each controller believes about the hydraulics rather than a common
-  measurement, and each panel carries its own scale. The slew and boom~I panels
-  mark where \ppoROM{} sits on its \unit[1500]{bar} numerical guard.}
-  \label{fig:eval:pressure-stacks}
-\end{figure}
-
-Two properties of the signal govern how the figure is read. The pressure state
-is not a calibrated pressure on any stack: in this window the medians run to
-\unit[2295]{bar} and the peaks to \unit[3784]{bar}, which is past what a
-cylinder of this size could develop. The rod-force channel carries no supervised
-weight and pressure-increment accuracy is only $R^2 = 0.06$ to $0.09$
-(Section~\ref{sec:models:rom}). On \ppoROM{} the excursions are additionally
-clipped by the \unit[1500]{bar} numerical guard, which binds on the slew and
-the first boom cylinder and not on the other two. There is therefore no common
-physical level the panels can be read against, and each cylinder is drawn on its
-own scale. What the figure supports is the shape of the response either side of
-the change, not the level.
-
-Read that way, the traces show that the model-derived pressure state responds
-through the event. The adaptive advantage is already present before it, which is
-consistent with continuous conditioning on the operating point. The uncalibrated
-state is not evidence for the magnitude or cause of the tracking improvement.
+The internal pressure state of the three stacks through the same load change is
+reported in Appendix~\ref{app:pressure-signals}. It is an actuator-model state
+rather than a calibrated pressure, so it supports the shape of the response and
+not its level, and it is not used to quantify any result in this chapter.
 
 \section{Conditions for Useful Online Adaptation}
 \label{sec:eval:discussion}
@@ -660,19 +638,22 @@ latent adapter produced no closed-loop effect because clipping removed the
 correction before it reached the plant. The residual on the valve path has
 bounded authority and can change the realised command.
 
-\textbf{History must add value beyond residual capacity.} At the primary
-endpoint it does not, on the median seed. The residual improves tracking on four
-of five seeds, an equal-capacity residual reading zeros improves it on four of
-five as well, and the increment between them favours live history on one. The
-benefit of history is resolved on seed~$42$ here, on seed~$17$ at the final
-checkpoint, and in the lateral dose response. It is conditional, and estimator
-quality alone does not establish it.
+\textbf{History must add value beyond residual capacity.} The residual improves
+tracking on four of five seeds, and an equal-capacity residual reading zeros
+improves it on four of five as well, so the median gain is capacity rather than
+history. The increment favours live history on seed~$42$ here, on seed~$17$ at
+the final checkpoint, and in the lateral dose response. It is conditional, and
+estimator quality alone does not establish it.
 
-The chapter therefore supports two results that must be reported together. The
-bounded residual on the valve path improves task tracking on the median training
-seed under the pre-registered rule, on either checkpoint rule, which is a
-method-level result about the residual. The attribution of that improvement to
-online adaptation is not established: at equal capacity, live history separates
-from zeros on one seed of five. Robustness, observability, residual capacity and
-correction authority must be evaluated together before a tracking gain on a
-saturating actuator is read as adaptation.
+The chapter therefore supports two results that must be reported together.
+First, a bounded residual on the valve path improves task tracking on the median
+training seed under the pre-registered rule and under the fixed final
+checkpoint. That is a method-level result about the residual controller.
+Second, most of that median gain is residual capacity: live history separates
+from a capacity-matched control on one seed of five, and a load-dependent
+lateral component appears in the dose study. Online adaptation, understood as
+using live interaction history, is therefore supported as a conditional
+increment rather than as the source of the median residual gain. Robustness,
+observability, residual capacity and correction authority have to be stated
+alongside that increment, or the residual result will be misread as plant
+identification.

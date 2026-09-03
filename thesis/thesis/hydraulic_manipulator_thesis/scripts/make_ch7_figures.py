@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 
 from ch7_style import (C_AMBER, C_BLUE, C_GRAY, C_GREEN, C_GRN, C_ORANGE,
                        C_PINK, C_RED, C_RULE, EXP, FULL, FULLW, GATES, JSON_KEY,
@@ -1042,10 +1043,10 @@ def fig_pressure_stacks():
     t = np.arange(-W, W) / FS
     files = {"ppo_rom": "rom", "ppo_id_fd": "idfd",
              "ppo_aam_id_fd": "af_adaptive"}
-    # Reuse the chapter's stack palette directly. A small amount of
-    # transparency softens the three saturated hues without changing their
-    # R/IF/AF identities used in the preceding figures.
-    colors = {key: color for key, _, color in STACKS}
+    # Keep R in the chapter red, and use the blue-gray pairing established by
+    # Figure 7.5 for the two forward-model stacks.
+    colors = {"ppo_rom": C_RED, "ppo_id_fd": C_GRAY,
+              "ppo_aam_id_fd": C_BLUE}
     labels_by_stack = {"ppo_rom": "R (PPO-ROM)",
                        "ppo_id_fd": "IF (PPO-ID-FD)",
                        "ppo_aam_id_fd": "AF (Adaptive Forward)"}
@@ -1053,7 +1054,7 @@ def fig_pressure_stacks():
     axes = axes_grid.ravel()
     CLIP = 1500.0                       # numerical guard in the command ROM
     for c, ax in enumerate(axes):
-        ax.set_facecolor("#FBFCFD")
+        ax.set_facecolor("white")
         clipped = []
         for key, _, _ in STACKS:
             col = colors[key]
@@ -1070,10 +1071,13 @@ def fig_pressure_stacks():
         ax.set_xlim(t[0], t[-1])
         ax.set_xticks([-4, 0, 4])
         if c >= 2:
-            ax.set_xlabel("time from load change (s)")
+            ax.set_xlabel("time from load change (s)", labelpad=4)
         ax.set_axisbelow(True)
         ax.grid(True, axis="y", color=C_RULE, linewidth=.45, alpha=.16)
-        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left", fontsize=9.4)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax.tick_params(axis="both", pad=3)
+        ax.set_title(f"({'abcd'[c]}) {CYLINDERS[c]}", loc="left",
+                     fontsize=9.4, pad=7)
         for spine in ax.spines.values():
             spine.set_color(C_RULE)
             spine.set_alpha(.58)
@@ -1081,8 +1085,10 @@ def fig_pressure_stacks():
             ax.annotate("R reaches its $\\pm$1500 bar guard",
                         xy=(0.04, 0.05), xycoords="axes fraction", fontsize=7.8,
                         color=C_RULE, va="bottom")
-    axes[0].set_ylabel(r"median $\Delta p$ (bar)")
-    axes[2].set_ylabel(r"median $\Delta p$ (bar)")
+    axes[0].set_ylabel(r"median $\Delta p$ (bar)", labelpad=7)
+    axes[2].set_ylabel(r"median $\Delta p$ (bar)", labelpad=7)
+    fig.align_ylabels([axes[0], axes[2]])
+    fig.align_xlabels([axes[2], axes[3]])
     h, l = axes[0].get_legend_handles_labels()
     h.append(plt.Line2D([], [], color=C_RULE, lw=1.0, ls="--", alpha=.72))
     l.append("load change")
@@ -1090,7 +1096,7 @@ def fig_pressure_stacks():
                fontsize=8.4, frameon=False, columnspacing=1.35,
                handlelength=1.9)
     fig.subplots_adjust(left=.105, right=.985, top=.915, bottom=.085,
-                        wspace=.25, hspace=.27)
+                        wspace=.25, hspace=.30)
     save(fig, "ch7_pressure_stacks")
 
 
@@ -1181,7 +1187,7 @@ KAPPA_KS = ["1.0", "0.8", "0.6", "0.5", "0.4", "0.3",
             "0.2", "0.1", "0.05", "0.03", "0.02", "0.01"]
 KAPPA_ARMS = [("R", "R: PPO-ROM", C_RED, "-"),
               ("IF", "IF: PPO-ID-FD", C_AMBER, "-"),
-              ("AFf", "AF frozen", C_GRN, "--"),
+              ("AFf", "AF frozen", C_BLUE, "--"),
               ("AFa", "AF adaptive", C_GRN, "-")]
 
 
@@ -1222,12 +1228,12 @@ def fig_kappa_stacks():
     # tracking down to kappa = 0.30, which is the 3.3x authority saving.
     nom = _kappa_row("AFf", "1.0")[0]
     cross = _kappa_row("AFa", "0.3")[0]
-    axa.axhline(nom, color=C_GRN, lw=0.7, ls=":", alpha=.75, zorder=1)
+    axa.axhline(nom, color=C_BLUE, lw=0.7, ls=":", alpha=.75, zorder=1)
     axa.plot([0.30], [cross], marker="o", ms=6.5, mfc="none",
              mec=C_GRN, mew=1.3, zorder=4)
     axa.annotate(f"AF frozen at $\\kappa=1$ ({nom:.0f} mm)",
                  (0.011, nom), xytext=(0, 4), textcoords="offset points",
-                 fontsize=7.2, color=C_GRN, va="bottom")
+                 fontsize=7.2, color=C_BLUE, va="bottom")
     axa.annotate("$\\kappa=0.30$", (0.30, cross), xytext=(0, -9),
                  textcoords="offset points", fontsize=7.2, color=C_GRN,
                  ha="center", va="top")
@@ -1338,22 +1344,22 @@ def fig_dose_response():
     base_col = C_GRAY
     adapt_col = C_BLUE
     sham_col = "#B9C2C9"
-    pale_col = "#AECBE0"
 
     for ax, base, adapt, ylim, ylab, title in (
             (ax_lat, lat_base, lat_adapt, 72, "lateral error (mm)",
-             "(a) lateral tracking across cutter-mass dose"),
+             "(a) lateral tracking"),
             (ax_cut, cut_base, cut_adapt, 8.4, "cut-height error (mm)",
-             "(b) cut-height tracking across cutter-mass dose")):
+             "(b) cut-height tracking")):
         ax.axvspan(0.88, 1.12, color="#EEF1F3", alpha=.95, lw=0, zorder=0)
-        ax.fill_between(doses, adapt, base, color=adapt_col, alpha=.16, lw=0,
+        ax.fill_between(doses, adapt, base, color=adapt_col, alpha=.14, lw=0,
                         zorder=1)
-        ax.plot(doses, base, "-o", color=base_col, lw=2.25, ms=6.4,
+        ax.plot(doses, base, "-o", color=base_col, lw=2.5, ms=6.7,
                 mec="white", mew=.8, label="frozen base", zorder=3)
-        ax.plot(doses, adapt, "-D", color=adapt_col, lw=2.25, ms=6.1,
+        ax.plot(doses, adapt, "-D", color=adapt_col, lw=2.5, ms=6.4,
                 mec="white", mew=.8, label="adaptive", zorder=3)
-        ax.annotate("sham", (1.0, ylim * .93), fontsize=7.6,
-                    color="#5F6C76", ha="center", va="center")
+        ax.annotate("sham", (1.0, ylim * .92), fontsize=7.6,
+                    color="#5F6C76", ha="center", va="center", zorder=5,
+                    bbox=dict(facecolor="#EEF1F3", edgecolor="none", pad=.8))
         ax.set_xticks(doses)
         ax.set_xticklabels([f"{d:.1f}" for d in doses])
         ax.set_xlim(0.85, 3.2)
@@ -1361,13 +1367,20 @@ def fig_dose_response():
         ax.set_xlabel("cutter-mass dose ($\\times$ nominal)")
         ax.set_ylabel(ylab)
         ax.set_axisbelow(True)
-        ax.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
-        ax.set_title(title, loc="left", fontsize=9.0)
+        ax.grid(axis="y", color=C_RULE, linewidth=.45, alpha=.18)
+        ax.set_title(title, loc="left", fontsize=9.2, pad=7)
+        ax.annotate(f"{base[-1]:.1f}", (doses[-1], base[-1]),
+                    xytext=(-5, 8), textcoords="offset points", ha="right",
+                    fontsize=7.8, color=base_col, weight="bold")
+        ax.annotate(f"{adapt[-1]:.1f}", (doses[-1], adapt[-1]),
+                    xytext=(-5, -13), textcoords="offset points", ha="right",
+                    fontsize=7.8, color=adapt_col, weight="bold")
     ax_lat.annotate("gain from\nthe residual",
                     xy=(2.5, (lat_base[3] + lat_adapt[3]) / 2), xytext=(-4, 0),
                     textcoords="offset points", ha="right", va="center",
                     fontsize=8.0, color="#005A8C")
-    ax_lat.legend(fontsize=8.2, loc="lower left")
+    ax_lat.legend(fontsize=8.2, loc="lower left", frameon=True,
+                  facecolor="white", edgecolor="#D0D6DA", framealpha=.95)
 
     # (c) and (d): the same decomposition on each metric. A component whose
     # interval crosses zero is drawn open, so the eye cannot read a bar that
@@ -1379,12 +1392,25 @@ def fig_dose_response():
             (ax_cutbar, cut_gain[0], cut_excess, cut_ci, (-2.2, 3.9),
              "(d) separately estimated cut-height residual components")):
         resolved = [lo > 0 or hi < 0 for lo, hi in cis]
-        ax.bar(x - .13, [sham] * len(x), width=.24, color=sham_col,
-               label="general residual gain")
-        ax.bar(x + .13, excess, width=.24,
-               color=[adapt_col if r else pale_col for r in resolved],
-               edgecolor=adapt_col, linewidth=.9,
-               label="plant-dependent residual component")
+        general_bars = ax.bar(x - .13, [sham] * len(x), width=.24,
+                              color=sham_col, edgecolor=base_col,
+                              linewidth=.85, label="general residual gain")
+        plant_bars = ax.bar(x + .13, excess, width=.24, color="white",
+                            edgecolor=adapt_col, linewidth=1.0,
+                            label="plant-dependent residual component")
+        for bar, is_resolved in zip(plant_bars, resolved):
+            if is_resolved:
+                bar.set_facecolor(adapt_col)
+            else:
+                bar.set_facecolor("white")
+                bar.set_hatch("///")
+        for bar in general_bars:
+            ax.annotate(f"{sham:.1f}",
+                        (bar.get_x() + bar.get_width() / 2,
+                         bar.get_height()),
+                        xytext=(0, -11), textcoords="offset points",
+                        ha="center", va="top", fontsize=7.5,
+                        color="#48535B", weight="bold")
         ax.errorbar(x + .13, excess, yerr=np.abs(np.array(
             [[e - lo for e, (lo, _) in zip(excess, cis)],
              [hi - e for e, (_, hi) in zip(excess, cis)]])),
@@ -1406,14 +1432,19 @@ def fig_dose_response():
         ax.set_xlabel("cutter-mass dose ($\\times$ nominal)")
         ax.set_ylabel("paired residual gain (mm)")
         ax.set_axisbelow(True)
-        ax.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
-        ax.set_title(title, loc="left", fontsize=9.0)
-    ax_latbar.legend(fontsize=8.2, loc="upper left", labelspacing=.35)
-    ax_cutbar.annotate("open bar: interval crosses zero", (1.31, 3.35),
+        ax.grid(axis="y", color=C_RULE, linewidth=.45, alpha=.18)
+        ax.set_title(title, loc="left", fontsize=9.2, pad=7)
+    ax_latbar.legend(fontsize=8.2, loc="upper left", labelspacing=.35,
+                     frameon=True, facecolor="white", edgecolor="#D0D6DA",
+                     framealpha=.95)
+    ax_cutbar.annotate("hatched bar: interval crosses zero", (1.31, 3.35),
                        fontsize=7.8, color="#5F6C76", ha="left", va="center")
     for ax in (ax_lat, ax_cut, ax_latbar, ax_cutbar):
+        ax.set_facecolor("#FBFCFD")
+        ax.tick_params(axis="both", pad=3)
         for spine in ax.spines.values():
-            spine.set_color("#7C8791")
+            spine.set_color(C_RULE)
+            spine.set_alpha(.58)
     fig.subplots_adjust(left=.098, right=.985, top=.965, bottom=.065)
     save(fig, "ch7_dose_response")
     for d, b, a, g in zip(doses, lat_base, lat_adapt, lat_gain):

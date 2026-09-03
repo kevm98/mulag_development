@@ -92,8 +92,8 @@ condition the model or the policy on that estimate. It promises to recover that
 difference, at the cost of an estimator that must work from observable signals
 alone, since a deployed machine has no access to its own plant parameters.
 
-Adaptation is useful only when three conditions coincide. Plant identity must be
-present in the signals produced under the available excitation. The robust
+Whether adaptation repays that cost depends on three things. Plant identity must
+be present in the signals produced under the available excitation. The robust
 controller must leave a control-relevant deficit to recover. The correction
 path must retain enough authority to change the realised command. This thesis
 measures these conditions on a hydraulic mowing arm and then evaluates whether
@@ -245,15 +245,15 @@ because the correction is added to a command already resting against its own
 limit for most of the scored window. Removing the inverse model allows an
 end-to-end history-conditioned residual to act directly on the valve command.
 The deployed residual improves closed-loop tracking relative to its frozen base
-on four of five training runs, so the median run improves, and the direction
-holds under both checkpoint rules. Matched ablations then locate most of that
-improvement in the added residual capacity rather than in the live history,
-which separates from an equal-capacity zero-history control on one run of five.
-A plant-dependent component is resolved in lateral tracking across the
-cutter-mass dose study, although that design couples starting mass with the
-later change. The architecture delivers a correction and, on some runs, a
-plant-dependent one; attributing the method-level gain to online adaptation is
-not supported by these data.
+on four of five training runs, so the median run improves under both checkpoint
+rules. Matched ablations locate most of that improvement in the added residual
+capacity. Live history separates from an equal-capacity zero-history control on
+one run of five, and a plant-dependent lateral term appears in the cutter-mass
+dose study, although that design couples starting mass with the later change.
+The supported method-level claim is therefore a bounded residual on the valve
+path. The supported adaptation-specific claim is narrower: live history helps
+where residual capacity alone does not, and where load variation remains visible
+in the scored channel.
 
 The causal plant estimator, the bounded adaptation path and the eight-gate
 evaluation harness are described where they are used, as technical enablers

@@ -579,12 +579,13 @@ configuration and its frozen run-level outputs.
 \end{figure}
 \clearpage
 
-\subsection{The Open-Loop Excitation Collection}
+\subsection{The Open-Loop Context-Identification Collection}
 \label{sec:data:openloop-collection}
 
 A second collection of $118$ runs was recorded in the same deployment plant,
 with the same six-factor design and the same domain and split structure, and it
-is the one the adaptation module is trained on. It differs from the collection
+is the offline context-identification collection used to train the AAM. It
+differs from the collection
 above in a single respect, and that respect is the point of it: there is no task
 controller. Each run is driven by open-loop excitation alone, the vehicle is
 stationary, and no policy is in the loop. The excitation is the same
@@ -737,7 +738,7 @@ contract is set out with the dataset it produces in
 Section~\ref{sec:data:system-dynamics}, because what it is for is only visible
 alongside the audit it makes possible.
 
-\subsection{On-Policy Data for the Deployed Adaptation Residual}
+\subsection{On-Policy AF Adaptation Rollouts}
 \label{sec:data:onpolicy}
 
 The residual that carries the adaptation result in \ppoAAMFD{} is not trained
@@ -750,13 +751,15 @@ stack generates as it learns.
 What replaces the dataset is a plant design, since on-policy training makes the
 training distribution a property of the environment rather than of a file. The
 cutter mass is drawn from two well-separated modes and flips between them
-\emph{mid-episode}, so no single compromise response is correct in both halves
-of a run. The flip instant is jittered per environment so it cannot be
+\emph{mid-episode}. The flip instant is jittered per environment so it cannot be
 anticipated on a timer, and the direction is balanced across environments so it
-cannot be assumed. History is therefore not merely available to the residual but
-necessary to it, and an arm that cannot see the history falls well below the
-frozen base rather than merely failing to improve on it
-(Section~\ref{sec:eval:adaptation}).
+cannot be assumed. This design makes recent history potentially informative:
+the active regime cannot be inferred from a fixed timer, and one fixed
+compromise need not be optimal in both regimes. It creates an opportunity for
+history-conditioned control without assuming that history will be beneficial.
+Whether live history contributes beyond additional residual capacity is tested
+explicitly against a capacity-matched zero-history control in
+Section~\ref{sec:eval:adaptation}.
 
 Two properties of the frozen collection are inherited unchanged. The history row
 is the same eighteen-value row defined above, with the same four exclusion

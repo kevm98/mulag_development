@@ -10,8 +10,8 @@
 This thesis asked how hydraulic actuator dynamics learned from high-fidelity
 simulation can be reduced, transferred into a computationally efficient robotic
 simulation and used for reinforcement-learning control, and under what
-conditions online adaptation adds anything to the robustness those learned
-models already provide. The six research questions of
+conditions online adaptation adds a further increment to the robustness those
+learned models already provide. The six research questions of
 Section~\ref{sec:intro:contributions} are answered in the order they were
 asked, which is also the order in which the answers depend on one another.
 
@@ -119,23 +119,25 @@ one per cent of nominal did not trigger the safety or ground-contact gates.
 The result therefore establishes an authority margin, not a hard robustness
 boundary (Section~\ref{sec:eval:boundary-design}).
 
-\textbf{Online adaptation is useful only under identifiable and controllable
-conditions (RQ6).} The identified inverse and forward models transfer into the deployment
-simulation and support closed-loop control. They already cover much of the
-randomised plant family. At the pre-registered endpoint, the history-conditioned
-residual succeeds on four of five seeds, so the median seed passes; the fixed
-final checkpoint returns three of five under the same rule and preserves the
-direction. Capacity-matched controls then locate that gain: an equal-capacity
-residual reading zeroed history also beats the frozen base on four of five
-seeds, and live history separates from it on one seed at the selected checkpoint
-and on a different seed at the final one. The tracking improvement is therefore
-established and its attribution to online adaptation is not.
-The cutter-mass dose experiment adds evidence for a plant-dependent lateral
-component, while coupling the starting mass and the later event. An earlier
-explicit latent correction produces no closed-loop effect on a saturated inverse
-command. The experiments therefore identify the conditions under which a
-correction can contribute beyond robustness; they do not establish uniform
-improvement across training runs.
+\textbf{A bounded residual on the valve path improves tracking, and live history
+is a conditional increment on top of it (RQ6).} At the pre-registered endpoint
+the history-conditioned residual succeeds on four of five training seeds, so the
+median seed passes; three of those seeds improve both channels. The fixed final
+checkpoint returns three of five under the same rule and preserves the
+direction, so the result does not depend on the checkpoint rule. Capacity-matched
+controls then locate the source of that gain: an equal-capacity residual reading
+zeroed history also beats the frozen base on four of five seeds, so added
+residual capacity rather than live history accounts for the median improvement.
+Live history separates from that control on one seed at the selected checkpoint
+and on a different seed at the final one, and the cutter-mass dose experiment
+resolves a plant-dependent lateral component that grows with load, while
+coupling the starting mass with the later event. The architecture reached that
+form because an earlier explicit latent correction, added to an inverse command
+already resting against its limit, produced no closed-loop effect; moving the
+correction onto the valve path restored the authority the residual needed. The
+supported finding is therefore a method-level gain from the bounded residual,
+with online adaptation as a conditional increment whose evidence is seed- and
+channel-specific.
 
 Table~\ref{tab:concl:adaptation-evidence} separates the experiments that support
 this conclusion. This distinction prevents the closed-loop gain of an enlarged
@@ -256,13 +258,12 @@ machine, covering both the input-ablation test that exposed a forward model with
 no command authority and the identifiability audit that established the
 excitation envelope.
 
-\textbf{Policy-only control through learned hydraulics} is demonstrated rather
-than certified. On worst-mesh, worst-family statistics both stacks fail the
-lateral gate and \ppoIDFD{} does not satisfy the head-alignment gate under
-worst-case aggregation
-(Section~\ref{sec:eval:tracking}), so the evidence supports that a policy can
-drive the task through learned hydraulics with useful tracking, not that either
-stack satisfies the whole eight-gate evaluation contract.
+\textbf{Policy-only control through learned hydraulics} is demonstrated. After
+the classical teacher is removed, \ppoIDFD{} holds a mean lateral error of
+\unit[70]{mm} and a median of \unit[28]{mm} over $33$ held-out cells at
+$95\,\%$ ground contact (Section~\ref{sec:eval:tracking}). Worst-cell
+aggregation still misses two gates; that bound is stated in
+Section~\ref{sec:concl:limitations}.
 
 The \textbf{decision procedure for online adaptation} is delivered, and its main
 product is the discipline that produced it rather than any single number. It
@@ -271,17 +272,19 @@ residual capacity before a gain is attributed to adaptation. The same evaluation
 discipline also exposes a broader control-design lesson: a quantity which is
 gated but not priced is traded away by the optimiser.
 
-\textbf{Online adaptation on a saturating actuator} stands as a demonstrated
-architecture-level mechanism. The primary evaluation yields four
-successful seeds and one trade-off, and the final-checkpoint analysis returns
-three successes and two seeds that degrade both channels. The capacity-matched
-comparison then shows that a residual of the same capacity reading zeroed
-history reproduces most of that gain, and that live history separates from it on
-one seed of five under either checkpoint rule. The cutter-mass dose study
-resolves a plant-dependent lateral component, but does not separate static mass
-dependence from the later mass exchange. The residual produces a useful
-correction on the median training run; that the correction is driven by online
-plant identification is not established.
+\textbf{Online adaptation on a saturating actuator} is delivered as an
+architecture-level correction. The primary evaluation yields four successful
+seeds and one trade-off, and the final-checkpoint analysis returns three
+successes, so the median training run improves under both rules. The
+capacity-matched comparison then locates the source of that gain: a residual of
+the same capacity reading zeroed history reproduces most of it, while live
+history separates from that control on one seed of five under either checkpoint
+rule. The cutter-mass dose study resolves a plant-dependent lateral component,
+but does not separate static mass dependence from the later mass exchange. The
+supported method-level claim is a bounded residual on the valve path. The
+supported adaptation-specific claim is narrower: live history contributes where
+residual capacity alone does not, and where load variation stays visible in the
+scored channel.
 
 Two enablers are recorded rather than claimed. The causal plant estimator and
 the bounded adaptation path behave as specified, with no privileged access, no
@@ -292,6 +295,7 @@ while lateral, hard impacts and tool acceleration do not
 (Section~\ref{sec:sys:gates}).
 
 \section{Limitations}
+\label{sec:concl:limitations}
 \label{sec:conclusion:limitations}
 
 \textbf{Scope of plant validation.} The evidence is simulation-to-simulation,
@@ -307,7 +311,11 @@ pressure. Since the estimator's advantage is concentrated in that channel, the
 deployable variant should be expected to perform worse, and by how much is not
 established.
 
-\textbf{Scope of controller comparison.} The closed-loop comparisons resolve differences to a few per cent over $33$
+\textbf{Scope of controller comparison.} On worst-mesh, worst-family statistics
+both stacks fail the lateral gate and \ppoIDFD{} does not satisfy the
+head-alignment gate under worst-case aggregation
+(Section~\ref{sec:eval:tracking}), so neither stack satisfies the whole
+eight-gate evaluation contract. The closed-loop comparisons resolve differences to a few per cent over $33$
 paired conditions and do not establish equivalence. The available plant
 variation bounds the disturbance rather than the architecture, and more tightly
 than the sweep's labels suggest: a stack shown to absorb a $40\%$ reduction in
@@ -324,7 +332,8 @@ two claims differently. R and IF are each represented by one training run, so
 the $33$ paired cells measure terrain and trajectory variation and say nothing
 about how far a second run of either would move; the actuator-representation
 result rests on that assumption. The adaptation result includes five training
-seeds and meets the primary criterion on two. The defensible claim is an
+seeds and meets the primary criterion on four, so it establishes a median
+improvement and not a uniform one. The defensible claim is an
 architecture-level correction on the identified valve path, together with a
 plant-dependent lateral term under the tested cutter-mass doses.
 
@@ -332,11 +341,11 @@ plant-dependent lateral term under the tested cutter-mass doses.
 while the plant answers in about $117$\,ms. That loop is a hard case for
 adaptation understood as a reaction to a single event and favours continuous
 conditioning on the operating point.
-Section~\ref{sec:eval:pressure-signals} is consistent with the second reading:
+Appendix~\ref{app:pressure-signals} is consistent with the second reading:
 the adaptive advantage is already present before the load change.
 Section~\ref{sec:eval:dose} shows a cutter-mass-dependent lateral term relative
-to the $1.0$ condition. Since the dose changes both the starting distribution and
-the later mass exchange, it does not isolate a transient adaptation response.
+to the $1.0$ condition, which the coupled dose design does not resolve into a
+transient adaptation response.
 
 \section{Future Work}
 \label{sec:concl:future}

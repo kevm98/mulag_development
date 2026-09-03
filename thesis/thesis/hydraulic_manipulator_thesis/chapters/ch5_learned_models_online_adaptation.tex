@@ -479,7 +479,7 @@ Sections~\ref{sec:models:aam} and~\ref{sec:models:adapter} modifies the inverse
 path. Final AF instead omits the inverse model and corrects the frozen actor's
 valve command, as described in Section~\ref{sec:ctrl:ppo-aamfd}.
 
-\section{Offline Arm Adaptation Module Study}
+\section{Offline Plant-Context Identifiability Study}
 \label{sec:models:aam}
 
 This section describes the encoder trained offline against the plant context of
@@ -527,7 +527,7 @@ through pressure, which the controller does not integrate. Estimating named
 physical quantities would improve interpretation but requires an explicit
 plant model~\cite{hu2026bayesian}.
 
-\section{ID-Adapter Prototype}
+\section{Latent-Delivery Test Through the Inverse Model}
 \label{sec:models:adapter}
 
 The earlier prototype applies the correction to the inverse model's output, the
@@ -609,14 +609,13 @@ The chain gate compares
 $SD_0(\bm{s},\bm{u})$, $SD_z(\bm{s},\bm{u},\latent)$ and
 $SD_z(\bm{s},\bm{u},\latenthat)$ under the frozen protocol with paired
 bootstrap intervals. Neither the true nor estimated latent improves extension
-or velocity over $SD_0$ with an interval excluding zero. The estimate is not
-worse than the true latent, so estimation is not the limiting stage. The
-measurable advantage remains in pressure, as it was for the separately
-trained pair of Section~\ref{sec:data:system-dynamics}.
-
-The estimate is therefore not the main loss. The missing link is a path from
-pressure information to the integrated extension command with sufficient
-actuator headroom.
+or velocity over $SD_0$ with an interval excluding zero. Within this evaluated
+surrogate chain, replacing the causal estimate with privileged context does not
+recover extension or velocity performance. Estimation error is therefore not
+the dominant observed bottleneck in this test; the measurable bottleneck is
+delivery through the saturated command path. The latent advantage remains in
+pressure, as it was for the separately trained pair of
+Section~\ref{sec:data:system-dynamics}.
 
 Every stage of the chain up to the command holds: plant identity is present, a
 causal estimator recovers it, the estimate is as informative as a privileged
@@ -628,12 +627,11 @@ better estimator or a larger latent, nor by reducing the demand, since lowering
 the lead cap buys headroom at the cost of tripling cut-height error
 (Section~\ref{sec:models:adapter-null}).
 
-It is addressed by removing the accumulator that consumes the headroom, which
-is what \ppoAAMFD{} does: the inverse model leaves the command path, the policy
-emits the valve command itself, and the residual acts on that command
-(Section~\ref{sec:ctrl:af-no-id}). The result of that redesign is reported in
-Section~\ref{sec:eval:adaptation}; Chapter~\ref{chap:conclusion} returns to
-what the sequence implies for adaptation on saturating actuators generally.
+The prototype does not show that the plant estimate is useless. It shows that an
+estimate obtained from identification does not affect the plant if it is added to
+a saturated inverse command. The limit is delivery. Chapter~\ref{chap:control}
+therefore removes the inverse model from the adaptive path and applies the
+residual to the valve command of the identified forward model.
 
 \section{Training and Model-Selection Protocol}
 \label{sec:models:training}
