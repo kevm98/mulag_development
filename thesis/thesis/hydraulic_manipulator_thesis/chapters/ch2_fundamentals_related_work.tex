@@ -27,10 +27,13 @@ structured priors.
 Section~\ref{sec:fund:gap} then states the gap that remains and how the
 three control stacks of this thesis (\ppoROM, \ppoIDFD, and
 \ppoAAMFD) address it. As defined in Chapter~\ref{chap:introduction},
-these abbreviate PPO--ROM, PPO--ID--FD, and PPO--AAM--FD,
-respectively. Only material that is
-needed for the later chapters is included. The concrete system definition
-and problem formulation follow in Chapter~\ref{chap:system}.
+the first two abbreviate PPO--ROM and PPO--ID--FD; AF denotes the deployed
+Adaptive Forward stack rather than the offline AAM. Only material that is
+needed for the later chapters is included. Background and results are kept
+apart: where a later measurement is the reason a line of work was left behind,
+it is quoted forward and marked as such, and no argument in this chapter rests
+on it. The concrete system definition and problem formulation follow in
+Chapter~\ref{chap:system}.
 
 \section{Manipulator Actuation and Control Fundamentals}
 \label{sec:fund:actuation}
@@ -192,6 +195,19 @@ the task rather than to the estimator, so they carry over to the learned
 adaptation of this thesis. They are measured there
 (Section~\ref{sec:models:adapter-null}) rather than assumed away.
 
+The scope of that argument should be stated plainly. No classical adaptive
+baseline is run in this thesis. The experiments of
+Chapter~\ref{chap:evaluation} compare actuator representations inside one
+reinforcement-learning stack, so nothing here shows that adaptive robust
+control tracks worse than the learned route on this machine. What is claimed is
+narrower: the two conditions the classical estimator needs, informative
+excitation and an unsaturated regressor, are not supplied by the mowing task,
+and the maintenance burden the family carries per machine, season and
+attachment is the burden the thesis is trying to remove. A tracking comparison
+would need a per-cylinder pressure loop, an identification campaign on the
+physical implement and a second control implementation, none of which is in
+scope here. It is left open in Chapter~\ref{chap:conclusion}.
+
 \subsection{What Is Retained}
 
 The classical methods are not replaced wholesale. Kinematics is reliable and is
@@ -286,11 +302,10 @@ response on the current plant.
 \begin{figure}[H]
   \centering
   \input{images/ch2/fund_robust_adaptive}
-  \caption{Comparison of robust training and latent adaptation. Robust
-  training applies one fixed response across the randomised plant family. The
-  adaptive stack uses privileged factors only to supervise training; during
-  deployment, the AAM infers context from observable history and conditions
-  the downstream response.}
+  \caption{Canonical latent-adaptation architecture contrasted with robust
+  training. The architecture motivates the offline identifiability study; the
+  final AF implementation instead learns its context representation end to end
+  from the control objective.}
   \label{fig:fund:robust-adaptive}
 \end{figure}
 
@@ -301,9 +316,11 @@ properties; Kumar et al.~\cite{kumar2021rma} developed rapid motor adaptation.
 Both assume that the factor directions the estimator retains are the directions
 the controller needs. Liu et al.~\cite{liu2025frma} report the failure when it
 does not hold, where a low-dimensional adapter drops factors that act through
-separate channels, and add training phases to recover them. The same mismatch appears here in a sharper
-form. What the estimate carries is mainly seal condition, which acts through
-pressure, and pressure is the one channel the controller does not integrate
+separate channels, and add training phases to recover them. Chapter~\ref{chap:models} finds the same
+mismatch here in a sharper form, and the finding is quoted forward because it
+is why the deployed stack departs from this line: what the estimate carries is
+mainly seal condition, which acts through pressure, and pressure is the one
+channel the controller does not integrate
 (Section~\ref{sec:models:aam-content}). Further adapter phases would not close
 that gap, because the loss is at delivery rather than at estimation.
 
@@ -321,16 +338,21 @@ with one difference that decides the outcome: in \ppoAAMFD{} the conditioning
 enters the command path rather than the predictor, because a better prediction
 helps only if something downstream acts on it.
 
-The adaptation module in Chapter~\ref{chap:models} encodes one second of
-causal observable history. In \ppoAAMFD, that encoding conditions a bounded
-residual on the valve command the policy itself emits, while the base policy
-remains frozen; it does not condition the ROM, the forward model or the PhysX
-plant. The experiments keep two distinctions explicit: randomised training is
-robust but not automatically adaptive, and an informative privileged latent
-does not prove that an inferred one improves closed-loop control. The second
-distinction is not rhetorical here, since the privileged-context route was
-tried on this stack and returned a null while the history-conditioned route did
-not.
+The offline AAM developed in Chapter~\ref{chap:models} tests whether one second
+of observable history contains recoverable plant information. It is not the
+encoder deployed in AF. The final adaptive stack uses the same causal
+information contract but trains a separate history encoder jointly with the
+bounded residual under the task objective. The two routes therefore answer
+different questions: the former tests identifiability; the latter tests
+control-relevant adaptation. The experiments also keep robust randomised
+training distinct from both routes.
+
+Randomised training produces a single controller for a family of plants.
+Identification of that family is what makes a member-specific correction
+possible. In canonical latent adaptation, adaptation is the online use of that
+identification: the controller infers which plant is present from observable
+history and conditions the command on that estimate. The two responses are
+therefore sequential, not alternatives.
 
 \section{Reinforcement Learning and Structured Priors}
 \label{sec:fund:rl-residual}
@@ -377,23 +399,50 @@ reward while degrading the physical tracking criterion
 
 \subsection{Reinforcement Learning on Hydraulic Machines}
 
-Deep RL has reached full-size hydraulic machines. Egli and
-Hutter~\cite{egli2020towards} trained an excavator-arm policy in simulation and
-transferred it to the machine, then generalised the construction across
-excavation tasks~\cite{egli2022general}. Spinelli et
-al.~\cite{spinelli2024rl} carried it to a commercial material handler whose
-tool is underactuated, so the policy has to exploit passive tool dynamics
-rather than command them. These studies settle scale and feasibility. In each
-of them the actuator representation is a fixed design choice inside the stack
-rather than a variable, so none separates the transfer result from the
-representation that produced it. That separation is criterion V below.
+Deep RL has reached full-size hydraulic machines. What distinguishes those
+stacks from the one built here is not scale but the level at which the policy
+commands the machine, because that level decides how much of the hydraulic
+chain of Section~\ref{sec:fund:actuation-chain} the policy has to represent at
+all.
+
+Egli and Hutter~\cite{egli2020towards} trained an excavator-arm policy in
+simulation and transferred it to a full-size walking excavator, then generalised
+the construction across excavation tasks~\cite{egli2022general}. The policy
+acts on joint-level velocity references, and a low-level tracking layer on the
+machine converts them into valve currents. Spinelli et
+al.~\cite{spinelli2024rl} keep that division on a commercial material handler
+and add an underactuated tool, so the policy has to exploit passive tool
+dynamics rather than command them, while the actuated joints are still driven
+through the same kind of tracking layer. In both cases the orifice
+nonlinearity, the dead zone, the directional asymmetry and the load dependence
+live below the learned policy, in a layer that was identified and calibrated for
+that machine before the policy existed.
+
+That division is sound where the tracking layer already exists. It is not
+available here for two reasons. The FME~500 is a series road-maintenance
+implement with no calibrated joint-velocity layer to inherit, and building one
+is precisely the per-machine identification that
+Section~\ref{sec:fund:conventional-control} identified as the maintenance cost
+of the model-based families. More importantly, a velocity interface hides the
+quantity this thesis sets out to measure. If the layer beneath the policy
+already owns the command-to-motion mapping, the question of whether a learned
+actuator retains command authority under saturation and dead zone cannot be
+posed at all; it has been answered by construction, once, by hand. The stacks
+here therefore command the actuator directly, either as a cylinder increment
+realized by a learned model or, in \ppoAAMFD, as the valve command itself.
 
 Maitan et al.~\cite{maitan2026contraction} take the opposite position and train
 on the physical cylinder, bounding exploration with a contraction-metric
-filter. Training on hardware removes the transfer question outright. The result
-is force control on a single actuator on a test bench, and it does not obviously
-scale to a multi-link boom on a moving carrier, where the exploration the policy
-needs is the exploration the filter has to prevent.
+filter. That work does command the actuator at the low level, and training on
+hardware removes the transfer question outright. The result is force control on
+a single actuator on a test bench, and it does not obviously scale to a
+multi-link boom on a moving carrier, where the exploration the policy needs is
+the exploration the filter has to prevent.
+
+These studies settle scale and feasibility. In each of them the actuator
+representation is a fixed design choice inside the stack rather than a
+variable, so none separates the transfer result from the representation that
+produced it. That separation is criterion V below.
 
 None of these stacks varies the plant within a deployment. They are trained for
 robustness across one machine and its payload or soil conditions, and a plant
@@ -419,8 +468,20 @@ a matched protocol. Table~\ref{tab:fund:positioning} summarises this position.
 
 The five criteria are: (I) learned hydraulic actuation, (II) data audited for
 causal input identifiability, (III) online adaptation to plant variation at
-deployment, (IV) a structured controller retained as a bounded prior, and
-(V) a matched actuator comparison.
+deployment, (IV) a classical-control prior transferred through policy
+distillation, and (V) a matched actuator comparison.
+
+What the table does and does not assert is worth fixing before it is read. The
+rows are lines of work, not individual papers, and the criteria are the ones
+this thesis needs rather than a neutral taxonomy of the field. Every criterion
+is individually established somewhere, several of them for decades, and
+single works cover more of a row than a coarse mark can show. The latent
+adaptation row in particular samples a large and active literature; it is read
+here for the assumption those constructions share, that the factor directions
+an estimator retains are the directions the controller needs, and not for
+coverage. The claim is the combination on one machine under one protocol, and
+Column III shows how narrow even that claim becomes once it is measured rather
+than designed for.
 
 \begin{table}[H]
   \centering
@@ -429,7 +490,7 @@ deployment, (IV) a structured controller retained as a bounded prior, and
   thesis because the deployed route is history-conditioned residual control
   rather than the identified-latent adaptation of
   \cite{lee2020learning,kumar2021rma}, and because the plant-dependent part of
-  its benefit is isolated in the lateral channel only
+  its benefit is resolved in the lateral channel only
   (Section~\ref{sec:eval:adaptation}).}
   \label{tab:fund:positioning}
   \small
@@ -466,18 +527,20 @@ latent was not, and on the inverse-model path it could not be, for the
 saturation reason developed in Section~\ref{sec:ctrl:af-no-id}. What
 \ppoAAMFD{} deploys is therefore not identified-latent adaptation but a bounded
 residual on the valve command, conditioned on one second of observable history.
-That residual separates from its own frozen base under a paired protocol, and a
-sham-controlled dose experiment isolates a lateral component that grows with
-the size of the plant change (Section~\ref{sec:eval:adaptation}). A
-capacity-matched control shows that residual capacity accounts for much of the
-remainder, so the gain cannot be assigned to live history alone. Online
-adaptation is demonstrated, in a narrower channel than a full mark would claim.
+That residual separates from its own frozen base on two of five seeds under the
+pre-registered primary criterion. Capacity-matched controls show a contribution
+from live history on those successful final checkpoints, while a secondary
+checkpoint analysis also exposes a substantial capacity effect. A cutter-mass
+dose experiment resolves a lateral component that varies with the plant
+condition, although starting mass and the later change are coupled
+(Section~\ref{sec:eval:adaptation}). The architecture-level mechanism is
+demonstrated; method-level reliability across training runs is not.
 
 The contribution remains the complete experimental chain: identifiable cylinder
 data, physics-structured models fast enough for parallel training, online
-adaptation and a common evaluation protocol. It is not an unqualified claim
-that adaptation always improves control; the conditions under which it does not
-are reported alongside those under which it does. The three tested stacks are:
+adaptation and a common evaluation protocol. Adaptation is reported as a
+conditional mechanism, with positive and negative training seeds kept in the
+same analysis. The three tested stacks are:
 
 \begin{description}
   \item[\ppoROM.] A command-conditioned ROM realizes the policy's desired
@@ -493,7 +556,7 @@ are reported alongside those under which it does. The three tested stacks are:
 \end{description}
 
 All stacks share the task, terrain, trajectories, deployment factors and
-acceptance gates. \ppoROM{} and \ppoIDFD{} additionally share the action
+evaluation gates. \ppoROM{} and \ppoIDFD{} additionally share the action
 contract and form the matched pair; \ppoAAMFD{} does not, because its policy
 chooses a valve command rather than a cylinder increment, and it is therefore
 compared with its own frozen base rather than ranked against the others. The
@@ -501,3 +564,9 @@ ROM is calibrated to the deployment plant, so causal architectural claims rely
 on the matched pair and on within-stack paired ablations rather than on a
 three-way contrast (Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system}
 now grounds this comparison in the concrete machine.
+
+The remaining gap concerns the interaction between these established
+techniques: whether hydraulic actuators identified for control retain command
+authority after transfer, and under which plant conditions a
+history-conditioned correction on the identified valve path adds value beyond
+randomisation and matched residual capacity.
