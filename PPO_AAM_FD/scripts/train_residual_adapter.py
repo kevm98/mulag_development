@@ -66,6 +66,14 @@ p.add_argument("--lateral_tracking_weight", type=float, default=None,
 p.add_argument("--save_interval", type=int, default=25)
 p.add_argument("--log_dir", type=str, default=None)
 p.add_argument("--task", type=str, default="RRLAB-Mulag-Verge-ID-AAM-FD-v0")
+p.add_argument("--history_cols", choices=("full", "ext_vel", "plant"), default=None,
+               help="Which base-observation columns the history encoder reads. "
+                    "'full' (default) is every column, 70 features per step. "
+                    "'plant' is the starved encoder: tracking error, cylinder "
+                    "extension and velocity, valve command, measured-minus-"
+                    "commanded state, actuator prediction residual and cylinder "
+                    "effort -- 30 features per step. The choice is written into "
+                    "the checkpoint, so evaluation cannot use a different set.")
 p.add_argument("--plant_history", action="store_true",
                help="Feed phi ONLY the plant signature -- cylinder extensions "
                     "(obs 12:16), velocities (16:20) and the action -- instead "
@@ -104,10 +112,8 @@ from verge_task.residual_adapter import ResidualMLP  # noqa: E402
 class HistoryObservation:
     """Append the flattened (base_obs, prev_action) history to the observation."""
 
-    PLANT_COLS = slice(12, 20)   # cylinder extensions 12:16, velocities 16:20
-
     def __init__(self, inner, *, base_dim, base_width, action_dim, history,
-                 num_envs, device, zero_history=False, plant_only=False):
+                 num_envs, device, zero_history=False, cols=None):
         self.inner = inner
         self.base_dim = int(base_dim)
         self.base_width = int(base_width)
@@ -115,8 +121,10 @@ class HistoryObservation:
         self.history = int(history)
         self.device = device
         self.zero_history = bool(zero_history)
-        self.plant_only = bool(plant_only)
-        self.feature_dim = (8 + self.action_dim) if self.plant_only else (self.base_dim + self.action_dim)
+        # cols is a LongTensor of base-observation column indices.
+        self.cols = cols.to(device) if cols is not None else None
+        n_cols = self.cols.numel() if self.cols is not None else self.base_dim
+        self.feature_dim = n_cols + self.action_dim
         self._hist = torch.zeros(
             (num_envs, self.history, self.feature_dim), device=device)
         self._prev = torch.zeros((num_envs, self.action_dim), device=device)
@@ -140,8 +148,9 @@ class HistoryObservation:
         # the previous ACTION is not scrubbed anywhere, so one NaN action would
         # poison the whole history window and surface as a NaN observation --
         # which is exactly how the first bimodal run died at iteration 314.
-        cols = base_obs[:, self.PLANT_COLS] if self.plant_only else base_obs[:, : self.base_dim]
-        step = torch.cat((cols, self._prev), dim=-1)
+        picked = (base_obs[:, self.cols] if self.cols is not None
+                  else base_obs[:, : self.base_dim])
+        step = torch.cat((picked, self._prev), dim=-1)
         step = torch.nan_to_num(step, nan=0.0, posinf=0.0, neginf=0.0)
         self._hist = torch.roll(self._hist, shifts=-1, dims=1)
         self._hist[:, -1, :] = step
@@ -187,15 +196,20 @@ def main() -> int:
     base_width = int(env_cfg.observation_space)
     action_dim = int(env_cfg.action_space)
     base_dim = base_width - 4 if base_width in (70, 72) else base_width
-    feat = (8 + action_dim) if a.plant_history else (base_dim + action_dim)
-    hist_cols = int(a.history) * feat
-    wide = base_width + hist_cols
+    # --plant_history is the legacy spelling of --history_cols ext_vel.
+    col_set = a.history_cols or ("ext_vel" if a.plant_history else "full")
+    cols = ResidualMLP.expand_columns(col_set, base_dim)
+    feat = cols.numel() + action_dim
+    wide = base_width + int(a.history) * feat
     # env_cfg.observation_space MUST stay at base_width: the environment derives
     # its own expected width (`_expected_observation_dim`) and raises if the cfg
     # disagrees. Only the RUNNER sees the wide observation, and it sees it from
     # the wrapper's output rather than from this config.
     print(f"[residual] base_width={base_width} base_dim={base_dim} action={action_dim} "
           f"history={a.history} -> runner observation width {wide}", flush=True)
+    print(f"[residual] history columns: '{col_set}' -> {cols.numel()} obs columns "
+          f"+ {action_dim} action = {feat} features/step, "
+          f"{int(a.history) * feat} numbers over the window", flush=True)
 
     env = gym.make(a.task, cfg=env_cfg, render_mode=None)
 
@@ -209,7 +223,7 @@ def main() -> int:
     wrapped = HistoryObservation(
         wrapped, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
         history=int(a.history), num_envs=int(a.num_envs), device=a.device,
-        zero_history=bool(a.no_history), plant_only=bool(a.plant_history))
+        zero_history=bool(a.no_history), cols=cols)
 
     log_dir = a.log_dir or str(
         ROOT / "logs/rsl_rl/ppo_id_aam_fd" /
@@ -267,6 +281,7 @@ def main() -> int:
     residual = ResidualMLP(
         base_mlp, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
         history=int(a.history), latent_dim=int(a.latent_dim), alpha=float(a.alpha),
+        history_cols=cols,
     ).to(a.device)
     runner.alg.actor.mlp = residual
 

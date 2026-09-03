@@ -60,9 +60,39 @@ class ResidualMLP(torch.nn.Module):
     frozen base sees exactly the inputs it was trained on.
     """
 
+    HISTORY_COLUMN_SETS = {
+        # Every base observation column. 66 + 4 action = 70 features per step,
+        # 1400 numbers over a 20-step window, almost all terrain and task state.
+        "full": None,
+        # Legacy narrow set: cylinder extensions and velocities only.
+        "ext_vel": ((12, 20),),
+        # Plant-relevant channels, the starved encoder. Tracking error 9:11,
+        # cylinder extensions 12:16 and velocities 16:20, current valve command
+        # 32:36, measured-minus-commanded cylinder state 54:58, actuator
+        # prediction residual 58:62 and normalised cylinder effort 62:66.
+        # 26 + 4 action = 30 features per step, 600 numbers over the window.
+        # Terrain profile, headroom, target lead, alignment, truck speed, path
+        # preview and cutter pose are all excluded: they let the head clone the
+        # task policy rather than identify the plant.
+        "plant": ((9, 11), (12, 20), (32, 36), (54, 58), (58, 62), (62, 66)),
+    }
+
+    @classmethod
+    def expand_columns(cls, name, base_dim):
+        """Column-index tensor for a named set, or all base columns for 'full'."""
+        spans = cls.HISTORY_COLUMN_SETS[name]
+        if spans is None:
+            return torch.arange(int(base_dim), dtype=torch.long)
+        idx = [c for lo, hi in spans for c in range(lo, hi)]
+        if max(idx) >= int(base_dim):
+            raise ValueError(
+                f"history column set '{name}' reaches column {max(idx)} but the "
+                f"base observation has only {base_dim} columns")
+        return torch.tensor(idx, dtype=torch.long)
+
     def __init__(self, base_mlp, *, base_dim, base_width, action_dim,
                  history=20, latent_dim=8, hidden=64, alpha=0.25,
-                 history_feature_dim=None):
+                 history_feature_dim=None, history_cols=None):
         super().__init__()
         self.base_mlp = base_mlp
         for parameter in self.base_mlp.parameters():
@@ -73,17 +103,28 @@ class ResidualMLP(torch.nn.Module):
         self.history = int(history)
         self.alpha = float(alpha)
 
-        # PLANT-ONLY history is the default worth using. Feeding the whole
-        # observation gives 66+4 features per step -- 1400 numbers over a 20-step
-        # window, almost all terrain and task state. A 53k-parameter head has
-        # ample room to fit that noise, which is why the benefit swung +1529% to
-        # -80% across seeds in BOTH directions.
+        # Feeding the whole observation gives 70 features per step, 1400 numbers
+        # over a 20-step window, almost all terrain and task state. A 53k head
+        # has ample room to fit that noise, and the measured history benefit
+        # swung between seeds in both directions. What identifies the plant is
+        # far smaller: what was COMMANDED against how the cylinders RESPONDED,
+        # a signature invariant to where the machine sits on the terrain, which
+        # is the property a plant latent needs. HISTORY_COLUMN_SETS names the
+        # candidate sets and 'plant' is the starved one.
         #
-        # What identifies the plant is far smaller: what was COMMANDED against
-        # how the cylinders RESPONDED (extensions 12:16, velocities 16:20, plus
-        # the action). That signature is invariant to where the machine is on the
-        # terrain, which is exactly the property a plant latent needs.
-        feature_dim = int(history_feature_dim) if history_feature_dim else self.base_dim + self.action_dim
+        # The column spec rides in the state_dict as a buffer, so an evaluation
+        # cannot silently feed the head a different set from the one it was
+        # trained on -- the failure mode that a plain CLI flag invites.
+        if history_cols is None:
+            history_cols = torch.arange(self.base_dim, dtype=torch.long)
+        history_cols = torch.as_tensor(history_cols, dtype=torch.long)
+        self.register_buffer("history_cols", history_cols)
+        feature_dim = int(history_feature_dim) if history_feature_dim else (
+            history_cols.numel() + self.action_dim)
+        if feature_dim != history_cols.numel() + self.action_dim:
+            raise ValueError(
+                f"history_feature_dim={feature_dim} disagrees with "
+                f"{history_cols.numel()} columns + {self.action_dim} action")
         self.history_feature_dim = feature_dim
         self.encoder = torch.nn.Sequential(torch.nn.Linear(feature_dim, hidden), torch.nn.ELU())
         self.temporal = torch.nn.Sequential(

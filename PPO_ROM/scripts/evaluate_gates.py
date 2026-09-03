@@ -721,6 +721,10 @@ if getattr(a, "video", False):
 launcher = AppLauncher(a)
 simulation_app = launcher.app
 
+# Base-observation columns the residual's history encoder read; filled in
+# when a residual policy is built, empty for non-residual arms.
+RESIDUAL_HISTORY_COLS: list[int] = []
+
 import gymnasium as gym  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -972,7 +976,17 @@ def _build_residual_policy(runner, raw, env_cfg):
     action_dim = int(env_cfg.action_space)
     base_dim = base_width - 4 if base_width in (70, 72) else base_width
     history = int(a.residual_history)
-    feature = base_dim + action_dim
+    # The column spec travels IN the checkpoint (ResidualMLP registers it as a
+    # buffer), so a starved-encoder residual is evaluated on exactly the columns
+    # it was trained on. Checkpoints written before that buffer existed read the
+    # full base observation, which is what they were trained on.
+    if "mlp.history_cols" in sd:
+        hist_cols = sd["mlp.history_cols"].to(a.device).long()
+    else:
+        hist_cols = torch.arange(base_dim, dtype=torch.long, device=a.device)
+    global RESIDUAL_HISTORY_COLS
+    RESIDUAL_HISTORY_COLS = [int(c) for c in hist_cols.tolist()]
+    feature = int(hist_cols.numel()) + action_dim
     wide = base_width + history * feature
 
     import torch.nn as nn
@@ -985,7 +999,7 @@ def _build_residual_policy(runner, raw, env_cfg):
     residual = ResidualMLP(
         base_mlp, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
         history=history, latent_dim=int(a.residual_latent_dim),
-        alpha=float(a.residual_alpha),
+        alpha=float(a.residual_alpha), history_cols=hist_cols.cpu(),
     ).to(a.device)
 
     actor = runner.alg.actor
@@ -998,12 +1012,15 @@ def _build_residual_policy(runner, raw, env_cfg):
             src = sd[f"obs_normalizer.{name}"].to(a.device)
             setattr(norm, name, src.clone())
     missing, unexpected = actor.load_state_dict(sd, strict=False)
-    if any(k.startswith("mlp.") for k in missing):
-        raise RuntimeError(f"residual weights did not load: missing {missing[:4]}")
+    lost = [k for k in missing
+            if k.startswith("mlp.") and k != "mlp.history_cols"]
+    if lost:
+        raise RuntimeError(f"residual weights did not load: missing {lost[:4]}")
     actor.eval()
     print(
         f"[PPO3-1-GATES] residual policy: base_width={base_width} history={history} "
         f"alpha={a.residual_alpha} wide={wide} "
+        f"cols={feature - action_dim}+{action_dim}={feature}/step "
         f"history={'ZEROED' if a.residual_no_history else 'live'}",
         flush=True,
     )
@@ -1017,7 +1034,7 @@ def _build_residual_policy(runner, raw, env_cfg):
     def residual_policy(obs):
         base = obs["policy"] if isinstance(obs, dict) else obs
         step = torch.nan_to_num(
-            torch.cat((base[:, :base_dim], state["prev"]), dim=-1), nan=0.0,
+            torch.cat((base[:, hist_cols], state["prev"]), dim=-1), nan=0.0,
             posinf=0.0, neginf=0.0)
         state["hist"] = torch.roll(state["hist"], shifts=-1, dims=1)
         state["hist"][:, -1, :] = step
@@ -2322,6 +2339,12 @@ def main() -> None:
         "online_aam_smoother_window": int(
             getattr(env_cfg, "online_aam_smoother_window", 0)
         ),
+        # Which base-observation columns the residual's history encoder read,
+        # recovered from the checkpoint. Records the starved-encoder arm in the
+        # artefact rather than only in the launch command.
+        "residual_checkpoint": str(getattr(a, "residual_checkpoint", "") or ""),
+        "residual_no_history": bool(getattr(a, "residual_no_history", False)),
+        "residual_history_cols": RESIDUAL_HISTORY_COLS,
         "deployment_factor_enabled": bool(
             getattr(env_cfg, "deployment_factor_enabled", False)
         ),
