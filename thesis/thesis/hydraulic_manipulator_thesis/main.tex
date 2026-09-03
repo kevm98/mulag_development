@@ -73,46 +73,49 @@ this achievement possible.
 \RRLABabstract{Abstract}{%
 Hydraulic manipulators are difficult to control precisely: the actuator response
 is nonlinear, depends on load and supply pressure, and varies between machines.
-Faithful simulation is possible but far too slow for reinforcement learning,
-while commanding joint positions directly discards the behaviour that makes the
-machine difficult.
+Faithful simulation of those effects is possible but far too slow for
+reinforcement learning, while commanding joint positions directly discards the
+behaviour that makes the machine difficult.
 
-This thesis investigates how hydraulic actuator dynamics learned from
-high-fidelity simulation can be reduced, transferred into an efficient robotic
-simulation, and used for reinforcement-learning control of a verge mowing arm.
-Actuator data from a high-fidelity Simscape model are used to identify a modular
-inverse and forward model chain and a physics-structured reduced-order model.
-The frozen inverse and forward representation transfers from Simscape without
-deployment-specific retraining, whereas the reduced-order model receives a
-bounded calibration of its correction head against the deployment plant. The
-former maps desired cylinder motion to valve commands and predicts the resulting
-response; the latter keeps pressure, force and extension propagation explicit
-while learning valve realisation and unmodelled loading. A damped
-least-squares controller supplies privileged demonstrations and is then removed,
-leaving the distilled policy as the sole deployed controller.
+This thesis investigates how hydraulic actuator dynamics learned from a
+high-fidelity Simscape model can be reduced, transferred into an efficient
+robotic simulation and used for reinforcement-learning control of a verge mowing
+arm. Two actuator representations are identified from the same data: a modular
+inverse and forward chain, and a physics-structured reduced-order model that
+keeps pressure, force, velocity and extension propagation explicit while
+learning valve realisation and unmodelled loading. The inverse and forward pair
+transfers from Simscape frozen, without deployment-specific retraining; the
+reduced-order model receives a bounded calibration of its correction head
+against the deployment plant. A model can also score well on supervised
+prediction while ignoring the valve command a controller must use, so excitation
+design and command ablation are established as admission tests for a learned
+actuator.
 
-Both actuator representations are realised in the deployment simulation and
-support closed-loop terrain following. The evaluation also shows why supervised
-accuracy alone is insufficient: a model can predict motion well while ignoring
-the valve command that a controller must use. Excitation design and input
-ablation are therefore treated as necessary checks before a learned actuator
-model is admitted to control.
+Both representations are integrated into the deployment simulation and used for
+policy learning. A damped least-squares controller supplies privileged
+demonstrations during training and is then removed, leaving the distilled policy
+as the sole deployed controller, emitting desired cylinder motion into learned
+actuator dynamics. Both stacks support closed-loop terrain following, and a
+matched comparison over held-out meshes, trajectory families and reserved plant
+configurations shows that the choice of representation changes tracking, command
+behaviour, dynamic response and robustness under plant variation. The
+transferred models and trained policies already absorb much of the tested
+variation unaided.
 
-The transferred models and trained policies already absorb much of the tested
-plant variation. A bounded residual is therefore added on the valve-command
-path, where correction authority remains. Under the pre-registered checkpoint
-rule and success criterion the residual improves tracking on four of five
-training seeds; three of those seeds improve both channels, and the median seed
-still passes at the fixed final checkpoint. A capacity-matched residual reading
-zeroed history reproduces most of that gain, so added residual capacity rather
-than live history accounts for the median improvement. Live history separates
-from the zero-history control on one seed, and a cutter-mass dose study resolves
-an additional lateral component that grows with plant load. An earlier
-latent-conditioned correction on a saturated inverse command has no closed-loop
-effect. Online adaptation is therefore useful here as a bounded residual with
-remaining authority; attributing the median gain to plant identification
-requires the history-versus-capacity split, which is resolved only on particular
-seeds.
+Online adaptation is examined last, as two mechanisms rather than one. The
+explicit mechanism estimates a plant latent from recent interaction history and
+corrects the inverse command with it. It is informative but undeliverable:
+latent-conditioned adapters beat a zero-context control on the adapter objective
+on all five seeds, yet no closed-loop metric changes, because the inverse command
+is saturated for most of the scored window and the correction is clipped before
+it reaches the plant. The implicit mechanism conditions a bounded residual on a
+causal history window and applies it to the valve command, where authority
+remains. It improves tracking on four of five training seeds under the
+pre-registered rule, while a capacity-matched residual reading zeroed history
+reproduces most of that gain. Effective control of this machine therefore
+depends not only on model accuracy and policy robustness, but on where the
+correction acts and on whether live history adds information beyond residual
+capacity.
 }
 % Table of contents (plus list of figures/tables)
 \RRLABcontents

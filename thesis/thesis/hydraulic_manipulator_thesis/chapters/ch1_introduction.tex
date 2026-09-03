@@ -156,23 +156,28 @@ remains for adaptation once the first four are settled. The six questions are:
     deployed controller while acting through learned actuator dynamics?
   \item How does the choice of actuator representation affect tracking, command
     behaviour, latency and robustness under plant variation?
-  \item Where plant variation survives robust training, what part of that
-    variation is observable from recent interaction history, and under what
-    conditions does a history-conditioned correction provide closed-loop
-    benefit beyond a frozen robust controller?
+  \item Where plant variation survives robust training, which online
+    adaptation mechanisms exploit it, and how do the representation of the
+    plant context and the location of the correction determine whether their
+    benefit reaches closed-loop tracking?
 \end{enumerate}
 
-Two mechanisms sit under the second half of RQ6 and are kept apart throughout,
-because the thesis studies both and deploys only one. The \emph{explicit} route
-estimates a low-dimensional plant latent decodable against the true factors,
-which is what the AAM of Section~\ref{sec:models:aam} produces; it is the route
-the identifiability evidence concerns and the one that fails at delivery. The
-deployed route conditions a bounded residual on a causal state--action history
-window and trains its encoder end to end for control
-(Section~\ref{sec:ctrl:af-residual}). Its internal representation is not
-constrained to identify physical parameters and is not tested for that, so it is
-described throughout as history-conditioned adaptation with an implicit
-control-relevant context, not as latent identification.
+RQ6 compares two adaptation mechanisms, and they are kept apart throughout
+because the thesis studies both and deploys only one. The \emph{explicit}
+mechanism estimates a low-dimensional plant latent decodable against the true
+factors, which is what the AAM of Section~\ref{sec:models:aam} produces, and
+corrects the inverse command with it. It is the mechanism the identifiability
+evidence concerns, and the one whose benefit stops at the command interface. The
+\emph{implicit} mechanism, which is the deployed one, conditions a bounded
+residual on a causal state--action history window and trains its encoder end to
+end for control (Section~\ref{sec:ctrl:af-residual}). Its internal
+representation is not constrained to identify physical parameters and is not
+tested for that, so it is described throughout as history-conditioned adaptation
+with an implicit control-relevant context, not as latent identification. Neither
+label is extended to the third arm used below. A residual reading a zeroed
+history window receives no information about the current plant, so it is a
+capacity control rather than an adaptation mechanism, and the frozen stacks are
+robust controllers rather than adaptive ones.
 
 The first question is answered in Chapters~\ref{chap:data}
 and~\ref{chap:models}, the second and third in Chapter~\ref{chap:models}, the
@@ -182,9 +187,11 @@ Chapter~\ref{chap:evaluation}.
 RQ6 is the question named in the title and is deliberately placed last, since it
 is only worth asking once the preceding questions have established that the
 learned models transfer, that a policy can control through them, and how much
-plant variation the closed loop already absorbs unaided. The answer is
-conditional: plant variation must remain control-relevant after robust training,
-be observable from the available history, and reach a correction path with
+plant variation the closed loop already absorbs unaided. Its answer separates
+two levels. Online plant context is usable at the model level, and whether that
+benefit reaches the closed loop depends on the interface the correction acts
+through: plant variation must remain control-relevant after robust training, be
+observable from the available history, and reach a correction path with
 sufficient authority. Any apparent gain must also be separated from the effect
 of adding residual capacity. The work rests on the following contributions:
 
@@ -237,13 +244,15 @@ data do contain plant structure, and the privileged encoding is informative. The
 procedure therefore does not stop the adaptation path; it determines where the
 correction must be applied.
 
-\textbf{Online Adaptation on a Saturating Actuator:} A demonstration that the
-binding constraint on latent-conditioned adaptation here is delivery rather than
-estimation, and a redesign that follows from it. With the inverse model in the
-command path the estimate is informative and the closed-loop effect is absent,
-because the correction is added to a command already resting against its own
-limit for most of the scored window. Removing the inverse model allows an
-end-to-end history-conditioned residual to act directly on the valve command.
+\textbf{Where Online Adaptation Is Effective:} A comparison of two online
+adaptation mechanisms on the same machine, separating the level at which each
+one acts. The explicit mechanism is informative and undeliverable. Its latent
+improves the adapter objective on all five seeds, and the closed-loop effect is
+absent because the correction is added to a command already resting against its
+own limit for most of the scored window. The binding constraint on
+latent-conditioned adaptation here is therefore delivery rather than estimation.
+Removing the inverse model allows an end-to-end history-conditioned residual to
+act directly on the valve command.
 The deployed residual improves closed-loop tracking relative to its frozen base
 on four of five training runs, so the median run improves under both checkpoint
 rules. Matched ablations locate most of that improvement in the added residual

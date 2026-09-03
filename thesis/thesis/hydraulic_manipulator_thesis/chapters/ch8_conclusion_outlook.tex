@@ -39,10 +39,11 @@ makes the dependency between those experiments explicit.
       Teacher distillation, the matched R--IF comparison, 33 evaluation cells
       and plant-factor sweeps establish policy-only control and the tested
       robustness and authority margin.};
-    \node[evidence, draw=cborange, line width=1.1pt, below=6mm of control] (adapt) {\textbf{3. Conditional adaptation}\quad
-      The offline AAM tests observability; the latent-delivery experiment exposes
-      saturation; direct-valve AF trials then separate frozen-base, residual-capacity,
-      history and plant-dependent effects.};
+    \node[evidence, draw=cborange, line width=1.1pt, below=6mm of control] (adapt) {\textbf{3. Adaptation mechanisms}\quad
+      The offline AAM tests observability and is usable at the model level; the
+      latent-delivery experiment exposes saturation at that interface; direct-valve
+      AF trials then separate frozen-base, residual-capacity, history and
+      plant-dependent effects.};
     \draw[flow] (models) -- (control);
     \draw[flow] (control) -- (adapt);
   \end{tikzpicture}
@@ -119,10 +120,16 @@ one per cent of nominal did not trigger the safety or ground-contact gates.
 The result therefore establishes an authority margin, not a hard robustness
 boundary (Section~\ref{sec:eval:boundary-design}).
 
-\textbf{A bounded residual on the valve path improves tracking, and live history
-is a conditional increment on top of it (RQ6).} At the pre-registered endpoint
-the history-conditioned residual succeeds on four of five training seeds, so the
-median seed passes; three of those seeds improve both channels. The fixed final
+\textbf{Online plant context is usable, and whether it reaches the closed loop
+is set by the correction interface (RQ6).} The explicit mechanism estimates a
+plant latent from recent interaction history. Its latent-conditioned adapters
+beat a zero-context control on the adapter objective on all five seeds, and the
+same correction changes no closed-loop metric, because it is added to an inverse
+command already resting against its limit for most of the scored window. Moving
+the correction onto the valve path restores the authority the residual needed.
+At the pre-registered endpoint the history-conditioned residual there succeeds
+on four of five training seeds, so the median seed passes; three of those seeds
+improve both channels. The fixed final
 checkpoint returns three of five under the same rule and preserves the
 direction, so the result does not depend on the checkpoint rule. Capacity-matched
 controls then locate the source of that gain: an equal-capacity residual reading
@@ -131,10 +138,7 @@ residual capacity rather than live history accounts for the median improvement.
 Live history separates from that control on one seed at the selected checkpoint
 and on a different seed at the final one, and the cutter-mass dose experiment
 resolves a plant-dependent lateral component that grows with load, while
-coupling the starting mass with the later event. The architecture reached that
-form because an earlier explicit latent correction, added to an inverse command
-already resting against its limit, produced no closed-loop effect; moving the
-correction onto the valve path restored the authority the residual needed. The
+coupling the starting mass with the later event. The
 supported finding is therefore a method-level gain from the bounded residual,
 with online adaptation as a conditional increment whose evidence is seed- and
 channel-specific.
@@ -146,7 +150,8 @@ residual network from being reported as evidence that live history caused it.
 \begin{table}[htbp]
   \centering
   \caption{Experimental decomposition of the adaptation claim. The rows answer
-  different questions and are not interchangeable evidence.}
+  different questions at different levels of the control chain and are not
+  interchangeable evidence.}
   \label{tab:concl:adaptation-evidence}
   \small
   \setlength{\tabcolsep}{4pt}
@@ -154,6 +159,12 @@ residual network from being reported as evidence that live history caused it.
     \toprule
     Experiment & Controlled comparison & Supported conclusion \\
     \midrule
+    Latent adapter objective
+      & estimated, privileged and zero latent on the adapter's own objective
+      & Online plant context is usable at the model level: both latent arms beat the zero-context control on five of five seeds. \\
+    Latent-delivery test
+      & estimated, privileged and zero latent through the inverse-model correction path
+      & Better plant context does not recover extension or velocity; saturation leaves insufficient correction authority at that interface. \\
     Primary seed table
       & history residual against its frozen base, paired within seed
       & The residual improves tracking on four of five seeds and the median seed passes; three of five at the final checkpoint. \\
@@ -163,9 +174,6 @@ residual network from being reported as evidence that live history caused it.
     Cutter-mass dose and sham
       & plant perturbation against the corresponding sham condition
       & A plant-dependent lateral component is resolved, but starting mass and the later exchange remain coupled. \\
-    Latent-delivery test
-      & estimated, privileged and zero latent through the inverse-model correction path
-      & Better plant context does not recover extension or velocity; saturation leaves insufficient correction authority at that interface. \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -272,8 +280,11 @@ residual capacity before a gain is attributed to adaptation. The same evaluation
 discipline also exposes a broader control-design lesson: a quantity which is
 gated but not priced is traded away by the optimiser.
 
-\textbf{Online adaptation on a saturating actuator} is delivered as an
-architecture-level correction. The primary evaluation yields four successful
+\textbf{Where online adaptation is effective} is answered at two levels rather
+than with a single verdict. The explicit mechanism is informative at the model
+level and has no closed-loop effect through the saturated inverse command, and
+the implicit mechanism that replaced it acts on the valve path, where authority
+remains. The primary evaluation yields four successful
 seeds and one trade-off, and the final-checkpoint analysis returns three
 successes, so the median training run improves under both rules. The
 capacity-matched comparison then locates the source of that gain: a residual of

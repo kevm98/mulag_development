@@ -319,15 +319,37 @@ because the baseline leaves only a limited deficit to recover. This is also why
 the capacity-matched control matters: with a small deficit to recover, extra
 residual capacity and live plant information can produce similar gains.
 
-\section{Online Adaptation Beyond the Robust Baseline}
+\section{Evaluation of Online Adaptation Mechanisms}
 \label{sec:eval:adaptation}
 
-The following experiments remain inside \ppoAAMFD{} and use the identified
-forward model from Chapter~\ref{chap:models}. They measure three distinct
-effects: improvement over the frozen base, improvement due to live history
-beyond matched residual capacity, and variation of the residual advantage with
-cutter mass. Keeping these effects separate prevents additional model capacity
-from being interpreted as online identification.
+Two online adaptation mechanisms were built for this machine and they act at
+different points in the control chain. The explicit mechanism corrects the
+inverse command with an estimated plant latent and is measured in
+Chapter~\ref{chap:models}; its outcome is recalled in
+Section~\ref{sec:eval:explicit-mechanism} because it determines the design
+tested here. The implicit mechanism conditions a bounded residual on a causal
+history window and applies it to the valve command. The experiments below remain
+inside \ppoAAMFD{} and use the identified forward model from
+Chapter~\ref{chap:models}. They measure three distinct effects: improvement over
+the frozen base, improvement due to live history beyond matched residual
+capacity, and variation of the residual advantage with cutter mass. Keeping
+these effects separate prevents additional model capacity from being interpreted
+as online identification.
+
+\subsection{The Explicit Mechanism and Its Delivery Limit}
+\label{sec:eval:explicit-mechanism}
+
+The explicit mechanism is not re-scored in this chapter. Two results from
+Chapter~\ref{chap:models} carry it. Its estimated latent improves the adapter
+objective over a zero-context control on all five seeds
+(Section~\ref{sec:models:adapter-openloop}), and it changes no closed-loop
+tracking metric (Section~\ref{sec:models:adapter-null}). The reason is measured
+rather than inferred: the cylinders it corrects are saturated for most of the
+scored window, so a bounded additive correction is clipped before it reaches the
+plant. The two results are compatible, and together they place the constraint at
+the interface rather than at the estimator. The sections below therefore test
+the same adaptation idea through a path that retains authority, and every
+comparison in them is between arms of that second mechanism.
 
 \subsection{Experiment and Measurement}
 \label{sec:eval:instrument}
@@ -372,7 +394,7 @@ the earlier method versions used. The relaxed rule was fixed because the
 stricter one records a change smaller than the instrument can resolve as a
 failure.
 
-\subsection{Primary Result Across Training Seeds}
+\subsection{History-Conditioned Residual Across Training Seeds}
 
 \begin{table}[tbp]
   \centering
@@ -617,7 +639,7 @@ reported in Appendix~\ref{app:pressure-signals}. It is an actuator-model state
 rather than a calibrated pressure, so it supports the shape of the response and
 not its level, and it is not used to quantify any result in this chapter.
 
-\section{Conditions for Useful Online Adaptation}
+\section{What Determines Effective Online Adaptation}
 \label{sec:eval:discussion}
 
 The experiments identify four conditions that govern whether online adaptation
@@ -633,9 +655,9 @@ of Chapters~\ref{chap:data} and~\ref{chap:models} show that plant information is
 present only under suitable excitation. A history encoder cannot recover a
 factor that the measured trajectory does not reveal.
 
-\textbf{The correction path must retain authority.} The earlier explicit
-latent adapter produced no closed-loop effect because clipping removed the
-correction before it reached the plant. The residual on the valve path has
+\textbf{The correction path must retain authority.} The explicit mechanism
+produced no closed-loop effect because clipping removed the correction before it
+reached the plant, although its estimate was the more informative of the two. The residual on the valve path has
 bounded authority and can change the realised command.
 
 \textbf{History must add value beyond residual capacity.} The residual improves
@@ -645,15 +667,17 @@ history. The increment favours live history on seed~$42$ here, on seed~$17$ at
 the final checkpoint, and in the lateral dose response. It is conditional, and
 estimator quality alone does not establish it.
 
-The chapter therefore supports two results that must be reported together.
-First, a bounded residual on the valve path improves task tracking on the median
-training seed under the pre-registered rule and under the fixed final
-checkpoint. That is a method-level result about the residual controller.
-Second, most of that median gain is residual capacity: live history separates
-from a capacity-matched control on one seed of five, and a load-dependent
-lateral component appears in the dose study. Online adaptation, understood as
-using live interaction history, is therefore supported as a conditional
-increment rather than as the source of the median residual gain. Robustness,
-observability, residual capacity and correction authority have to be stated
-alongside that increment, or the residual result will be misread as plant
-identification.
+The answer the chapter supports has two levels and both have to be reported
+together. Online plant context is usable, and the level at which it is usable is
+set by the interface it acts through. The explicit mechanism improves the model
+that consumes its estimate and changes nothing in the loop. The bounded residual
+on the valve path improves task tracking on the median training seed under the
+pre-registered rule and under the fixed final checkpoint, which is a
+method-level result about the residual controller, and most of that median gain
+is residual capacity: live history separates from a capacity-matched control on
+one seed of five, and a load-dependent lateral component appears in the dose
+study. Effective online adaptation here therefore depends jointly on a residual
+deficit surviving robust training, on that variation being observable, on the
+correction path retaining authority, and on live history adding something beyond
+capacity. Stated without those four, the residual result will be misread as
+plant identification.
