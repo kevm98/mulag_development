@@ -18,7 +18,11 @@ observation set, or success criteria when interpreting results.
 
 The physical machine and its two simulation representations are distinguished
 explicitly. Simscape is the high-fidelity hydraulic source used for actuator
-identification. IsaacLab/PhysX is the parallel environment used for policy
+identification. Here, high fidelity is relative to the reduced actuator
+representations used for policy training. The Simscape model is a
+component-level hydraulic source model; this thesis does not claim that its
+complete hydraulic state, particularly absolute pressure, has been validated
+against measurements from the physical machine. IsaacLab/PhysX is the parallel environment used for policy
 training, adaptation-data collection, and closed-loop evaluation. Both use the
 cylinder ordering, kinematics, action contract, and cutter-tip task variables
 defined here, but they are not assumed to be identical plants.
@@ -27,7 +31,7 @@ Sections~\ref{sec:sys:platform}--\ref{sec:sys:actuation} define the mechanism,
 coordinate spaces, and signals. Sections~\ref{sec:sys:simscape} and
 \ref{sec:sys:isaaclab} describe the two simulation models. The remaining
 sections define the verge-following task, the R, IF, and AF control stacks,
-the control objective, and the acceptance gates used in the experiments.
+the control objective, and the evaluation gates used in the experiments.
 
 \section{Manipulator Platform}
 \label{sec:sys:platform}
@@ -194,15 +198,20 @@ Table~\ref{tab:sys:signals} lists the signals and their availability.
     $\bm{c} = [\Delta\bm{x}^*, \Delta\dot{\bm{x}}^*]$ & $\mathbb{R}^8$ & I & desired cylinder command \\
     $\factorvec$ & $\mathbb{R}^6$ & P & physical randomisation factors of the active plant \\
     $\latent = \mu(\factorvec)$ & $\mathbb{R}^{d_z}$ & P & privileged dynamics latent, $d_z = 2$ \\
-    $\latenthat$ & $\mathbb{R}^{d_z}$ & M & AAM estimate of $\latent$ from observable history \\
+    $\latenthat$ & $\mathbb{R}^{d_z}$ & M & offline diagnostic estimate of $\latent$; not deployed in AF \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 In IsaacLab, valve commands and differential pressures are learned-actuator
 states, not direct measurements. R produces them internally; IF obtains them
-from the inverse/forward pair, and AF from the frozen forward model alone. $\factorvec$ and
-$\latent=\mu(\factorvec)$ are privileged; only $\latenthat$ may enter AF.
+from the inverse/forward pair, and AF from the frozen forward model alone. The
+physical factor vector $\factorvec$ and privileged latent
+$\latent=\mu(\factorvec)$ are unavailable to every deployed controller. The
+estimated latent $\latenthat$ is used only in the offline identifiability and
+delivery studies of Chapter~\ref{chap:models}; it is not an input to final AF.
+Final AF instead receives causal observable history through its own end-to-end
+trained encoder.
 
 \subsection{Sensing and Observability}
 \label{sec:sys:sensing}
@@ -429,6 +438,44 @@ fed by a variable-speed, fixed-displacement pump
   \label{fig:sys:schematic}
 \end{figure}
 
+Figure~\ref{fig:sys:actuator-channel} identifies the cylinder chambers,
+piston, seal, and rod used in the actuator model.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \node[inner sep=0] (cylinder) {\includegraphics[width=.98\textwidth]{images/ch3/ch3_double_acting_cylinder_cutaway}};
+    % Color-coded callouts follow the electrical--hydraulic--mechanical
+    % annotation language used in Figure~\ref{fig:fund:chain}.
+    \node[draw=cbblue,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north west] (caplabel)
+      at ([xshift=2mm,yshift=-2mm]cylinder.north west) {Cap-side chamber ($p_1,Q_1$)};
+    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north] (pistonlabel)
+      at ([xshift=-18mm,yshift=-2mm]cylinder.north) {Piston};
+    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north] (seallabel)
+      at ([xshift=12mm,yshift=-2mm]cylinder.north) {Piston seal};
+    \node[draw=cbblue,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=north east] (rodlabel)
+      at ([xshift=-2mm,yshift=-2mm]cylinder.north east) {Rod-side chamber ($p_2,Q_2$)};
+    \node[draw=cbgreen,fill=white,rounded corners=1pt,inner sep=3pt,font=\normalsize,anchor=south east] (strokelabel)
+      at ([xshift=-2mm,yshift=2mm]cylinder.south east) {Piston rod; stroke $x$};
+    \draw[cbblue,semithick,-{Latex[length=1.8mm]}] (caplabel.south east) --
+      ([xshift=15mm,yshift=-36mm]cylinder.north west);
+    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (pistonlabel.south) --
+      ([xshift=-17mm,yshift=-42mm]cylinder.north);
+    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (seallabel.south) --
+      ([xshift=-14mm,yshift=-26mm]cylinder.north);
+    \draw[cbblue,semithick,-{Latex[length=1.8mm]}] (rodlabel.south west) --
+      ([xshift=-60mm,yshift=-29mm]cylinder.north east);
+    \draw[cbgreen,semithick,-{Latex[length=1.8mm]}] (strokelabel.north west) --
+      ([xshift=-38mm,yshift=39mm]cylinder.south east);
+  \end{tikzpicture}
+  \caption{Annotated cutaway of an asymmetric double-acting hydraulic
+  cylinder. The cap-side and rod-side chamber pressures generate the piston
+  force and rod stroke. The labels are the states of
+  \eqref{eq:sys:continuity}, and the four cylinder channels of
+  Figure~\ref{fig:sys:schematic} are of this type.}
+  \label{fig:sys:actuator-channel}
+\end{figure}
+
 The 4/3 valve in Figure~\ref{fig:sys:schematic} meters flow to the two chambers
 of each asymmetric double-acting cylinder, cap side ($p_1,Q_1$) and rod side
 ($p_2,Q_2$). The chamber pressures follow
@@ -536,8 +583,8 @@ setting of $\unit[27.6]{MPa}$, and about half of the valid rows sit above twice
 that setting. The pressure signal has the right shape and the wrong level, and
 the level is inherited from this source rather than introduced by the learned
 models. No result in this thesis is stated in absolute pressure units: every
-learned model consumes $\Delta p$ through a fitted normaliser
-(Appendix~\ref{app:models}), and Section~\ref{sec:eval:pressure-signals} reads
+learned model consumes $\Delta p$ through a fitted normaliser, and
+Section~\ref{sec:eval:pressure-signals} reads
 the deployed pressure state for shape only, for this reason.
 
 Beyond these checks the model represents one machine and omits thermal
@@ -566,8 +613,8 @@ at which the identification data were sampled, and their prediction is held
 across the intervening PhysX updates. Data collection uses that same
 $\unit[50]{ms}$ grid. ``The control frequency'' is therefore not a well-defined
 quantity for this system and no scalar rate is reported for it.
-Table~\ref{tab:app:rates} lists every rate with the configuration key it is
-read from.
+Table~\ref{tab:app:rates} summarises these rates and distinguishes the offline
+AAM timing from the deployed AF history path.
 
 \subsection{Environment Configuration Details}
 
@@ -753,7 +800,7 @@ the scored part of each episode and are kept in physical units where possible.
 This makes a failed gate traceable to a specific limitation rather than to a
 single combined reward value.
 
-\subsection{The Eight-Gate Promotion Criterion}
+\subsection{The Eight System-Level Evaluation Gates}
 \label{sec:sys:gates}
 
 Table~\ref{tab:sys:gates} defines the eight physical gates used throughout this
@@ -781,15 +828,21 @@ fractions so that episodes of different completed length remain comparable.
 
 \begin{table}[htbp]
   \centering
-  \caption{Eight system-level acceptance gates. Each gate uses at least three
+  \caption{Eight system-level evaluation gates. Each gate uses at least three
   terrain meshes and the worst mesh; tracking-critical gates also use the worst
   path family. The last column states where each number comes from, because a
   threshold read off an earlier baseline does not carry the same weight as one
   fixed by the task or by the machine.}
   \label{tab:sys:gates}
-  \small
-  \setlength{\tabcolsep}{4pt}
-  \begin{tabular}{@{}llllp{2.5cm}@{}}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.08}
+  \begin{tabular}{@{}
+    >{\raggedright\arraybackslash}p{.16\textwidth}
+    >{\raggedright\arraybackslash}p{.23\textwidth}
+    >{\raggedright\arraybackslash}p{.14\textwidth}
+    >{\raggedright\arraybackslash}p{.22\textwidth}
+    >{\raggedright\arraybackslash}p{.15\textwidth}@{}}
     \toprule
     Gate & Metric & Threshold & Aggregation & Origin \\
     \midrule
@@ -838,7 +891,7 @@ Cylinder checks use fresh $\pm\unit[10]{mm}$ commands, coordinated
 $\unit[80]{mm}$ motions, return error, and saturation. Model checks use
 one-step and rollout accuracy, input ablation, and Jacobian conditioning
 (Chapter~\ref{chap:models}). Chapter~\ref{chap:evaluation} reports these with
-the acceptance contract. The small command checks local response and deadband;
+the evaluation contract. The small command checks local response and deadband;
 the coordinated motion checks coupling between actuator channels. Return error
 tests reversibility, and saturation checks whether the learned model respects
 the command and stroke limits. These diagnostics are interpreted alongside the
