@@ -1293,9 +1293,11 @@ def fig_dose_response():
     (a) and (b) are the same picture on the two task metrics: the frozen base
     degrades steadily as the cutter-mass dose grows, and the adaptive arm stays
     nearer flat, so the gap between them widens. It widens monotonically on the
-    lateral axis and irregularly on cut height. (c) splits the lateral gap into
+    lateral axis and irregularly on cut height. (c) and (d) split each gap into
     the part present when the mass never moves at all and the part that only
-    appears because it did.
+    appears because it did. The lateral component is resolved and grows; the
+    cut-height component changes sign and crosses zero twice, which is why the
+    chapter reads the cut-height benefit as a general residual effect.
     """
     def curve(key):
         base, adapt, gain, doses = [], [], [], []
@@ -1306,7 +1308,7 @@ def fig_dose_response():
             adapt.append(float(np.median(a)))
             # The estimator is the median of the PAIRED differences, which is
             # not the difference of the medians. The level panels draw levels;
-            # panel (c) has to draw the statistic the result is stated on.
+            # the bar panels have to draw the statistic the result is stated on.
             n = min(len(b), len(a))
             gain.append(float(np.median([x - y for x, y in zip(b[:n], a[:n])])))
             doses.append(x)
@@ -1314,26 +1316,34 @@ def fig_dose_response():
 
     lat_base, lat_adapt, lat_gain, doses = curve("per_env_lateral_m")
     cut_base, cut_adapt, cut_gain, _ = curve("per_env_cut_error_m")
-    sham = lat_gain[0]                   # dose 1.0: the flip fires, mass does not
-    # These are the paired dose-versus-sham estimates reported with their
-    # bootstrap intervals in Table 7.10. They are estimated separately from
-    # the per-dose total gains, so panel (c) must not imply exact additivity.
-    plant_component = [0.0, 3.796, 3.912, 4.073, 7.410]
+    # Dose 1.0 is the sham: the flip fires on the same instants, the mass does
+    # not move. Its gain is the level the higher doses are measured against.
+    # These dose-versus-sham estimates and their bootstrap intervals are the
+    # ones tabulated in Tables 7.8 and 7.9. They are estimated separately from
+    # the per-dose total gains, so the bar panels must not imply exact
+    # additivity.
+    lat_excess = [3.796, 3.912, 4.073, 7.410]
+    lat_ci = [(2.303, 6.105), (1.693, 6.415), (2.318, 6.697), (4.785, 10.503)]
+    cut_excess = [-0.919, 0.562, 1.644, 0.674]
+    cut_ci = [(-1.419, -0.345), (-0.131, 1.192), (1.093, 2.282),
+              (-0.078, 1.833)]
 
-    fig = plt.figure(figsize=(FULLW, 5.9))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, .88], hspace=.40,
+    fig = plt.figure(figsize=(FULLW, 7.5))
+    gs = fig.add_gridspec(3, 2, height_ratios=[1.06, .82, .82], hspace=.46,
                           wspace=.26)
-    axa = fig.add_subplot(gs[0, 0])
-    axc = fig.add_subplot(gs[0, 1])
-    axb = fig.add_subplot(gs[1, :])
+    ax_lat = fig.add_subplot(gs[0, 0])
+    ax_cut = fig.add_subplot(gs[0, 1])
+    ax_latbar = fig.add_subplot(gs[1, :])
+    ax_cutbar = fig.add_subplot(gs[2, :])
     base_col = C_GRAY
     adapt_col = C_BLUE
     sham_col = "#B9C2C9"
+    pale_col = "#AECBE0"
 
     for ax, base, adapt, ylim, ylab, title in (
-            (axa, lat_base, lat_adapt, 72, "lateral error (mm)",
+            (ax_lat, lat_base, lat_adapt, 72, "lateral error (mm)",
              "(a) lateral tracking across cutter-mass dose"),
-            (axc, cut_base, cut_adapt, 8.4, "cut-height error (mm)",
+            (ax_cut, cut_base, cut_adapt, 8.4, "cut-height error (mm)",
              "(b) cut-height tracking across cutter-mass dose")):
         ax.axvspan(0.88, 1.12, color="#EEF1F3", alpha=.95, lw=0, zorder=0)
         ax.fill_between(doses, adapt, base, color=adapt_col, alpha=.16, lw=0,
@@ -1353,41 +1363,62 @@ def fig_dose_response():
         ax.set_axisbelow(True)
         ax.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
         ax.set_title(title, loc="left", fontsize=9.0)
-    axa.annotate("gain from\nthe residual",
-                 xy=(2.5, (lat_base[3] + lat_adapt[3]) / 2), xytext=(-4, 0),
-                 textcoords="offset points", ha="right", va="center",
-                 fontsize=8.0, color="#005A8C")
-    axa.legend(fontsize=8.2, loc="lower left")
+    ax_lat.annotate("gain from\nthe residual",
+                    xy=(2.5, (lat_base[3] + lat_adapt[3]) / 2), xytext=(-4, 0),
+                    textcoords="offset points", ha="right", va="center",
+                    fontsize=8.0, color="#005A8C")
+    ax_lat.legend(fontsize=8.2, loc="lower left")
 
+    # (c) and (d): the same decomposition on each metric. A component whose
+    # interval crosses zero is drawn open, so the eye cannot read a bar that
+    # the data does not resolve as an effect.
     x = np.array(doses[1:])
-    axb.bar(x - .13, [sham] * len(x), width=.24, color=sham_col,
-            label="general residual gain")
-    axb.bar(x + .13, plant_component[1:], width=.24, color=adapt_col,
-            alpha=.95, label="plant-dependent residual component")
-    for i, e in zip(x, plant_component[1:]):
-        axb.annotate(f"+{e:.1f}", (i + .13, e), xytext=(0, 3),
-                     textcoords="offset points", ha="center", fontsize=8.1,
-                     color="#005A8C")
-    axb.set_xticks(x)
-    axb.set_xticklabels([f"{d:.1f}" for d in x])
-    axb.set_xlim(1.25, 3.25)
-    axb.set_ylim(0, 22)
-    axb.set_xlabel("cutter-mass dose ($\\times$ nominal)")
-    axb.set_ylabel("paired residual gain (mm)")
-    axb.set_axisbelow(True)
-    axb.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
-    axb.legend(fontsize=8.2, loc="upper left", labelspacing=.35)
-    axb.set_title("(c) separately estimated lateral residual components",
-                  loc="left", fontsize=9.0)
-    for ax in (axa, axb, axc):
+    for ax, sham, excess, cis, ylim, title in (
+            (ax_latbar, lat_gain[0], lat_excess, lat_ci, (0, 22),
+             "(c) separately estimated lateral residual components"),
+            (ax_cutbar, cut_gain[0], cut_excess, cut_ci, (-2.2, 3.9),
+             "(d) separately estimated cut-height residual components")):
+        resolved = [lo > 0 or hi < 0 for lo, hi in cis]
+        ax.bar(x - .13, [sham] * len(x), width=.24, color=sham_col,
+               label="general residual gain")
+        ax.bar(x + .13, excess, width=.24,
+               color=[adapt_col if r else pale_col for r in resolved],
+               edgecolor=adapt_col, linewidth=.9,
+               label="plant-dependent residual component")
+        ax.errorbar(x + .13, excess, yerr=np.abs(np.array(
+            [[e - lo for e, (lo, _) in zip(excess, cis)],
+             [hi - e for e, (_, hi) in zip(excess, cis)]])),
+            fmt="none", ecolor="#20496B", elinewidth=.9, capsize=2.6,
+            capthick=.9, zorder=4)
+        for i, e, (lo, hi) in zip(x, excess, cis):
+            ax.annotate(f"{e:+.1f}".replace("-", "\u2212"),
+                        (i + .13, hi if e >= 0 else lo),
+                        xytext=(0, 4 if e >= 0 else -11),
+                        textcoords="offset points", ha="center", fontsize=8.1,
+                        color="#005A8C")
+        if ylim[0] < 0:
+            ax.axhline(0, color="#7C8791", lw=.7, zorder=2)
+            ax.set_yticks(np.arange(-2.0, 3.1, 1.0))
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{d:.1f}" for d in x])
+        ax.set_xlim(1.25, 3.25)
+        ax.set_ylim(*ylim)
+        ax.set_xlabel("cutter-mass dose ($\\times$ nominal)")
+        ax.set_ylabel("paired residual gain (mm)")
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#D5DADF", linewidth=.45, alpha=.7)
+        ax.set_title(title, loc="left", fontsize=9.0)
+    ax_latbar.legend(fontsize=8.2, loc="upper left", labelspacing=.35)
+    ax_cutbar.annotate("open bar: interval crosses zero", (1.31, 3.35),
+                       fontsize=7.8, color="#5F6C76", ha="left", va="center")
+    for ax in (ax_lat, ax_cut, ax_latbar, ax_cutbar):
         for spine in ax.spines.values():
             spine.set_color("#7C8791")
-    fig.subplots_adjust(left=.098, right=.985, top=.955, bottom=.082)
+    fig.subplots_adjust(left=.098, right=.985, top=.965, bottom=.065)
     save(fig, "ch7_dose_response")
-    for d, b, a, g, e in zip(doses, lat_base, lat_adapt, lat_gain,
-                             plant_component):
+    for d, b, a, g in zip(doses, lat_base, lat_adapt, lat_gain):
         print(f"     lateral dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
-              f"gain {g:6.3f}  excess {e:+6.3f}")
+              f"gain {g:6.3f}")
     for d, b, a, g in zip(doses, cut_base, cut_adapt, cut_gain):
         print(f"     cut     dose {d:.1f}: base {b:6.2f}  adaptive {a:6.2f}  "
               f"gain {g:6.3f}")
