@@ -9,7 +9,7 @@
 %% the three-way comparison fair.
 %%
 %% NOTE ON NOMENCLATURE: the only stack names are PPO-ROM (R),
-%% PPO-ID-FD (IF) and PPO-AAM-FD (AF). The earlier PPO1/PPO2 and
+%% PPO-ID-FD (IF) and Adaptive Forward (AF). The earlier PPO1/PPO2 and
 %% PPO1-A/B, PPO2-A/B/C/D labels are superseded and must not reappear,
 %% and neither must AF or PPO-(AAM)-ID-FD.
 %% The BASE policy is NOT a residual policy: it emits its command
@@ -161,7 +161,7 @@ and 480 control steps.
   \caption{The privileged DLS teacher, measured on the stage-6 verge task
   through the command-ROM plant (128 environments, 480 steps, all eleven path
   families, seed 17). It is competent, not perfect,
-and several acceptance thresholds sit deliberately just outside what it achieves.}
+and several evaluation thresholds sit deliberately just outside what it achieves.}
   \label{tab:ctrl:teacher}
   \small
   \begin{tabular}{lcc}
@@ -321,8 +321,7 @@ It replaces an inherited formulation carrying $53$ weighted reward fields, at
 which size the optimum is not something a designer can reason about: three
 separate terms turned out to be working against the task without being noticed
 for thirteen training campaigns. Three rules govern the replacement, each
-adopted after a measured failure, and Appendix~\ref{app:ppo-config} records the
-measurements behind them.
+adopted after a measured failure described below.
 
 \paragraph{No Gaussian Shaping}
 The earlier reward priced tracking as $w\exp[-(e/s)^2]$, which is effectively
@@ -395,7 +394,7 @@ to be bad, as measured in the earlier stack.
 \end{table}
 
 Three terms of the earlier formulation were removed on measured evidence rather
-than preference, and Appendix~\ref{app:ppo-config} records the figures. The
+than preference. The
 \emph{action-magnitude} penalty on $\operatorname{mean}(a^2)$ charged for
 precisely the sustained offset that \texttt{lane\_change\_hold},
 \texttt{offset\_return} and \texttt{boom\_sweep} structurally require, so the
@@ -458,7 +457,7 @@ policy discover the command directions before refining them. On the terrain
 task, where distillation supplies a competent starting point, it is reduced
 again and \emph{held fixed} rather than initialized, for the reason taken up in
 Section~\ref{sec:ctrl:anchored}. Exact values for any reported run are read from
-that run's frozen manifest (Table~\ref{tab:app:ppo}).
+that run's frozen manifest.
 
 \section{Training Protocol and the Distillation Finding}
 \label{sec:ctrl:training}
@@ -525,7 +524,7 @@ only at the end, since a training curve reporting only the scalar reward would
 have shown a success here.
 
 The general form applies beyond this machine: when a competent teacher exists
-and the acceptance criterion is not the reward, reward-based fine-tuning is not
+and the evaluation criterion is not the reward, reward-based fine-tuning is not
 automatically an improvement step. Distillation transfers the intent, PPO then
 optimises the proxy, and the two point in measurably different directions. That
 divergence grows with distance travelled from the policy where proxy and intent
@@ -678,7 +677,7 @@ expensive to rebuild.
 This is the structural point of the construction. The policy is at all times
 within a bounded divergence of a checkpoint that has been verified against
 $\bm{G}$, and the anchor advances only through verified checkpoints. The
-acceptance criterion therefore enters the training loop instead of appearing
+evaluation criterion therefore enters the training loop instead of appearing
 only at the end. The optimiser still ascends the proxy. It simply can never
 travel far from the last point at which proxy and intent were measured to
 agree. In this construction distillation is no longer the endpoint: it is
@@ -851,7 +850,7 @@ output is retained as a diagnostic (Section~\ref{sec:models:fd}).
 
 The stored run manifest shows that the actor learning rate, entropy coefficient,
 seed, terrain seed, environment count, curriculum stage, frozen normaliser, and
-warm-up match \ppoROM{} field for field (Table~\ref{tab:app:ppo}). This makes
+warm-up match \ppoROM{} field for field. This makes
 the pair a controlled comparison. Chapter~\ref{chap:evaluation} reports the
 common-protocol results.
 
@@ -874,6 +873,14 @@ actuator representation changes.
 \section{AF: The Adaptive Stack}
 \label{sec:ctrl:ppo-aamfd}
 
+AF is not constructed as a matched replacement for IF and is not used for a
+direct causal ranking against it. The adaptive stack answers a different
+question: whether a history-conditioned correction can improve a frozen
+direct-valve controller once the saturated inverse-model command path has been
+removed. The matched actuator-representation comparison remains R against IF;
+adaptation is evaluated within AF against its own frozen and capacity-matched
+controls.
+
 \ppoAAMFD{} places online adaptation on the forward model alone. The policy
 emits the valve command directly, the frozen strict forward model of
 Section~\ref{sec:models:fd} converts that command to a predicted extension
@@ -888,19 +895,23 @@ stacks:
   \;\longrightarrow\; \text{PhysX} .
 \end{equation}
 %
-The inverse model is absent from the command path. This is the one structural
-difference from \ppoIDFD{}, and it is deliberate: the name of the stack records
-the two models that remain, \AAM{} and \FD{}. Task, terrain families, meshes,
-observation contract, reward, gates and the PPO update are inherited unchanged,
-so the actuator representation and the adaptation path are the only free
-variables against the baselines.
+The inverse model is absent from the command path. The final AF stack consists
+of the frozen direct-valve base actor, a jointly trained causal history encoder
+and bounded residual head, and the frozen strict forward model. The offline AAM
+of Chapter~\ref{chap:models} is not part of this runtime path. Task definition,
+terrain distribution, reward, evaluation gates and the downstream PhysX
+environment remain fixed. Because AF uses a different command interface,
+cross-stack claims are not based on AF-against-IF ranking. Within AF, disabling
+the residual exactly recovers the frozen base, and the zero-history arm preserves
+the same trainable capacity, providing the controlled comparisons used in
+Chapter~\ref{chap:evaluation}.
 
 That the inverse model is genuinely out of the loop is a verified property
 rather than a claim about intent. Under the direct-valve configuration the
 adaptation-site instrumentation reports zero valve elements attributable to the
 inverse model and zero adapter applications at that site across a complete run,
 where all three counters would be non-zero if the inverse model were in the
-path (Appendix~\ref{app:models:residual}). The actuator key recorded inside the
+path. The actuator key recorded inside the
 checkpoints still reads \texttt{id\_aam\_fd}, retained so that previously
 trained checkpoints remain loadable; it is a legacy identifier, not a
 description of the runtime path.
@@ -1088,11 +1099,10 @@ action scale, roughly $840$ times the anchored route.
 \label{sec:ctrl:af-encoder}
 
 The encoder $\phi$ and the head $g_\psi$ are trained together under the
-reinforcement objective, not fitted offline to an auxiliary target and handed
-to a controller afterwards. This is the concurrent scheme of Ji et
-al.~\cite{ji2022concurrent}, and its consequence is that the latent is
-control-relevant by construction rather than by hope: the only gradient
-reaching $\phi$ is the one that improves the task.
+reinforcement objective rather than against an auxiliary identification target.
+This is the concurrent scheme of Ji et al.~\cite{ji2022concurrent}. The resulting
+representation is therefore optimised for control utility under the training
+objective, rather than for reconstruction of privileged plant parameters.
 
 An offline dynamics objective does not by itself guarantee a control-relevant
 history representation. The adaptation module is therefore assessed
@@ -1140,17 +1150,23 @@ $528$ environments, with the interval on the paired difference excluding zero. A
 bounded correction needs enough authority to matter, and below that threshold it
 contributes noise rather than adaptation; no value of $\alpha$ should therefore
 be read as incidental.
-Whether the adaptation path contributes anything to closed-loop task
-performance is a separate question, settled by the paired comparison of
-Section~\ref{sec:eval:adaptation} and not asserted here.
+\ppoAAMFD{} cannot be ranked against \ppoROM{} and \ppoIDFD{} because the action
+contract is different. That restriction is a comparison rule, not a judgement of
+the adaptation result. The adaptation claim is made inside \ppoAAMFD{}, on the
+identified forward model: frozen base, capacity-matched residual without
+history, and history-conditioned residual. Chapter~\ref{chap:evaluation}
+separates architecture-level evidence that the correction can reach the plant
+from method-level evidence about whether the improvement replicates across
+training seeds.
 
 \section{IsaacLab Integration and Timing}
 \label{sec:ctrl:integration}
 
 Four rates run concurrently and Table~\ref{tab:app:rates} lists them: PhysX
 integrates at $\unit[120]{Hz}$, the policy acts at $\unit[60]{Hz}$ under a
-decimation of two, the learned actuator models advance on a $\unit[20]{Hz}$
-grid of $\unit[0.05]{s}$ model ticks, and the AAM updates on that same grid. No
+decimation of two, and the learned actuator models advance on a $\unit[20]{Hz}$
+grid of $\unit[0.05]{s}$ model ticks. The AF history encoder and residual are
+evaluated with the policy at $\unit[60]{Hz}$. No
 single one of these is ``the control frequency'', and reporting a scalar rate
 for this system would misdescribe every one of the three stacks.
 
@@ -1212,7 +1228,7 @@ recorded training field and differ only in the actuator path. Held identical
 across the pair are the verge task and its eleven path families, the terrain
 generator and the held-out mesh set, the reward function of
 Table~\ref{tab:ctrl:reward}, the action chain and its authority budget, the
-eight acceptance gates and their aggregation to the worst mesh and worst path
+eight evaluation gates and their aggregation to the worst mesh and worst path
 family, episode length, actor and critic capacity, and the three-layer training
 construction of distillation, critic warm-up and reference-anchored PPO. That
 pair is a controlled single-variable comparison and is the only place an
@@ -1247,19 +1263,21 @@ capacity-matched control is trained at every seed, so the comparison is made
 within a seed rather than across one at all five
 (Section~\ref{sec:eval:attribution}).
 
-The arms are therefore paired environment by environment, so scenario variation
-is differenced out rather than averaged over, and any separation between the
-control and the adaptive arm is attributable to online sensing rather than to
-added parameters, a different optimiser trajectory or a different checkpoint.
-Every arm is scored at the peak of its own training-reward curve by one parser,
-which uses no held-out information. The result is reported on this basis in
+The arms are paired environment by environment, so scenario variation is
+differenced out rather than averaged over. The adaptive and zero-history arms
+share the same architecture, trainable capacity, training budget, reward and
+evaluation conditions; the manipulated variable in that comparison is access
+to live history. The primary evaluation scores every arm at the
+saved checkpoint nearest its own training-reward peak, chosen by one rule for
+every arm and without consulting held-out performance. The fixed final
+checkpoint is reported beside it as a robustness analysis. Both are given in
 Section~\ref{sec:eval:adaptation}.
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
 Comparing a distilled baseline against a separately optimised adaptive policy
 and attributing the difference to adaptation is not permitted, for the reason
 established in Section~\ref{sec:ctrl:finding}: reward ascent moves a policy off
-the acceptance criterion, so an unmatched budget is itself a treatment. The
+the evaluation criterion, so an unmatched budget is itself a treatment. The
 paired construction above satisfies this rule by design. The rule is stated
 because it constrains any future stack added to this comparison, not because the
 present one is at risk of violating it.

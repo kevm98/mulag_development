@@ -527,14 +527,15 @@ latent was not, and on the inverse-model path it could not be, for the
 saturation reason developed in Section~\ref{sec:ctrl:af-no-id}. What
 \ppoAAMFD{} deploys is therefore not identified-latent adaptation but a bounded
 residual on the valve command, conditioned on one second of observable history.
-That residual separates from its own frozen base on two of five seeds under the
-pre-registered primary criterion. Capacity-matched controls show a contribution
-from live history on those successful final checkpoints, while a secondary
-checkpoint analysis also exposes a substantial capacity effect. A cutter-mass
-dose experiment resolves a lateral component that varies with the plant
-condition, although starting mass and the later change are coupled
-(Section~\ref{sec:eval:adaptation}). The architecture-level mechanism is
-demonstrated; method-level reliability across training runs is not.
+That residual improves task tracking against its own frozen base on four of five
+training seeds under the pre-registered criterion, so the median seed passes,
+and the direction survives the alternative checkpoint rule. Capacity-matched
+controls then place most of that gain on the added residual capacity rather than
+on the live history: at equal capacity, history separates from zeros on one seed
+of five. A cutter-mass dose experiment resolves a lateral component that varies
+with the plant condition, although starting mass and the later change are
+coupled (Section~\ref{sec:eval:adaptation}). The correction is demonstrated;
+its attribution to online adaptation is not.
 
 The contribution remains the complete experimental chain: identifiable cylinder
 data, physics-structured models fast enough for parallel training, online

@@ -26,13 +26,13 @@
 \RRLABinception{23 March 2026}
 
 % Date of submission
-\RRLABsubmission{TODO: date of submission}
+\RRLABsubmission{\today}
 
 % First reviewer
 \RRLABfirstreviewer{Prof. Dr. Karsten Berns}
 
 % Supervisor
-\RRLABsupervisor{TODO: supervisor}
+\RRLABsupervisor{M.Sc. Qi Li}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Additional packages and own macros
@@ -47,7 +47,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Title page (optional middle content, e.g. an image, and the date)
-\RRLABtitlepage{}{23 March 2026}
+\RRLABtitlepage{}{\RRLABVARsubmission}
 
 % Second page with title, author, supervisor etc.
 \RRLABsecondpage
@@ -57,10 +57,8 @@
 
 % Acknowledgements (optional)
 \RRLABpreface{Acknowledgements}{%
-\emph{``It always seems impossible until it's done.''} \hfill Nelson Mandela
-
 I would like to express my sincere gratitude to my supervisor,
-\textbf{[Supervisor's Name]}, for their invaluable guidance, support, and
+\textbf{Mr. Qi Li}, for their invaluable guidance, support, and
 encouragement throughout this Master's thesis. I am also deeply grateful to
 my family for their unwavering love and belief in me, and to my friends for
 their support and encouragement throughout this journey.
@@ -70,7 +68,7 @@ this achievement possible.
 }
 
 % Abstract (~250--400 words: problem, approach, datasets, the three
-% stacks PPO-ROM / PPO-ID-FD / PPO-AAM-FD, principal results,
+% stacks R / IF / AF, principal results,
 % contribution. State results according to completed evidence.)
 \RRLABabstract{Abstract}{%
 Hydraulic manipulators are difficult to control precisely: the actuator response
@@ -84,30 +82,36 @@ high-fidelity simulation can be reduced, transferred into an efficient robotic
 simulation, and used for reinforcement-learning control of a verge mowing arm.
 Actuator data from a high-fidelity Simscape model are used to identify a modular
 inverse and forward model chain and a physics-structured reduced-order model.
-The former maps desired cylinder motion to valve commands and predicts the
-resulting response; the latter keeps pressure, force and extension propagation
-explicit while learning valve realisation and unmodelled loading. A damped
+The frozen inverse and forward representation transfers from Simscape without
+deployment-specific retraining, whereas the reduced-order model receives a
+bounded calibration of its correction head against the deployment plant. The
+former maps desired cylinder motion to valve commands and predicts the resulting
+response; the latter keeps pressure, force and extension propagation explicit
+while learning valve realisation and unmodelled loading. A damped
 least-squares controller supplies privileged demonstrations and is then removed,
 leaving the distilled policy as the sole deployed controller.
 
-Both actuator representations transfer into the deployment simulation and
+Both actuator representations are realised in the deployment simulation and
 support closed-loop terrain following. The evaluation also shows why supervised
 accuracy alone is insufficient: a model can predict motion well while ignoring
 the valve command that a controller must use. Excitation design and input
 ablation are therefore treated as necessary checks before a learned actuator
 model is admitted to control.
 
-Online adaptation is examined only after transfer, control and robustness have
-been established. The trained stacks absorb much of the randomised plant
-variation without adaptation, while a more abrupt plant change exposes the
-remaining gap. A bounded residual conditioned on causal history improves
-tracking when it acts directly on a valve command with authority to change.
-A capacity-matched control without live history does not produce the same
-effect. Delivering adaptation through an inverse-model output instead produces
-no closed-loop change because the command is already saturated. The thesis contributes a
-decision procedure for testing whether online adaptation is worth building and
-shows that, on a saturating actuator, the placement of the correction can matter
-more than the quality of the estimate.
+The transferred models and trained policies already absorb much of the tested
+plant variation. Online adaptation is therefore evaluated as a bounded residual
+on a valve-command path with remaining authority. Under the pre-registered
+checkpoint rule and success criterion the residual improves tracking on four of
+five training seeds, so the median seed passes, and the fixed final checkpoint
+preserves that direction. Capacity-matched controls then locate the gain: a
+residual of equal capacity reading zeroed history improves tracking on four of
+five seeds as well, and live history separates from it on one seed of five. A cutter-mass dose study
+resolves a lateral component whose magnitude depends on the plant condition,
+although the design does not separate the starting mass from the later mass
+change. An earlier latent-conditioned correction on a saturated inverse command
+has no closed-loop effect. Adaptation utility therefore depends jointly on
+observability, a control-relevant deficit, residual capacity, and correction
+authority.
 }
 % Table of contents (plus list of figures/tables)
 \RRLABcontents

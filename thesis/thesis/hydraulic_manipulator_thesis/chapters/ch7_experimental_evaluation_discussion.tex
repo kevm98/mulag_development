@@ -306,7 +306,9 @@ controllers already absorb substantial variation, and the authority sweep does
 not reach a contact or safety failure. The adaptation study therefore measures
 residual performance differences beyond a robust learned controller. Modest,
 channel-specific, or seed-dependent gains are compatible with this setting
-because the baseline leaves only a limited deficit to recover.
+because the baseline leaves only a limited deficit to recover. This is also why
+the capacity-matched control matters: with a small deficit to recover, extra
+residual capacity and live plant information can produce similar gains.
 
 \section{Online Adaptation Beyond the Robust Baseline}
 \label{sec:eval:adaptation}
@@ -335,33 +337,52 @@ tests continuous conditioning on the operating point as well as the response to
 the event.
 
 Results use $880$ paired environments across five held-out meshes. Lateral and
-cut-height effects are evaluated separately. Cut-height effects smaller than
-approximately $10\,\%$ are treated as unresolved because of the measurement
-resolution; the corresponding lateral threshold is approximately $1.5\,\%$.
-The paired design ensures that each arm is assessed under the same terrain,
-trajectory, and mass condition. The pre-registered primary criterion requires
-both error channels to improve with paired intervals excluding zero. Outcomes
-that improve one channel while leaving the other unresolved are reported as
-secondary trade-offs; they do not change the primary criterion.
+cut-height effects are evaluated separately. An A/A series on this instrument
+places the noise floor at approximately $10\,\%$ on cut height and
+$1.5\,\%$ on lateral error, and those two figures fix both the resolution
+limit and the non-inferiority bounds used below. The paired design ensures that
+each arm is assessed under the same terrain, trajectory, and mass condition.
+
+Two protocol decisions are pre-registered, and both are stated before the
+numbers because both of them move seeds.
+
+\textbf{Checkpoint.} Every arm is scored at the saved checkpoint nearest the
+peak of its own training-reward curve, selected by one parser for every arm,
+control and adaptive alike. Training reward is measured on the training plants
+and the held-out meshes are never consulted in the selection, so this is model
+selection on training signal rather than on the test set. The rule exists
+because a fixed final checkpoint catches late-training collapse: seed~$7$ peaks
+at $14729$ mean reward and ends at $6957$. The final checkpoint is retained and
+reported below as the robustness analysis.
+
+\textbf{Success.} An arm succeeds if one tracking metric improves with its
+paired interval excluding zero while the other either improves or stays inside
+its non-inferiority bound. The stricter bar, both channels improving with
+intervals excluding zero, is reported alongside it because it is the criterion
+the earlier method versions used. The relaxed rule was fixed because the
+stricter one records a change smaller than the instrument can resolve as a
+failure.
 
 \subsection{Primary Result Across Training Seeds}
 
 \begin{table}[tbp]
   \centering
-  \caption{Pre-registered final-checkpoint comparison of the
-  history-conditioned residual with the frozen base over five training seeds
-  and $880$ paired environments. An asterisk indicates that the paired
-  bootstrap interval excludes zero.}
+  \caption{Primary comparison of the history-conditioned residual with the
+  frozen base, five training seeds at the training-reward-peak checkpoint and
+  $880$ paired environments. An asterisk indicates that the paired bootstrap
+  interval excludes zero. Outcome labels follow the pre-registered rule: joint
+  improvement means both channels resolved, Pareto improvement means one
+  resolved and the other inside its non-inferiority bound.}
   \label{tab:eval:arms}
   \begin{tabular}{lccc}
     \toprule
-    Seed & cut-height gain & lateral gain & interpretation \\
+    Seed & cut-height gain & lateral gain & outcome \\
     \midrule
-    $17$ & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & primary success \\
-    $23$ & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & primary success \\
-    $101$ & $-1.1\,\%$ & $+28.6\,\%^{*}$ & lateral only \\
-    $42$ & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & both worse \\
-    $7$ & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & both worse \\
+    $17$ & $+39.1\,\%^{*}$ & $+84.9\,\%^{*}$ & joint improvement \\
+    $23$ & $+35.5\,\%^{*}$ & $+4.0\,\%^{*}$ & joint improvement \\
+    $101$ & $+74.7\,\%^{*}$ & $+5.9\,\%^{*}$ & joint improvement \\
+    $42$ & $+43.4\,\%^{*}$ & $-16.1\,\%^{*}$ & trade-off, fails \\
+    $7$ & $+4.5\,\%$ & $+55.7\,\%^{*}$ & Pareto improvement \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -371,58 +392,126 @@ adaptive arm has lower error than the frozen base for the median paired
 environment. The bootstrap marker indicates that the paired difference is
 resolved by the stated statistical test.
 
-Two of five seeds meet the primary criterion, so the median seed does not pass.
-Seed~$101$ has a resolved lateral improvement and an unresolved cut-height
-effect. Seeds~$42$ and~$7$ degrade both channels at the final checkpoint. The
-method-level result is therefore seed-dependent even though the two successful
-seeds show large, resolved effects.
+Four of five seeds succeed, so the median seed passes. Three of them improve
+both channels with resolved intervals. Seed~$7$ improves lateral tracking by
+$55.7\,\%$ while its cut-height change of $+4.5\,\%$ stays inside the
+$10\,\%$ bound, which is an improvement at no measurable cost rather than a
+trade. Seed~$42$ is the failure: it gains $43.4\,\%$ on cut height and gives
+up $16.1\,\%$ laterally, past the $1.5\,\%$ bound. Under the stricter
+both-channels bar the same table returns three seeds. The residual therefore
+improves the median training run, and Section~\ref{sec:eval:attribution} asks
+what in the residual produces that improvement.
 
-An exploratory checkpoint analysis applies one uniform rule that selects the
-saved checkpoint nearest each run's peak training reward, without using
-held-out performance. Under that later rule, three seeds improve both channels,
-seed~$42$ trades a cut-height gain for a lateral loss, and seed~$7$ improves
-lateral tracking while its cut-height effect remains unresolved. The rule was
-adopted after the primary result and was evaluated on already inspected meshes.
-It is therefore a secondary stability analysis and does not replace the
-pre-registered result in Table~\ref{tab:eval:arms}.
+\subsection{Robustness to the Checkpoint Rule}
+\label{sec:eval:checkpoint-robustness}
+
+The pre-registration commits to reporting the fixed final checkpoint alongside
+the selected one, and to treating a disagreement between the two as a result
+rather than as a detail.
+
+\begin{table}[tbp]
+  \centering
+  \caption{The same comparison at the fixed final checkpoint, no selection step,
+  $880$ paired environments.}
+  \label{tab:eval:arms-final}
+  \begin{tabular}{lccc}
+    \toprule
+    Seed & cut-height gain & lateral gain & outcome \\
+    \midrule
+    $17$ & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & joint improvement \\
+    $23$ & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & joint improvement \\
+    $101$ & $-1.1\,\%$ & $+28.6\,\%^{*}$ & Pareto improvement \\
+    $42$ & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & both worse \\
+    $7$ & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & both worse \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three of five seeds succeed at the final checkpoint under the same rule, and two
+under the stricter both-channels bar. The median passes on either reading, so
+the direction of the result does not depend on the checkpoint rule. Its margin
+does. Seeds~$17$ and~$23$ improve both channels under both rules and seed~$101$
+improves at no measurable cost under both. The rules disagree on seed~$7$, which
+succeeds at its reward peak and degrades both channels by $84.8\,\%$ and
+$72.1\,\%$ at the final checkpoint, after the reward collapse that motivated
+the selection rule. Seed~$42$ fails under both, trading channels at the peak and
+losing both at the end.
 
 \subsection{Capacity Versus Live History}
 \label{sec:eval:attribution}
 
 The capacity-matched control separates the effect of the residual from the
-effect of the history it receives.
+effect of the history it receives. This comparison is necessary because a larger
+residual can improve control even when it receives no information about the
+current plant, and Table~\ref{tab:eval:arms} cannot distinguish the two.
+
+One control is trained per seed with the history window zeroed and the input
+width unchanged, so the control and the adaptive arm share the frozen base,
+architecture, trainable parameter count, training budget, reward, optimiser and
+plant schedule. The single manipulated variable is whether the numbers the
+encoder reads are the real history or zeros. Both arms are scored at the same
+selected checkpoint as Table~\ref{tab:eval:arms}.
 
 \begin{table}[tbp]
   \centering
-  \caption{Capacity-matched control against the adaptive arm at the
-  pre-registered final checkpoints for the two successful seeds. The arms share
-  the frozen base, architecture, trainable capacity, budget, and reward; only
-  the adaptive arm receives live history.}
+  \caption{Decomposition of the residual advantage at the selected checkpoints.
+  The left pair isolates added capacity, the right pair isolates live history at
+  equal capacity. Same $880$ paired environments and the same success rule as
+  Table~\ref{tab:eval:arms}.}
   \label{tab:eval:control-arm}
   \small
-  \begin{tabular}{lcc}
+  \begin{tabular}{lcccc}
     \toprule
-    Seed & cut-height gain & lateral gain \\
+    & \multicolumn{2}{c}{capacity alone (base $\to$ control)}
+    & \multicolumn{2}{c}{live history (control $\to$ adaptive)} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+    Seed & cut-height & lateral & cut-height & lateral \\
     \midrule
-    $17$ & $+51.3\,\%^{*}$ & $+81.6\,\%^{*}$ \\
-    $23$ & $+51.4\,\%^{*}$ & $+26.1\,\%^{*}$ \\
+    $17$ & $+63.9\,\%^{*}$ & $-1.2\,\%$ & $-21.1\,\%^{*}$ & $+80.3\,\%^{*}$ \\
+    $23$ & $+77.2\,\%^{*}$ & $+42.2\,\%^{*}$ & $-21.2\,\%^{*}$ & $-22.8\,\%^{*}$ \\
+    $101$ & $+90.9\,\%^{*}$ & $+56.2\,\%^{*}$ & $-5.2\,\%$ & $-29.9\,\%^{*}$ \\
+    $42$ & $+1.3\,\%$ & $-62.2\,\%^{*}$ & $+38.4\,\%^{*}$ & $+124.9\,\%^{*}$ \\
+    $7$ & $+95.0\,\%^{*}$ & $+39.7\,\%^{*}$ & $-46.0\,\%^{*}$ & $+12.2\,\%^{*}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-This comparison is necessary because a larger residual can improve control even
-when it receives no information about the current plant. The control arm has
-the same trainable capacity and the same optimisation conditions as the adaptive
-arm, so the difference between them is the live history and nothing else.
+Read the two halves in order. Added capacity alone reproduces most of
+Table~\ref{tab:eval:arms}: the zero-history control beats the frozen base on
+four of five seeds under the same success rule, with cut-height gains of
+$63.9$, $77.2$, $90.9$ and $95.0\,\%$. The increment from live history is not
+present on the median seed. Only seed~$42$ improves both channels against its
+own control, and it is the one seed where added capacity achieved nothing.
+Seeds~$17$ and~$7$ buy large lateral gains with cut-height losses past the
+$10\,\%$ bound, seed~$23$ is worse on both channels, and seed~$101$ shows no
+resolved improvement. One of five seeds succeeds on this axis, so the median
+seed fails it.
 
-At the primary endpoint, live history explains the improvement on the two seeds
-that meet the primary criterion: all four comparisons with the zero-history
-control are positive and resolved. The exploratory reward-peak analysis gives a
-different attribution. With one control trained per seed at those selected
-checkpoints, residual capacity accounts for most of the cut-height gain on four
-seeds and the incremental effect of history is mixed. The evidence therefore
-shows that history can produce a control benefit, while the fraction attributable
-to history is sensitive to the training seed and checkpoint rule.
+The two results have to be stated together, because the second constrains what
+the first means. The residual improves the median training run, and at this
+checkpoint the part of that improvement attributable to reading live history
+rather than zeros is not resolved. A network fed real data should not
+systematically lose to the same network fed zeros, and on cut height it does so
+on three seeds, which is not the shape of a null result either.
+
+The final-checkpoint analysis does not overturn this and is not uniform.
+On the full mesh set only seed~$17$ carries a scored control arm there, where
+live history improves both channels by $51.3$ and $81.6\,\%$. On the
+three-mesh subset all five are available and again one of five succeeds:
+seed~$17$ improves both channels, seeds~$23$ and~$42$ trade cut height for
+lateral tracking, and seeds~$101$ and~$7$ are worse on both. Live history
+therefore produces a resolved closed-loop benefit on particular combinations of
+seed and checkpoint, and not as a property of the method as trained here.
+
+One mechanism is a candidate and is not settled by these data. Every arm in this
+table conditions on the full observation over the window, $70$ features per step
+and $1400$ numbers in total, of which almost all describe terrain and task state
+rather than plant identity, while the head that consumes them holds $53$k
+parameters. Rapid motor adaptation avoids exactly this by never training its
+encoder with the policy gradient, fitting it instead by regression onto a
+low-dimensional privileged vector~\cite{kumar2021rma}. Restricting the encoder
+input to plant-relevant channels is the direct test and is left to future work
+(Section~\ref{sec:concl:future}).
 
 \subsection{Dependence on Cutter-Mass Dose}
 \label{sec:eval:dose}
@@ -572,15 +661,18 @@ correction before it reached the plant. The residual on the valve path has
 bounded authority and can change the realised command.
 
 \textbf{History must add value beyond residual capacity.} At the primary
-endpoint, live history improves both channels on the two successful seeds. The
-secondary checkpoint analysis shows that a fixed residual can explain much of
-the cut-height gain on other selections. History is therefore useful
-conditionally, and estimator quality alone does not establish a closed-loop
-benefit.
+endpoint it does not, on the median seed. The residual improves tracking on four
+of five seeds, an equal-capacity residual reading zeros improves it on four of
+five as well, and the increment between them favours live history on one. The
+benefit of history is resolved on seed~$42$ here, on seed~$17$ at the final
+checkpoint, and in the lateral dose response. It is conditional, and estimator
+quality alone does not establish it.
 
-The chapter supports an architecture-level result: a history-conditioned
-residual can produce a resolved plant-dependent correction on a command path
-with remaining authority. The method-level result is weaker because the primary
-criterion is met by two of five seeds. Robustness, observability, residual
-capacity, and correction authority must therefore be evaluated together before
-online adaptation is justified.
+The chapter therefore supports two results that must be reported together. The
+bounded residual on the valve path improves task tracking on the median training
+seed under the pre-registered rule, on either checkpoint rule, which is a
+method-level result about the residual. The attribution of that improvement to
+online adaptation is not established: at equal capacity, live history separates
+from zeros on one seed of five. Robustness, observability, residual capacity and
+correction authority must be evaluated together before a tracking gain on a
+saturating actuator is read as adaptation.

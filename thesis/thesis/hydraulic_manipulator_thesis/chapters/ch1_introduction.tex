@@ -92,15 +92,12 @@ condition the model or the policy on that estimate. It promises to recover that
 difference, at the cost of an estimator that must work from observable signals
 alone, since a deployed machine has no access to its own plant parameters.
 
-The second response is only worth pursuing under conditions that are rarely
-checked before the work is done. Plant identity must be recoverable from the
-data the machine actually produces, which depends on how the machine is being
-driven while that data is collected. And the difference between knowing the
-plant and not knowing it must be large enough to matter once the estimate
-reaches a feedback controller. Neither condition is guaranteed, both are
-specific to the task, and both can be measured before an estimator is built.
-Establishing those measurements, and applying them to a hydraulic mowing arm, is
-the problem this thesis addresses.
+Adaptation is useful only when three conditions coincide. Plant identity must be
+present in the signals produced under the available excitation. The robust
+controller must leave a control-relevant deficit to recover. The correction
+path must retain enough authority to change the realised command. This thesis
+measures these conditions on a hydraulic mowing arm and then evaluates whether
+live history adds value beyond matched residual capacity.
 
 \section{Contribution of This Thesis}
 \label{sec:intro:contributions}
@@ -117,19 +114,24 @@ resulting policy controls something close to the real actuator.
 Learned actuator models and latent-conditioned adaptation are both established
 techniques. What remains unclear is how such models should be identified so that
 they retain the command dependence a controller needs, whether they transfer
-between simulators without retraining, and whether online adaptation adds
-anything once a policy has been trained against them. This thesis therefore
-treats representation and transfer as the primary questions and online
-adaptation as the last of them. The research statement is as follows:
+between simulators without retraining, and where a correction retains command
+authority once the models are used in control. Representation and transfer are
+established first because the residual is applied to an identified plant rather
+than replacing one. Online adaptation is evaluated last so that any remaining
+gain can be interpreted against the transferred model and the robustness of the
+fixed controller. The order follows the dependencies among the claims. The
+research statement is as follows:
 
 \paragraph{Comparison notation.}
 The three policy--actuator stacks carry both a short label and a full name, used
 interchangeably throughout: \emph{R} is \ppoROMfull, \emph{IF} is \ppoIDFDfull,
-and \emph{AF} is \ppoAAMFDfull. R uses the command-conditioned reduced-order
-model; IF uses the frozen inverse/forward pair; and AF retains the forward model
-alone, the policy emitting the valve command directly, with online adaptation
-supplied by a bounded history-conditioned residual. The labels name the complete
-stacks, not just their actuator models.
+and \emph{AF} is the \ppoAAMFDfull. R uses the command-conditioned reduced-order
+model; IF uses the frozen inverse/forward pair; and AF consists of the frozen
+direct-valve base actor, a jointly trained causal history encoder and bounded
+residual head, and the frozen forward model. The offline AAM of
+Chapter~\ref{chap:models} is a diagnostic plant-context estimator and is not
+loaded in the AF command path. The labels name complete stacks, not only their
+actuator models.
 
 \researchstatement{To determine how hydraulic actuator dynamics learned from
 high-fidelity simulation can be reduced, transferred into a computationally
@@ -154,9 +156,10 @@ remains for adaptation once the first four are settled. The six questions are:
     deployed controller while acting through learned actuator dynamics?
   \item How does the choice of actuator representation affect tracking, command
     behaviour, latency and robustness under plant variation?
-  \item Where plant variation survives that robustness, is it identifiable from
-    recent observations, and does online adaptation conditioned on that history
-    improve closed-loop performance?
+  \item Where plant variation survives robust training, what part of that
+    variation is observable from recent interaction history, and under what
+    conditions does a history-conditioned correction provide closed-loop
+    benefit beyond a frozen robust controller?
 \end{enumerate}
 
 Two mechanisms sit under the second half of RQ6 and are kept apart throughout,
@@ -179,11 +182,11 @@ Chapter~\ref{chap:evaluation}.
 RQ6 is the question named in the title and is deliberately placed last, since it
 is only worth asking once the preceding questions have established that the
 learned models transfer, that a policy can control through them, and how much
-plant variation the closed loop already absorbs unaided. The answer this thesis
-reaches is that the size of any adaptation gain depends on where the adaptation
-is placed: on a command path already saturated it is indistinguishable from
-nothing, and on one with authority to spare it is substantial. The work rests on
-the following contributions:
+plant variation the closed loop already absorbs unaided. The answer is
+conditional: plant variation must remain control-relevant after robust training,
+be observable from the available history, and reach a correction path with
+sufficient authority. Any apparent gain must also be separated from the effect
+of adding residual capacity. The work rests on the following contributions:
 
 \textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
 hydraulic actuation from high-fidelity Simscape data and transfers it into
@@ -225,33 +228,32 @@ controller. Both representations support closed-loop terrain following in this
 configuration, although two learned models placed in series could have
 compounded their errors.
 
-\textbf{A Decision Procedure for Online Adaptation:} A matched evaluation
-protocol that scores the resulting stacks on tracking, control effort, latency,
-disturbance rejection and sensitivity to the magnitude of plant variation,
-together with a procedure that decides in advance whether online plant
-conditioning will repay the effort. Its first measurement establishes whether
-plant identity is present in the data the machine produces; its second supplies
-the true plant parameters through a privileged encoder and measures what the
-closed loop does with them. Both precede estimator training and either can end
-the effort before it is incurred, which converts an open-ended engineering
-effort into a measurement.
+\textbf{A Decision Procedure for Online Adaptation:} A matched protocol that
+first asks whether plant identity is present in the identification data, then
+measures what a privileged plant encoding does in the closed loop, and only then
+trains a deployable history estimator. Either of the first two measurements can
+show that a residual will have nothing to act on. In this work the identification
+data do contain plant structure, and the privileged encoding is informative. The
+procedure therefore does not stop the adaptation path; it determines where the
+correction must be applied.
 
 \textbf{Online Adaptation on a Saturating Actuator:} A demonstration that the
 binding constraint on latent-conditioned adaptation here is delivery rather than
 estimation, and a redesign that follows from it. With the inverse model in the
 command path the estimate is informative and the closed-loop effect is absent,
 because the correction is added to a command already resting against its own
-limit for most of the scored window. Removing that model, so that the policy
-emits the valve command itself and a bounded history-conditioned residual acts
-on it, converts the same information into a measured improvement. Four of five
-training seeds improve on the stack's own frozen base under a mid-episode plant
-change, by up to $74.7\,\%$ on cut height and $84.9\,\%$ on lateral error,
-paired across $880$ environments on five held-out meshes, and the median seed
-meets the pre-registered criterion. What the improvement is attributable to is
-less settled: a capacity-matched control whose history window is zeroed
-reproduces most of the cut-height gain by itself, so the result establishes the
-architecture rather than the sensing, and identifying when live history beats
-matched capacity is left open.
+limit for most of the scored window. Removing the inverse model allows an
+end-to-end history-conditioned residual to act directly on the valve command.
+The deployed residual improves closed-loop tracking relative to its frozen base
+on four of five training runs, so the median run improves, and the direction
+holds under both checkpoint rules. Matched ablations then locate most of that
+improvement in the added residual capacity rather than in the live history,
+which separates from an equal-capacity zero-history control on one run of five.
+A plant-dependent component is resolved in lateral tracking across the
+cutter-mass dose study, although that design couples starting mass with the
+later change. The architecture delivers a correction and, on some runs, a
+plant-dependent one; attributing the method-level gain to online adaptation is
+not supported by these data.
 
 The causal plant estimator, the bounded adaptation path and the eight-gate
 evaluation harness are described where they are used, as technical enablers
@@ -265,11 +267,10 @@ actuator representation and the transfer assumptions made for it.
 \begin{figure}[H]
   \centering
   \resizebox{.80\textwidth}{!}{\input{images/ch1/ch1_research_cycle}}
-  \caption{Research cycle followed in this thesis. Actuator representation
-  determines what can be transferred, the transferred model shapes control,
-  and closed-loop robustness determines which remaining variation must be
-  identifiable. Identifiable variation supports adaptation, whose evidence in
-  turn informs the next actuator representation.}
+  \caption{Research cycle connecting actuator representation, transfer,
+  closed-loop control, robustness, identifiability, and adaptation. Evidence
+  from the final stages informs the next actuator representation and its transfer
+  assumptions.}
   \label{fig:intro:research-cycle}
 \end{figure}
 
@@ -301,7 +302,7 @@ space and cylinder space, and the closed kinematic loops introduced by the
 cylinder mounts. It specifies what the controller can observe, separating
 measured quantities from quantities produced by a model, and presents the
 high-fidelity Simscape model from which the actuator data derives. The chapter
-also states the task, the plant capability limits and the acceptance criteria
+also states the task, the plant capability limits and the system-level evaluation gates
 against which every later result is scored.
 
 \textbf{Chapter~\ref{chap:data}} presents the data generation strategy and
@@ -344,9 +345,9 @@ control effort, measures dead time through the actuation chain and the response
 of each stack to a commanded change, and audits how much of the randomised
 factor draw reaches each plant. It closes on online adaptation, measured within
 the adaptive stack against its own frozen base and a capacity-matched control:
-the contribution of live history, the component of the gain that tracks the
-magnitude of the plant change, the replication across five training seeds, and
-the pressure channel each stack exposes.
+the contribution of live history, the component of the gain that varies with
+cutter-mass dose, the replication across five training seeds, and the pressure
+channel each stack exposes.
 
 \textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
 the work establishes and what it does not, states the design implications that
@@ -355,16 +356,9 @@ sets out the future work, which centres on transferring the learned actuator
 models and the distilled policy to the physical machine and fine-tuning them on
 data collected from it.
 
-\textbf{Appendix~\ref{app:system-parameters}} provides the system parameters and
-the coordinate mappings between task space, joint space and cylinder space
-referred to in Chapter~\ref{chap:system}.
 \textbf{Appendix~\ref{app:dataset}} lists the dataset manifests and the factor
 ranges that define the family of plants used in
 Chapters~\ref{chap:data} and~\ref{chap:evaluation}.
-\textbf{Appendix~\ref{app:models}} records the model architectures, the
-normalisers and the checkpoint hashes for every learned model reported in
-Chapter~\ref{chap:models}.
-\textbf{Appendix~\ref{app:ppo-config}} documents the PPO and IsaacLab
-configuration used for the training described in Chapter~\ref{chap:control}.
-\textbf{Appendix~\ref{app:results}} collects supplementary results supporting
-Chapter~\ref{chap:evaluation}.
+\textbf{Appendix~\ref{app:implementation}} records the timing and input
+contracts, frozen artifact identifiers and reproduction entry points used by
+the model, control and evaluation chapters.
