@@ -425,7 +425,9 @@ predicted motion indirectly, through the pressure state entering the recurrent
 encoder, rather than through the force balance. The model has a grey-box
 structure. Its equations fix the transition form and keep it differentiable in
 named hydraulic quantities, but they do not identify the machine's physical
-constants.
+constants. Put bluntly: at these clamped values the explicit chain is a
+regulariser on the shape of the residual heads' output, not an identified
+plant, and the residual heads are what actually moves the cylinder.
 
 Training uses rollout horizons $H\in\{1,5,20,50\}$ and scheduled sampling up to
 $75\,\%$ self-fed~\cite{bengio2015scheduled}. Residual penalties retain the
@@ -440,7 +442,14 @@ Jacobian is diagonally dominant with condition number $2.14$. At
 $\unit[5]{s}$, terminal extension $R^2$ is $0.998$, $0.998$, $0.84$ and $0.91$
 across the cylinders. Pressure-increment $R^2$ is only $0.06$--$0.09$, so the
 internal pressure is a dynamic state, not a calibrated pressure estimate
-(Figure~\ref{fig:models:rom-validation}).
+(Figure~\ref{fig:models:rom-validation}), consistent with the source
+Simscape pressure signal's own wrong-level ceiling
+(Section~\ref{sec:sys:simscape-validation}) and with the AF residual's own
+deployed pressure state carrying shape rather than level
+(Appendix~\ref{app:pressure-signals}). Any later use of this pressure
+channel, including the seal-condition decoding of
+Section~\ref{sec:models:aam-content}, inherits this limit and is read
+accordingly.
 
 \begin{figure}[H]
   \centering
@@ -502,6 +511,34 @@ they come from the command ROM in \ppoROM{} and the frozen FD in
 state are excluded. Using the previous valve command keeps each row causal.
 Validation selected the shortest competitive history from $5$, $10$, $20$ and
 $40$ ticks. Latent RMSE is $0.802$ on validation and $0.734$ on reserved test.
+
+Table~\ref{tab:models:param-counts} collects the trainable size of the four
+learned models introduced in this chapter, counted directly from each deployed
+checkpoint's state dictionary rather than estimated from the architecture
+description. ID and FD share the same $512$-wide, four-block residual-MLP
+family and are consequently within eight parameters of each other despite
+different input and output widths. The command ROM and the offline AAM are
+both roughly two orders of magnitude smaller: the ROM's explicit hydraulic
+chain carries the interpretable structure so its recurrent core need not, and
+the AAM is deliberately a small probe rather than a capacity-rich estimator, so
+a positive result could not be attributed to head size alone.
+
+\begin{table}[H]
+  \centering
+  \caption{Trainable parameters of the four learned models, counted from the
+  deployed checkpoint state dictionaries.}
+  \label{tab:models:param-counts}
+  \begin{tabular}{lllr}
+    \toprule
+    Model & Role & Architecture & Parameters \\
+    \midrule
+    ID & valve-command increment & $512$-wide, $4$-block residual MLP & $2\,124\,292$ \\
+    FD & extension/velocity/pressure increment & $512$-wide, $4$-block residual MLP & $2\,124\,300$ \\
+    Command ROM & command-conditioned actuator & GRU, hidden $128$, $2$ layers, + hydraulic chain & $196\,220$ \\
+    Offline AAM & plant-context latent encoder & $4$-layer causal convolution, width $64$ & $42\,562$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop, the
 prototype ID adapter is bypassed until 20 rows are available, and a causal

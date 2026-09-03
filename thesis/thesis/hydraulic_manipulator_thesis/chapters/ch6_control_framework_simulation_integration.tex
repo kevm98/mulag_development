@@ -249,6 +249,16 @@ observation contract therefore gives each policy an honest view of its own
 actuator's shortcomings, which is what Section~\ref{sec:ctrl:matching}
 requires.
 
+That honesty cuts two ways. Because the residual channel is genuinely
+informative for \ppoIDFD{} and genuinely near zero for \ppoROM{}, the same
+sixteen channels hand \ppoIDFD{} a closed-loop correction signal that
+\ppoROM{} has structurally little use for, independent of which actuator is
+more accurate open-loop. Some part of the R--IF gap in
+Chapter~\ref{chap:evaluation} may therefore reflect the value of correcting
+against a standing residual rather than the value of the underlying actuator
+representation, and the shared observation contract cannot by itself separate
+the two.
+
 \subsection{The Action and Its Bounds}
 
 The policy emits $\bm{a} \in \mathbb{R}^4$, sampled from its Gaussian at
@@ -312,16 +322,15 @@ paths are derived.
 \subsection{The Reward Function}
 
 The reward of the final \ppoROM{} task has ten bounded terms, listed in
-Table~\ref{tab:ctrl:reward}. Three are positive and describe the task. Seven
-are penalties and describe how the machine must behave while doing it. All are
-bounded, and all retain a live gradient beyond the acceptance boundary, so that
-a policy already inside a gate still has a direction to improve in.
-
-It replaces an inherited formulation carrying $53$ weighted reward fields, at
-which size the optimum is not something a designer can reason about: three
-separate terms turned out to be working against the task without being noticed
-for thirteen training campaigns. Three rules govern the replacement, each
-adopted after a measured failure described below.
+Table~\ref{tab:ctrl:reward}.\footnote{It replaces an inherited formulation
+carrying $53$ weighted reward fields, at which size the optimum was not
+something a designer could reason about: three separate terms turned out to be
+working against the task without being noticed for thirteen training
+campaigns.} Three are positive and describe the task. Seven are penalties and
+describe how the machine must behave while doing it. All are bounded, and all
+retain a live gradient beyond the acceptance boundary, so that a policy already
+inside a gate still has a direction to improve in. Three rules govern the ten
+terms, each adopted after a measured failure described below.
 
 \paragraph{No Gaussian Shaping}
 The earlier reward priced tracking as $w\exp[-(e/s)^2]$, which is effectively
@@ -357,7 +366,16 @@ The three task terms are non-negative and the seven safety terms non-positive.
 This is what makes worst-case (CVaR) weighting safe to add later: scaling a
 non-positive term by a factor $\ge 1$ can only lower the return, whereas
 up-weighting a \emph{positive} reward for the worst environments pays the policy
-to be bad, as measured in the earlier stack.
+to be bad, as measured in the earlier stack.\footnote{Three terms of that
+earlier formulation were removed on measured evidence rather than preference.
+The \emph{action-magnitude} penalty on $\operatorname{mean}(a^2)$ charged for
+precisely the sustained offset that \texttt{lane\_change\_hold},
+\texttt{offset\_return} and \texttt{boom\_sweep} structurally require, so the
+policy learned to return to neutral, which is the one thing ``hold an offset''
+forbids. The \emph{head barrier} was replaced because the head group dwarfed
+lateral tracking, and the \emph{clearance barrier} was disabled because
+measured contact, cylinder headroom and cut-height error proved more reliable
+signals of the same condition.}
 
 \begin{table}[tb]
   \centering
@@ -392,17 +410,6 @@ to be bad, as measured in the earlier stack.
     \bottomrule
   \end{tabular}
 \end{table}
-
-Three terms of the earlier formulation were removed on measured evidence rather
-than preference. The
-\emph{action-magnitude} penalty on $\operatorname{mean}(a^2)$ charged for
-precisely the sustained offset that \texttt{lane\_change\_hold},
-\texttt{offset\_return} and \texttt{boom\_sweep} structurally require, so the
-policy learned to return to neutral, which is the one thing ``hold an offset''
-forbids. The \emph{head barrier} was replaced because the head group dwarfed
-lateral tracking, and the \emph{clearance barrier} was disabled because measured
-contact, cylinder headroom and cut-height error proved more reliable signals of
-the same condition.
 
 One apparent inconsistency is deliberate. The tool-acceleration term saturates
 at $\unit[300]{m/s^2}$ while the corresponding gate sits at
@@ -763,6 +770,7 @@ each PPO block, and Stage~5 returns the last promoted checkpoint.
 \end{algorithm}
 
 \subsection{Theoretical Status}
+\label{sec:ctrl:theory}
 
 The components are standard and citable. The bound on $D_{\mathrm{update}}$ is
 conservative policy iteration and its trust-region
@@ -778,13 +786,15 @@ policy does bound gate degradation in form, since the chain rule of KL over
 trajectories, Pinsker's inequality and the boundedness of every gate metric give
 $|\mathbb{E}_{\pi_\vartheta}[g] - \mathbb{E}_{\pi_{\mathrm{ref}}}[g]|
 \le 2 G_{\max}\sqrt{H \delta_{\mathrm{ref}}/2}$ for a metric $g$ with
-$\|g\|_\infty \le G_{\max}$ over a horizon $H$. At the production horizon of
-$2808$ steps and $\delta_{\mathrm{ref}} = 0.05$ the right-hand side exceeds
-eight, which for a metric bounded in $[0,1]$ is vacuous, and there is a further
-measure mismatch because the constraint is taken under the live policy's state
-distribution while the chain rule requires the reference's. The construction is
-therefore a principled restriction of reward ascent to a neighbourhood of a
-verified policy, not a guarantee: the gates certify each promotion.
+$\|g\|_\infty \le G_{\max}$ over a horizon $H$
+(Appendix~\ref{app:kl-bound} derives this bound step by step). At the
+production horizon of $2808$ steps and $\delta_{\mathrm{ref}} = 0.05$ the
+right-hand side exceeds sixteen, which for a metric bounded in $[0,1]$ is
+vacuous, and there is a further measure mismatch because the constraint is
+taken under the live policy's state distribution while the chain rule requires
+the reference's. The construction is therefore a principled restriction of
+reward ascent to a neighbourhood of a verified policy, not a guarantee: the
+gates certify each promotion.
 
 \section{R: Reference Actuator Baseline}
 \label{sec:ctrl:ppo-rom}
@@ -872,6 +882,34 @@ actuator representation changes.
 
 \section{AF: The Adaptive Stack}
 \label{sec:ctrl:ppo-aamfd}
+
+Table~\ref{tab:ctrl:af-matching} previews what the rest of this section and
+Section~\ref{sec:ctrl:matching} establish in full: AF shares the task,
+terrain, reward, observation and evaluation gates with R and IF, but not their
+action contract or their training protocol, and the comparisons that follow
+respect that split rather than papering over it.
+
+\begin{table}[H]
+  \centering
+  \caption{What is matched between AF and the R/IF pair, and what is not.
+  Section~\ref{sec:ctrl:matching} gives the full matching rules.}
+  \label{tab:ctrl:af-matching}
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Dimension & Matched with R/IF? & Detail \\
+    \midrule
+    Task, terrain, reward, gates & yes & identical across all three stacks \\
+    Base $66$-channel observation & yes & AF carries its causal history separately \\
+    Action contract & no & AF emits the valve command directly, not a
+      bounded cylinder increment \\
+    Training seed & no & AF trains at a different seed \\
+    Actor learning rate & no & lower than the R/IF value \\
+    Frozen-actor warm-up & no & AF's base is the already-distilled policy,
+      frozen; there is no separate warm-up stage \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 AF is not constructed as a matched replacement for IF and is not used for a
 direct causal ranking against it. The adaptive stack answers a different

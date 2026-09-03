@@ -176,12 +176,22 @@ implement~\cite{mattila2017survey}, not any weakness in the control law.
 \subsection{Online Parameter Estimation}
 
 Adaptive control estimates the uncertain parameters during operation instead of
-fixing them in advance~\cite{astrom1995adaptive}. Adaptive robust control pairs
-that estimator with a robust feedback term so that transient tracking does not
-wait for the estimate to converge, and it is the established result for
-single-rod hydraulic actuators~\cite{yao2000adaptive}. On the face of it this
-is the closest classical answer to the problem of this thesis, because it
-targets exactly the drifting parameters just described.
+fixing them in advance~\cite{astrom1995adaptive}. Yao's adaptive robust control
+(ARC) pairs a projection-bounded parameter estimator with a robust feedback
+term, so that a guaranteed transient tracking bound does not wait for the
+estimate to converge, and it is the established result for single-rod
+hydraulic actuators~\cite{yao2000adaptive}. On the face of it this is the
+closest classical answer to the problem of this thesis, because it targets
+exactly the drifting parameters just described, and because it is the one
+classical family that ships a proof rather than an empirical trend, in direct
+contrast to the residual studied here (Section~\ref{sec:ctrl:af-claims}). ARC
+buys that guarantee by assuming a known parametric structure for the plant: the
+orifice, chamber and friction terms must be derived correctly in advance, with
+only their coefficients left uncertain. That is exactly the assumption
+Chapter~\ref{chap:models} finds hard to hold on this machine, where the
+reduced-order model's own orifice and friction parameters settle at their
+optimisation clamps rather than at physically plausible values
+(Section~\ref{sec:models:rom}).
 
 Two properties of the task limit it. Parameter convergence requires persistent
 excitation, and mowing supplies smooth, low-bandwidth commands that do not
@@ -203,10 +213,22 @@ control tracks worse than the learned route on this machine. What is claimed is
 narrower: the two conditions the classical estimator needs, informative
 excitation and an unsaturated regressor, are not supplied by the mowing task,
 and the maintenance burden the family carries per machine, season and
-attachment is the burden the thesis is trying to remove. A tracking comparison
-would need a per-cylinder pressure loop, an identification campaign on the
-physical implement and a second control implementation, none of which is in
-scope here. It is left open in Chapter~\ref{chap:conclusion}.
+attachment is the burden the thesis is trying to remove.
+
+The experiment that would settle the comparison is concrete rather than
+hypothetical. It needs a per-cylinder differential-pressure loop, since ARC's
+estimator is driven by the same pressure signal that Chapter~\ref{chap:models}
+shows this simulation only produces as an uncalibrated model state
+(Appendix~\ref{app:pressure-signals}); an open-loop identification campaign on
+the physical implement to fit the orifice and friction structure ARC assumes
+rather than the clamped values the reduced-order model settles on; a projection
+bound and adaptation gain tuned against that identified structure; and a second
+control implementation run on the same excitation schedule and evaluation gates
+as Chapter~\ref{chap:evaluation}, so the two families are compared under one
+protocol rather than one against the literature's reported numbers for the
+other. None of that instrumentation exists on the target machine yet
+(Chapter~\ref{chap:conclusion}), which is why the comparison is left open rather
+than run.
 
 \subsection{What Is Retained}
 
@@ -340,12 +362,12 @@ helps only if something downstream acts on it.
 
 The offline AAM developed in Chapter~\ref{chap:models} tests whether one second
 of observable history contains recoverable plant information. It is not the
-encoder deployed in AF. The final adaptive stack uses the same causal
-information contract but trains a separate history encoder jointly with the
-bounded residual under the task objective. The two routes therefore answer
-different questions: the former tests identifiability; the latter tests
-control-relevant adaptation. The experiments also keep robust randomised
-training distinct from both routes.
+encoder deployed in AF, which trains its own history encoder end to end with
+the residual under the task objective rather than against an offline target
+(Section~\ref{sec:ctrl:af-encoder} details the training scheme). The two routes
+therefore answer different questions: the former tests identifiability; the
+latter tests control-relevant adaptation. The experiments also keep robust
+randomised training distinct from both routes.
 
 Randomised training produces a single controller for a family of plants.
 Identification of that family is what makes a member-specific correction
