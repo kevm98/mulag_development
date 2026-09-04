@@ -63,9 +63,12 @@ def label(res):
         return "joint improvement", True
     other = [n for n in res if n not in wins][0]
     r = res[other]
-    if r["pct"] > 0 or not r["sig"] or abs(r["pct"]) <= BOUND[other]:
-        return f"Pareto improvement ({wins[0]} resolved, {other} within bound)", True
-    return f"trade-off ({wins[0]} up, {other} down past bound)", False
+    # Non-inferiority is a bound on the point estimate, exactly as triplet.py
+    # applies it. An unresolved degradation is NOT inside the bound: a wide
+    # interval is missing evidence, not evidence of no harm.
+    if r["pct"] >= -BOUND[other]:
+        return f"Pareto improvement ({wins[0]} resolved, {other} maintained)", True
+    return f"trade-off ({wins[0]} up, {other} worse than the bound)", False
 
 
 def run(ref_tag, arm_tag, title):

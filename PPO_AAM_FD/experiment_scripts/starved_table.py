@@ -96,7 +96,7 @@ for s in SEEDS:
     elif len(wins) == 1:
         other = [n for n in res if n not in wins][0]
         r = res[other]
-        ok = r["pct"] > 0 or not r["sig"] or abs(r["pct"]) <= BOUND[other]
+        ok = r["pct"] >= -BOUND[other]
         verdict = ("Pareto improvement" if ok
                    else f"trade-off past the {other} bound")
     else:
