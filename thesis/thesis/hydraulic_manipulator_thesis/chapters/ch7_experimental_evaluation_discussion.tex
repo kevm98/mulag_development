@@ -540,12 +540,11 @@ input to plant-relevant channels is the direct test and is left to future work
 The two statements the section supports are therefore separate. Added residual
 capacity reproduces the median gain against the frozen base, so live history is
 not required for that median result. Live history is required for seed~$42$ at
-the selected checkpoint, for seed~$17$ at the final checkpoint, and for the
-additional lateral term in the dose study of Section~\ref{sec:eval:dose}. The
+the selected checkpoint and for seed~$17$ at the final checkpoint. The
 method-level statement is that a bounded residual on the valve path improves
 tracking. The adaptation-specific statement is that live history is not the
 source of the median gain under this encoder, and is the source of the gain on
-particular seeds and on the load-dependent lateral channel.
+those particular seeds.
 
 \subsection{Dependence on Cutter-Mass Dose}
 \label{sec:eval:dose}
@@ -663,9 +662,9 @@ bounded authority and can change the realised command.
 \textbf{History must add value beyond residual capacity.} The residual improves
 tracking on four of five seeds, and an equal-capacity residual reading zeros
 improves it on four of five as well, so the median gain is capacity rather than
-history. The increment favours live history on seed~$42$ here, on seed~$17$ at
-the final checkpoint, and in the lateral dose response. It is conditional, and
-estimator quality alone does not establish it.
+history. The increment favours live history on seed~$42$ here and on seed~$17$
+at the final checkpoint. It is conditional, and estimator quality alone does not
+establish it.
 
 The answer the chapter supports has two levels and both have to be reported
 together. Online plant context is usable, and the level at which it is usable is
@@ -675,8 +674,11 @@ on the valve path improves task tracking on the median training seed under the
 pre-registered rule and under the fixed final checkpoint, which is a
 method-level result about the residual controller, and most of that median gain
 is residual capacity: live history separates from a capacity-matched control on
-one seed of five, and a load-dependent lateral component appears in the dose
-study. Effective online adaptation here therefore depends jointly on a residual
+one seed of five. The dose study resolves a load-dependent lateral component of
+that residual advantage, but it scores the residual against the frozen base
+rather than against the capacity-matched control, so it does not say whether the
+component is capacity or history. Effective online adaptation here therefore
+depends jointly on a residual
 deficit surviving robust training, on that variation being observable, on the
 correction path retaining authority, and on live history adding something beyond
 capacity. Stated without those four, the residual result will be misread as

@@ -544,21 +544,14 @@ than designed for.
   \end{tabular}
 \end{table}
 
-Column III carries a parenthesis, and the reason is specific. Causal recovery
-of the latent was established (Section~\ref{sec:models:chain}). The closed-loop benefit of that
-latent was not, and on the inverse-model path it could not be, for the
+Column III carries a parenthesis, and the reason is specific. Causal recovery of
+the latent was established (Section~\ref{sec:models:chain}), but its closed-loop
+benefit was not, and on the inverse-model path it could not be, for the
 saturation reason developed in Section~\ref{sec:ctrl:af-no-id}. What
-\ppoAAMFD{} deploys is therefore not identified-latent adaptation but a bounded
-residual on the valve command, conditioned on one second of observable history.
-That residual improves task tracking against its own frozen base on four of five
-training seeds under the pre-registered criterion, so the median seed passes,
-and the direction survives the alternative checkpoint rule. Capacity-matched
-controls then place most of that gain on the added residual capacity rather than
-on the live history: at equal capacity, history separates from zeros on one seed
-of five. A cutter-mass dose experiment resolves a lateral component that varies
-with the plant condition, although starting mass and the later change are
-coupled (Section~\ref{sec:eval:adaptation}). The correction is demonstrated;
-its attribution to online adaptation is not.
+\ppoAAMFD{} deploys is therefore a bounded residual on the valve command,
+conditioned on one second of observable history, rather than identified-latent
+adaptation. Section~\ref{sec:eval:adaptation} measures what that residual
+recovers and how much of it live history accounts for.
 
 The contribution remains the complete experimental chain: identifiable cylinder
 data, physics-structured models fast enough for parallel training, online

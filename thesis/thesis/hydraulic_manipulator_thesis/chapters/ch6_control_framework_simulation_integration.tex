@@ -1007,15 +1007,13 @@ Section~\ref{sec:models:id-trust}. In the adaptive command path, however, an
 additional correction must retain authority after the command is formed.
 
 The same transfer study recorded the failure mode that later disqualified it for
-adaptation. The model predicts a valve-command \emph{increment}, and the
-deployed command is the accumulated, clipped quantity
-$\bm{u}_k = \operatorname{clip}(\bm{u}_{k-1} + \Delta\bm{u}_k, -\bm{u}_{\max},
-\bm{u}_{\max})$ with per-axis limits $[0.95,\, 0.95,\, 0.80,\, 0.80]$, so under
-sustained demand the accumulation walks the command onto its own clip and holds
-it there. Fed its own predictions, the composite left the reference by more than
-a metre in \emph{every one} of the $118$ runs, with its pre-clip valve command
-at the limit on $89.1\,\%$ of elements while the ROM valve on the same runs
-never reached its bound. Closed-loop instrumentation over the $33$-cell panel
+adaptation. Because the model predicts a valve-command \emph{increment} that is
+accumulated and clipped (Section~\ref{sec:models:id}), sustained demand walks the
+command onto its own limit and holds it there: fed its own predictions, the
+composite left the reference in \emph{every one} of the $118$ runs, with the
+pre-clip command at its limit on $89.1\,\%$ of elements while the ROM valve on
+the same runs never reached its bound
+(Section~\ref{sec:models:id-trust}). Closed-loop instrumentation over the $33$-cell panel
 measures the same thing in the terms that matter for adaptation: the command sat
 at its pre-clip limit on $79.9\,\%$ of valve elements, $34.5\,\%$ of the
 corrections the adapter computed were clipped away after being computed, and on
@@ -1292,25 +1290,19 @@ claim about beating the non-adaptive stack.
 \paragraph{The Paired Comparison: AF Against Its Own Frozen Base}
 The adaptation claim is made within the adaptive stack, against the frozen base
 policy it was built from, and the matching is exact. The arms share the frozen
-base policy, the residual architecture, the trainable capacity of $53\,836$
-parameters, the training budget and the reward. Because the head of $g_\psi$ is
-zero-initialised and $\tanh(0)=0$, every arm begins as bit-for-bit the same
-policy, verified at a maximum absolute action difference of $0.0$. The single
+base policy, the residual architecture, the trainable capacity, the training
+budget, the reward and the evaluation conditions, and every arm begins as
+bit-for-bit the same policy (Section~\ref{sec:ctrl:af-residual}). The single
 manipulated variable is whether the residual may see the
 $(\text{state},\, \text{action})$ history it is conditioned on. A
-capacity-matched control is trained at every seed, so the comparison is made
-within a seed rather than across one at all five
-(Section~\ref{sec:eval:attribution}).
-
-The arms are paired environment by environment, so scenario variation is
-differenced out rather than averaged over. The adaptive and zero-history arms
-share the same architecture, trainable capacity, training budget, reward and
-evaluation conditions; the manipulated variable in that comparison is access
-to live history. The primary evaluation scores every arm at the
-saved checkpoint nearest its own training-reward peak, chosen by one rule for
-every arm and without consulting held-out performance. The fixed final
-checkpoint is reported beside it as a robustness analysis. Both are given in
-Section~\ref{sec:eval:adaptation}.
+capacity-matched control is trained at every seed, and the arms are paired
+environment by environment, so scenario variation is differenced out rather than
+averaged over and the comparison is made within a seed rather than across one at
+all five. The primary evaluation scores every arm at the saved checkpoint
+nearest its own training-reward peak, chosen by one rule for every arm and
+without consulting held-out performance; the fixed final checkpoint is reported
+beside it as a robustness analysis
+(Sections~\ref{sec:eval:attribution} and~\ref{sec:eval:adaptation}).
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
 Comparing a distilled baseline against a separately optimised adaptive policy
