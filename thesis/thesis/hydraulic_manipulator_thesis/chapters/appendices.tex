@@ -301,6 +301,19 @@ window separately and does not widen the actor input. The final twelve values
 make actuator prediction and cylinder tracking errors visible to the otherwise
 memoryless actor.
 
+What the AF history encoder reads is a separate contract and is read off the
+frozen checkpoint rather than asserted. In \texttt{model\_399.pt} of the AF
+seed-$17$ arm, the observation normaliser has width $1470$ and the encoder's
+first layer is $64 \times 70$: $70$ base columns for the actor, and a
+$20$-step window of $70$ values per step, being the $66$ observation channels
+above plus the four previously applied valve commands. Reconstructing the
+encoder, temporal convolutions, latent projection and head from those shapes
+gives $53\,836$ trainable parameters, the figure quoted in
+Section~\ref{sec:ctrl:af-residual}. The encoder therefore sees the terrain
+profile, the task errors and the commanded target lead, and the exclusion
+contract of Section~\ref{sec:data:history-features} applies to the offline AAM
+only.
+
 \begin{table}[H]
   \centering
   \caption{Policy observation layout. Indices are zero-based and half-open.}
