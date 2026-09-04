@@ -528,14 +528,19 @@ a positive result could not be attributed to head size alone.
   \caption{Trainable parameters of the four learned models, counted from the
   deployed checkpoint state dictionaries.}
   \label{tab:models:param-counts}
-  \begin{tabular}{lllr}
+  \small
+  \begin{tabular}{@{}lllr@{}}
     \toprule
     Model & Role & Architecture & Parameters \\
     \midrule
-    ID & valve-command increment & $512$-wide, $4$-block residual MLP & $2\,124\,292$ \\
-    FD & extension/velocity/pressure increment & $512$-wide, $4$-block residual MLP & $2\,124\,300$ \\
-    Command ROM & command-conditioned actuator & GRU, hidden $128$, $2$ layers, + hydraulic chain & $196\,220$ \\
-    Offline AAM & plant-context latent encoder & $4$-layer causal convolution, width $64$ & $42\,562$ \\
+    ID & valve-command increment & $512$-wide, $4$-block residual MLP
+      & $2\,124\,292$ \\
+    FD & extension, velocity, pressure & $512$-wide, $4$-block residual MLP
+      & $2\,124\,300$ \\
+    Command ROM & command-conditioned actuator & GRU $128$, $2$ layers,
+      $+$ hydraulic chain & $196\,220$ \\
+    Offline AAM & plant-context latent encoder & $4$-layer causal conv.,
+      width $64$ & $42\,562$ \\
     \bottomrule
   \end{tabular}
 \end{table}
