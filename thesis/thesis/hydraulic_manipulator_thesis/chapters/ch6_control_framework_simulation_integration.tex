@@ -245,31 +245,22 @@ This was measured: across ten training blocks the p01 head alignment sat at
 $0.79$--$0.80$ and did not respond to changes in the feedforward source or the
 levelling gain.
 
-This group is also what makes the matched pair comparable. Under the ROM the
-tracking residual is near zero, because the ROM reaches what it is told, while
-under a learned ID--FD path it is the model's standing error. The same
-observation contract therefore gives each policy an honest view of its own
-actuator's shortcomings, which is what Section~\ref{sec:ctrl:matching}
-requires.
-
-That honesty cuts two ways. Because the residual channel is genuinely
-informative for \ppoIDFD{} and genuinely near zero for \ppoROM{}, the same
-sixteen channels hand \ppoIDFD{} a closed-loop correction signal that
-\ppoROM{} has structurally little use for, independent of which actuator is
-more accurate open-loop. Some part of the R--IF gap in
-Chapter~\ref{chap:evaluation} may therefore reflect the value of correcting
-against a standing residual rather than the value of the underlying actuator
-representation, and the shared observation contract cannot by itself separate
-the two.
+This group is also what makes the matched pair comparable, and it cuts two ways.
+Under the ROM the tracking residual is near zero, because the ROM reaches what
+it is told; under a learned ID--FD path it is the model's standing error. The
+same contract therefore gives each policy an honest view of its own actuator,
+and at the same time hands \ppoIDFD{} a closed-loop correction signal that
+\ppoROM{} has structurally little use for. Part of the R--IF gap in
+Chapter~\ref{chap:evaluation} may reflect the value of correcting against a
+standing residual rather than the actuator representation, and the shared
+observation contract cannot separate the two.
 
 \subsection{The Action and Its Bounds}
 
 The policy emits $\bm{a} \in \mathbb{R}^4$, sampled from its Gaussian at
-training time and taken at the mean for evaluation. Between that sample and the
-PhysX cylinder target sit five bounding stages. Figure~\ref{fig:ctrl:action-chain}
-places them in the complete PPO actor--critic loop. The critic is used only
-during training; the actor and bounded action interface form the deployed
-controller. Each bounding stage can only \emph{reduce} authority and cannot
+training time and taken at the mean for evaluation. Five bounding stages sit
+between that sample and the PhysX cylinder target
+(Figure~\ref{fig:ctrl:action-chain}). Each can only reduce authority, never
 introduce motion the policy did not request.
 
 \begin{figure}[tb]
@@ -297,30 +288,23 @@ travel per unit action, and the target integrator accumulates the increments in
 reference space, permitted to lead the measured extension by at most
 $\unit[50]{mm}$ on cylinders~1 to~3 and $\unit[20]{mm}$ on cylinder~4.
 
-This chain describes the cylinder-increment interpretation of the action, which
-\ppoROM{} and \ppoIDFD{} use. Under \ppoAAMFD{} the same bounded action is read
-as a valve command and scaled to span exactly the admissible valve range, so no
-further clamp binds at nominal. The bounding stages that act in cylinder space
-therefore do not have the same meaning on that stack, which is one reason its
-results are read against its own frozen base
-(Section~\ref{sec:ctrl:matching}).
+This is the cylinder-increment reading of the action, used by \ppoROM{} and
+\ppoIDFD{}. Under \ppoAAMFD{} the same bounded action is a valve command scaled
+to span the admissible valve range, so the cylinder-space stages do not carry
+the same meaning there.
 
-That last cap is an anti-windup device and it is load-bearing, which is how the
-per-axis split above was arrived at. An earlier configuration used
-$\unit[18]{mm}$ on every cylinder. Relaxing it to $\unit[50]{mm}$ halved the
-lateral error on the two families demanding a sustained standing offset
-(\texttt{lane\_change\_hold} from $0.4833$ to $0.2310$, \texttt{boom\_sweep}
-from $0.3745$ to $0.1602$), showing that the clamp was bounding the standing
-effort those paths need, while the same relaxation on cylinder~4 drove head
-alignment from $0.9507$ to $0.4636$. The trade is therefore resolved per axis.
-The $\unit[18]{mm}$ value is historical and no reported result uses it.
+The lead cap is an anti-windup device and it is load-bearing, which is how the
+per-axis split was arrived at. An earlier configuration used $\unit[18]{mm}$ on
+every cylinder; relaxing it to $\unit[50]{mm}$ halved lateral error on the two
+families needing a sustained standing offset (\texttt{lane\_change\_hold}
+$0.4833 \to 0.2310$, \texttt{boom\_sweep} $0.3745 \to 0.1602$), while the same
+relaxation on cylinder~4 drove head alignment from $0.9507$ to $0.4636$. The
+$\unit[18]{mm}$ value is historical and no reported result uses it.
 
-The chain replaces the residual band, since exploration is bounded by how much
-motion a single action can command rather than by proximity to a baseline, and
-it fixes the plant's capability ceiling: four millimetres of cylinder travel per
-step is the entire authority budget, which produces the $\unit[0.240]{m/s}$
-lateral rate limit of Section~\ref{sec:sys:capability} from which the reference
-paths are derived.
+The chain also fixes the capability ceiling: four millimetres of cylinder travel
+per step is the entire authority budget, which produces the
+$\unit[0.240]{m/s}$ lateral rate limit of Section~\ref{sec:sys:capability} from
+which the reference paths are derived.
 
 \subsection{The Reward Function}
 
@@ -329,11 +313,10 @@ Table~\ref{tab:ctrl:reward}.\footnote{It replaces an inherited formulation
 carrying $53$ weighted reward fields, at which size the optimum was not
 something a designer could reason about: three separate terms turned out to be
 working against the task without being noticed for thirteen training
-campaigns.} Three are positive and describe the task. Seven are penalties and
-describe how the machine must behave while doing it. All are bounded, and all
-retain a live gradient beyond the acceptance boundary, so that a policy already
-inside a gate still has a direction to improve in. Three rules govern the ten
-terms, each adopted after a measured failure described below.
+campaigns.} Three are positive and describe the task; seven are penalties on how
+the machine behaves while doing it. All retain a live gradient beyond the
+acceptance boundary, so a policy already inside a gate still has a direction to
+improve in. Three rules govern them, each adopted after a measured failure.
 
 \paragraph{No Gaussian Shaping}
 The earlier reward priced tracking as $w\exp[-(e/s)^2]$, which is effectively
@@ -358,11 +341,11 @@ quadratic precision near zero where cut height needs it, without a vanishing
 far field.
 
 \paragraph{Bounded Terms}
-A term that can grow without limit can dominate the sum and destabilize the
-critic. Each contribution is clipped, which gives the reward a published budget:
-$6+12+4 = 22$ for the task terms against $-24$ for the safety terms. A
-non-finite value is replaced by $-25$, just below that worst case, so a
-numerical fault can never outscore legitimate behaviour.
+An unbounded term can dominate the sum and destabilise the critic. Each
+contribution is clipped, giving the reward a published budget: $6+12+4 = 22$ for
+the task terms against $-24$ for the safety terms. A non-finite value is
+replaced by $-25$, just below that worst case, so a numerical fault can never
+outscore legitimate behaviour.
 
 \paragraph{Fixed Sign Convention}
 The three task terms are non-negative and the seven safety terms non-positive.
@@ -416,18 +399,16 @@ signals of the same condition.}
 \end{table}
 
 One apparent inconsistency is deliberate. The tool-acceleration term saturates
-at $\unit[300]{m/s^2}$ while the corresponding gate sits at
-$\unit[120]{m/s^2}$. The reward scale is a saturation scale for a bounded
-penalty rather than a target, so the gate remains the binding criterion and the
-reward's role is only to keep a gradient against gross excursions. The
-action-rate term is held mild for a related reason: cylinder~4 owns head pitch,
-so a rate tax falls hardest on the fast corrections that keep the head down as
-boom attitude shifts.
+at $\unit[300]{m/s^2}$ while its gate sits at $\unit[120]{m/s^2}$, because the
+reward scale is a saturation scale for a bounded penalty rather than a target:
+the gate stays the binding criterion and the reward only keeps a gradient
+against gross excursions. The action-rate term is mild for a related reason,
+since cylinder~4 owns head pitch and a rate tax falls hardest on the fast
+corrections that keep the head down.
 
-Every term is logged individually and by name during training, because the whole
-difficulty is that total reward can rise while the system gets worse. The reward
-is therefore \emph{not} the result criterion: promotion uses the eight physical
-gates of Section~\ref{sec:sys:evaluation-criteria}.
+Every term is logged by name during training, because total reward can rise
+while the system gets worse. The reward is not the result criterion; promotion
+uses the eight gates of Section~\ref{sec:sys:evaluation-criteria}.
 
 \subsection{Optimisation}
 \label{sec:ctrl:optimization}
@@ -746,11 +727,9 @@ of Section~\ref{sec:sys:task} are distributed across environments within a
 single run, and the terrain mesh is drawn per environment so that no policy can
 memorize one ground surface.
 
-Its status is that of a reference condition rather than a competitor. The
-command ROM is a Simscape-trained model with a bounded closed-loop calibration
-against IsaacLab and PhysX, and ROM-plus-PhysX \emph{is} the deployment plant,
-so \ppoROM{}'s actuator coincides with the plant. The consequence for how its
-tracking advantage may be read is stated once, in
+It is a reference condition rather than a competitor: ROM-plus-PhysX \emph{is}
+the deployment plant, so \ppoROM{}'s actuator coincides with the plant. What
+that does to its tracking advantage is stated in
 Section~\ref{sec:ctrl:matching}.
 
 The policy is produced by the three-layer construction of this chapter:
@@ -776,35 +755,27 @@ Task, terrain families, meshes, observation contract, action chain, reward,
 gates and the PPO update are inherited unchanged, so the actuator
 representation is the only free variable between the two stacks.
 
-The stack is the honest control for \ppoROM, whose actuator coincides with the
-deployment plant, and it is the stack in which the inverse model is carried in
-the command path and is adequate there.
+It is the honest control for \ppoROM{}, and the stack in which the inverse model
+is carried in the command path and is adequate there.
 
-\emph{Robust} is used here in the sense of
-Section~\ref{sec:fund:domain-randomization}: the stack was trained across the
-randomised plant family and applies one fixed response to whichever member of
-that family it meets, performing no online estimation and conditioning on no
-plant identity. It does not mean the policy is blind to plant variation, since
-the twelve model-error channels carry a standing residual that is itself
-plant-dependent. What the stack lacks is not information about the consequences
-of plant variation but any representation of \emph{which} plant produced them.
+\emph{Robust} here means what Section~\ref{sec:fund:domain-randomization} means
+by it: trained across the randomised plant family, applying one fixed response
+to whichever member it meets, with no online estimation. The policy is not blind
+to plant variation, since the twelve model-error channels carry a standing
+residual that is itself plant-dependent. What it lacks is any representation of
+\emph{which} plant produced them.
 
-Two properties of the composed path shape its behaviour, and both were
-established offline. The valve command is accumulated rather than issued
-absolutely and is clipped to the per-axis limits $[0.95, 0.95, 0.80, 0.80]$, so
-the actuator path carries its own saturation boundary independently of the
-action chain. Only the predicted extension increment is integrated; the velocity
-output is retained as a diagnostic (Section~\ref{sec:models:fd}).
+Two properties of the composed path shape its behaviour, both established
+offline. The valve command is accumulated rather than issued absolutely and is
+clipped to the per-axis limits $[0.95, 0.95, 0.80, 0.80]$, so the actuator path
+carries its own saturation boundary independently of the action chain. Only the
+predicted extension increment is integrated; the velocity output is a
+diagnostic (Section~\ref{sec:models:fd}).
 
-The stored run manifest shows that the actor learning rate, entropy coefficient,
-seed, terrain seed, environment count, curriculum stage, frozen normaliser, and
-warm-up match \ppoROM{} field for field. This makes
-the pair a controlled comparison. Chapter~\ref{chap:evaluation} reports the
-common-protocol results.
-
-Figure~\ref{fig:ctrl:r-if-stack} summarises the two non-adaptive actuator paths
-used as baselines. Both use the same policy interface and PhysX task; only the
-actuator representation changes.
+The stored run manifest matches \ppoROM{} field for field on actor learning
+rate, entropy coefficient, seed, terrain seed, environment count, curriculum
+stage, frozen normaliser and warm-up, which is what makes the pair a controlled
+comparison.
 
 \begin{figure}[!htbp]
   \centering
@@ -917,49 +888,30 @@ description of the runtime path.
 \subsection{Omission of the Inverse Model}
 \label{sec:ctrl:af-no-id}
 
-The inverse model's place in two of the three stacks follows from what each
-stack is for. The command ROM together with PhysX \emph{is} the deployment plant
-(Section~\ref{sec:models:rom-calibration}), so \ppoROM{} uses the plant itself
-and fixes the reference condition. The inverse and forward models are identified
-independently of it, from the high-fidelity Simscape data of
-Chapter~\ref{chap:data}, and neither has seen the deployment plant during
-training, so \ppoIDFD{} prices the cost of substituting an independently
-identified pair for the plant itself. That question requires the inverse model:
-a policy commanding desired cylinder motion needs a map from that intent to a
-valve command, and supplying that map from identification data alone is exactly
-the substitution being priced. The R--IF gap is interpretable only because the
-composition is complete.
+The inverse model belongs in \ppoIDFD{} and not in the adaptive stack, and the
+reason is the same measurement in both cases. \ppoIDFD{} prices the cost of
+substituting an independently identified pair for the deployment plant, and that
+question needs the inverse model: a policy commanding desired cylinder motion
+needs a map from intent to valve command, and supplying that map from
+identification data alone is the substitution being priced.
 
-The adaptive stack asks a different question. The inverse model remains
-appropriate for \ppoIDFD{} and its one-step transfer is established in
-Section~\ref{sec:models:id-trust}. In the adaptive command path, however, an
-additional correction must retain authority after the command is formed.
-
-The same transfer study recorded the failure mode that later disqualified it for
-adaptation. Because the model predicts a valve-command \emph{increment} that is
-accumulated and clipped (Section~\ref{sec:models:id}), sustained demand walks the
-command onto its own limit and holds it there: fed its own predictions, the
-composite left the reference in \emph{every one} of the $118$ runs, with the
-pre-clip command at its limit on $89.1\,\%$ of elements while the ROM valve on
-the same runs never reached its bound
-(Section~\ref{sec:models:id-trust}). Closed-loop instrumentation over the $33$-cell panel
-measures the same thing in the terms that matter for adaptation: the command sat
-at its pre-clip limit on $79.9\,\%$ of valve elements, $34.5\,\%$ of the
-corrections the adapter computed were clipped away after being computed, and on
+Adaptation needs something the same map cannot give. Because the model predicts
+a valve-command \emph{increment} that is accumulated and clipped
+(Section~\ref{sec:models:id}), sustained demand walks the command onto its limit
+and holds it there. Fed its own predictions the composite left the reference in
+every one of the $118$ runs, with the pre-clip command at its limit on
+$89.1\,\%$ of elements while the ROM valve on the same runs never reached its
+bound. Closed-loop instrumentation over the $33$-cell panel says the same thing
+in adaptation's terms: the command sat at its pre-clip limit on $79.9\,\%$ of
+valve elements, $34.5\,\%$ of computed corrections were clipped away, and on
 $37.9\,\%$ of elements the correction could not move the command at all.
 
 The quantity being adapted and the quantity being saturated are therefore the
-same, and the consequence is not a small effect but an uninterpretable one: a
-null measured through such a path cannot distinguish a task that is not
-adaptation-limited from credit that was clipped before it could reach the
-metric. The disqualification is specific and retracts nothing claimed for
-\ppoIDFD{}, where the command is consumed as issued and saturation is a limit on
-authority rather than a defect of the map. It binds only where a second signal
-must be added to that command and survive the same clip.
-
-The final stack therefore emits the valve command directly. The residual acts
-on the same bounded command as the policy, rather than on an increment that is
-subsequently accumulated and clipped.
+same, which makes a null through that path uninterpretable: it cannot separate a
+task that is not adaptation-limited from credit clipped before it reached the
+metric. Nothing here retracts what is claimed for \ppoIDFD{}, where the command
+is consumed as issued. The final stack emits the valve command directly, so the
+residual acts on the same bounded command as the policy.
 
 \subsection{Sufficiency of the Forward Model}
 \label{sec:ctrl:af-fd-sufficient}

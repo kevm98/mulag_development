@@ -59,25 +59,24 @@ was trained on Simscape data alone and evaluated on all $118$ IsaacLab
 deployment runs, drawn entirely outside that training distribution, where its
 teacher-forced one-step extension error is millimetre-scale and nearly flat
 across domains: $\unit[2.36]{mm}$ on the combined runs against $\unit[3.36]{mm}$
-on nominal. This claim is limited to the one-step regime used by the policy.
-The inverse model remains frozen downstream. The reduced-order model received a
-small bounded calibration against the deployment plant.
+on nominal. The claim holds only in that one-step regime; closing the loop on
+its own predictions diverges in all $118$ runs
+(Section~\ref{sec:models:id-trust}). The reduced-order model received a small
+bounded calibration against the deployment plant.
 
 \textbf{Predictive accuracy must be accompanied by a control-authority test
-(RQ1).} Input ablation and open-loop excitation showed that a learned actuator
-must be tested for dependence on the command, not only for prediction error.
-With the accepted excitation design, removing the valve input increases rollout
-error by a factor of $1.81$. This is a general validation requirement for
-learned models used in control.
+(RQ1).} A learned actuator must be tested for dependence on the command, not
+only for prediction error. With the accepted excitation design, removing the
+valve input increases rollout error by a factor of $1.81$; before it, by $0.94$.
+This is a general validation requirement for learned models used in control.
 
 \textbf{Two actuator representations both support closed-loop control, and they
 do not produce the same controller (RQ3, RQ5).} The command-conditioned
 reduced-order model reaches $R^2 = 0.998$ on the internal valve state and $0.97$
-on extension, with a diagonally dominant extension--command Jacobian of
-condition number $2.14$, and it runs inside GPU-parallel training. The
-inverse--forward chain composes two separately learned models in series, which
-could have compounded their errors and did not. The two representations differ
-in the control strategy they induce from the same policy interface. On the
+on extension, and runs inside GPU-parallel training. The inverse--forward chain
+composes two separately learned models in series, which could have compounded
+their errors and did not. The two induce different control strategies from the
+same policy interface. On the
 recorded traces of one held-out mesh, \ppoROM{} spends the least command and
 reverses about $40$ times per second against $10.6$ for \ppoIDFD{}, which
 converts greater actuator effort into lower lateral error
@@ -150,9 +149,9 @@ supported finding is therefore a method-level gain from the bounded residual,
 with online adaptation as a conditional increment whose evidence is
 seed-specific.
 
-Table~\ref{tab:concl:adaptation-evidence} separates the experiments that support
-this conclusion. This distinction prevents the closed-loop gain of an enlarged
-residual network from being reported as evidence that live history caused it.
+Table~\ref{tab:concl:adaptation-evidence} separates the experiments behind that
+conclusion, so the gain of an enlarged residual is not read as evidence that
+live history caused it.
 
 \begin{table}[htbp]
   \centering

@@ -72,23 +72,15 @@ sample. Predictions carry a hat, and $\Delta(\cdot)_k = (\cdot)_{k+1} -
   \label{fig:models:overview}
 \end{figure}
 
-Figure~\ref{fig:models:overview} compares the actuator paths. In \ppoIDFD, the
-ID maps the state and desired increment to a valve command, and the FD predicts
-the resulting increment. In \ppoROM, one command-conditioned model predicts
-the valve internally and propagates pressure, velocity and extension. Both
-paths produce the same bounded PhysX cylinder target in
-IsaacLab~\cite{mittal2023orbit} under the same policy action
-contract~\cite{schulman2017proximal}.
-
 Three conventions apply throughout. Dynamic targets are within-run increments,
 with $\Delta\hat{\bm{x}}=\bm{0}$ as the persistence baseline. Each checkpoint
 uses its own training-set normalisation. Inputs at step $k$ are causal, and
 targets are measured transitions to step $k+1$.
 
-Simscape supplies the identification data described in Chapter~\ref{chap:data}.
-The exported arrays are audited, frozen and used to train the models in
-PyTorch~\cite{paszke2019pytorch}; Simscape is not part of training or
-deployment.
+Simscape supplies the identification data of Chapter~\ref{chap:data}. The
+exported arrays are audited, frozen and used to train the models in
+PyTorch~\cite{paszke2019pytorch}; Simscape itself is part of neither training
+nor deployment.
 
 The closed-loop Simscape export~\cite{mathworks2024simscape} contains
 $452\,400$ transitions at $T=\unit[0.05]{s}$ from $1\,040$ runs, split by run

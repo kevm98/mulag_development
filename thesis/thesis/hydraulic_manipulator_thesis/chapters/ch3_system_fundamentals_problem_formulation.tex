@@ -840,27 +840,21 @@ single combined reward value.
 \label{sec:sys:gates}
 
 Table~\ref{tab:sys:gates} defines the eight physical gates used throughout this
-thesis. Their role is to supply a criterion that is \emph{not} the reward. A
+thesis. Their role is to supply a criterion that is \emph{not} the reward: a
 policy is optimised against the scalar return of
-Section~\ref{sec:ctrl:optimization}, but it is selected and promoted against
-this vector of physical quantities, and Section~\ref{sec:ctrl:finding} shows
-that the two point in measurably different directions. The gates are therefore
-an instrument for checkpoint selection and for the block-ratchet promotion of
-Section~\ref{sec:ctrl:anchored}, and that is how every result in this thesis
-uses them. They are used to rank and to promote candidates, not to certify a
-stack as accepted, and no claim of certified acceptance is made anywhere in
-this work.
+Section~\ref{sec:ctrl:optimization} but selected and promoted against this
+vector, and Section~\ref{sec:ctrl:finding} shows the two point in measurably
+different directions. They rank and promote candidates; they do not certify a
+stack as accepted, and no such claim is made anywhere here.
 
-All controller stacks are evaluated with the same path, terrain, and
-randomisation conditions. A candidate is preferred when it satisfies more of
-the gates at a wider margin; strong mean tracking does not compensate for loss
-of contact, inadequate cylinder headroom, excessive impacts, or safety
-terminations. Worst-case
-aggregation prevents easy terrain or path cases from masking a local failure.
-Mean absolute errors quantify sustained tracking performance, while the lower
-and upper percentiles capture short alignment, clearance, or acceleration
-events that a mean can hide. Contact and termination measures are reported as
-fractions so that episodes of different completed length remain comparable.
+All stacks are evaluated under the same path, terrain and randomisation
+conditions. A candidate is preferred when it satisfies more gates at a wider
+margin, and strong mean tracking does not compensate for loss of contact,
+inadequate headroom, excessive impacts or safety terminations. Worst-case
+aggregation stops easy terrain or path cases from masking a local failure, the
+percentiles catch short alignment, clearance and acceleration events a mean
+hides, and contact and termination measures are fractions so episodes of
+different completed length stay comparable.
 
 \begin{table}[htbp]
   \centering

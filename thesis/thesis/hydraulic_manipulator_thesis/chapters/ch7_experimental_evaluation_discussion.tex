@@ -540,17 +540,14 @@ losing both at the end.
 \subsection{Capacity Versus Live History}
 \label{sec:eval:attribution}
 
-The capacity-matched control separates the effect of the residual from the
-effect of the history it receives. This comparison is necessary because a larger
-residual can improve control even when it receives no information about the
-current plant, and Table~\ref{tab:eval:arms} cannot distinguish the two.
-
-One control is trained per seed with the history window zeroed and the input
-width unchanged, so the control and the adaptive arm share the frozen base,
-architecture, trainable parameter count, training budget, reward, optimiser and
-plant schedule. The single manipulated variable is whether the numbers the
-encoder reads are the real history or zeros. Both arms are scored at the same
-selected checkpoint as Table~\ref{tab:eval:arms}.
+A larger residual can improve control while receiving no information about the
+current plant, and Table~\ref{tab:eval:arms} cannot distinguish that from
+adaptation. One control is therefore trained per seed with the history window
+zeroed and the input width unchanged, sharing the frozen base, architecture,
+trainable parameter count, budget, reward, optimiser and plant schedule with the
+adaptive arm. The single manipulated variable is whether the encoder reads real
+history or zeros, and both arms are scored at the same checkpoint as
+Table~\ref{tab:eval:arms}.
 
 \begin{table}[tbp]
   \centering
@@ -596,15 +593,13 @@ lateral tracking, and seeds~$101$ and~$7$ are worse on both. Live history
 therefore produces a resolved closed-loop benefit on particular combinations of
 seed and checkpoint.
 
-One mechanism is a candidate and is not settled by these data. Every arm in this
-table conditions on the full observation over the window, $70$ features per step
-and $1400$ numbers in total, of which almost all describe terrain and task state
-rather than plant identity, while the head that consumes them holds $53$k
-parameters. Rapid motor adaptation avoids exactly this by never training its
-encoder with the policy gradient, fitting it instead by regression onto a
-low-dimensional privileged vector~\cite{kumar2021rma}. Restricting the encoder
-input to plant-relevant channels is the direct test and is left to future work
-(Section~\ref{sec:concl:future}).
+One mechanism is a candidate and is not settled by these data. Every arm here
+conditions on the full observation over the window, $70$ features per step and
+$1400$ numbers in total, almost all describing terrain and task state rather
+than plant identity, into a $53$k-parameter head. Rapid motor adaptation avoids
+exactly this by never training its encoder with the policy gradient, fitting it
+by regression onto a low-dimensional privileged vector~\cite{kumar2021rma}.
+Restricting the encoder input to plant-relevant channels is the direct test.
 
 The two statements the section supports are therefore separate. Added residual
 capacity reproduces the median gain against the frozen base, so live history is
@@ -619,12 +614,13 @@ those particular seeds.
 \label{sec:eval:dose}
 
 The cutter-mass dose was varied and compared with the $1.0$ condition, in which
-the event schedule runs but the mass does not change. In the higher-dose runs,
-half of the environments start at the heavier mass and the later flip exchanges
-the nominal and heavy assignments. The dose therefore changes both the starting
-mass distribution and the event magnitude. This experiment measures dependence
-on cutter mass; it does not isolate a transient response to the mid-episode
-change.
+the event schedule runs but the mass does not change. At higher doses half the
+environments start at the heavier mass and the later flip exchanges the nominal
+and heavy assignments, so the dose changes both the starting mass distribution
+and the event magnitude. This measures dependence on cutter mass; it does not
+isolate a transient response to the mid-episode change. It also scores the
+residual against the frozen base rather than against the capacity-matched
+control, so it does not separate capacity from history either.
 
 \begin{table}[tbp]
   \centering
@@ -740,20 +736,11 @@ history. The increment favours live history on seed~$42$ here and on seed~$17$
 at the final checkpoint. It is conditional, and estimator quality alone does not
 establish it.
 
-The answer the chapter supports has two levels and both have to be reported
-together. Online plant context is usable, and the level at which it is usable is
-set by the interface it acts through. The explicit mechanism improves the model
-that consumes its estimate and changes nothing in the loop. The bounded residual
-on the valve path improves task tracking on the median training seed under the
-pre-registered rule and under the fixed final checkpoint, which is a
-method-level result about the residual controller, and most of that median gain
-is residual capacity: live history separates from a capacity-matched control on
-one seed of five. The dose study resolves a load-dependent lateral component of
-that residual advantage, but it scores the residual against the frozen base
-rather than against the capacity-matched control, so it does not say whether the
-component is capacity or history. Effective online adaptation here therefore
-depends jointly on a residual
-deficit surviving robust training, on that variation being observable, on the
-correction path retaining authority, and on live history adding something beyond
-capacity. Stated without those four, the residual result will be misread as
-plant identification.
+The answer has two levels and both have to be reported together. Online plant
+context is usable, and the level at which it is usable is set by the interface
+it acts through: the explicit mechanism improves the model that consumes its
+estimate and changes nothing in the loop, while the bounded residual on the
+valve path improves tracking on the median training seed under both checkpoint
+rules. That second result is about the residual controller, not about
+adaptation, because most of the median gain is capacity. Stated without the four
+conditions above, it will be misread as plant identification.
