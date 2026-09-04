@@ -82,6 +82,49 @@ those collections.
   \end{tabular}
 \end{table}
 
+\section{Closed-Loop Curriculum Generation}
+\label{app:data:curriculum}
+
+The procedure that produced the $1\,000$-run Simscape curriculum of
+Section~\ref{sec:data:randomization}. No reported model is trained on it; it is
+recorded so the collection can be reproduced and audited.
+
+\begin{algorithm}[tb]
+  \small
+  \DontPrintSemicolon
+  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+  \Input{run budget $N=1000$; joint limits $\bm{q}_{\min},\bm{q}_{\max}$;
+    nominal parameters $\bm{\theta}_0$}
+  \Output{dataset $\mathcal{D}=\{(\text{trajectory}_i,\bm{\xi}_i)\}_{i=1}^{N}$}
+  \BlankLine
+  $\mathbf{L}\leftarrow\textsc{LatinHypercube}(N,12)$
+    \tcp*{one design for the whole batch}
+  \For{$i\leftarrow 1$ \KwTo $N$}{
+    assign $i$ to a curriculum block (nominal / hydraulic / mechanical /
+      full)\;
+    $\bm{\xi}_i\leftarrow\textsc{DrawParameters}(\mathbf{L}_i,\text{block})$
+      \tcp*{$\varepsilon_{\mathrm{air}},\varepsilon_{\mathrm{vol}},c_d,
+      w_{\mathrm{seal}},p_{\mathrm{set}}$; masses, CoM, inertia,
+      stiffness}
+  }
+  \For{$i\leftarrow 1$ \KwTo $N$}{
+    inject $\bm{\xi}_i$ into the Simscape model\;
+    $n_w\leftarrow\textsc{RandInt}(12,20)$;\quad
+      $\bm{W}\leftarrow\textsc{LatinHypercube}(n_w,\text{JDOF})$ within
+      $[\bm{q}_{\min},\bm{q}_{\max}]$\;
+    assign each segment a speed class (slow / medium / fast / variable);
+      \textbf{no} dwell\;
+    $\bm{q}_{\mathrm{ref}}(t)\leftarrow\textsc{Interpolate}(\bm{W})$ over
+      $\unit[22]{s}$\;
+    simulate with \texttt{ode23t}; log on the $\unit[0.05]{s}$ grid\;
+    store $(\bm{u},\bm{x},\dot{\bm{x}},\Delta\bm{p},\bm{F},\bm{q},
+      \dot{\bm{q}},\bm{q}_{\mathrm{ref}},\bm{\xi}_i)$\;
+    \lIf{$i \bmod 100 = 0$}{checkpoint $\mathcal{D}$ to disk}
+  }
+  \caption{Closed-loop curriculum generation.}
+  \label{alg:data:closed-loop}
+\end{algorithm}
+
 \section{Open-Loop Export Audit}
 
 \begin{table}[H]
@@ -332,6 +375,89 @@ Read that way, the traces show that the model-derived pressure state responds
 through the event. The adaptive advantage is already present before it, which is
 consistent with continuous conditioning on the operating point. The uncalibrated
 state is not evidence for the magnitude or cause of the tracking improvement.
+
+\section{Reference-Anchored PPO in Full}
+\label{app:anchored-ppo}
+
+The five-stage procedure summarised in Section~\ref{sec:ctrl:anchored}. The
+teacher is used only in Stage~1; every PPO rollout is controlled by
+$\pi_\vartheta$ alone, and the frozen reference advances only through
+checkpoints that pass every gate.
+
+\begin{algorithm}[!ht]
+  \small
+  \DontPrintSemicolon
+  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+  \Input{teacher $\pi_T$; gate test
+    $\bm{G}(\vartheta)\preceq\bm{g}^{\star}$; $M$ PPO blocks; anchored loss
+    and divergence bounds from Equations~\eqref{eq:ctrl:anchored-loss}
+    and~\eqref{eq:ctrl:bounds}}
+  \Output{last promoted actor $\vartheta^{\star}$ satisfying the gate test}
+  \tcp{\textbf{Stage 1 -- Distil a feasible actor}}
+  $\mathcal{D}\leftarrow$ DAgger states labelled by teacher mean action
+    $\bm{y}^{T}$\;
+  $\vartheta \leftarrow \arg\min_{\vartheta}
+    \mathbb{E}_{(\bm{o},\bm{y}^{T})\sim\mathcal{D}}
+    \bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$\;
+  remove $\pi_T$ from the controller
+    \tcp*{all later rollouts are teacher-free}
+  \tcp{\textbf{Stage 2 -- Warm the critic and set the first anchor}}
+  freeze $\vartheta$ and the observation normalisers\;
+  \For{$j\leftarrow1$ \KwTo $150$}{
+    roll out $\pi_{\vartheta}$ and set
+    $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
+      \nabla_{\psi}\mathcal{L}_{V}(\psi)$\;
+  }
+  verify $\vartheta_{\mathrm{after}}=\vartheta_{\mathrm{before}}$\;
+  $\vartheta_{\mathrm{ref}}\leftarrow\vartheta$;
+    $\vartheta^{\star}\leftarrow\vartheta$
+    \tcp*{initial verified anchor}
+  \For{block $m\leftarrow0$ \KwTo $M-1$}{
+    \tcp{\textbf{Stage 3 -- Train inside the frozen reference bound}}
+    freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
+    \For{each PPO iteration in block $m$}{
+      collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
+      compute and normalise GAE; save snapshot $\mathcal{S}$;
+        set $\vartheta_{\mathrm{old}}\leftarrow\vartheta$\;
+      \For{$3$ epochs over the rollout minibatches}{
+        \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
+          >\delta_{\mathrm{upd}}$}{stop the update epochs}
+        update actor and critic using Equation~\eqref{eq:ctrl:anchored-loss}\;
+      }
+      compute $(D_{\mathrm{upd}},D_{\mathrm{ref}})$ on the full rollout
+        \tcp*{full rollout}
+      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ is non-finite}{
+        restore the complete snapshot $\mathcal{S}$\;
+      }
+      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{or}
+        $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
+        restore the actor and its optimiser moments from $\mathcal{S}$;
+          retain the new critic fit\;
+      }
+    }
+    \tcp{\textbf{Stage 4 -- Evaluate the block and promote a passing checkpoint}}
+    score every saved checkpoint on at least three held-out terrain meshes\;
+    aggregate each gate to the worst mesh and, for tracking gates, the worst
+      path family\;
+    $\mathcal{C}\leftarrow
+      \{\vartheta_c:\bm{G}(\vartheta_c)\preceq\bm{g}^{\star}\}$\;
+    \eIf{$\mathcal{C}\neq\varnothing$}{
+      choose $\vartheta^{\star}\in\mathcal{C}$ using the fixed checkpoint
+        selection rule\;
+      load $\vartheta\leftarrow\vartheta^{\star}$ and set
+        $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
+      reset the actor optimiser moments; retain the critic state\;
+    }{
+      leave $\vartheta_{\mathrm{ref}}$ unchanged; do not promote the block\;
+    }
+  }
+  \tcp{\textbf{Stage 5 -- Return the deployable policy}}
+  \Return{$\vartheta^{\star}=\vartheta_{\mathrm{ref}}$}\;
+  \caption{Five-stage reference-anchored PPO procedure. The teacher is used
+  only in Stage~1. All PPO rollouts are controlled by $\pi_{\vartheta}$ alone,
+  and the frozen reference moves only when a checkpoint passes every gate.}
+  \label{alg:ctrl:anchored}
+\end{algorithm}
 
 \section{Derivation of the Reference-Divergence Gate Bound}
 \label{app:kl-bound}

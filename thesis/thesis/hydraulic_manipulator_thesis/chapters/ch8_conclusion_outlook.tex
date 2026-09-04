@@ -378,33 +378,46 @@ transient adaptation response.
 \section{Future Work}
 \label{sec:concl:future}
 
-The evidence in this thesis is simulation-to-simulation. The next step is to
-evaluate the learned actuator models and distilled policy on the target machine.
+The evidence in this thesis is simulation-to-simulation, and the three
+experiments that would most change what it can claim are also in simulation.
+They are listed first for that reason.
 
-That step begins with instrumentation, because the FME~500 as delivered carries
-no cylinder-chamber pressure transducers, and the differential pressure the
-models propagate exists here only as an actuator-model state. Fitting pressure
-transducers, extension sensing and a rod load pin converts three modelled
-quantities into measured ones. The collection instrument is already designed and
-validated: the open-loop excitation schedule of Chapter~\ref{chap:data} was built
-to make the valve causally identifiable, and the identifiability audit of
-Section~\ref{sec:data:openloop-collection} applies to machine data unchanged.
+\textbf{Restrict the encoder input.} This targets the weakest link in the
+present result. Every history encoder trained here reads the full observation,
+$1400$ numbers over the window, of which almost all describe terrain and task
+state rather than plant identity, and a head of this capacity can fit that
+noise. Restricting the encoder to plant-relevant channels, or fitting it by
+regression onto a privileged plant vector instead of through the policy gradient
+as rapid motor adaptation does~\cite{kumar2021rma}, is the direct test of
+whether the missing history effect is a property of the plant or of the encoder.
 
-One simulation experiment should precede that step, because it targets the
-weakest link in the present result. Every history encoder trained here reads the
-full observation, $1400$ numbers over the window, of which almost all describe
-terrain and task state rather than plant identity, and a head of this capacity
-can fit that noise. Restricting the encoder input to plant-relevant channels, or
-fitting it by regression onto a privileged plant vector instead of through the
-policy gradient as rapid motor adaptation does~\cite{kumar2021rma}, is the
-direct test of whether the missing history effect is a property of the plant or
-of the encoder.
+\textbf{Train more than one seed per representation.} R and IF are one training
+run each, so the cross-stack comparison of Section~\ref{sec:eval:tracking}
+describes two deployed controllers and cannot separate the representation from
+the seed. Three or more runs per stack, scored on the same $33$ cells, would
+convert that observation into a result at moderate cost.
 
-Hardware data would support a bounded correction to the frozen inverse model,
-with hydraulic parameters retained and the original dataset used for replay.
-Input ablation should verify that the correction remains dependent on the valve
-command. The reference-anchored policy provides a suitable starting point
-because it limits policy drift from a verified checkpoint.
+\textbf{Ablate reference-anchored PPO.} Section~\ref{sec:ctrl:finding}
+establishes that unconstrained fine-tuning fails; it does not establish that
+this particular construction is what fixed it. A three-arm comparison against
+plain PPO with early stopping and against the un-fine-tuned distilled policy
+would separate the block ratchet from the constraint it sits inside.
+
+\textbf{Then the machine.} Evaluating the learned actuator models and distilled
+policy on the FME~500 begins with instrumentation, because the machine as
+delivered carries no cylinder-chamber pressure transducers and the differential
+pressure the models propagate exists here only as an actuator-model state.
+Fitting pressure transducers, extension sensing and a rod load pin converts
+three modelled quantities into measured ones. The collection instrument is
+already designed and validated: the open-loop excitation schedule of
+Chapter~\ref{chap:data} was built to make the valve causally identifiable, and
+the identifiability audit of Section~\ref{sec:data:openloop-collection} applies
+to machine data unchanged. Hardware data would then support a bounded correction
+to the frozen inverse model, with hydraulic parameters retained and the original
+dataset used for replay; input ablation should verify that the correction
+remains dependent on the valve command. The reference-anchored policy is a
+suitable starting point because it limits policy drift from a verified
+checkpoint.
 
 The central design lesson is conditional. Robust training absorbs a large part
 of the plant variation before online adaptation is introduced. A remaining

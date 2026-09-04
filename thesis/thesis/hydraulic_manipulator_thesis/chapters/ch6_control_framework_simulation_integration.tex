@@ -694,84 +694,18 @@ travel far from the last point at which proxy and intent were measured to
 agree. In this construction distillation is no longer the endpoint: it is
 $\vartheta_{\mathrm{ref}}^{(0)}$.
 
-Algorithm~\ref{alg:ctrl:anchored} summarises the procedure in five stages.
-The first two produce the initial verified anchor. Stages~3 and~4 repeat for
-each PPO block, and Stage~5 returns the last promoted checkpoint.
+The procedure has five stages. Stage~1 distils a feasible actor from the teacher
+and then removes the teacher, so every later rollout is teacher-free. Stage~2
+warms the critic with the actor and its normalisers frozen, and sets the first
+verified anchor. Stages~3 and~4 repeat per block: train inside the frozen
+reference bound, restoring the actor from a snapshot whenever either divergence
+bound is exceeded or either is non-finite, then score every saved checkpoint on
+at least three held-out meshes, aggregate each gate to the worst mesh and worst
+path family, and promote a passing checkpoint to reference. Stage~5 returns the
+last promoted checkpoint. Algorithm~\ref{alg:ctrl:anchored} in
+Appendix~\ref{app:anchored-ppo} gives it in full.
 
-\begin{algorithm}[!ht]
-  \small
-  \DontPrintSemicolon
-  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
-  \Input{teacher $\pi_T$; gate test
-    $\bm{G}(\vartheta)\preceq\bm{g}^{\star}$; $M$ PPO blocks; anchored loss
-    and divergence bounds from Equations~\eqref{eq:ctrl:anchored-loss}
-    and~\eqref{eq:ctrl:bounds}}
-  \Output{last promoted actor $\vartheta^{\star}$ satisfying the gate test}
-  \tcp{\textbf{Stage 1 -- Distil a feasible actor}}
-  $\mathcal{D}\leftarrow$ DAgger states labelled by teacher mean action
-    $\bm{y}^{T}$\;
-  $\vartheta \leftarrow \arg\min_{\vartheta}
-    \mathbb{E}_{(\bm{o},\bm{y}^{T})\sim\mathcal{D}}
-    \bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$\;
-  remove $\pi_T$ from the controller
-    \tcp*{all later rollouts are teacher-free}
-  \tcp{\textbf{Stage 2 -- Warm the critic and set the first anchor}}
-  freeze $\vartheta$ and the observation normalisers\;
-  \For{$j\leftarrow1$ \KwTo $150$}{
-    roll out $\pi_{\vartheta}$ and set
-    $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
-      \nabla_{\psi}\mathcal{L}_{V}(\psi)$\;
-  }
-  verify $\vartheta_{\mathrm{after}}=\vartheta_{\mathrm{before}}$\;
-  $\vartheta_{\mathrm{ref}}\leftarrow\vartheta$;
-    $\vartheta^{\star}\leftarrow\vartheta$
-    \tcp*{initial verified anchor}
-  \For{block $m\leftarrow0$ \KwTo $M-1$}{
-    \tcp{\textbf{Stage 3 -- Train inside the frozen reference bound}}
-    freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
-    \For{each PPO iteration in block $m$}{
-      collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
-      compute and normalise GAE; save snapshot $\mathcal{S}$;
-        set $\vartheta_{\mathrm{old}}\leftarrow\vartheta$\;
-      \For{$3$ epochs over the rollout minibatches}{
-        \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
-          >\delta_{\mathrm{upd}}$}{stop the update epochs}
-        update actor and critic using Equation~\eqref{eq:ctrl:anchored-loss}\;
-      }
-      compute $(D_{\mathrm{upd}},D_{\mathrm{ref}})$ on the full rollout
-        \tcp*{full rollout}
-      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ is non-finite}{
-        restore the complete snapshot $\mathcal{S}$\;
-      }
-      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{or}
-        $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
-        restore the actor and its optimiser moments from $\mathcal{S}$;
-          retain the new critic fit\;
-      }
-    }
-    \tcp{\textbf{Stage 4 -- Evaluate the block and promote a passing checkpoint}}
-    score every saved checkpoint on at least three held-out terrain meshes\;
-    aggregate each gate to the worst mesh and, for tracking gates, the worst
-      path family\;
-    $\mathcal{C}\leftarrow
-      \{\vartheta_c:\bm{G}(\vartheta_c)\preceq\bm{g}^{\star}\}$\;
-    \eIf{$\mathcal{C}\neq\varnothing$}{
-      choose $\vartheta^{\star}\in\mathcal{C}$ using the fixed checkpoint
-        selection rule\;
-      load $\vartheta\leftarrow\vartheta^{\star}$ and set
-        $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
-      reset the actor optimiser moments; retain the critic state\;
-    }{
-      leave $\vartheta_{\mathrm{ref}}$ unchanged; do not promote the block\;
-    }
-  }
-  \tcp{\textbf{Stage 5 -- Return the deployable policy}}
-  \Return{$\vartheta^{\star}=\vartheta_{\mathrm{ref}}$}\;
-  \caption{Five-stage reference-anchored PPO procedure. The teacher is used
-  only in Stage~1. All PPO rollouts are controlled by $\pi_{\vartheta}$ alone,
-  and the frozen reference moves only when a checkpoint passes every gate.}
-  \label{alg:ctrl:anchored}
-\end{algorithm}
+
 
 \subsection{Theoretical Status}
 \label{sec:ctrl:theory}
@@ -887,11 +821,13 @@ actuator representation changes.
 \section{AF: The Adaptive Stack}
 \label{sec:ctrl:ppo-aamfd}
 
-Table~\ref{tab:ctrl:af-matching} previews what the rest of this section and
-Section~\ref{sec:ctrl:matching} establish in full: AF shares the task,
-terrain, reward, observation and evaluation gates with R and IF, but not their
-action contract or their training protocol, and the comparisons that follow
-respect that split rather than papering over it.
+Table~\ref{tab:ctrl:af-matching} states what AF shares with R and IF and what it
+does not. AF is not a matched replacement for IF: it answers whether a
+history-conditioned correction can improve a frozen direct-valve controller once
+the saturated inverse-model command path has been removed. The matched
+actuator-representation comparison remains R against IF, and adaptation is
+evaluated inside AF against its own frozen and capacity-matched controls. This
+is stated once here and not repeated.
 
 \begin{table}[H]
   \centering
@@ -916,14 +852,6 @@ respect that split rather than papering over it.
   \end{tabular}
 \end{table}
 
-AF is not constructed as a matched replacement for IF and is not used for a
-direct causal ranking against it. The adaptive stack answers a different
-question: whether a history-conditioned correction can improve a frozen
-direct-valve controller once the saturated inverse-model command path has been
-removed. The matched actuator-representation comparison remains R against IF;
-adaptation is evaluated within AF against its own frozen and capacity-matched
-controls.
-
 \ppoAAMFD{} places online adaptation on the forward model alone. The policy
 emits the valve command directly, the frozen strict forward model of
 Section~\ref{sec:models:fd} converts that command to a predicted extension
@@ -938,15 +866,12 @@ stacks:
   \;\longrightarrow\; \text{PhysX} .
 \end{equation}
 %
-The inverse model is absent from the command path. The final AF stack consists
-of the frozen direct-valve base actor, a jointly trained causal history encoder
-and bounded residual head, and the frozen strict forward model. The offline AAM
-of Chapter~\ref{chap:models} is not part of this runtime path. Task definition,
-terrain distribution, reward, evaluation gates and the downstream PhysX
-environment remain fixed. Because AF uses a different command interface,
-cross-stack claims are not based on AF-against-IF ranking. Within AF, disabling
-the residual exactly recovers the frozen base, and the zero-history arm preserves
-the same trainable capacity, providing the controlled comparisons used in
+The inverse model is absent from the command path. The final AF stack is the
+frozen direct-valve base actor, a jointly trained causal history encoder and
+bounded residual head, and the frozen strict forward model; the offline AAM of
+Chapter~\ref{chap:models} is not part of it. Disabling the residual exactly
+recovers the frozen base and the zero-history arm preserves the same trainable
+capacity, which are the controlled comparisons used in
 Chapter~\ref{chap:evaluation}.
 
 That the inverse model is genuinely out of the loop is a verified property
@@ -1202,14 +1127,12 @@ $528$ environments, with the interval on the paired difference excluding zero. A
 bounded correction needs enough authority to matter, and below that threshold it
 contributes noise rather than adaptation; no value of $\alpha$ should therefore
 be read as incidental.
-\ppoAAMFD{} cannot be ranked against \ppoROM{} and \ppoIDFD{} because the action
-contract is different. That restriction is a comparison rule, not a judgement of
-the adaptation result. The adaptation claim is made inside \ppoAAMFD{}, on the
-identified forward model: frozen base, capacity-matched residual without
-history, and history-conditioned residual. Chapter~\ref{chap:evaluation}
-separates architecture-level evidence that the correction can reach the plant
-from method-level evidence about whether the improvement replicates across
-training seeds.
+The adaptation claim is made inside \ppoAAMFD{}, on the identified forward
+model: frozen base, capacity-matched residual without history, and
+history-conditioned residual. Chapter~\ref{chap:evaluation} separates
+architecture-level evidence that the correction can reach the plant from
+method-level evidence about whether the improvement replicates across training
+seeds.
 
 \section{IsaacLab Integration and Timing}
 \label{sec:ctrl:integration}
@@ -1272,7 +1195,7 @@ from drifting apart.
 
 This thesis does not present a three-way ranking of the stacks. Two distinct
 comparisons are made, each with its own matching rule and each carrying one
-claim; conflating them would produce a table whose rows are not commensurable.
+claim.
 
 \paragraph{The Matched Pair: R Against IF}
 The representation claim rests on \ppoROM{} and \ppoIDFD, which agree on every
@@ -1292,16 +1215,6 @@ advantage over \ppoIDFD{} is not evidence that a reduced-order model
 approximates the actuator better than an identified pair: one of the two defines
 the target.
 
-\paragraph{Non-Comparability of AF and IF}
-\ppoAAMFD{} does not share the action contract of the other two, since its
-policy emits the valve command itself where the other two emit a bounded desired
-cylinder increment that a downstream path realises. The quantity the policy
-chooses is not the same quantity in the two cases, so the action chain that
-makes the other comparison fair does not extend to this one. This is a declared
-property of the implementation, and it is why no row of any table ranks
-\ppoAAMFD{} against \ppoIDFD{} on task error. The adaptive claim was never a
-claim about beating the non-adaptive stack.
-
 \paragraph{The Paired Comparison: AF Against Its Own Frozen Base}
 The adaptation claim is made within the adaptive stack, against the frozen base
 policy it was built from, and the matching is exact. The arms share the frozen
@@ -1320,10 +1233,10 @@ beside it as a robustness analysis
 (Sections~\ref{sec:eval:attribution} and~\ref{sec:eval:adaptation}).
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
-Comparing a distilled baseline against a separately optimised adaptive policy
-and attributing the difference to adaptation is not permitted, for the reason
+An unmatched fine-tuning budget is itself a treatment, for the reason
 established in Section~\ref{sec:ctrl:finding}: reward ascent moves a policy off
-the evaluation criterion, so an unmatched budget is itself a treatment. The
-paired construction above satisfies this rule by design. The rule is stated
-because it constrains any future stack added to this comparison, not because the
-present one is at risk of violating it.
+the evaluation criterion. Comparing a distilled baseline against a separately
+optimised adaptive policy and attributing the difference to adaptation is
+therefore not permitted. The paired construction above satisfies this by design;
+the rule is stated because it constrains any stack added to this comparison
+later.

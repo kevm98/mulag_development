@@ -262,6 +262,21 @@ one-step use \ppoIDFD{} makes of it. What it does disturb is adaptation: a
 bounded correction added to a command already resting on its stops has nothing
 left to move (Section~\ref{sec:ctrl:af-no-id}).
 
+Stated on its own, this is one of the clearer transfer results in the thesis and
+it is specific to the structure of the map rather than to its accuracy. A model
+with millimetre one-step error across every domain, including held-out plants,
+diverges by more than a metre in all $118$ of the same runs when asked to close
+the loop on its own predictions. Accuracy is not the failing quantity. The
+failing quantity is the accumulate-and-clip contract: the model predicts a
+command \emph{increment}, the increments are integrated, and sustained demand
+walks the integral onto the clip and holds it there, at which point the map's
+one-step fidelity is irrelevant because its output is no longer what reaches the
+plant. Any inverse model with that contract inherits the result, and a
+one-step validation score cannot detect it. This belongs with the command
+ablation of Section~\ref{sec:models:fd-identifiability} as the second case in
+this thesis where a supervised score stays high while the property a controller
+needs is already gone.
+
 \section{Forward Dynamics Model}
 \label{sec:models:fd}
 

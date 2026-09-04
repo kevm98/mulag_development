@@ -178,30 +178,22 @@ Section~\ref{sec:data:combining}.
 \section{Randomised Parameter Space of the Simscape Campaign}
 \label{sec:data:randomization}
 
-This section and the next record the Simscape randomisation design and the
-procedure that executed it. No reported model is trained on this curriculum. It
-is retained as collection provenance and because its compliance analysis
-(Section~\ref{sec:data:compliance}) informed the IsaacLab factor design. The
-export the actuator models are actually fitted on is a separate closed-loop
-collection on the nominal plant, described in
-Section~\ref{sec:data:combining}. Readers concerned only with trained models
-may continue at Section~\ref{sec:data:open-loop}.
+This section records the Simscape randomisation design as collection provenance.
+No reported model is trained on this curriculum. The export the actuator models
+are actually fitted on is a separate closed-loop collection on the nominal
+plant (Section~\ref{sec:data:combining}). The curriculum is kept because its
+compliance analysis informed the IsaacLab factor design of
+Section~\ref{sec:data:factors}.
 
-\subsection{Sampling Design}
-
-The closed-loop campaign draws its plants from a twelve-dimensional parameter
-space using Latin hypercube sampling~\cite{mckay1979comparison}, which spreads
-the draws more evenly over each marginal than independent uniform sampling would
-at this sample size. The twelve coordinates are fixed once for the whole batch,
-before any simulation runs, so the parameter table is reproducible and can be
-audited independently of the data it produced.
-
-The batch is organised as a curriculum rather than a single homogeneous pool.
-Run~1 is the untouched nominal plant, runs 2--251 randomise only the hydraulics,
-runs 252--501 only the mechanics, and runs 502--1000 both together
-(Figure~\ref{fig:data:design}(a)). This makes it possible to attribute a later
-modelling failure to the hydraulic or the mechanical axis by retraining on one
-block at a time.
+Plants are drawn from a twelve-dimensional space by Latin hypercube
+sampling~\cite{mckay1979comparison}, fixed once before any simulation runs, so
+the parameter table can be audited independently of the data it produced. The
+batch is a curriculum rather than a homogeneous pool: run~1 is the nominal
+plant, runs 2--251 randomise only the hydraulics, runs 252--501 only the
+mechanics, and runs 502--1000 both (Figure~\ref{fig:data:design}(a)), so a
+modelling failure can be attributed to one axis by retraining on one block.
+Appendix~\ref{app:dataset} lists the axes and
+Appendix~\ref{app:data:curriculum} the generation procedure.
 
 \begin{figure}[tb]
   \centering
@@ -213,94 +205,29 @@ block at a time.
   \label{fig:data:design}
 \end{figure}
 
-\subsection{Hydraulic Parameters}
-
-Table~\ref{tab:data:hydraulic} lists the hydraulic axes. They were
-chosen to correspond to the physical mechanisms that make one machine
-differ from another in service, in the sense discussed in
-Section~\ref{sec:fund:actuation-chain}: air works its way into the
-fluid, spools and seals wear, and relief settings drift.
-
-
-
-The seal-wear coordinate is the one place where a single sampled number moves
-several model parameters together. A worn cylinder does not become leakier
-without also becoming slower, so $w_{\mathrm{seal},i}$ scales the piston
-clearance linearly, the valve leakage area with the cube of the same factor, and
-the spool time constant from $\unit[8]{ms}$ to about $\unit[13]{ms}$ at the top
-of the range. Sampling those three independently would have produced physically
-incoherent machines, some very leaky and yet perfectly fast.
-
-\subsection{The Compressibility Axis}
-\label{sec:data:compliance}
-
-The entrained-air and dead-volume coordinates randomise the chamber dead
-volume, which spans $505$ to $\unit[579]{mL}$ across the batch. This reaches
-the pressure dynamics through the continuity equation
-\eqref{eq:sys:continuity}, which carries the chamber volume: a larger chamber
-is more compliant and slower, a smaller one stiffer and faster. The
-compressibility axis therefore enters the batch as capacitance variation.
-
-\subsection{Mechanical Parameters}
-
-The mechanical axes of Table~\ref{tab:data:mechanical} are applied to all
-fourteen rigid bodies, namely the six links, the four cylinder barrels and the
-four pistons. Per body, mass is perturbed by up to $\pm 20\,\%$, the centre of
-mass by up to $\pm 5\,\%$ of its nominal offset, and the inertia tensor with its
-products of inertia consistently with the mass change, so that the body remains
-physically realisable.
-
-
-
-The joint stiffness and damping terms model compliance in the bearings
-and linkage rather than in the fluid. They matter here because they set
-how much of a pressure transient appears as boom oscillation instead of
-clean motion, which is the coupling that a purely kinematic
-controller cannot anticipate.
+Two design choices carry into the deployment factors. Seal wear is one sampled
+number driving three parameters together, so a worn cylinder becomes leakier and
+slower at once: it scales piston clearance linearly, valve leakage area with the
+cube of the same factor, and the spool time constant from $\unit[8]{ms}$ to
+about $\unit[13]{ms}$ at the top of the range. Sampling the three independently
+would have produced machines that are very leaky and yet perfectly fast. The
+entrained-air and dead-volume coordinates randomise chamber dead volume over
+$505$ to $\unit[579]{mL}$, which reaches the pressure dynamics through the
+chamber volume in Equation~\eqref{eq:sys:continuity}, so compressibility enters
+the batch as capacitance variation. The mechanical axes perturb all fourteen
+rigid bodies: mass by up to $\pm 20\,\%$, centre of mass by up to $\pm 5\,\%$
+of its nominal offset, and the inertia tensor consistently with the mass change,
+so each body remains physically realisable. Joint stiffness and damping model
+compliance in the bearings and linkage rather than in the fluid, and set how
+much of a pressure transient appears as boom oscillation instead of clean
+motion.
 
 \section{Closed-Loop Data Collection}
 \label{sec:data:closed-loop}
 
-Algorithm~\ref{alg:data:closed-loop} summarises the procedure that produced
-the curriculum of the preceding section, which no reported result uses. The
-parameter table is fixed before simulation, and each run receives a new
-reference path.
-
-\begin{algorithm}[tb]
-  \small
-  \DontPrintSemicolon
-  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
-  \Input{run budget $N=1000$; joint limits $\bm{q}_{\min},\bm{q}_{\max}$;
-    nominal parameters $\bm{\theta}_0$}
-  \Output{dataset $\mathcal{D}=\{(\text{trajectory}_i,\bm{\xi}_i)\}_{i=1}^{N}$}
-  \BlankLine
-  $\mathbf{L}\leftarrow\textsc{LatinHypercube}(N,12)$
-    \tcp*{one design for the whole batch}
-  \For{$i\leftarrow 1$ \KwTo $N$}{
-    assign $i$ to a curriculum block (nominal / hydraulic / mechanical /
-      full)\;
-    $\bm{\xi}_i\leftarrow\textsc{DrawParameters}(\mathbf{L}_i,\text{block})$
-      \tcp*{$\varepsilon_{\mathrm{air}},\varepsilon_{\mathrm{vol}},c_d,
-      w_{\mathrm{seal}},p_{\mathrm{set}}$; masses, CoM, inertia,
-      stiffness}
-  }
-  \For{$i\leftarrow 1$ \KwTo $N$}{
-    inject $\bm{\xi}_i$ into the Simscape model\;
-    $n_w\leftarrow\textsc{RandInt}(12,20)$;\quad
-      $\bm{W}\leftarrow\textsc{LatinHypercube}(n_w,\text{JDOF})$ within
-      $[\bm{q}_{\min},\bm{q}_{\max}]$\;
-    assign each segment a speed class (slow / medium / fast / variable);
-      \textbf{no} dwell\;
-    $\bm{q}_{\mathrm{ref}}(t)\leftarrow\textsc{Interpolate}(\bm{W})$ over
-      $\unit[22]{s}$\;
-    simulate with \texttt{ode23t}; log on the $\unit[0.05]{s}$ grid\;
-    store $(\bm{u},\bm{x},\dot{\bm{x}},\Delta\bm{p},\bm{F},\bm{q},
-      \dot{\bm{q}},\bm{q}_{\mathrm{ref}},\bm{\xi}_i)$\;
-    \lIf{$i \bmod 100 = 0$}{checkpoint $\mathcal{D}$ to disk}
-  }
-  \caption{Closed-loop curriculum generation.}
-  \label{alg:data:closed-loop}
-\end{algorithm}
+Algorithm~\ref{alg:data:closed-loop} in Appendix~\ref{app:data:curriculum}
+gives the procedure that produced the curriculum above. The parameter table is
+fixed before simulation and each run receives a new reference path.
 
 \subsection{The Controller as a Data-Collection Instrument}
 
