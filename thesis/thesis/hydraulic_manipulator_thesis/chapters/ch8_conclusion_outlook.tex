@@ -102,8 +102,8 @@ $\unit[70.3]{mm}$, a median of $\unit[28.1]{mm}$ and $95.29\,\%$ ground contact
 demonstrated behaviour because the reward is an imperfect proxy for the
 evaluation gates.
 
-\textbf{The robust stacks retain a broad margin without online adaptation
-(RQ2, RQ5).} Every closed-loop result is
+\textbf{The robust stacks retain a broad margin against mechanical variation
+and against authority loss, without online adaptation (RQ2, RQ5).} Every closed-loop result is
 measured on held-out meshes, eleven trajectory families scored individually, and
 plants drawn from sixteen reserved factor configurations disjoint from training
 by construction. Under those conditions \ppoIDFD{} holds the lateral criterion in
@@ -255,11 +255,17 @@ above rather than repeated.
 \textbf{Transferable hydraulic actuator learning} is delivered: both
 representations were identified from Simscape and realised in IsaacLab, and the
 inverse model transfers without deployment-specific retraining. The
-\textbf{reduced-order actuator model} is delivered and carries everything
-downstream, being accurate enough to serve as the deployment plant and cheap
-enough to evaluate inside GPU-parallel training, which the stiff implicit solver
-of the model it replaces cannot support; it was calibrated against IsaacLab and
-is therefore the reference condition rather than an independent competitor.
+\textbf{reduced-order actuator model} is delivered as a surrogate and carries
+everything downstream, being accurate enough to serve as the deployment plant
+and cheap enough to evaluate inside GPU-parallel training, which the stiff
+implicit solver of the model it replaces cannot support; it was calibrated
+against IsaacLab and is therefore the reference condition rather than an
+independent competitor. It is not delivered as an identified plant. Its fitted
+physical constants sit on their clamps, the explicit chain alone produces no net
+travel, and the learned heads move the cylinder
+(Section~\ref{sec:models:rom}). The structure buys a bounded, differentiable
+transition form, not measured hydraulic constants, and no result in this thesis
+rests on reading those constants as physical.
 
 The \textbf{control-relevant identification and validation} procedure is
 delivered and is the contribution most likely to transfer independently of this
@@ -330,10 +336,14 @@ head-alignment gate under worst-case aggregation
 eight-gate evaluation contract. The closed-loop comparisons resolve differences to a few per cent over $33$
 paired conditions and do not establish equivalence. The available plant
 variation bounds the disturbance rather than the architecture, and more tightly
-than the sweep's labels suggest: a stack shown to absorb a $40\%$ reduction in
-valve effectiveness and a nominal doubling of every deployment factor has been
-shown to tolerate what actually reached it, which on the inverse/forward plant
-is a mechanical perturbation only. The three
+than the sweep's labels suggest. A stack has been shown to tolerate what
+actually reached it, which on the inverse and forward plant is a mechanical
+perturbation only, plus a generic reduction of realised actuator motion. Median
+lateral error first reaches $1.5$ times its full-authority value at
+$\kappa = 0.20$ for \ppoIDFD{} and $\kappa = 0.10$ for \ppoROM{}, and no stack
+reaches the pre-declared breakdown gate down to $\kappa = 0.01$
+(Section~\ref{sec:eval:boundary-design}). That is an authority margin, not a
+demonstration of hydraulic robustness. The three
 stacks are matched on evaluation but not on training budget, so the comparison
 describes three deployed controllers rather than three equally tuned training
 procedures.

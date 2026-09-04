@@ -150,8 +150,9 @@ remains for adaptation once the first four are settled. The six questions are:
     preserving the command dependence a controller requires?
   \item To what extent do actuator models identified from Simscape transfer to
     an IsaacLab manipulator without deployment-specific retraining?
-  \item Can a physics-structured reduced-order hydraulic model supply dynamics
-    that are accurate and stable enough for GPU-parallel policy training?
+  \item Can a structurally constrained reduced-order hydraulic model supply
+    dynamics that are accurate and stable enough for GPU-parallel policy
+    training?
   \item Can a policy trained from a privileged classical teacher become the sole
     deployed controller while acting through learned actuator dynamics?
   \item How does the choice of actuator representation affect tracking, command
@@ -198,7 +199,7 @@ of adding residual capacity. The work rests on the following contributions:
 \textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
 hydraulic actuation from high-fidelity Simscape data and transfers it into
 IsaacLab through two representations, a modular inverse and forward chain and a
-physics-structured reduced-order model. The inverse and forward pair transfers
+structurally constrained reduced-order model. The inverse and forward pair transfers
 frozen, without deployment-specific retraining. The reduced-order model instead
 receives a small bounded calibration against the deployment plant, so it serves
 as a reference condition rather than an independent competitor
@@ -213,12 +214,15 @@ paired with input ablation is established here as a required test before a
 learned actuator model is admitted to control
 (Chapters~\ref{chap:data} and~\ref{chap:models}).
 
-\textbf{Reduced-Order Actuator Model:} A command-conditioned grey-box actuator
-in which pressure, force, velocity and extension propagation remain explicit
-while learning covers valve realisation and unmodelled loading. It is accurate
-enough to serve as the deployment plant, stable in recursive rollout, and cheap
-enough to evaluate inside GPU-parallel policy training
-(Chapter~\ref{chap:models}).
+\textbf{Reduced-Order Actuator Model:} A command-conditioned recurrent actuator
+surrogate whose transition is written as an explicit hydraulic chain, so the
+predicted step stays differentiable in named quantities and bounded in form,
+with learned heads covering valve realisation and unmodelled loading. It is
+accurate enough to serve as the deployment plant, stable in recursive rollout,
+and cheap enough to evaluate inside GPU-parallel policy training. It is not an
+identified plant: the fitted physical constants settle on their clamps and the
+realised motion comes from the learned heads, which is measured and reported
+rather than assumed (Section~\ref{sec:models:rom}).
 
 \textbf{Policy-Only Control Through Learned Hydraulics:} A damped least-squares
 controller supplies privileged demonstrations during training and is then

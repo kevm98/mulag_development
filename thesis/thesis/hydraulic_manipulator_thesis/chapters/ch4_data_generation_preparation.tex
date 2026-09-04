@@ -347,7 +347,7 @@ motivating a separate open-loop experiment.
 \subsection{Design of the Excitation Signal}
 
 The excitation run lasts $\unit[64]{s}$ and follows the fixed schedule in
-Figure~\ref{fig:data:design}(c). One second of startup is discarded, because
+Figure~\ref{fig:data:design}(b). One second of startup is discarded, because
 those samples describe the initialisation rather than the dynamics. Four
 sequential slots follow, each giving one cylinder ten seconds of excitation
 followed by a half-second zero-command gap that makes the segment boundaries
@@ -527,8 +527,8 @@ through that same action port, at small amplitude and a hold of ten control
 steps, so the excitation is causally independent of the state without leaving
 the safe envelope. Probe actions are logged separately from controller output.
 Each run follows a fixed eleven-segment structure (settle, three postures, three
-PRBS windows, DLS task motion, reach-and-return and stow), giving $11\,304$
-control steps and $\unit[188.4]{s}$ of simulated time per run.
+PRBS windows, DLS task motion, reach-and-return and stow). As recorded, each
+run is $11\,520$ control steps and $\unit[192.0]{s}$ of simulated time.
 
 Figure~\ref{fig:data:isaaclab-collection} summarises the IsaacLab collection
 configuration and its frozen run-level outputs.
@@ -721,11 +721,16 @@ an explicit input mask rather than by convention:
 Windows are contained within a single run, and each carries the
 stopped-gradient target $\latent = \mu(\factorvec)$ of its own run together with
 the run identifier, domain, split and valid history bounds. Applied to the $118$
-frozen runs this yields $444\,624$ causal history ticks; what is built from them
-belongs to Chapter~\ref{chap:models}.
+frozen runs this yields $434\,240$ rows, of which $431\,998$ carry a complete
+twenty-step window ($3\,661$ per run; the first nineteen ticks of a run cannot
+fill one). What is built from them belongs to Chapter~\ref{chap:models}.
 
-The residual encoder deployed in \ppoAAMFD{} shares this row but uses no
-collection at all, for the reason given in Section~\ref{sec:data:onpolicy}.
+The residual encoder deployed in \ppoAAMFD{} uses no collection at all, for the
+reason given in Section~\ref{sec:data:onpolicy}, and it does not read this row.
+It reads the whole $66$-value policy observation together with the four
+previously applied valve commands, $70$ values per step. The row defined here is
+the contract of the explicit estimator only. What the wider input costs is
+examined in Section~\ref{sec:eval:adaptation}.
 
 \subsection{Features and Targets for the Prediction Models}
 \label{sec:data:sd-features}
@@ -761,11 +766,15 @@ Whether live history contributes beyond additional residual capacity is tested
 explicitly against a capacity-matched zero-history control in
 Section~\ref{sec:eval:adaptation}.
 
-Two properties of the frozen collection are inherited unchanged. The history row
-is the same eighteen-value row defined above, with the same four exclusion
-classes enforced by the same input mask, and the plant is still the deployment
-plant, so the change of training regime does not substitute a different
-system.
+One property of the frozen collection is inherited unchanged: the plant is still
+the deployment plant, so the change of training regime does not substitute a
+different system. The history row is not inherited. The residual encoder reads
+the full policy observation and the previous valve command rather than the
+eighteen-value row, so the exclusion contract above does not apply to it. That
+is stated where the residual is defined
+(Section~\ref{sec:ctrl:af-residual}) and carried into
+Section~\ref{sec:eval:adaptation}, where it becomes the leading candidate
+explanation for what the adaptation experiment finds.
 
 \section{Preprocessing and Data Splits}
 \label{sec:data:preprocessing}

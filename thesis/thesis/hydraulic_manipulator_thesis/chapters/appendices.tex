@@ -362,7 +362,7 @@ divergences:
 This step is exact only if the per-step divergences on the right are evaluated
 on states drawn from $\pi_{\mathrm{ref}}$'s own rollout distribution. In the
 actual training loop $D_{\mathrm{ref}}$ is evaluated on states visited by the
-\emph{live} policy $\pi_\vartheta$ (Section~\ref{sec:ctrl:af-frozen}), not by
+\emph{live} policy $\pi_\vartheta$ (Section~\ref{sec:ctrl:anchored}), not by
 $\pi_{\mathrm{ref}}$, so what follows is the idealised argument the main text
 already flags as carrying a measure mismatch, not a derivation that closes
 that gap.
@@ -405,15 +405,11 @@ gives the quoted bound,
 $\delta_{\mathrm{ref}} = 0.05$, $\sqrt{H\delta_{\mathrm{ref}}/2} =
 \sqrt{70.2} \approx 8.38$. For a gate metric normalised to $[0,1]$,
 $G_{\max}=1$, so Equation~\eqref{eq:app:final-bound} evaluates to
-$2 \times 8.38 \approx 16.76$. This is the value the formula in
-Section~\ref{sec:ctrl:theory} produces; the main text's statement that the
-bound ``exceeds eight'' understates it by close to a factor of two, and the
-correct reading is that the bound exceeds sixteen for a metric bounded in
-$[0,1]$. The substantive conclusion is unaffected and, if anything,
-strengthened: a bound of $16.76$ on a $[0,1]$-valued metric is vacuous more
-emphatically than a bound of $8.38$ would be, and neither closes the measure
-mismatch flagged above. The construction remains a principled restriction of
-reward ascent to a neighbourhood of a verified policy, not a certificate.
+$2 \times 8.38 \approx 16.76$, the value quoted in
+Section~\ref{sec:ctrl:theory}. A bound of $16.76$ on a $[0,1]$-valued metric is
+vacuous, and it does not close the measure mismatch noted above. The
+construction remains a principled restriction of reward ascent to a
+neighbourhood of a verified policy, not a certificate.
 
 \section{Reproduction Entry Points}
 

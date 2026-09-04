@@ -292,7 +292,7 @@ cylinder travel, replacing the teacher's hard clamp into the learned range. The
 command scale converts the filtered action into $\unit[4]{mm}$ of cylinder
 travel per unit action, and the target integrator accumulates the increments in
 reference space, permitted to lead the measured extension by at most
-$\unit[18]{mm}$.
+$\unit[50]{mm}$ on cylinders~1 to~3 and $\unit[20]{mm}$ on cylinder~4.
 
 This chain describes the cylinder-increment interpretation of the action, which
 \ppoROM{} and \ppoIDFD{} use. Under \ppoAAMFD{} the same bounded action is read
@@ -302,15 +302,15 @@ therefore do not have the same meaning on that stack, which is one reason its
 results are read against its own frozen base
 (Section~\ref{sec:ctrl:matching}).
 
-That last cap is an anti-windup device and it is load-bearing. Relaxing it from
-$\unit[18]{mm}$ to $\unit[50]{mm}$ halved the lateral error on the two families
-demanding a sustained standing offset (\texttt{lane\_change\_hold} from $0.4833$
-to $0.2310$, \texttt{boom\_sweep} from $0.3745$ to $0.1602$), showing that the
-clamp was bounding the standing effort those paths need, while the same
-relaxation on cylinder~4 drove head alignment from $0.9507$ to $0.4636$. The
-final task therefore resolves the trade per axis, and this is the configuration
-every reported \ppoROM{} result was produced under: $\unit[50]{mm}$ on
-cylinders~1 to~3 and $\unit[20]{mm}$ on cylinder~4.
+That last cap is an anti-windup device and it is load-bearing, which is how the
+per-axis split above was arrived at. An earlier configuration used
+$\unit[18]{mm}$ on every cylinder. Relaxing it to $\unit[50]{mm}$ halved the
+lateral error on the two families demanding a sustained standing offset
+(\texttt{lane\_change\_hold} from $0.4833$ to $0.2310$, \texttt{boom\_sweep}
+from $0.3745$ to $0.1602$), showing that the clamp was bounding the standing
+effort those paths need, while the same relaxation on cylinder~4 drove head
+alignment from $0.9507$ to $0.4636$. The trade is therefore resolved per axis.
+The $\unit[18]{mm}$ value is historical and no reported result uses it.
 
 The chain replaces the residual band, since exploration is bounded by how much
 motion a single action can command rather than by proximity to a baseline, and
@@ -1152,12 +1152,23 @@ history and the closed-loop comparison with the frozen base.
 Two consistency requirements follow from the system model of
 Chapter~\ref{chap:system}, and both are met by construction.
 
-The first is causality. Each history row carries observable quantities only,
-namely joint positions, joint velocities, cylinder pressure differences and the
-previous valve command. The privileged factor vector, the true latent, the
-reference, future rows and any hidden simulator state are excluded, and the
-estimate at step $t$ is formed without step $t$, so nothing enters the deployed
-path that would be unavailable on the physical machine.
+The first is causality. Each history row carries the $66$-value policy
+observation and the four previously applied valve commands, $70$ values per
+step, all of them quantities the deployed stack produces at runtime. The
+privileged factor vector, the true latent, future rows and any hidden simulator
+state are excluded, and the estimate at step $t$ is formed without step $t$, so
+nothing enters the deployed path that would be unavailable on the physical
+machine.
+
+The task reference is not excluded, and that separates this contract from the
+explicit estimator's in Section~\ref{sec:data:history-features}, where the
+reference is masked so the latent describes the plant rather than the
+trajectory. No such mask was imposed here, because the encoder is trained under
+the reinforcement objective rather than against a latent target. Most of what it
+reads therefore describes terrain and task state rather than plant identity.
+Section~\ref{sec:eval:adaptation} treats that as the leading candidate
+explanation for the adaptation result, and
+Section~\ref{sec:eval:starved} tests it directly.
 
 The second is a qualification rather than a guarantee. Under \ppoAAMFD{} the
 pressure differences supplied to the encoder are recursive states of the frozen
