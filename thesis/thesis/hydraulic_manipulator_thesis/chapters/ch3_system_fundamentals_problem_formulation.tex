@@ -591,6 +591,21 @@ learned model consumes $\Delta p$ through a fitted normaliser, and
 Appendix~\ref{app:pressure-signals} reads
 the deployed pressure state for shape only, for this reason.
 
+That normaliser is what keeps the wrong level away from the results. Each model
+standardises the pressure channel as $(\Delta p - \mu)/\sigma$ with $\mu$ and
+$\sigma$ fitted on this same export; the inverse model's four pressure channels
+carry $\sigma$ between $\unit[50]{MPa}$ and $\unit[70]{MPa}$, and the forward
+model, the reduced-order model and the offline AAM each store their own. Scaling
+every pressure by a constant and scaling $\mu$ and $\sigma$ with it leaves the
+standardised input unchanged, and therefore leaves every trained network and
+every reported number unchanged. Rewriting the export at a plausible relief
+pressure would relabel the axis and alter no measurement. It would also repair
+nothing: pressure-increment $R^2$ is $0.06$ to $0.09$
+(Section~\ref{sec:models:rom}), so the state follows the level poorly in any
+units. The wrong level costs interpretation rather than correctness, and the
+cost falls where the pressure channel is read as physical, which is the
+seal-condition decoding of Section~\ref{sec:models:aam-content}.
+
 Beyond these checks the model represents one machine and omits thermal
 dynamics. The logged rod-force channel is not carried into the learned actuator
 models: force is generated internally by the PhysX plant at deployment, and the
