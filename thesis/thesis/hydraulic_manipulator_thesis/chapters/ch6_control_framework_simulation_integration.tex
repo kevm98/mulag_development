@@ -126,7 +126,7 @@ controller that closes quickly on the task error simply excites it.
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch6/ch6_dls_controller}
-  \caption{Feedback realization of the damped least-squares teacher of
+  \caption{Feedback realisation of the damped least-squares teacher of
   \eqref{eq:ctrl:teacher-dls}. The weighted task error is scaled by $g$, mapped
   to the first three cylinder coordinates by the measured damped inverse
   $\bm{J}_c^{\#}(\lambda)$, and clipped to $\pm\Delta x_{\max}$ per tick. Cylinder~4 is
@@ -432,7 +432,7 @@ gates of Section~\ref{sec:sys:evaluation-criteria}.
 \subsection{Optimisation}
 \label{sec:ctrl:optimization}
 
-Policies are optimised with clipped-surrogate PPO over generalized advantage
+Policies are optimised with clipped-surrogate PPO over generalised advantage
 estimation, in the form of Section~\ref{sec:fund:rl-residual}. The maintained
 configuration uses clip parameter $\epsilon = 0.2$, discount $\gamma = 0.99$,
 GAE parameter $\lambda = 0.95$, five learning epochs over four minibatches per
@@ -466,7 +466,7 @@ here means the arm does not move at all rather than that it tracks nominally, so
 the initial standard deviation was raised from $0.05$ to $0.30$ to let the
 policy discover the command directions before refining them. On the terrain
 task, where distillation supplies a competent starting point, it is reduced
-again and \emph{held fixed} rather than initialized, for the reason taken up in
+again and \emph{held fixed} rather than initialised, for the reason taken up in
 Section~\ref{sec:ctrl:anchored}. Exact values for any reported run are read from
 that run's frozen manifest.
 
@@ -475,7 +475,7 @@ that run's frozen manifest.
 
 \subsection{Distillation by DAgger}
 
-Policies are initialized by imitation, not by reward. The privileged teacher is
+Policies are initialised by imitation, not by reward. The privileged teacher is
 rolled out in the student's own environment and the student is fitted to the
 teacher's raw action by regression, in the DAgger scheme of Ross et
 al.~\cite{ross2011reduction}: the teacher's probability of \emph{executing} the
@@ -615,8 +615,8 @@ does not, and therefore penalizes the \emph{abandonment} of reference
 behaviour. The reverse direction is mode-seeking and would permit the policy to
 collapse onto a subset of reference behaviour at no cost, which is the observed failure, in which one competence was dropped to buy another. It
 follows that the term is a behaviour-cloning anchor evaluated on the policy's
-own state distribution, rather than the reverse-KL regularizer of soft
-reinforcement learning. Its lineage is demonstration-regularized policy
+own state distribution, rather than the reverse-KL regulariser of soft
+reinforcement learning. Its lineage is demonstration-regularised policy
 gradient~\cite{rajeswaran2018dapg}, not the Boltzmann-optimum family.
 
 The actor objective is

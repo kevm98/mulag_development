@@ -107,8 +107,98 @@ correction acts and on whether live history adds information beyond residual
 capacity.
 }
 
-% Table of contents (plus list of figures/tables)
-\RRLABcontents
+% Table of contents, list of figures, list of tables, nomenclature.
+% \RRLABcontents is expanded here rather than called, because the class macro
+% emits only \tableofcontents and then resets the page counter, which would put
+% the two lists after page 1 of Chapter 1.
+\tableofcontents
+\cleardoublepage
+\listoffigures
+\cleardoublepage
+\listoftables
+\cleardoublepage
+
+\chapter*{Nomenclature}
+\addcontentsline{toc}{chapter}{Nomenclature}
+
+\noindent\textbf{Control stacks.} The three deployed stacks are named once here
+and referred to by the short label everywhere else.
+
+\medskip
+\noindent\begin{tabular}{@{}ll@{\hspace{2em}}p{.60\textwidth}@{}}
+  \toprule
+  Label & Full name & Actuator path \\
+  \midrule
+  \ppoROM{}   & \ppoROMfull{}   & one command-conditioned reduced-order model \\
+  \ppoIDFD{}  & \ppoIDFDfull{}  & separately learned inverse and forward models in series \\
+  \ppoAAMFD{} & \ppoAAMFDfull{} & frozen forward model driven by a valve command, with a bounded history-conditioned residual \\
+  \bottomrule
+\end{tabular}
+
+\bigskip
+\noindent\textbf{Symbols.}
+
+\medskip
+\noindent\begin{tabular}{@{}l@{\hspace{2em}}p{.72\textwidth}@{}}
+  \toprule
+  Symbol & Meaning \\
+  \midrule
+  $\jointpos,\ \jointvel$ & joint positions and velocities, $\mathbb{R}^5$ \\
+  $\bm{x}_k,\ \dot{\bm{x}}_k$ & cylinder extension and extension velocity at model tick $k$, $\mathbb{R}^4$ \\
+  $\Delta\bm{p}_k$ & cylinder chamber pressure difference, $\mathbb{R}^4$ \\
+  $\bm{u}_k$ & normalised valve command, $[-1,1]^4$ \\
+  $\ppoaction$ & policy action, four normalised channels \\
+  $\bm{o}$ & policy observation, $66$ values \\
+  $\bm{H}_t$ & causal history window supplied to a context encoder \\
+  $\factorvec$ & privileged six-factor plant vector; never an input to a deployed model \\
+  $\latent$ & privileged plant latent, from the frozen factor encoder \\
+  $\latenthat$ & deployable latent estimated from history by the AAM \\
+  $T$ & learned-model sample period, $\unit[0.05]{s}$ \\
+  $\bm{J}_c$ & measured cutter Jacobian \\
+  $\lambda$ & damping parameter of the damped least-squares inverse \\
+  $\sigma$ & policy action standard deviation, fixed at $0.15$ during anchored fine-tuning \\
+  $\vartheta$ & policy parameters \\
+  $D_{\mathrm{ref}}$ & Kullback--Leibler divergence from the reference policy to the live policy \\
+  $\alpha$ & residual authority bound, $\bm{u} = \operatorname{clip}(\bm{u}_0 + \alpha\tanh(\cdot))$ \\
+  $\kappa$ & actuator authority scale applied to realised displacement \\
+  $H$ & scored horizon in control steps \\
+  $R^2$ & coefficient of determination \\
+  \bottomrule
+\end{tabular}
+
+\bigskip
+\noindent\textbf{Abbreviations.}
+
+\medskip
+\noindent\begin{tabular}{@{}l@{\hspace{2em}}p{.72\textwidth}@{}}
+  \toprule
+  \ID{}    & inverse dynamics model, desired motion to valve command \\
+  \FD{}    & forward dynamics model, valve command to realised motion \\
+  \ROM{}   & reduced-order model, one command-conditioned actuator \\
+  \SD{}    & system-dynamics prediction model \\
+  \AAM{}   & actuator adaptation module, the offline history-to-latent encoder \\
+  \DLS{}   & damped least squares \\
+  \PPO{}   & proximal policy optimisation \\
+  RMA      & rapid motor adaptation \\
+  DAgger   & dataset aggregation, the distillation scheme \\
+  PRBS     & pseudo-random binary sequence, the open-loop excitation \\
+  LHS      & Latin hypercube sampling \\
+  GRU      & gated recurrent unit \\
+  MLP      & multilayer perceptron \\
+  CVaR     & conditional value at risk \\
+  KL       & Kullback--Leibler divergence \\
+  TV       & total variation distance \\
+  VIF      & variance inflation factor \\
+  COM      & centre of mass \\
+  CI       & confidence interval \\
+  RMSE     & root-mean-square error \\
+  USD      & Universal Scene Description, the IsaacLab asset format \\
+  \bottomrule
+\end{tabular}
+
+\clearpage{\pagestyle{empty}\cleardoublepage}
+\setcounter{page}{1}
+\pagenumbering{arabic}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Main matter - one file per chapter
