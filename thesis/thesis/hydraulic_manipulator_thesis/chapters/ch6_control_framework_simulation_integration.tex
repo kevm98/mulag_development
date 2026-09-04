@@ -916,21 +916,13 @@ residual acts on the same bounded command as the policy.
 \subsection{Sufficiency of the Forward Model}
 \label{sec:ctrl:af-fd-sufficient}
 
-Removing one of the two learned actuator models raises the question of whether
-the remaining one carries the path. Sufficiency here is a specific claim: the
-forward model must convert a commanded valve position into a one-step extension
-increment with genuine valve sensitivity, because that increment is the only
-quantity the controller integrates.
-
-The evidence is the strict retraining of
-Section~\ref{sec:models:fd-identifiability}. Before it, zeroing the valve input
-at a $\unit[0.5]{s}$ horizon changed the rollout-error ratio to only $0.94$,
-meaning the network had extrapolated smooth closed-loop kinematics rather than
-learned the valve's effect. After strict retraining on the open-loop plateau
-data the valve-zero error ratio rises to $1.81$, extension rollout RMSE falls
-from $\unit[75.2]{mm}$ to $\unit[12.4]{mm}$ at $\unit[0.5]{s}$ and from
-$\unit[157.9]{mm}$ to $\unit[27.3]{mm}$ at $\unit[1.0]{s}$, and per-axis
-one-step extension $R^2$ improves from $[-5.7,\, 0.60]$ to $[0.76,\, 0.98]$.
+Removing one of the two learned models raises the question of whether the
+remaining one carries the path. The claim is specific: the forward model must
+convert a commanded valve position into a one-step extension increment with
+genuine valve sensitivity, because that increment is the only quantity the
+controller integrates. The evidence is the strict retraining of
+Section~\ref{sec:models:fd-identifiability}, which raises the valve-zero error
+ratio from $0.94$ to $1.81$.
 
 Sufficiency is established on the channel that is used and is not claimed beyond
 it. Three qualifications carry forward. Only the extension increment is

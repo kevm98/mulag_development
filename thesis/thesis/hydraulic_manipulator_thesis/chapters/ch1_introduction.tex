@@ -281,84 +281,24 @@ actuator representation and the transfer assumptions made for it.
 \section{Thesis Structure}
 \label{sec:intro:structure}
 
-This thesis investigates how hydraulic actuator dynamics learned from
-high-fidelity simulation can be reduced, transferred into a computationally
-efficient robotic simulation and used for reinforcement-learning control,
-grounding its investigation in the identifiability of the actuator models and in
-the robustness of the controllers built on them. The document is organised as
-follows:
-
-\textbf{Chapter~\ref{chap:fundamentals}} establishes the background against
-which the remainder is read. It introduces the machine class and its
-electro-hydraulic actuation, recalls the kinematic tools underlying the
-classical controller, and reviews how conventional model-based control handles
-hydraulic uncertainty. It then treats the learning methods this work builds on,
-namely data-driven dynamics models and the pitfalls of identifying them from
-closed-loop data, reduced-order and grey-box modelling, domain randomisation and
-latent adaptation, and policy optimisation with structured priors. The chapter
-closes by stating the gap that remains and the position of the three control
-stacks examined here.
-
-\textbf{Chapter~\ref{chap:system}} analyses the platform, using the MULAG
-FME~500 mounted on a Unimog carrier as the case study. It describes the rigid
-bodies and the serial chain they form, the coordinate mappings between task
-space and cylinder space, and the closed kinematic loops introduced by the
-cylinder mounts. It specifies what the controller can observe, separating
-measured quantities from quantities produced by a model, and presents the
-high-fidelity Simscape model from which the actuator data derives. The chapter
-also states the task, the plant capability limits and the system-level evaluation gates
-against which every later result is scored.
-
-\textbf{Chapter~\ref{chap:data}} presents the data generation strategy and
-answers the first research question. It describes the excitation design, the
-randomised factor set defining the family of plants, and the procedures that
-keep training, validation and reserved test configurations separate. It then
-reports the identifiability audit applied to the resulting collection, including
-the measured finding that excitation gathered under a task controller does not
-separate plants, and the open-loop collection that repairs this.
-
-\textbf{Chapter~\ref{chap:models}} develops the learned models and answers the
-first three research questions. It presents the inverse model that maps a
-desired cylinder motion to a valve command, the forward model that predicts the
-response, and the evidence that supervised accuracy alone does not establish
-that either model retains command authority. It then presents the
-command-conditioned reduced-order model that serves as the deployment plant
-inside GPU-parallel training. The chapter closes with the material required for
-the final research question, namely the privileged latent and its measured
-limits, the causal estimator that infers a deployable substitute from observable
-history, and the bounded adapter through which that estimate first reached the
-actuator path. That adapter produces no closed-loop effect, and the chapter ends
-by establishing why: the limit is the delivery of the correction rather than the
-quality of the estimate, which is the finding the following chapter acts on.
-
-\textbf{Chapter~\ref{chap:control}} describes the control framework and its
-integration with the simulator, and answers the fourth research question. It
-presents the damped least-squares teacher used for demonstration and data
-collection, the shared observation interface and the action interface the two
-non-adaptive stacks hold in common, the distillation of the teacher into a
-student policy, and the reference-anchored fine-tuning that makes further policy
-optimisation admissible without discarding the distilled behaviour. It then
-assembles the three deployed control stacks, including the removal of the
-inverse model from the adaptive command path that the preceding chapter
-motivates, and states which comparison each stack can carry.
-
-\textbf{Chapter~\ref{chap:evaluation}} reports the experimental evaluation and
-answers the last two research questions. It states the protocol and what each
-stack can carry, then compares the matched pair on closed-loop tracking and
-control effort, measures dead time through the actuation chain and the response
-of each stack to a commanded change, and audits how much of the randomised
-factor draw reaches each plant. It closes on online adaptation, measured within
-the adaptive stack against its own frozen base and a capacity-matched control:
-the contribution of live history, the component of the gain that varies with
-cutter-mass dose, the replication across five training seeds, and the pressure
-channel each stack exposes.
-
-\textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
-the work establishes and what it does not, states the design implications that
-follow from the measured results, records the limitations of the evidence, and
-sets out the future work, which centres on transferring the learned actuator
-models and the distilled policy to the physical machine and fine-tuning them on
-data collected from it.
+Chapter~\ref{chap:fundamentals} sets the background: hydraulic actuation, the
+kinematic tools behind the classical controller, learned dynamics models and the
+pitfalls of identifying them from closed-loop data, domain randomisation and
+latent adaptation, and the gap the three stacks address.
+Chapter~\ref{chap:system} fixes the system definition, including what the
+controller may observe, the Simscape source model and its validated scope, and
+the evaluation gates every later result is scored against.
+Chapter~\ref{chap:data} answers RQ1 with the excitation design and the
+identifiability audit, including the measured finding that data gathered under a
+task controller does not separate plants and the open-loop collection that
+repairs it. Chapter~\ref{chap:models} answers RQ2 and RQ3 with the inverse,
+forward and reduced-order models, the evidence that supervised accuracy does not
+establish command authority, and the privileged latent whose benefit stops at
+the command interface. Chapter~\ref{chap:control} answers RQ4 with the teacher,
+the distillation, reference-anchored fine-tuning and the three assembled stacks.
+Chapter~\ref{chap:evaluation} answers RQ5 and RQ6.
+Chapter~\ref{chap:conclusion} states what the work establishes, what it does
+not, and what to run next.
 
 \textbf{Appendix~\ref{app:dataset}} lists the dataset manifests and the factor
 ranges that define the family of plants used in
