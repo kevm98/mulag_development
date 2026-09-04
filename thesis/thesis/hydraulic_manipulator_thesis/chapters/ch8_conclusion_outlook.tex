@@ -77,11 +77,17 @@ on extension, with a diagonally dominant extension--command Jacobian of
 condition number $2.14$, and it runs inside GPU-parallel training. The
 inverse--forward chain composes two separately learned models in series, which
 could have compounded their errors and did not. The two representations differ
-in the control strategy they induce from the same policy interface. \ppoROM{}
-spends the least command and reverses about $40$ times per second, against
-$10.6$ for \ppoIDFD, which converts greater actuator effort into lower lateral
-error. The choice of representation therefore affects the resulting controller
-and is not an implementation detail.
+in the control strategy they induce from the same policy interface. On the
+recorded traces of one held-out mesh, \ppoROM{} spends the least command and
+reverses about $40$ times per second against $10.6$ for \ppoIDFD{}, which
+converts greater actuator effort into lower lateral error
+(Table~\ref{tab:eval:effort}). Over the $33$ paired cells the median cell
+favours \ppoIDFD{} on lateral error by $\unit[9.3]{mm}$ with the interval
+excluding zero and favours \ppoROM{} on cut height by $\unit[1.7]{mm}$, while
+neither mean difference is resolved and the mean changes sign if the double
+S-curve family is removed (Table~\ref{tab:eval:paired-rif}). The choice of
+representation therefore affects the resulting controller and is not an
+implementation detail, but the size of that effect is not established.
 
 \ppoROM{} and \ppoIDFD{} agree on every recorded training field and differ only
 in the actuator path, so the difference above \emph{is} attributable to the
