@@ -484,11 +484,10 @@ of $12.9$. The critic remained healthy, with explained variance in the
 $0.85$--$0.95$ range. This motivates the anchored formulation of
 Section~\ref{sec:ctrl:anchored}, which is used for the final policies.
 
-The reward includes ground contact and cut height as well as lateral tracking.
-It can therefore increase while a gate-relevant tracking measure degrades.
-
-This is a claim about two functionals over the same policy space rather
-than about the optimiser. Training maximizes the expected return
+The reward includes ground contact and cut height as well as lateral tracking,
+so it can increase while a gate-relevant tracking measure degrades. This is a
+claim about two functionals over the same policy space rather than about the
+optimiser. Training maximizes the expected return
 $J(\vartheta)$, while acceptance is decided by the vector of physical gates
 $\bm{G}(\vartheta) \preceq \bm{g}^{\star}$ of
 Section~\ref{sec:sys:evaluation-criteria}. Writing
@@ -508,20 +507,18 @@ point therefore leaves $\mathcal{F}$ by construction. This is the optimiser
 working correctly on the wrong functional, and it is why the remedy is a
 constraint on the ascent rather than a repair of the reward.
 
-Two consequences follow, both of them protocol. Unconstrained fine-tuning is
+Two consequences follow, both protocol. Unconstrained fine-tuning is
 inadmissible, and both the pre- and post-fine-tune checkpoints are reported in
-every case. And reward decomposition, critic explained variance, policy entropy
-and the gate metrics themselves are logged \emph{during} training rather than
-only at the end, since a training curve reporting only the scalar reward would
-have shown a success here.
+every case. And the gate metrics are logged \emph{during} training rather than
+only at the end, since a curve reporting the scalar reward alone would have
+shown a success here.
 
-The general form applies beyond this machine: when a competent teacher exists
+The general form applies beyond this machine. Where a competent teacher exists
 and the evaluation criterion is not the reward, reward-based fine-tuning is not
-automatically an improvement step. Distillation transfers the intent, PPO then
-optimises the proxy, and the two point in measurably different directions. That
-divergence grows with distance travelled from the policy where proxy and intent
-were measured to agree, so the remedy is to bound the distance explicitly rather
-than to abandon reward optimisation.
+automatically an improvement step: distillation transfers the intent, PPO
+optimises the proxy, and the divergence grows with distance from the policy
+where the two were measured to agree. The remedy is to bound that distance, not
+to abandon reward optimisation.
 
 \section{Reference-Anchored PPO}
 \label{sec:ctrl:anchored}

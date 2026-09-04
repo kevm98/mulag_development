@@ -120,10 +120,16 @@ capacity.
 %% Main matter - one file per chapter
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Chapter separator. This used to emit one unnumbered blank page between
-% chapters, which cost eight pages across Chapters 1 to 8. It is now a plain
-% page break; restore the \mbox{} version below to get the blank pages back.
-\newcommand{\RRLABchapterblank}{\clearpage}
+% Insert exactly one unnumbered, header-free blank page between chapters.
+% The openany class option prevents the book class from adding a second
+% parity-dependent blank page at the following chapter opening.
+\newcommand{\RRLABchapterblank}{%
+  \clearpage
+  \begingroup
+    \thispagestyle{empty}%
+    \mbox{}%
+    \clearpage
+  \endgroup}
 
 % Preserve the template's normal paragraph and heading gaps.  With
 % \flushbottom, pages containing fixed figures or algorithms stretch those

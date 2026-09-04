@@ -206,17 +206,14 @@ inside the training loop. This structure also represents the pressure dependence
 of valve authority directly.
 
 \textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
-The inverse model transferred across the deployment plant family at
-millimetre scale in every domain, from $\unit[2.36]{mm}$ to $\unit[3.36]{mm}$
-one-step, and with an ordering that does not follow plant severity: the nominal
-plant scores worst and the combined draws best
-(Table~\ref{tab:models:id-trust}). It was therefore deployed frozen everywhere
-downstream. Where a deployment offset did have to be absorbed, it was absorbed
-by a correction capped at $\unit[3]{mm}$ and gated to vanish at zero command,
-with every hydraulic parameter frozen and the original data retained as replay.
-That construction preserves the identified physics, keeps a commanded hold a
-hold, and confines the deployment-specific part of the model to a component
-whose authority is bounded by construction.
+The inverse model transferred at millimetre scale in every domain, with an
+ordering that does not follow plant severity, and was therefore deployed frozen
+everywhere downstream. Where a deployment offset had to be absorbed, it was
+absorbed by a correction capped at $\unit[3]{mm}$ and gated to vanish at zero
+command, with every hydraulic parameter frozen and the original data retained as
+replay. That construction preserves the identified physics, keeps a commanded
+hold a hold, and confines the deployment-specific part of the model to a
+component whose authority is bounded by construction.
 
 \subsection*{Control Methodology}
 
@@ -233,10 +230,9 @@ is therefore bounded by the chain the action passes through rather than by
 proximity to a nominal controller, with a rate limit, a filter, a shield that
 fades authority as travel headroom is consumed, a command scale, and an
 anti-windup cap on how far the integrated target may lead the measured
-extension. That last cap is load-bearing and axis-dependent: relaxing it from
-$\unit[18]{mm}$ to $\unit[50]{mm}$ halved lateral error on the families needing a
-sustained standing offset, while the same relaxation on the head-pivot cylinder
-drove alignment from $0.9507$ to $0.4636$.
+extension. That last cap is load-bearing and has to be resolved per axis, since
+the value that recovers a sustained standing offset on the boom destroys head
+alignment on the head-pivot cylinder (Section~\ref{sec:ctrl:ppo}).
 
 \subsection*{Plant Adaptation}
 
