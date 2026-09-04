@@ -591,20 +591,33 @@ learned model consumes $\Delta p$ through a fitted normaliser, and
 Appendix~\ref{app:pressure-signals} reads
 the deployed pressure state for shape only, for this reason.
 
-That normaliser is what keeps the wrong level away from the results. Each model
-standardises the pressure channel as $(\Delta p - \mu)/\sigma$ with $\mu$ and
-$\sigma$ fitted on this same export; the inverse model's four pressure channels
-carry $\sigma$ between $\unit[50]{MPa}$ and $\unit[70]{MPa}$, and the forward
-model, the reduced-order model and the offline AAM each store their own. Scaling
-every pressure by a constant and scaling $\mu$ and $\sigma$ with it leaves the
-standardised input unchanged, and therefore leaves every trained network and
-every reported number unchanged. Rewriting the export at a plausible relief
-pressure would relabel the axis and alter no measurement. It would also repair
-nothing: pressure-increment $R^2$ is $0.06$ to $0.09$
-(Section~\ref{sec:models:rom}), so the state follows the level poorly in any
-units. The wrong level costs interpretation rather than correctness, and the
-cost falls where the pressure channel is read as physical, which is the
-seal-condition decoding of Section~\ref{sec:models:aam-content}.
+A normaliser keeps the wrong level away from most of the results, but not all of
+them, and the exception matters. Each model standardises the pressure channel as
+$(\Delta p - \mu)/\sigma$ with $\mu$ and $\sigma$ fitted on this same export;
+the inverse model's four pressure channels carry $\sigma$ between
+$\unit[50]{MPa}$ and $\unit[70]{MPa}$, and the forward model, the reduced-order
+model and the offline AAM each store their own. Wherever pressure enters only
+through that standardisation, scaling every pressure by a constant and scaling
+$\mu$ and $\sigma$ with it leaves the input unchanged, so the trained network
+and the numbers it produces are unchanged. That covers the inverse model, the
+strict forward model and the AAM.
+
+It does not cover the reduced-order model's explicit chain. There pressure also
+enters unstandardised, under a square root and against a fitted supply pressure,
+in Equation~\eqref{eq:models:rom-pressure}, and that expression is neither
+linear nor homogeneous in the pressure scale. With $\Delta p$ reaching
+$\unit[116]{MPa}$ to $\unit[122]{MPa}$ against supply pressures the fit drives
+onto clamps at $\unit[1]{MPa}$ on two cylinders and $\unit[50]{MPa}$ on two,
+the radicand is degenerate over most of the operating range. That is a candidate
+cause of the finding in Section~\ref{sec:models:rom} that the explicit chain
+produces no net travel and its parameters settle on their clamps, and the two
+should be read together rather than separately. Correcting the level in the
+export would therefore change that model's fitted constants, though it would not
+by itself repair the channel: pressure-increment $R^2$ is $0.06$ to $0.09$, so
+the state follows the level poorly in any units. Elsewhere the wrong level costs
+interpretation rather than correctness, and that cost falls where the pressure
+channel is read as physical, which is the seal-condition decoding of
+Section~\ref{sec:models:aam-content}.
 
 Beyond these checks the model represents one machine and omits thermal
 dynamics. The logged rod-force channel is not carried into the learned actuator

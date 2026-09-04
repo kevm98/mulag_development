@@ -623,8 +623,18 @@ tests latent information without this ceiling.
 
 Three matched adapter arms use a zeroed, estimated or privileged latent. Across
 five seeds, both latent arms improve validation loss over the zeroed arm in
-$5/5$ cases. Mean paired improvements are $0.0037$ for the privileged latent
-and $0.0118$ for the AAM estimate. The effect is consistent but small.
+$5/5$ cases. The quantity is the adapter's held-out validation loss on the
+frozen-FD next-state objective, and the arms are differenced within seed, so the
+paired improvement is the reported number rather than the level. Mean paired
+improvements are $0.0037$ for the privileged latent and $0.0118$ for the AAM
+estimate. The effect is consistent but small.
+
+The ordering between the two latent arms is not a result. The estimate improves
+the loss by about three times as much as the privileged latent, which is the
+wrong direction for a causal estimate of a quantity the privileged arm is handed
+exactly, and with five seeds and no interval on the between-arm difference it is
+not resolved. What the $5/5$ count supports is that both beat the zeroed arm,
+not that the estimate beats privileged context.
 
 This is the one measurement in which online plant context acts without the
 closed loop in the way, and it is reproducible across every seed: a causally
@@ -685,6 +695,31 @@ estimate obtained from identification does not affect the plant if it is added t
 a saturated inverse command. The limit is delivery. Chapter~\ref{chap:control}
 therefore removes the inverse model from the adaptive path and applies the
 residual to the valve command of the identified forward model.
+
+One alternative explanation is not excluded by these measurements, and it is
+worth stating in one place because its parts are reported separately. Everything
+the explicit mechanism carries runs through pressure. The source Simscape
+pressure signal is wrong in level by roughly a factor of four, at
+$\unit[116]{MPa}$ to $\unit[122]{MPa}$ against a
+$\unit[27.6]{MPa}$ relief setting (Section~\ref{sec:sys:simscape-validation}).
+The reduced-order model reproduces pressure increments at $R^2=0.06$ to $0.09$,
+its weakest channel by a wide margin (Section~\ref{sec:models:rom}). The latent
+decodes seal condition at $R^2=0.956$ and nothing else above $0.45$
+(Section~\ref{sec:models:aam-content}), and seal condition acts through
+pressure. The paired dataset advantage of
+Section~\ref{sec:data:sd-audit} sits entirely in the same channel. A
+two-dimensional latent that is effectively one-dimensional, encoding a factor
+that acts through the state the model reproduces worst, on a plant whose source
+pressure level is wrong, is a second candidate account of why nothing arrives in
+the closed loop. Saturation is the mechanism the measurements here resolve,
+because substituting the privileged latent recovers nothing and the command is
+against its clip for most of the scored window; the pressure account is not
+resolved against it, and separating them would need a source model with a
+correct pressure level. Section~\ref{sec:sys:simscape-validation} argues that
+standardisation makes the level harmless to every trained network, which holds
+for a standardised input and does not hold for
+Equation~\eqref{eq:models:rom-pressure}, where pressure enters under a square
+root and against a hard relief clip.
 
 \section{Training and Model-Selection Protocol}
 \label{sec:models:training}
