@@ -123,15 +123,15 @@ fixed controller. The order follows the dependencies among the claims. The
 research statement is as follows:
 
 \paragraph{Comparison notation.}
-The three policy--actuator stacks carry both a short label and a full name, used
-interchangeably throughout: \emph{R} is \ppoROMfull, \emph{IF} is \ppoIDFDfull,
-and \emph{AF} is the \ppoAAMFDfull. R uses the command-conditioned reduced-order
-model; IF uses the frozen inverse/forward pair; and AF consists of the frozen
-direct-valve base actor, a jointly trained causal history encoder and bounded
-residual head, and the frozen forward model. The offline AAM of
-Chapter~\ref{chap:models} is a diagnostic plant-context estimator and is not
-loaded in the AF command path. The labels name complete stacks, not only their
-actuator models.
+Three policy--actuator stacks are compared, each carrying a short label used
+throughout. \emph{R} (\ppoROMfull) uses the command-conditioned reduced-order
+model. \emph{IF} (\ppoIDFDfull) uses the frozen inverse and forward pair.
+\emph{AF} (\ppoAAMFDfull) adds a history-conditioned bounded residual on the
+valve command. The labels name complete stacks rather than actuator models
+alone, and Section~\ref{sec:ctrl:ppo-aamfd} gives their construction. One point
+is worth fixing here because the name invites the opposite reading: the offline
+AAM of Chapter~\ref{chap:models} is a diagnostic estimator and is not loaded in
+the AF command path.
 
 \researchstatement{To determine how hydraulic actuator dynamics learned from
 high-fidelity simulation can be reduced, transferred into a computationally
@@ -198,71 +198,54 @@ of adding residual capacity. The work rests on the following contributions:
 \textbf{Transferable Hydraulic Actuator Learning:} A pipeline that identifies
 hydraulic actuation from high-fidelity Simscape data and transfers it into
 IsaacLab through two representations, a modular inverse and forward chain and a
-physics-structured reduced-order model. The inverse model is trained on Simscape
-data and evaluated on deployment runs drawn entirely outside that training
-distribution, where it reproduces most of the valve-command variance with an
-accuracy that is nearly flat across plant domains. It requires no
-deployment-specific retraining and remains frozen in every downstream stack. The
-reduced-order model is transferred differently and the difference is stated
-wherever it matters: it receives a small bounded calibration against the
-deployment plant, which is why it serves as a reference condition rather than as
-an independent competitor to the inverse and forward pair.
+physics-structured reduced-order model. The inverse and forward pair transfers
+frozen, without deployment-specific retraining. The reduced-order model instead
+receives a small bounded calibration against the deployment plant, so it serves
+as a reference condition rather than an independent competitor
+(Chapter~\ref{chap:models}).
 
 \textbf{Control-Relevant Identification and Validation:} A demonstration that
 predictive accuracy can conceal the loss of exactly the property a controller
-needs, together with the procedure that detects it. The first forward model
-reached a near-perfect supervised score while learning to ignore the valve
-command and reconstruct motion from the state history instead. The validation
-loss did not show this; ablating the command did. Redesigning the excitation and
-retraining recovered genuine command sensitivity, and the pairing of excitation
-design with input ablation is established here as a required test for learned
-hydraulic models intended for control rather than for prediction.
+needs, together with the procedure that detects it. A forward model reached a
+near-perfect supervised score while learning to ignore the valve command. The
+validation loss did not show this; ablating the command did. Excitation design
+paired with input ablation is established here as a required test before a
+learned actuator model is admitted to control
+(Chapters~\ref{chap:data} and~\ref{chap:models}).
 
 \textbf{Reduced-Order Actuator Model:} A command-conditioned grey-box actuator
 in which pressure, force, velocity and extension propagation remain explicit
-while learning covers valve realisation, unmodelled loading and bounded residual
-effects. It is accurate enough to serve as the deployment plant, stable in
-recursive rollout, and cheap enough to evaluate inside GPU-parallel policy
-training. Zeroing or shuffling its command collapses its extension and velocity
-accuracy, which establishes that the command authority is real rather than
-inferred from context.
+while learning covers valve realisation and unmodelled loading. It is accurate
+enough to serve as the deployment plant, stable in recursive rollout, and cheap
+enough to evaluate inside GPU-parallel policy training
+(Chapter~\ref{chap:models}).
 
 \textbf{Policy-Only Control Through Learned Hydraulics:} A damped least-squares
 controller supplies privileged demonstrations during training and is then
-removed, so that the distilled policy emits desired cylinder motion directly
-into a learned actuator representation and constitutes the entire deployed
-controller. Both representations support closed-loop terrain following in this
-configuration, although two learned models placed in series could have
-compounded their errors.
+removed, leaving the distilled policy as the entire deployed controller, acting
+through learned actuator dynamics. Both representations support closed-loop
+terrain following in that configuration
+(Chapters~\ref{chap:control} and~\ref{chap:evaluation}).
 
 \textbf{A Decision Procedure for Online Adaptation:} A matched protocol that
-first asks whether plant identity is present in the identification data, then
-measures what a privileged plant encoding does in the closed loop, and only then
-trains a deployable history estimator. Either of the first two measurements can
-show that a residual will have nothing to act on. In this work the identification
-data do contain plant structure, and the privileged encoding is informative. The
-procedure therefore does not stop the adaptation path; it determines where the
-correction must be applied.
+asks, in order, whether plant identity is present in the identification data,
+what a privileged plant encoding does in the closed loop, and only then trains a
+deployable history estimator. Either of the first two measurements can show that
+a residual would have nothing to act on
+(Chapters~\ref{chap:models} and~\ref{chap:evaluation}).
 
-\textbf{Where Online Adaptation Is Effective:} A comparison of two online
-adaptation mechanisms on the same machine, separating the level at which each
-one acts. The explicit mechanism is informative and undeliverable. Its latent
-improves the adapter objective on all five seeds, and the closed-loop effect is
-absent because the correction is added to a command already resting against its
-own limit for most of the scored window. The binding constraint on
-latent-conditioned adaptation here is therefore delivery rather than estimation.
-Removing the inverse model allows an end-to-end history-conditioned residual to
-act directly on the valve command.
-The deployed residual improves closed-loop tracking relative to its frozen base
-on four of five training runs, so the median run improves under both checkpoint
-rules. Matched ablations locate most of that improvement in the added residual
-capacity. Live history separates from an equal-capacity zero-history control on
-one run of five, and a plant-dependent lateral term appears in the cutter-mass
-dose study, although that design couples starting mass with the later change.
-The supported method-level claim is therefore a bounded residual on the valve
-path. The supported adaptation-specific claim is narrower: live history helps
-where residual capacity alone does not, and where load variation remains visible
-in the scored channel.
+\textbf{Where Online Adaptation Is Effective:} A comparison of two adaptation
+mechanisms on one machine under one protocol, separating the level at which each
+acts. The explicit mechanism is informative but undeliverable, because its
+correction is added to a command already resting against its own limit. Removing
+the inverse model lets a history-conditioned residual act on the valve command
+directly, and matched ablations then separate what the residual's added capacity
+contributes from what live history contributes
+(Chapter~\ref{chap:evaluation}).
+
+Chapter~\ref{chap:conclusion} restates these six with the measurements attached.
+They are stated here as claims and there as results, so the evidence is given
+once.
 
 The causal plant estimator, the bounded adaptation path and the eight-gate
 evaluation harness are described where they are used, as technical enablers
