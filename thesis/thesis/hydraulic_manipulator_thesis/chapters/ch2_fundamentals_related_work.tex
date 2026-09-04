@@ -333,11 +333,18 @@ response on the current plant.
 \end{figure}
 
 Teacher--student methods encode known simulation factors into a privileged
-latent and train an estimator to recover it from observable history. Lee et
-al.~\cite{lee2020learning} used this construction for hidden terrain
-properties; Kumar et al.~\cite{kumar2021rma} developed rapid motor adaptation.
-Both assume that the factor directions the estimator retains are the directions
-the controller needs. Liu et al.~\cite{liu2025frma} report the failure when it
+latent and train an estimator to recover it from observable history. The
+construction generalises the wider privileged-learning idea, in which a teacher
+with access to unavailable state supervises a student restricted to deployable
+observations~\cite{chen2019cheating}. Lee et al.~\cite{lee2020learning} used it
+for hidden terrain properties; Kumar et al.~\cite{kumar2021rma} developed rapid
+motor adaptation; Miki et al.~\cite{miki2022perceptive} extended the same
+teacher--student route to fusing proprioception with exteroception under
+unreliable perception. Distillation from a privileged teacher is the mechanism
+this thesis uses in Chapter~\ref{chap:control}, with a classical controller in
+the teacher's place rather than a privileged
+policy~\cite{ross2011reduction}. All of them assume that the factor directions
+the estimator retains are the directions the controller needs. Liu et al.~\cite{liu2025frma} report the failure when it
 does not hold, where a low-dimensional adapter drops factors that act through
 separate channels, and add training phases to recover them. Chapter~\ref{chap:models} finds the same
 mismatch here in a sharper form, and the finding is quoted forward because it

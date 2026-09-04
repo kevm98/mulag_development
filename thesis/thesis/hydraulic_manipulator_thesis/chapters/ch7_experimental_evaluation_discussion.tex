@@ -27,7 +27,14 @@ history-conditioned residual.
 The results are paired by environment or by mesh and trajectory family. Error
 metrics are reported separately for lateral tracking and cut height because the
 two errors describe different aspects of the task. Confidence intervals are
-obtained by paired bootstrap. Checkpoints are selected using the validation or
+percentile bootstrap intervals over the paired
+units~\cite{efron1993bootstrap}, at $B=20\,000$ resamples. Where one channel is
+required only not to get worse, the bound is a non-inferiority margin declared
+before the comparison~\cite{piaggio2012noninferiority} rather than a failure to
+reject. Success rules and checkpoint rules are fixed in writing before the arms
+are trained, in the sense of a pre-registered
+analysis~\cite{nosek2018preregistration}; the registrations are listed in
+Appendix~\ref{app:repro}. Checkpoints are selected using the validation or
 training criterion specified for each experiment and are then evaluated once on
 the held-out set.
 

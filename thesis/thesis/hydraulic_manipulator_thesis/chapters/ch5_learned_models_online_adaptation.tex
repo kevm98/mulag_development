@@ -307,7 +307,8 @@ data.
 
 The repair dataset applies rank-4 open-loop valve plateaus to four plant draws.
 Its trajectories are distinct, valve history predicts pressure with
-$R^2\approx0.80$--$0.85$, valve-regressor variance-inflation factors are
+$R^2\approx0.80$--$0.85$, valve-regressor variance-inflation
+factors~\cite{kutner2005applied} are
 $7$--$10$, and relief saturation occupies $9$--$22\,\%$ of samples.
 
 Starting from the paired-control checkpoint, strict retraining minimised
@@ -323,7 +324,7 @@ Starting from the paired-control checkpoint, strict retraining minimised
 %
 combining the one-step loss on the strict data, a replay term on the original
 closed-loop data, a $\unit[0.5]{s}$ recursive rollout loss, and a kinematic
-consistency term enforcing the trapezoidal identity
+consistency term enforcing the trapezoidal identity~\cite{siciliano2009robotics}
 %
 \begin{equation}
   \label{eq:models:trapezoid}

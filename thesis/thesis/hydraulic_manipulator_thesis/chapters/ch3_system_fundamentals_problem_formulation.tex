@@ -75,7 +75,7 @@ channels used throughout the model.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\textwidth,trim=0 0 375 0,clip]{images/ch3/fme500_topology_annotated}
+  \includegraphics[width=\textwidth,trim=0 0 375 38,clip]{images/ch3/fme500_topology_annotated}
   \caption{Annotated CAD view of the MULAG FME~500. Links L0--L5,
   joints J1--J5, and the four hydraulic cylinders C1--C4 are identified;
   J5 denotes the \emph{Messerkopf} rotation, which is locked in the
@@ -299,7 +299,7 @@ it is not a general ranking of the two model classes.
 The mechanism uses the CAD-derived links, joints, and cylinder attachment
 frames of Section~\ref{sec:sys:platform}. It is simulated in Simscape
 Multibody \cite{mathworks2024simscapemultibody}. The joint-space dynamics take
-the standard manipulator form
+the standard manipulator form~\cite{siciliano2009robotics}
 %
 \begin{equation}
   \label{eq:sys:eom}
@@ -482,7 +482,8 @@ piston, seal, and rod used in the actuator model.
 
 The 4/3 valve in Figure~\ref{fig:sys:schematic} meters flow to the two chambers
 of each asymmetric double-acting cylinder, cap side ($p_1,Q_1$) and rod side
-($p_2,Q_2$). The chamber pressures follow
+($p_2,Q_2$). The chamber pressures follow the standard continuity
+relations~\cite{merritt1967hydraulic,jelali2003hydraulic}
 %
 \begin{equation}
   \label{eq:sys:continuity}
@@ -494,7 +495,8 @@ of each asymmetric double-acting cylinder, cap side ($p_1,Q_1$) and rod side
 \end{equation}
 %
 where $V_{1,2}(x)$ include dead volumes, $A_1\neq A_2$, and
-$C_{\mathrm{leak}}$ is internal leakage. Entrained air is represented by
+$C_{\mathrm{leak}}$ is internal leakage. Entrained air is represented by the
+usual effective bulk modulus~\cite{jelali2003hydraulic}
 %
 \begin{equation}
   \label{eq:sys:bulk}
@@ -629,8 +631,10 @@ through parameter randomisation.
 \section{IsaacLab Environment}
 \label{sec:sys:isaaclab}
 
-Policy training, adaptation-data collection, and evaluation run in
-IsaacLab~\cite{mittal2023orbit} on PhysX. The USD articulation contains the
+Policy training, adaptation-data collection, and evaluation run in IsaacLab on
+PhysX. IsaacLab is the successor to Orbit, and the Orbit
+paper~\cite{mittal2023orbit} remains its citable description; the underlying
+GPU-parallel simulator is Isaac Gym~\cite{makoviychuk2021isaac}. The USD articulation contains the
 Unimog carrier, five arm links, and four prismatic cylinder joints. Learned
 actuator models supply the hydraulic behaviour between the controller and PhysX
 cylinder targets.

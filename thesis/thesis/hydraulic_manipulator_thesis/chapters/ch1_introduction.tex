@@ -31,9 +31,10 @@ The demands on the manipulator follow from that. The machine studied here,
 shown in Figure~\ref{fig:intro:fme500}, carries a heavy rotating tool at the end
 of a long boom, works in intermittent contact with the ground,
 and must place that tool accurately while its own base is in motion. Hydraulic
-actuation is the standard answer at this scale: it supplies the force density
-and the tolerance to shock loading that electric drives do not, and it does so
-with components rugged enough for continuous outdoor operation. Precision,
+actuation is the standard answer at this
+scale~\cite{mattila2017survey}: it supplies the force density and the tolerance
+to shock loading that electric drives do not, and it does so with components
+rugged enough for continuous outdoor operation. Precision,
 however, is not what hydraulics are good at, and that tension is the subject of
 this thesis.
 
@@ -44,14 +45,17 @@ Two developments have changed what is achievable on machines of this kind.
 
 The first is that policy optimisation in simulation has become practical for
 contact-rich manipulation. GPU-parallel physics engines run thousands of
-environments simultaneously, which makes reinforcement learning feasible on
-tasks that would take years of real-machine experience, and randomising the
-simulator across a family of plants produces policies that transfer without
-being tuned to one machine. The second is that the actuator itself can be
-learned. Rather than deriving valve and cylinder behaviour from first
-principles and fitting its parameters, a network trained on recorded motion can
-represent the command-to-motion relationship directly, including the
-nonlinearities that analytical models approximate away.
+environments simultaneously~\cite{makoviychuk2021isaac,mittal2023orbit}, which
+makes reinforcement learning feasible on tasks that would take years of
+real-machine experience~\cite{rudin2022learning}, and randomising the simulator
+across a family of plants produces policies that transfer without being tuned to
+one machine~\cite{tobin2017domain,peng2018sim}. The second is that the actuator
+itself can be learned. Rather than deriving valve and cylinder behaviour from
+first principles and fitting its
+parameters~\cite{merritt1967hydraulic,jelali2003hydraulic}, a network trained on
+recorded motion can represent the command-to-motion relationship
+directly~\cite{hwangbo2019learning}, including the nonlinearities that
+analytical models approximate away.
 
 Combining the two is attractive and not straightforward. A learned actuator
 model must be cheap enough to evaluate inside the training loop, which rules out
@@ -59,9 +63,11 @@ the high-fidelity models used for offline analysis, and it must remain valid
 across the family of machines the policy will meet. This has motivated a line of
 work in which a compact code describing the current plant is inferred from
 recent interaction history and supplied to the controller, so that a single
-policy can serve a family rather than a single machine. Such methods report
-substantial gains in legged locomotion and in manipulation, and they are the
-direct antecedent of the architecture examined here.
+policy can serve a family rather than a single
+machine~\cite{lee2020learning,kumar2021rma}. Such methods report substantial
+gains in legged locomotion~\cite{lee2020learning,miki2022perceptive} and in
+manipulation~\cite{ji2022concurrent}, and they are the direct antecedent of the
+architecture examined here.
 
 \begin{figure}[H]
   \centering
@@ -76,19 +82,21 @@ direct antecedent of the architecture examined here.
 
 A valve command does not produce a proportional cylinder motion. The
 relationship is nonlinear, depends on load and supply pressure, and is subject
-to dead time between the command and any measurable response. It also differs
-between machines: seal condition, fluid temperature, hose compliance and the
-attachment fitted all change it, so two machines of the same model respond
+to dead time between the command and any measurable
+response~\cite{merritt1967hydraulic,mattila2017survey}. It also differs between
+machines: seal condition, fluid temperature, hose compliance and the attachment
+fitted all change it, so two machines of the same model respond
 differently and one machine responds differently across a season. A controller
 that inverts only the geometry therefore leaves the largest source of tracking
 error unaddressed.
 
 That difficulty admits two responses, and they are routinely conflated. The
 first is robustness: train across a randomised family so that a single fixed
-model is adequate everywhere. It costs nothing at run time and gives up the
-difference between the family and the individual. The second is adaptation:
-infer which member of the family is present from the interaction history and
-condition the model or the policy on that estimate. It promises to recover that
+model is adequate everywhere~\cite{tobin2017domain,peng2018sim}. It costs
+nothing at run time and gives up the difference between the family and the
+individual. The second is adaptation: infer which member of the family is
+present from the interaction history and condition the model or the policy on
+that estimate~\cite{kumar2021rma}. It promises to recover that
 difference, at the cost of an estimator that must work from observable signals
 alone, since a deployed machine has no access to its own plant parameters.
 

@@ -96,9 +96,9 @@ measured cutter position, with the lateral component weighted by a factor of
 three, because on this machine lateral error is what the acceptance gate
 measures and vertical error is largely handled by contact.
 
-That error is mapped to cylinder space through the damped least-squares inverse
-of the measured cutter Jacobian $\bm{J}_c$ of
-Section~\ref{sec:sys:task-jacobian},
+That error is mapped to cylinder space through the damped least-squares
+inverse~\cite{wampler1986manipulator,nakamura1986inverse} of the measured cutter
+Jacobian $\bm{J}_c$ of Section~\ref{sec:sys:task-jacobian},
 %
 \begin{equation}
   \label{eq:ctrl:teacher-dls}
@@ -194,7 +194,10 @@ The deployed controller is a memoryless Gaussian multilayer perceptron. It maps
 a $66$-value observation to four normalised actions, one desired motion command
 per hydraulic cylinder, and that is the entire control law. Actor and critic
 are separate networks with hidden widths $256$--$128$--$64$ and ELU
-activations, over empirically normalised observations. This description is of
+activations, over empirically normalised observations. The optimiser is
+PPO~\cite{schulman2017proximal} as supplied by RSL-RL, the implementation used
+for the GPU-parallel legged-locomotion results this setup
+follows~\cite{rudin2022learning}. This description is of
 the base policy, and it is shared by all three stacks: the actor width is the
 same $66$ in each, and \ppoAAMFD{} deploys this network frozen and unmodified
 rather than a widened variant of it. Two things differ for \ppoAAMFD{} and are
@@ -363,7 +366,8 @@ numerical fault can never outscore legitimate behaviour.
 
 \paragraph{Fixed Sign Convention}
 The three task terms are non-negative and the seven safety terms non-positive.
-This is what makes worst-case (CVaR) weighting safe to add later: scaling a
+This is what makes worst-case (CVaR) weighting~\cite{rockafellar2000cvar} safe
+to add later: scaling a
 non-positive term by a factor $\ge 1$ can only lower the return, whereas
 up-weighting a \emph{positive} reward for the worst environments pays the policy
 to be bad, as measured in the earlier stack.\footnote{Three terms of that
@@ -577,7 +581,7 @@ Let $\pi_{\mathrm{ref}}$ be a frozen copy of the accepted warm actor. It is
 queried only on states the live policy visits and never supplies an executed
 action, so PPO remains the sole controller of the plant. The penalty is the
 \emph{forward} divergence, which for diagonal Gaussians is available in closed
-form,
+form~\cite{cover2006information},
 %
 \begin{equation}
   \label{eq:ctrl:kl}
