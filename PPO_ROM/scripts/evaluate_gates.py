@@ -463,6 +463,25 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--obs_dump",
+    default="",
+    help=(
+        "Record (features, true payload) pairs to this .npz for fitting an "
+        "online payload estimator. Features are the 66 TASK columns only; the "
+        "four context columns are never included, because an estimator trained "
+        "on the answer is the failure the whole design exists to avoid "
+        "(rma_adaptation.assert_no_context_leakage). The label is read from "
+        "the env's own context, not from the observation, so it stays correct "
+        "under MULAG_CONTEXT_ABLATE."
+    ),
+)
+p.add_argument(
+    "--obs_dump_every",
+    type=int,
+    default=10,
+    help="Record one row every N control steps. 900 steps at 10 gives 90 rows per env.",
+)
+p.add_argument(
     "--paired_smoothing",
     default="",
     help=(
@@ -1105,6 +1124,11 @@ def _build_probe_policy(runner, raw, env_cfg):
 
 PROBE_LOG = []
 
+# Filled when --obs_dump is given; features never include the context columns.
+# A always-present dict rather than a rebindable None, so no call site needs a
+# `global` declaration and it cannot depend on whether that site is a function.
+OBS_DUMP = {"on": False, "x": [], "y": []}
+
 
 # Mutable so --paired_task_bias can change the offset between rollouts without
 # rebuilding the policy: a rebuilt policy would also reset rsl_rl's normaliser
@@ -1475,6 +1499,14 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 f"~{_elapsed / _step * (int(steps) - _step):.0f}s left",
                 flush=True,
             )
+        if OBS_DUMP["on"] and _step % max(int(a.obs_dump_every), 1) == 0:
+            _base = obs["policy"] if isinstance(obs, dict) else obs
+            # The label comes from the ENV, not the observation: under
+            # MULAG_CONTEXT_ABLATE the observation's context is zeroed or
+            # permuted, and a label read from there would be the ablation.
+            _true = raw._rma_context_observation()[:, 3]
+            OBS_DUMP["x"].append(_base[:, :66].detach().cpu().clone())
+            OBS_DUMP["y"].append(_true.detach().cpu().clone())
         action = policy(obs)
         obs, _, terminated, truncated, _ = raw.step(action)
         if _frames is not None and len(_frames) < int(a.video_length):
@@ -2045,6 +2077,11 @@ def main() -> None:
         assert_speed_channel_normalized(payload, a.vehicle_speed_kmh)
 
     per_mesh: dict[str, dict] = {}
+    if a.obs_dump:
+        OBS_DUMP["on"] = True
+        print(f"[PPO3-1-GATES] obs dump -> {a.obs_dump} "
+              f"(every {a.obs_dump_every} steps, 66 task columns, no context)",
+              flush=True)
     for mesh in meshes:
         env_cfg = parse_env_cfg(
             TASK_ID,
@@ -2923,6 +2960,17 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report, indent=2))
         print(f"[PPO3-1-GATES] wrote {path}", flush=True)
+
+    if OBS_DUMP["on"] and OBS_DUMP["x"]:
+        import numpy as _np
+
+        _dump = Path(a.obs_dump)
+        _dump.parent.mkdir(parents=True, exist_ok=True)
+        _x = torch.cat(OBS_DUMP["x"], dim=0).numpy()
+        _y = torch.cat(OBS_DUMP["y"], dim=0).numpy()
+        _np.savez_compressed(_dump, x=_x, y=_y)
+        print(f"[PPO3-1-GATES] wrote obs dump {_dump} "
+              f"x={_x.shape} y={_y.shape}", flush=True)
 
     env.close()
     simulation_app.close()
