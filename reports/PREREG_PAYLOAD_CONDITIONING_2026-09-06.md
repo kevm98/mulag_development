@@ -101,6 +101,41 @@ the other improves or stays within its non-inferiority bound (cut 10%, lateral
 
 Applied to `blind` -> `adaptive`, and separately at each scored payload.
 
+## Declared secondary outcomes: contact and safety
+
+Added 2026-09-06 BEFORE any arm of this campaign was trained, on the strength of
+`RESULT_rootcause_contact_2026-09-06.md`, which was computed from the oracle
+probe's existing reports and spent no new GPU time.
+
+The root cause of the heavy-payload deficit is impact and rebound, not lack of
+authority. Over 1.0x -> 3.0x the frozen base moves:
+
+    ground contact fraction   0.960 -> 0.795
+    hard-impact fraction      0.164 -> 0.445
+    p95 tool acceleration     50.7  -> 90.4 m/s2
+    safety-violation rate     0.018 -> 0.105
+
+while action saturation stays under 1 %.
+
+These are therefore reported for every arm, at every payload, as declared
+secondary outcomes:
+
+* `ground_contact_fraction` and `worst_family_ground_contact_fraction`
+* `hard_impact_event_fraction`
+* `p95_tool_acceleration_mps2`
+* `safety_violation_rate`
+
+**Status of these outcomes.** They are SECONDARY. The primary remains the two
+scored task channels under the Table 7.7 rule, and a failure there is a failure
+whatever the secondaries do. But a payload-conditioned arm that measurably
+reduces hard impacts and safety violations against its capacity-matched blind
+twin is a genuine and useful result on this plant, because those quantities are
+the mechanism by which the task fails, and it is reported as such rather than
+discarded for not being a tracking gain.
+
+They are written down here, with their baseline values, so that neither a
+favourable nor an unfavourable movement in them can be selected after the fact.
+
 ## Staging
 
 Stage A, one seed, decisive and cheap. Score `base`, `blind`, `adaptive` and
