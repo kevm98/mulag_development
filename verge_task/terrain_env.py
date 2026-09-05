@@ -4779,6 +4779,48 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             dim=-1,
         )
 
+    def _ablate_context(self, context: torch.Tensor) -> torch.Tensor:
+        """Destroy the plant information in the context without changing width.
+
+        `MULAG_CONTEXT_ABLATE` selects the arm:
+
+            (unset) / live   the true normalised context
+            zero             all context columns zeroed
+            shuffle          the per-environment context rows permuted
+
+        Width, architecture and parameter count are identical in every case, so
+        an arm difference cannot be attributed to capacity. That is the control
+        the residual campaigns had to add after the fact: dropping the slot
+        entirely (`MULAG_NO_CONTEXT_SLOT`) changes the observation to 66 and the
+        arms are then not comparable.
+
+        `shuffle` is the stronger falsification of the two. The context keeps
+        its exact marginal distribution and magnitude and loses only its pairing
+        with the environment it describes, so an arm that survives it was never
+        using the plant information. The permutation is redrawn every step, and
+        is a derangement where one exists, so no environment keeps its own row.
+        """
+        mode = str(os.environ.get("MULAG_CONTEXT_ABLATE", "") or "live").lower()
+        if mode in ("", "live"):
+            return context
+        if mode == "zero":
+            return torch.zeros_like(context)
+        if mode == "shuffle":
+            n = int(context.shape[0])
+            if n < 2:
+                return context
+            perm = torch.randperm(n, device=context.device)
+            # A random permutation leaves ~1 environment holding its own row on
+            # average, which is a small leak of true context into the control.
+            # Rotating any fixed point away costs nothing and removes it.
+            fixed = perm == torch.arange(n, device=context.device)
+            if bool(fixed.any()):
+                perm = torch.where(fixed, (perm + 1) % n, perm)
+            return context[perm]
+        raise ValueError(
+            f"MULAG_CONTEXT_ABLATE must be live, zero or shuffle; got {mode!r}"
+        )
+
     def _get_observations(self) -> dict:
         if getattr(self, "_sole_applied", None) is None:
             return super()._get_observations()
@@ -4887,6 +4929,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 context = self._rif_context_observation()
             else:
                 context = self._policy_latent_observation()
+            context = self._ablate_context(context)
             obs = torch.cat((obs, context), dim=-1)
             if obs.shape[-1] != int(self._expected_observation_dim()):
                 raise RuntimeError(
