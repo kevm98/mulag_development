@@ -137,3 +137,45 @@ metric artefact, not as a result.
 
 A partial pass, for example 1.0-3.0 passing and 4.0-5.0 failing, is reported as
 a partial pass with the boundary named. It is not rounded up.
+
+---
+
+## Amendment 2: the success rule is mis-specified at nominal payload
+
+Written after the 1.0x arm and BEFORE any loaded payload had finished, so that
+this is on record while the substantive result was still unknown. The 3.0x
+process was running when this was written and its report did not yet exist.
+
+The 1.0x table fails the rule above on every offset. That failure is an artefact
+of the rule, for two reasons, and both were foreseeable before the run.
+
+**One: `phi = 0` is the correct answer at nominal payload and the rule cannot
+express it.** The frozen policy was trained at this plant. It is already at its
+optimum here, at 1.587 mm of cut error, so no correction can Pareto-beat it and
+none should be expected to. What the programme actually requires at 1.0x is
+`phi*(1.0) = 0`, i.e. that the payload-conditioned schedule leaves the nominal
+plant alone and ties the static arm. The rule as written demands a strict
+improvement at every payload, which at the training plant is a demand that the
+correction beat the thing it is correcting.
+
+**Two: a percentage bound on a 1.587 mm denominator is not a test.** The 10 %
+cut-height bound is the A/A floor measured against a base at roughly 7.9 mm,
+where it means 0.79 mm. On the 1.0x baseline it means 0.16 mm, far below the
+instrument's own measured false-positive floor for this channel. The offset
+`b_Y = +0.02` reads as -63.1 % on cut while costing 2.90 mm in absolute terms,
+and buys 15.88 mm of lateral.
+
+**What changes and what does not.** The rule is NOT re-scored and the 1.0x
+result is reported exactly as the rule scores it: fail. The verdict for the
+programme is taken from the loaded payloads 2.0-5.0, where the frozen base
+carries 19-320 mm of cut-height error and there is headroom for a correction to
+recover. 1.0x is reported as uninformative by construction, with its table
+printed in full so the reader can see the trade rather than the percentage.
+
+Absolute millimetre differences are added to the table alongside the
+percentages. That is a reporting change, not a change to the criterion.
+
+**What would still count as a negative.** If no offset Pareto-improves at 3.0x,
+4.0x or 5.0x either, the programme's answer is negative and the estimator is not
+built, exactly as the original decision tree says. This amendment widens nothing
+about the payloads that carry the verdict.

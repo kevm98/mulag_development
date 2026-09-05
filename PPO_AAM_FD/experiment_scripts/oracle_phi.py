@@ -101,8 +101,12 @@ def table(path, payload):
           f"contact {base['worst_family_ground_contact_fraction']:.3f}  "
           f"safety {base['safety_violation_rate']:.3f}")
     print('=' * 92)
-    print(f"{'b_Y:b_Z':>12}  {'cut':>10}  {'lateral':>10}  {'contact':>8}  "
-          f"{'safety':>7}   outcome")
+    # Absolute millimetres alongside the percentages. At light payload the
+    # baseline cut error is ~1.6 mm, where the pre-registered 10% bound is
+    # 0.16 mm, well under the instrument's own floor, and a percentage on that
+    # denominator says more about the denominator than about the offset.
+    print(f"{'b_Y:b_Z':>12}  {'cut':>10} {'d_mm':>7}  {'lateral':>10} "
+          f"{'d_mm':>7}  {'contact':>8}  {'safety':>7}   outcome")
 
     winners = []
     for key, arm in arms.items():
@@ -120,7 +124,9 @@ def table(path, payload):
         elif ok:
             winners.append((key, res))
         cell = lambda r: f"{r['pct']:+9.1f}%{'*' if r['sig'] else ' '}"
-        print(f"{key:>12}  {cell(res['cut'])}  {cell(res['lateral'])}  "
+        dmm = lambda r: f"{r['med_arm'] - r['med_ref']:+7.2f}"
+        print(f"{key:>12}  {cell(res['cut'])}{dmm(res['cut'])}  "
+              f"{cell(res['lateral'])}{dmm(res['lateral'])}  "
               f"{arm['worst_family_ground_contact_fraction']:8.3f}  "
               f"{arm['safety_violation_rate']:7.3f}   {lab}")
 
