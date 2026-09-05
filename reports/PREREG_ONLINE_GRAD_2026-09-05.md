@@ -95,3 +95,68 @@ gate metrics. The selected value and the ladder are reported.
 If the mechanism is unstable at every rung of the learning-rate ladder, that is
 the result and it is reported. No further variants, no reward shaping, no widening
 of the adapter.
+
+
+---
+
+# Amendment 1, 2026-09-05 17:30 CEST
+
+## The first mechanism was objective-mismatched and is withdrawn
+
+Version 1 descended on the actuator prediction residual. The learning-rate
+ladder on mesh 2718 ran in full and is kept as evidence:
+
+| lr | mean abs prediction residual | cut median | lateral median |
+|---|---|---|---|
+| 1e-5 | 0.00616 | 15.5 mm | 94.0 mm |
+| 1e-4 | 0.00589 | 30.5 mm | 108.1 mm |
+| 1e-3 | 0.00553 | 56.7 mm | 149.8 mm |
+
+The objective fell monotonically with the learning rate and the task error rose
+monotonically. The mechanism optimised exactly what it was told to and that was
+the wrong thing: shrinking a model residual by moving the *command* makes the
+plant do what the model predicted, rather than making the cutter track. Model
+error is corrected by moving the model. This is recorded rather than deleted,
+because the monotonicity is the cleanest possible demonstration of an objective
+mismatch.
+
+Version 1 is withdrawn. Its three ladder reports are kept under
+`outputs/online_grad/ladder_v0_nodiag/` and `outputs/online_grad/`.
+
+## Version 2: analytic policy gradient on the task error
+
+Following the analytic-policy-gradient line, in particular the alternating
+scheme of *Learning on the Fly: Rapid Policy Adaptation via Differentiable
+Simulation* (arXiv 2508.21065), the two losses are kept distinct. That work
+updates a residual dynamics model on prediction error and the policy on task
+reward backpropagated through the model. Version 1 collapsed the two.
+
+Version 2 adapts the policy only, on the task error:
+
+    g    = e_lat * Ja[1] + e_cut * Ja[2]
+    L    = sum_i u_i * g_i
+    theta <- theta - eta * dL/dtheta
+
+`Ja` is the cascade's fixed 3x4 cylinder-to-cutter Jacobian in action
+coordinates. `verge_lateral_error` is the cutter's Y offset and
+`cut_height_error` its Z contact gap, so rows 1 and 2 carry them. Positive error
+on a channel means that axis must move negative, which is the sign this
+produces. The Jacobian rows are printed at startup and recorded.
+
+## What changes in the protocol
+
+- **Selection metric** is now the mean absolute task error, which is the
+  objective, replacing the prediction residual.
+- **Mesh 2718 becomes a selection mesh.** Because the selection metric now
+  coincides with the scored quantity, the confirmatory comparison is on the
+  held-out meshes **3141 and 8191 only**. Mesh 2718 is reported separately and
+  labelled as the selection mesh.
+
+Everything else is unchanged: the ladder, the three arms, the sham control, the
+success rule, the non-inferiority bounds and the statistic.
+
+## Declared outcome, unchanged in spirit
+
+Positive only if `on` passes against `off` on the held-out meshes **and** `sham`
+does not. A monotone worsening with learning rate, as in version 1, is reported
+as a failure of the mechanism and not retuned into a pass.

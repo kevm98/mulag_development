@@ -8,7 +8,7 @@
 set -u
 export IMAGE=isaac-lab:2.3.2-rl052
 BASE=logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt
-MESHES="2718 3141 8191"
+MESHES="3141 8191"   # 2718 is the selection mesh, scored separately
 LADDER="1e-5 1e-4 1e-3"
 OUT=outputs/online_grad
 cd /home/kevinmurera
@@ -49,13 +49,13 @@ best, blr = None, None
 for f in sorted(glob.glob("outputs/online_grad/ladder_lr*.json")):
     try:
         d = json.load(open(f))
-        v = d.get("online_grad_diag", {}).get("mean_abs_prediction_residual")
+        v = d.get("online_grad_diag", {}).get("mean_abs_task_error")
         lr = d.get("online_grad_lr")
     except Exception:
         continue
     if v is None or lr is None:
         continue
-    print(f"  lr={lr:g}  mean|d|={v:.6f}", flush=True)
+    print(f"  lr={lr:g}  mean|task err|={v:.6f}", flush=True)
     if best is None or v < best:
         best, blr = v, lr
 print(f"SELECTED {blr:g}" if blr else "SELECTED none", flush=True)

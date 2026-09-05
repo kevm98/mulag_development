@@ -985,20 +985,30 @@ ONLINE_GRAD_STATS = {"steps": 0, "quiet": 0.0, "reverted": 0, "resid": 0.0}
 def _build_online_grad_policy(runner, raw, env_cfg):
     """Frozen policy whose final layer is updated by gradient descent at runtime.
 
-    The signal is the actuator prediction residual the environment already
-    computes, `(realized - previous_pred) / span`, carried in observation
-    columns 58:62. A positive value means the plant delivered more travel than
-    the forward model predicted, so the command should fall.
+    This is an analytic policy gradient: the measured task error is mapped into
+    action space through the plant geometry and backpropagated into the policy.
 
-    The surrogate loss is `sum_i u_i * d_i`, whose gradient with respect to the
-    actor's parameters is `sum_i d_i * du_i/dtheta`. One descent step therefore
-    moves each commanded channel against its own measured over-delivery, scaled
-    by the policy's own sensitivity. No reward, no rollout, no credit
-    assignment, and no privileged input.
+    An earlier version descended on the actuator prediction residual instead.
+    That was an objective mismatch and the ladder showed it cleanly: the
+    residual fell monotonically with the learning rate while cut-height error
+    rose from 15.5 mm to 56.7 mm. Shrinking a model residual by moving the
+    *command* makes the plant do what the model predicted, which is the opposite
+    of making the cutter track. Model error is corrected by moving the model.
 
-    A full Jacobian of the forward model is not needed: Section 5.3.1 measures
-    the extension-command Jacobian as diagonally dominant at condition number
-    2.14, so the per-axis sign is the load-bearing part.
+    The signal here is the task error itself. `verge_lateral_error` is the
+    cutter's Y offset from the tracking line and `cut_height_error` its Z
+    contact gap, so rows 1 and 2 of the cascade's 3x4 cylinder-to-cutter
+    Jacobian carry them into cylinder space and the action-sign vector into
+    action space:
+
+        g = e_lat * Ja[1] + e_cut * Ja[2]
+
+    The surrogate `sum_i u_i * g_i` has gradient `sum_i g_i * du_i/dtheta`, so
+    one descent step moves the command the way the geometry says reduces the
+    measured error. Positive error on either channel means that axis must move
+    negative, which is the sign this produces.
+
+    No reward, no rollout, no credit assignment, no privileged input.
     """
     from tensordict import TensorDict
 
@@ -1015,6 +1025,31 @@ def _build_online_grad_policy(runner, raw, env_cfg):
     frozen = {"w": head.weight.detach().clone(), "b": head.bias.detach().clone()}
     trust = float(a.online_grad_trust)
     opt = torch.optim.SGD([head.weight, head.bias], lr=float(a.online_grad_lr))
+
+    # Fixed 3x4 map from learned cylinder extension to cutter XYZ, carried into
+    # policy-action coordinates. Fail loudly rather than descend on a wrong
+    # direction.
+    env_obj = raw
+    for _ in range(4):
+        if hasattr(env_obj, "_cascade"):
+            break
+        env_obj = getattr(env_obj, "unwrapped", getattr(env_obj, "env", None))
+        if env_obj is None:
+            break
+    if env_obj is None or not hasattr(env_obj, "_cascade"):
+        raise RuntimeError(
+            "online gradient adaptation needs the cutter Jacobian and could not "
+            "reach `_cascade` on the environment"
+        )
+    _ja = (
+        env_obj._cascade.jacobian.to(device=a.device, dtype=torch.float32)
+        * env_obj._action_to_learned_sign.reshape(1, 4).to(
+            device=a.device, dtype=torch.float32
+        )
+    )
+    jac_row_y = _ja[1].reshape(1, 4)
+    jac_row_z = _ja[2].reshape(1, 4)
+    print(f"[PPO3-1-GATES] task-error Jacobian rows y={_ja[1].tolist()} z={_ja[2].tolist()}", flush=True)
 
     n = int(raw.num_envs)
     # Sham sign is drawn once per environment and held, so the arm perturbs the
@@ -1037,11 +1072,15 @@ def _build_online_grad_policy(runner, raw, env_cfg):
         td = TensorDict({"policy": base}, batch_size=[base.shape[0]])
         with torch.enable_grad():
             action = actor(td)
-            # Columns 58:62 are the actuator prediction residual. The trailing
-            # context columns, if present, sit after the 66 base channels, so
-            # this index is the same for a 66- and a 70-wide observation.
-            d = base[:, 58:62].detach()
-            stats["resid"] += float(d.abs().mean().detach().cpu())
+            # Channel 9 is the cut-height (Z) error and channel 10 the lateral
+            # (Y) error, both raw: rsl_rl normalises inside the actor, so this
+            # observation is untouched.
+            e_cut = base[:, 9:10].detach()
+            e_lat = base[:, 10:11].detach()
+            stats["resid"] += float(
+                (e_cut.abs().mean() + e_lat.abs().mean()).detach().cpu()
+            )
+            d = e_lat * jac_row_y + e_cut * jac_row_z
             if a.online_grad_sham:
                 d = d * sham_sign[: d.shape[0]]
             # A quiet command makes the mismatch unidentifiable on that axis.
@@ -2502,7 +2541,7 @@ def main() -> None:
         "online_grad_trust": float(getattr(a, "online_grad_trust", 0.0)),
         "online_grad_diag": (
             {
-                "mean_abs_prediction_residual": ONLINE_GRAD_STATS["resid"] / max(ONLINE_GRAD_STATS["steps"], 1),
+                "mean_abs_task_error": ONLINE_GRAD_STATS["resid"] / max(ONLINE_GRAD_STATS["steps"], 1),
                 "quiet_axis_fraction": ONLINE_GRAD_STATS["quiet"] / max(ONLINE_GRAD_STATS["steps"], 1),
                 "nonfinite_reverts": ONLINE_GRAD_STATS["reverted"],
                 "steps": ONLINE_GRAD_STATS["steps"],
