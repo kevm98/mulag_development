@@ -78,8 +78,16 @@ fit the budget.
 
 Stage 1, axis sweep at each payload, one process per payload, baseline first:
 
-    b_Y in {-0.04, -0.02, 0, +0.02, +0.04}   with b_Z = 0
+    b_Y in {-0.02, -0.01, 0, +0.01, +0.02}      with b_Z = 0
     b_Z in {-0.15, -0.08, -0.04, -0.02, +0.02}  with b_Y = 0
+
+**Amendment, same day, before any scored arm ran.** The b_Y grid above started
+as {-0.04, -0.02, 0, +0.02, +0.04} and was halved. The plumbing smoke that
+checked the new code path (44 environments, 120 steps, payload 3.0x, not a
+scored configuration and not read as a result) measured b_Y = +0.02 moving
+cut-height error from 15.8 to 154 mm. A grid whose second point is already far
+past the failure is not a search. The change is recorded here rather than made
+silently, and the b_Z grid is unchanged.
 
 Stage 2, the product of the best two values on each axis, at each payload,
 4 combinations plus the baseline.
