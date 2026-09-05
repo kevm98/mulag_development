@@ -75,3 +75,22 @@ frozen base is kept and flagged, as seed 7 is.
   of gain here.
 - Either way the encoder explanation stays eliminated, since the starved encoder
   is used throughout.
+
+
+## Outcome and stop
+
+Stopped 2026-09-05 at 16:37 CEST after four of the five extension seeds, with
+seed 5's control arm part-trained and discarded. Analysis therefore uses every
+seed whose two arms are both scored: **seeds 17, 23, 101, 42, 7, 1, 2, 3**, plus
+seed 4 if its reports validate.
+
+The stop was **not** triggered by the results. Two facts fix that. First, the
+verdict was already arithmetically determined before the stop: 3 passes from 8
+scored, 2 seeds outstanding, maximum reachable 5 against a threshold of 6.
+Continuing could not have changed the outcome in either direction. Second, the
+GPU was reassigned to a different experiment
+(`PREREG_ONLINE_GRAD_2026-09-05.md`) at the author's direction.
+
+**Result: the primary fails.** Live history at equal capacity succeeds on 3 of 8
+seeds under the pre-registered rule, against a declared threshold of 6 of 10.
+Reported with the original 2-of-5 alongside it, not replaced by it.
