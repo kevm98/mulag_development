@@ -88,14 +88,11 @@ S-curve family is removed (Table~\ref{tab:eval:paired-rif}). The choice of
 representation therefore affects the resulting controller and is not an
 implementation detail, but the size of that effect is not established.
 
-\ppoROM{} and \ppoIDFD{} agree on every recorded training field and differ only
-in the actuator path, so the difference above \emph{is} attributable to the
-representation. \ppoAAMFD{} is a separately trained run at a different seed, a
-lower actor learning rate and no frozen-actor warm-up, reported as a deployed
-controller rather than a ranked competitor. Only one training run exists per
-stack, so seed variance is not estimated even for the matched pair, and claims
-about the adaptation path are carried instead by the paired within-stack
-comparison of Section~\ref{sec:eval:attribution}.
+\ppoROM{} and \ppoIDFD{} match on recorded training fields and differ only in
+the actuator path. AF uses a different seed and training configuration and is
+therefore evaluated through the paired within-stack comparison of
+Section~\ref{sec:eval:attribution}, not ranked against them. With one R and one
+IF training run, their seed variance remains unknown.
 
 \textbf{A learned policy can replace the classical controller at runtime
 (RQ4).} The damped-least-squares controller supplies privileged demonstrations
@@ -108,14 +105,11 @@ demonstrated behaviour because the reward is an imperfect proxy for the
 evaluation gates.
 
 \textbf{The robust stacks retain a broad margin against mechanical variation
-and against authority loss, without online adaptation (RQ2, RQ5).} Every closed-loop result is
-measured on held-out meshes, eleven trajectory families scored individually, and
-plants drawn from sixteen reserved factor configurations disjoint from training
-by construction. Under those conditions \ppoIDFD{} holds the lateral criterion in
-$32$ of $33$ cells at a median of $\unit[0.0281]{m}$, and the frozen inverse
-model beneath it, identified on Simscape alone, transfers to all $118$
-deployment runs with millimetre-scale one-step error, flat across domains. This
-is the broadest claim the work supports and it requires no plant estimation.
+and authority loss without online adaptation (RQ2, RQ5).} On held-out meshes,
+eleven trajectory families and sixteen reserved factor configurations,
+\ppoIDFD{} meets the lateral criterion in $32$ of $33$ cells at a median of
+$\unit[0.0281]{m}$. Its frozen inverse model transfers to all $118$ deployment
+runs with millimetre-scale one-step error.
 
 The factor sweep supports the tested mechanical variation, but not unbounded
 hydraulic variation. On the inverse and forward path, hydraulic factors are not
@@ -132,22 +126,19 @@ beat a zero-context control on the adapter objective on all five seeds, and the
 same correction changes no closed-loop metric, because it is added to an inverse
 command already resting against its limit for most of the scored window. Moving
 the correction onto the valve path restores the authority the residual needed.
-At the pre-registered endpoint the history-conditioned residual there succeeds
-on four of five training seeds, so the median seed passes; three of those seeds
-improve both channels. The fixed final
-checkpoint returns three of five under the same rule and preserves the
-direction, so the result does not depend on the checkpoint rule. Capacity-matched
-controls then locate the source of that gain: an equal-capacity residual reading
-zeroed history also beats the frozen base on four of five seeds, so added
-residual capacity rather than live history accounts for the median improvement.
-Live history separates from that control on one seed at the selected checkpoint
-and on a different seed at the final one. The cutter-mass dose experiment
-resolves a plant-dependent lateral component that grows with load, but it scores
-the residual against the frozen base rather than against the zero-history
-control, so it does not say whether that component is capacity or history. The
-supported finding is therefore a method-level gain from the bounded residual,
-with online adaptation as a conditional increment whose evidence is
-seed-specific.
+At the pre-registered endpoint the history-conditioned residual succeeds on four
+of five seeds; the fixed final checkpoint succeeds on three. An equal-capacity
+zero-history residual also beats the frozen base on four seeds, so residual
+capacity explains the median gain. Live history separates from that control on
+one seed under each checkpoint rule. Restricting the encoder to plant-relevant
+channels, the leading explanation for that absence, does not recover it: on a
+plant where the frozen base degrades by two orders of magnitude across the mass
+range, the primary comparison succeeds on two seeds of five and the median seed
+fails (Section~\ref{sec:eval:starved}). Capacity alone beats the frozen base on
+four of five there, one more than the history-conditioned arm. The cutter-mass study resolves a
+load-dependent lateral component but compares against the frozen base, so it
+cannot distinguish capacity from history. The supported method-level claim is
+therefore the bounded residual; the history-specific increment is seed-dependent.
 
 Table~\ref{tab:concl:adaptation-evidence} separates the experiments behind that
 conclusion, so the gain of an enlarged residual is not read as evidence that
@@ -177,6 +168,9 @@ live history caused it.
     Capacity control
       & history-conditioned residual against an equal-capacity zero-history residual
       & Capacity alone reproduces most of that gain; live history separates from zeroed history on one seed of five at each checkpoint rule. \\
+    Encoder restriction
+      & history against zeroed history at equal capacity, encoder starved to plant-relevant channels
+      & The missing history effect is not an artefact of a wide encoder input: two seeds of five succeed and the median seed fails. \\
     Cutter-mass dose and sham
       & plant perturbation against the corresponding sham condition
       & A plant-dependent lateral component is resolved, but starting mass and the later exchange remain coupled. \\
@@ -186,10 +180,8 @@ live history caused it.
 
 \section{Design Implications}
 
-The results carry design consequences for each of the three parts of this work:
-how a hydraulic actuator is identified and transferred, how a policy is trained
-to act through it, and how plant adaptation is fitted around both. They are
-stated below in that order, because each stage constrains the next.
+The design implications follow the same sequence: actuator identification,
+policy training and plant adaptation.
 
 \subsection*{Identification and Transfer}
 
@@ -206,14 +198,10 @@ inside the training loop. This structure also represents the pressure dependence
 of valve authority directly.
 
 \textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
-The inverse model transferred at millimetre scale in every domain, with an
-ordering that does not follow plant severity, and was therefore deployed frozen
-everywhere downstream. Where a deployment offset had to be absorbed, it was
-absorbed by a correction capped at $\unit[3]{mm}$ and gated to vanish at zero
-command, with every hydraulic parameter frozen and the original data retained as
-replay. That construction preserves the identified physics, keeps a commanded
-hold a hold, and confines the deployment-specific part of the model to a
-component whose authority is bounded by construction.
+The inverse model transferred at millimetre scale and remained frozen. A
+$\unit[3]{mm}$ correction absorbed the deployment offset, vanished at zero
+command and preserved the original data through replay, confining
+deployment-specific behaviour to a bounded component.
 
 \subsection*{Control Methodology}
 
@@ -224,15 +212,10 @@ anchor advances only through checkpoints that satisfy the gates. Reward terms
 should represent quantities that are also treated as evaluation constraints.
 
 \textbf{Where no baseline is inherited, the action contract is the safety
-argument.} The deployed policy is not a residual: a zero action leaves the arm
-stationary, and nothing is summed with the policy output at runtime. Authority
-is therefore bounded by the chain the action passes through rather than by
-proximity to a nominal controller, with a rate limit, a filter, a shield that
-fades authority as travel headroom is consumed, a command scale, and an
-anti-windup cap on how far the integrated target may lead the measured
-extension. That last cap is load-bearing and has to be resolved per axis, since
-the value that recovers a sustained standing offset on the boom destroys head
-alignment on the head-pivot cylinder (Section~\ref{sec:ctrl:ppo}).
+argument.} Zero action leaves the arm stationary. A rate limit, filter, travel
+shield, command scale and per-axis anti-windup cap bound its authority. The cap
+must be resolved per axis because the value that recovers boom offsets damages
+head alignment on cylinder~4 (Section~\ref{sec:ctrl:ppo}).
 
 \subsection*{Plant Adaptation}
 
@@ -242,10 +225,8 @@ present in the data. The delivered-stress check determines whether a
 perturbation reaches the plant and whether a correction can influence the
 command. Both tests should precede estimator training.
 
-Where the estimate is used also matters. A dynamics model can integrate a
-changing estimate over time, whereas a memoryless policy receives that change as
-input variation. Filtering on the policy path may therefore be useful, but its
-appropriate time constant remains to be determined on the deployed stack.
+Filtering may be needed when a changing estimate enters a memoryless policy,
+but its time constant remains to be determined on the deployed stack.
 
 \section{Contributions}
 
@@ -253,26 +234,16 @@ Section~\ref{sec:intro:contributions} stated six contributions. Their standing
 at the end of the work is as follows, with the supporting evidence as summarised
 above rather than repeated.
 
-\textbf{Transferable hydraulic actuator learning} is delivered: both
-representations were identified from Simscape and realised in IsaacLab, and the
-inverse model transfers without deployment-specific retraining. The
-\textbf{reduced-order actuator model} is delivered as a surrogate and carries
-everything downstream, being accurate enough to serve as the deployment plant
-and cheap enough to evaluate inside GPU-parallel training, which the stiff
-implicit solver of the model it replaces cannot support; it was calibrated
-against IsaacLab and is therefore the reference condition rather than an
-independent competitor. It is not delivered as an identified plant. Its fitted
-physical constants sit on their clamps, the explicit chain alone produces no net
-travel, and the learned heads move the cylinder
-(Section~\ref{sec:models:rom}). The structure buys a bounded, differentiable
-transition form, not measured hydraulic constants, and no result in this thesis
-rests on reading those constants as physical.
+\textbf{Transferable hydraulic actuator learning} is delivered through two
+Simscape-identified representations realised in IsaacLab; the inverse model
+transfers without retraining. The \textbf{reduced-order actuator model} is a
+bounded, differentiable surrogate suitable for GPU-parallel training and serves
+as the calibrated deployment plant. Its clamped constants are not identified
+physical parameters (Section~\ref{sec:models:rom}).
 
-The \textbf{control-relevant identification and validation} procedure is
-delivered and is the contribution most likely to transfer independently of this
-machine, covering both the input-ablation test that exposed a forward model with
-no command authority and the identifiability audit that established the
-excitation envelope.
+The \textbf{control-relevant identification and validation} procedure combines
+input ablation, which exposed a forward model without command authority, with an
+identifiability audit of the excitation envelope.
 
 \textbf{Policy-only control through learned hydraulics} is demonstrated. After
 the classical teacher is removed, \ppoIDFD{} holds a mean lateral error of
@@ -281,36 +252,24 @@ $95\,\%$ ground contact (Section~\ref{sec:eval:tracking}). Worst-cell
 aggregation still misses two gates; that bound is stated in
 Section~\ref{sec:concl:limitations}.
 
-The \textbf{decision procedure for online adaptation} is delivered, and its main
-product is the discipline that produced it rather than any single number. It
-separates residual plant sensitivity, observability, correction authority and
-residual capacity before a gain is attributed to adaptation. The same evaluation
-discipline also exposes a broader control-design lesson: a quantity which is
-gated but not priced is traded away by the optimiser.
+The \textbf{decision procedure for online adaptation} separates residual plant
+sensitivity, observability, correction authority and residual capacity before
+attributing a gain to adaptation. It also exposes when the optimiser trades away
+a gated quantity that the reward does not price.
 
-\textbf{Where online adaptation is effective} is answered at two levels rather
-than with a single verdict. The explicit mechanism is informative at the model
-level and has no closed-loop effect through the saturated inverse command, and
-the implicit mechanism that replaced it acts on the valve path, where authority
-remains. The primary evaluation yields four successful
-seeds and one trade-off, and the final-checkpoint analysis returns three
-successes, so the median training run improves under both rules. The
-capacity-matched comparison then locates the source of that gain: a residual of
-the same capacity reading zeroed history reproduces most of it, while live
-history separates from that control on one seed of five under either checkpoint
-rule. The cutter-mass dose study resolves a plant-dependent lateral component,
-but does not separate static mass dependence from the later mass exchange. The
-supported method-level claim is a bounded residual on the valve path. The
-supported adaptation-specific claim is narrower: live history contributes where
-residual capacity alone does not, and where load variation stays visible in the
-scored channel.
+\textbf{Where online adaptation is effective} is answered at two levels. Plant
+context is informative at the model level but cannot affect the saturated
+inverse command. A bounded valve-path residual retains authority and improves
+the median training run, although the capacity-matched control reproduces most
+of the gain. Live history contributes only on seed-specific cases, and a second
+campaign that starves the encoder to plant-relevant channels returns two of five
+seeds, eliminating the encoder as the explanation. The cutter-mass study resolves
+a plant-dependent lateral component without isolating the transient mass
+exchange.
 
-Two enablers are recorded rather than claimed. The causal plant estimator and
-the bounded adaptation path behave as specified, with no privileged access, no
-future information, bounded output and reversion to the robust actuator path on
-invalid input. Of the eight-gate promotion criterion, one property is worth
-reuse: five gates separate the matched pair and carry the comparative claims,
-while lateral, hard impacts and tool acceleration do not
+Two enablers are recorded: the causal estimator and bounded adaptation path use
+no privileged or future information and revert safely on invalid input. Five of
+the eight promotion gates separate the matched pair
 (Section~\ref{sec:sys:gates}).
 
 \section{Limitations}
@@ -377,14 +336,15 @@ The evidence in this thesis is simulation-to-simulation, and the three
 experiments that would most change what it can claim are also in simulation.
 They are listed first for that reason.
 
-\textbf{Restrict the encoder input.} This targets the weakest link in the
-present result. Every history encoder trained here reads the full observation,
-$1400$ numbers over the window, of which almost all describe terrain and task
-state rather than plant identity, and a head of this capacity can fit that
-noise. Restricting the encoder to plant-relevant channels, or fitting it by
-regression onto a privileged plant vector instead of through the policy gradient
-as rapid motor adaptation does~\cite{kumar2021rma}, is the direct test of
-whether the missing history effect is a property of the plant or of the encoder.
+\textbf{Fit the encoder by regression rather than through the policy gradient.}
+Restricting the encoder input has been done and did not recover the effect
+(Section~\ref{sec:eval:starved}), which leaves the training signal rather than
+the input width as the remaining candidate. Rapid motor adaptation never trains
+its encoder through the policy gradient, fitting it onto a low-dimensional
+privileged vector and freezing it before the residual head is
+trained~\cite{kumar2021rma}. That is the one variant this campaign's
+pre-registration admits, and it separates a representation problem from the
+absence of a usable effect.
 
 \textbf{Train more than one seed per representation.} R and IF are one training
 run each, so the cross-stack comparison of Section~\ref{sec:eval:tracking}
@@ -398,21 +358,12 @@ this particular construction is what fixed it. A three-arm comparison against
 plain PPO with early stopping and against the un-fine-tuned distilled policy
 would separate the block ratchet from the constraint it sits inside.
 
-\textbf{Then the machine.} Evaluating the learned actuator models and distilled
-policy on the FME~500 begins with instrumentation, because the machine as
-delivered carries no cylinder-chamber pressure transducers and the differential
-pressure the models propagate exists here only as an actuator-model state.
-Fitting pressure transducers, extension sensing and a rod load pin converts
-three modelled quantities into measured ones. The collection instrument is
-already designed and validated: the open-loop excitation schedule of
-Chapter~\ref{chap:data} was built to make the valve causally identifiable, and
-the identifiability audit of Section~\ref{sec:data:openloop-collection} applies
-to machine data unchanged. Hardware data would then support a bounded correction
-to the frozen inverse model, with hydraulic parameters retained and the original
-dataset used for replay; input ablation should verify that the correction
-remains dependent on the valve command. The reference-anchored policy is a
-suitable starting point because it limits policy drift from a verified
-checkpoint.
+\textbf{Then the machine.} Hardware evaluation begins by adding chamber-pressure
+and extension sensing and a rod load pin to the FME~500. The open-loop excitation
+schedule and identifiability audit of Chapter~\ref{chap:data} can then be applied
+to machine data. Any correction should remain bounded, retain the identified
+hydraulic parameters and original data for replay, and pass input ablation. The
+reference-anchored policy provides the verified starting checkpoint.
 
 The central design lesson is conditional. Robust training absorbs a large part
 of the plant variation before online adaptation is introduced. A remaining

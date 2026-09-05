@@ -608,7 +608,84 @@ the selected checkpoint and for seed~$17$ at the final checkpoint. The
 method-level statement is that a bounded residual on the valve path improves
 tracking. The adaptation-specific statement is that live history is not the
 source of the median gain under this encoder, and is the source of the gain on
-those particular seeds.
+those particular seeds. The next section tests the encoder itself.
+
+\subsection{Restricting the Encoder Input}
+\label{sec:eval:starved}
+
+The preceding section names the encoder as the leading candidate: every arm
+reads $70$ features per step, almost all terrain and task state, into a
+$53$k-parameter head that can fit them as noise. This section starves that input
+and repeats the comparison. The design was registered in writing before any arm
+of it was trained, and the success rule below is the one used for
+Table~\ref{tab:eval:arms}, not a rule chosen afterwards.
+
+Two things change and only two. The encoder reads a plant-relevant subset,
+namely tracking error, cylinder extension and velocity, valve command,
+measured-minus-commanded cylinder state, actuator prediction residual and
+normalised cylinder effort. That is $26$ columns plus the four-wide previous
+action, $30$ features per step and $600$ numbers over the window instead of
+$1400$. Terrain profile, headroom, target lead, alignment, truck speed, path
+preview and cutter pose are excluded, so the head cannot clone the task policy.
+The column set is written into the checkpoint as a buffer, so an evaluation
+cannot feed a different set from the trained one. Second, the cutter mass is
+drawn once per episode over $1.0$ to $5.0$ and held, with no mid-episode flip.
+Both residual arms are scored at the same final checkpoint, on three reserved
+meshes, over $528$ paired environments per seed.
+
+The plant was checked before the seeds were paid for, because a fixed policy
+that does not feel the mass draw gives the encoder nothing to identify. Over a
+constant-mass ladder the frozen base degrades from $\unit[3.4]{mm}$ median
+cut-height error at nominal mass to $\unit[19.4]{mm}$ at $3.0$ and
+$\unit[320]{mm}$ at $5.0$, and laterally from $\unit[46]{mm}$ to
+$\unit[410]{mm}$. The deficit is large and monotone, so this is not the
+low-headroom setting of Section~\ref{sec:eval:robustness-residual}.
+
+\begin{table}[tbp]
+  \centering
+  \caption{Live history against a capacity-matched control reading zeros, with
+  the starved encoder. Percentages are median log-ratios over $528$ paired
+  environments; an asterisk marks a paired bootstrap interval excluding zero.
+  The last column applies the rule of Table~\ref{tab:eval:arms}.}
+  \label{tab:eval:starved}
+  \small
+  \begin{tabular}{lccl}
+    \toprule
+    Seed & cut height & lateral & outcome \\
+    \midrule
+    $17$  & $+194.2\,\%^{*}$ & $+24.4\,\%^{*}$ & joint improvement \\
+    $7$   & $+427.9\,\%^{*}$ & $+0.5\,\%$      & Pareto improvement \\
+    $23$  & $+18.7\,\%^{*}$  & $-1.7\,\%$      & lateral outside its bound \\
+    $101$ & $-49.3\,\%^{*}$  & $+1.1\,\%$      & no resolved improvement \\
+    $42$  & $-27.5\,\%^{*}$  & $-62.1\,\%^{*}$ & both worse \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:eval:starved} reports the primary comparison. Two of five seeds
+succeed, so the median seed fails and the campaign does not meet its declared
+threshold of three. The failure is not a uniform absence of effect but a
+disagreement between seeds: $17$ and $7$ improve cut height by factors of two
+and five with intervals excluding zero, while $101$ and $42$ are worse on cut
+height by resolved margins and $42$ loses $\unit[88]{mm}$ of lateral tracking.
+Seed~$23$ misses on lateral by $0.2$ percentage points against a
+$1.5\,\%$ bound, on an interval that crosses zero.
+
+Two controls place that result. Added capacity alone beats the frozen base on
+four of five seeds, one more than the history-conditioned arm manages, so on
+this plant a residual that cannot see the plant is the more reliable of the two.
+And seed~$7$, the clearest primary success, is the seed whose control collapses:
+its zero-history arm is worse than the frozen base on both channels, and live
+history recovers that rather than adding to a working controller.
+
+The section therefore closes the question the previous one opened, in the
+negative. The encoder was the leading explanation for the missing history
+effect, and restricting its input from $1400$ numbers to $600$ does not recover
+that effect. What survives is narrower and seed-specific: live history helps
+where the plant is hard enough that the capacity-matched control fails, and it
+is neither necessary nor reliably beneficial elsewhere. The method-level result
+of Section~\ref{sec:eval:attribution} is unchanged, because it never depended on
+history.
 
 \subsection{Dependence on Cutter-Mass Dose}
 \label{sec:eval:dose}
@@ -727,9 +804,11 @@ bounded authority and can change the realised command.
 \textbf{History must add value beyond residual capacity.} The residual improves
 tracking on four of five seeds, and an equal-capacity residual reading zeros
 improves it on four of five as well, so the median gain is capacity rather than
-history. The increment favours live history on seed~$42$ here and on seed~$17$
-at the final checkpoint. It is conditional, and estimator quality alone does not
-establish it.
+history. Starving the encoder to plant-relevant channels does not change that
+conclusion: the primary comparison succeeds on two seeds of five and the median
+seed fails (Section~\ref{sec:eval:starved}). The increment is real where it
+appears, and it appears where the capacity-matched control fails rather than
+uniformly. Estimator quality alone does not establish it.
 
 The answer has two levels and both have to be reported together. Online plant
 context is usable, and the level at which it is usable is set by the interface
@@ -737,5 +816,7 @@ it acts through: the explicit mechanism improves the model that consumes its
 estimate and changes nothing in the loop, while the bounded residual on the
 valve path improves tracking on the median training seed under both checkpoint
 rules. That second result is about the residual controller, not about
-adaptation, because most of the median gain is capacity. Stated without the four
-conditions above, it will be misread as plant identification.
+adaptation, because most of the median gain is capacity, and the encoder
+restriction that was the leading alternative explanation does not recover the
+difference. Stated without the four conditions above, it will be misread as
+plant identification.
