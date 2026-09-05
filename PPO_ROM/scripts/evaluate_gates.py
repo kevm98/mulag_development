@@ -426,6 +426,23 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--valve_probe_amp",
+    type=float,
+    default=0.0,
+    help=(
+        "Add an independent per-channel PRBS of this amplitude to the frozen "
+        "policy's valve command, so the valve-to-cutter map can be identified. "
+        "Closed-loop commands are too correlated to identify it, which is the "
+        "finding of Section 4.4. Use with --trace_out and one mesh."
+    ),
+)
+p.add_argument(
+    "--valve_probe_hold",
+    type=int,
+    default=10,
+    help="Control steps each PRBS level is held, matching the Chapter 4 probe.",
+)
+p.add_argument(
     "--online_grad_trust",
     type=float,
     default=0.05,
@@ -977,6 +994,40 @@ def _headroom_diagnostic(
         int((binding[breach] == i).sum()) for i in range(measured_headroom.shape[-1])
     ]
     return out
+
+
+def _build_probe_policy(runner, raw, env_cfg):
+    """Frozen policy plus an independent per-channel PRBS on the valve command.
+
+    Section 4.4 measures that a task controller's own commands are close to
+    redundant with the state, so they cannot identify the actuator map. The same
+    argument applies to identifying the valve-to-cutter geometry AF needs, so
+    the probe is injected rather than inferred from natural motion.
+
+    The probe is written to PROBE_LOG alongside the trace so the regression uses
+    the injected component, which is independent of the state by construction.
+    """
+    base_policy = runner.get_inference_policy(device=a.device)
+    amp = float(a.valve_probe_amp)
+    hold = max(int(a.valve_probe_hold), 1)
+    n = int(raw.num_envs)
+    state = {"k": 0, "probe": torch.zeros((n, 4), device=a.device)}
+
+    def probe_policy(obs):
+        if state["k"] % hold == 0:
+            state["probe"] = (
+                torch.randint(0, 2, (n, 4), device=a.device).float() * 2.0 - 1.0
+            ) * amp
+        state["k"] += 1
+        action = base_policy(obs)
+        PROBE_LOG.append(state["probe"].detach().cpu().clone())
+        return torch.clamp(action + state["probe"], -1.0, 1.0)
+
+    print(f"[PPO3-1-GATES] valve probe: amp={amp} hold={hold}", flush=True)
+    return probe_policy
+
+
+PROBE_LOG = []
 
 
 ONLINE_GRAD_STATS = {"steps": 0, "quiet": 0.0, "reverted": 0, "resid": 0.0}
@@ -1707,6 +1758,15 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
         ),
         "path_family_results": family_rows,
     }
+    if PROBE_LOG:
+        # The injected probe, saved beside the report so the regression uses the
+        # component that is independent of the state by construction.
+        probe_path = Path(str(a.report)).expanduser().resolve().with_suffix(".probe.npz")
+        probe_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            probe_path, probe=torch.stack(PROBE_LOG).numpy()
+        )
+        print(f"[PPO3-1-GATES] wrote {probe_path}", flush=True)
     if trace is not None:
         trace_path = Path(a.trace_out).expanduser().resolve()
         trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2171,7 +2231,9 @@ def main() -> None:
             policy = runner.get_inference_policy(device=a.device)
             if getattr(a, "residual_checkpoint", None):
                 policy = _build_residual_policy(runner, raw, env_cfg)
-            elif float(getattr(a, "online_grad_lr", 0.0)) > 0.0:
+            elif float(getattr(a, "valve_probe_amp", 0.0)) > 0.0:
+                policy = _build_probe_policy(runner, raw, env_cfg)
+            elif abs(float(getattr(a, "online_grad_lr", 0.0))) > 0.0:
                 policy = _build_online_grad_policy(runner, raw, env_cfg)
         profiler = cProfile.Profile() if a.profile_out else None
         if profiler is not None:
