@@ -443,6 +443,28 @@ p.add_argument(
     help="Control steps each PRBS level is held, matching the Chapter 4 probe.",
 )
 p.add_argument(
+    "--online_grad_lag",
+    type=int,
+    default=10,
+    help=(
+        "Control steps between a valve command and its effect on the cutter. "
+        "The probe of 2026-09-06 measures 10 steps, 167 ms at 60 Hz, matching "
+        "the command-to-pressure delay of Section 7.3.1. The update attributes "
+        "the current error to the command issued this many steps ago; 0 "
+        "reproduces the uncompensated behaviour."
+    ),
+)
+p.add_argument(
+    "--online_grad_beta",
+    type=float,
+    default=0.02,
+    help=(
+        "EMA coefficient on the gradient signal. A loop closed around 167 ms of "
+        "dead time is only stable well below 1/(2*pi*0.167) = 0.95 Hz, so the "
+        "update is smoothed over roughly 1/beta steps. 1.0 disables smoothing."
+    ),
+)
+p.add_argument(
     "--online_grad_trust",
     type=float,
     default=0.05,
@@ -1106,6 +1128,12 @@ def _build_online_grad_policy(runner, raw, env_cfg):
     # Sham sign is drawn once per environment and held, so the arm perturbs the
     # weights exactly as much as the real one but in an uninformative direction.
     sham_sign = (torch.randint(0, 2, (n, 4), device=a.device).float() * 2.0 - 1.0)
+    from collections import deque
+
+    lag = max(int(a.online_grad_lag), 0)
+    beta = float(a.online_grad_beta)
+    obs_buf = deque(maxlen=lag + 1)
+    g_ema = torch.zeros((n, 4), device=a.device)
     # `resid` accumulates the mean absolute prediction residual, which is the
     # quantity the update actually minimises. The learning rate is selected on
     # it and never on a scored gate metric.
@@ -1121,6 +1149,7 @@ def _build_online_grad_policy(runner, raw, env_cfg):
     def online_grad_policy(obs):
         base = obs["policy"] if isinstance(obs, dict) else obs
         td = TensorDict({"policy": base}, batch_size=[base.shape[0]])
+        obs_buf.append(base.detach().clone())
         with torch.enable_grad():
             action = actor(td)
             # Channel 9 is the cut-height (Z) error and channel 10 the lateral
@@ -1134,14 +1163,23 @@ def _build_online_grad_policy(runner, raw, env_cfg):
             d = e_lat * jac_row_y + e_cut * jac_row_z
             if a.online_grad_sham:
                 d = d * sham_sign[: d.shape[0]]
-            # A quiet command makes the mismatch unidentifiable on that axis.
-            live = (action.detach().abs() > 0.05).float()
-            stats["quiet"] += float((1.0 - live).mean().detach().cpu())
+            # Low-pass the signal: the loop is closed around 167 ms of dead time
+            # and is only stable well below its bandwidth.
+            g_ema.mul_(1.0 - beta).add_(d.detach(), alpha=beta)
             stats["steps"] += 1
-            loss = (action * d * live).sum(dim=-1).mean()
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
+            # Attribute the error now to the command issued `lag` steps ago,
+            # which is the one that produced it. Without this the update fights
+            # its own past actions, which the probe identifies as the most
+            # likely cause of the uncompensated version degrading.
+            if len(obs_buf) > lag:
+                old = obs_buf[0]
+                u_old = actor(TensorDict({"policy": old}, batch_size=[old.shape[0]]))
+                live = (u_old.detach().abs() > 0.05).float()
+                stats["quiet"] += float((1.0 - live).mean().detach().cpu())
+                loss = (u_old * g_ema.detach() * live).sum(dim=-1).mean()
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                opt.step()
         with torch.no_grad():
             head.weight.copy_(frozen["w"] + (head.weight - frozen["w"]).clamp(-trust, trust))
             head.bias.copy_(frozen["b"] + (head.bias - frozen["b"]).clamp(-trust, trust))
@@ -2601,6 +2639,8 @@ def main() -> None:
         "online_grad_lr": float(getattr(a, "online_grad_lr", 0.0)),
         "online_grad_sham": bool(getattr(a, "online_grad_sham", False)),
         "online_grad_trust": float(getattr(a, "online_grad_trust", 0.0)),
+        "online_grad_lag": int(getattr(a, "online_grad_lag", 0)),
+        "online_grad_beta": float(getattr(a, "online_grad_beta", 1.0)),
         "online_grad_diag": (
             {
                 "mean_abs_task_error": ONLINE_GRAD_STATS["resid"] / max(ONLINE_GRAD_STATS["steps"], 1),
