@@ -4779,7 +4779,70 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             dim=-1,
         )
 
-    def _ablate_context(self, context: torch.Tensor) -> torch.Tensor:
+    def _estimated_context(
+        self, context: torch.Tensor, base_obs: torch.Tensor
+    ) -> torch.Tensor:
+        """Replace the true payload with one estimated online from the task obs.
+
+        This is the deployable arm. The policy is handed an estimate computed at
+        runtime from signals it already carries -- cylinder effort, the actuator
+        prediction residual, cylinder state -- and never the privileged value.
+
+        The estimate starts at nominal and converges within the episode, which
+        is what makes it online adaptation rather than a lookup: at step 0 the
+        machine does not know what it is carrying, and it works it out while
+        driving. The EMA is reset per environment at episode start, detected
+        from ``episode_length_buf == 0`` so no reset hook is needed.
+
+        Weights come from ``MULAG_ESTIMATOR_PATH`` (an .npz carrying w, b, mu,
+        sigma over the 66 TASK columns). Only the payload axis is replaced; the
+        other three context axes are constant in this campaign and are left as
+        they are.
+        """
+        path = os.environ.get("MULAG_ESTIMATOR_PATH", "")
+        if not path:
+            raise ValueError(
+                "MULAG_CONTEXT_ABLATE=estimated needs MULAG_ESTIMATOR_PATH"
+            )
+        fit = getattr(self, "_payload_fit", None)
+        if fit is None:
+            import numpy as np
+
+            data = np.load(path)
+            fit = {
+                k: torch.as_tensor(
+                    data[k], dtype=torch.float32, device=context.device
+                )
+                for k in ("w", "b", "mu", "sigma")
+            }
+            self._payload_fit = fit
+            print(
+                f"[MULAG] online payload estimator loaded from {path}",
+                flush=True,
+            )
+
+        features = base_obs[:, : fit["mu"].numel()]
+        z = (features - fit["mu"]) / fit["sigma"].clamp_min(1.0e-6)
+        raw_estimate = z @ fit["w"] + fit["b"]
+
+        ema = getattr(self, "_payload_ema", None)
+        if ema is None or ema.shape[0] != context.shape[0]:
+            ema = torch.zeros(context.shape[0], device=context.device)
+        # Nominal is the zero vector, so a fresh episode starts by assuming the
+        # nominal plant and is corrected by evidence, never by a privileged read.
+        fresh = self.episode_length_buf == 0
+        ema = torch.where(fresh, torch.zeros_like(ema), ema)
+        beta = float(os.environ.get("MULAG_ESTIMATOR_BETA", "0.02"))
+        ema = (1.0 - beta) * ema + beta * raw_estimate.detach()
+        self._payload_ema = ema
+
+        out = context.clone()
+        out[:, 3] = ema
+        return out
+
+    def _ablate_context(
+        self, context: torch.Tensor, base_obs: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Destroy the plant information in the context without changing width.
 
         `MULAG_CONTEXT_ABLATE` selects the arm:
@@ -4805,6 +4868,10 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             return context
         if mode == "zero":
             return torch.zeros_like(context)
+        if mode == "estimated":
+            if base_obs is None:
+                raise ValueError("estimated context needs the task observation")
+            return self._estimated_context(context, base_obs)
         if mode == "shuffle":
             n = int(context.shape[0])
             if n < 2:
@@ -4818,7 +4885,8 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 perm = torch.where(fixed, (perm + 1) % n, perm)
             return context[perm]
         raise ValueError(
-            f"MULAG_CONTEXT_ABLATE must be live, zero or shuffle; got {mode!r}"
+            "MULAG_CONTEXT_ABLATE must be live, zero, shuffle or estimated; "
+            f"got {mode!r}"
         )
 
     def _get_observations(self) -> dict:
@@ -4929,7 +4997,7 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 context = self._rif_context_observation()
             else:
                 context = self._policy_latent_observation()
-            context = self._ablate_context(context)
+            context = self._ablate_context(context, obs)
             obs = torch.cat((obs, context), dim=-1)
             if obs.shape[-1] != int(self._expected_observation_dim()):
                 raise RuntimeError(
