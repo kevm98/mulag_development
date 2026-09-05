@@ -14,9 +14,13 @@ The comparisons, in the order the pre-registration ranks them:
                           the same extra training on the same wide-payload
                           plant, and both started as literally the same policy
                           because the base's context weights are exactly zero.
-  adaptive -> shuffled    FALSIFICATION. Same weights, same context marginal
-                          distribution, pairing destroyed. If this matches the
-                          live arm, the gain is not payload information.
+  adaptive -> wrong       FALSIFICATION at fixed payload. Same weights, told
+                          it carries nominal while the plant gives it 3x or 5x.
+                          A PERMUTATION would be degenerate here: at fixed
+                          payload every environment has the same mass_scale, so
+                          shuffling the rows is the identity. The permuted
+                          control is run separately on the mixed range, where
+                          environments genuinely differ.
   base     -> blind       CONTEXT. How much of the deficit is recovered by
                           training on the range with no plant information.
   base     -> adaptive    CONFOUNDED, reported and labelled as such. It mixes
@@ -38,7 +42,7 @@ import sys
 
 B = 20000
 BOUND = {"cut": 10.0, "lateral": 1.5}
-ARMS = ("base", "blind", "adaptive", "adaptive_shuffle")
+ARMS = ("base", "blind", "adaptive", "adaptive_wrong")
 
 
 def load(root, arm, payload, mesh):
@@ -121,7 +125,7 @@ def run(root, mesh, payload):
     verdict = None
     for ref, arm, tag, is_primary in (
         ("blind", "adaptive", "PRIMARY   blind -> adaptive", True),
-        ("adaptive", "adaptive_shuffle", "FALSIFY   adaptive -> shuffled", False),
+        ("adaptive", "adaptive_wrong", "FALSIFY   adaptive -> wrong estimate", False),
         ("base", "blind", "CONTEXT   base -> blind", False),
         ("base", "adaptive", "CONFOUND  base -> adaptive", False),
     ):

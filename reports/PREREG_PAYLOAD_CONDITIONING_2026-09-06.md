@@ -83,13 +83,28 @@ beats online adaptation on this stack, and that is the finding.
 
 ## Falsification
 
-`adaptive` rescored with `MULAG_CONTEXT_ABLATE=shuffle`: the context keeps its
-exact marginal distribution and magnitude and loses only its pairing with the
-environment it describes. Same checkpoint, same weights, same everything.
+**Corrected 2026-09-06, before any arm was scored.** The original plan was to
+rescore `adaptive` with `MULAG_CONTEXT_ABLATE=shuffle`. That control is
+DEGENERATE at a fixed payload: every environment then carries the same
+`mass_scale`, so permuting the context rows is the identity. The shuffled arm
+would have matched the live arm exactly, and the pre-registered reading of that
+match is "the gain is not payload information" -- a false negative manufactured
+by the control, on a run where the information was never actually removed.
 
-If `adaptive`-shuffled matches `adaptive`-live, the gain is not from payload
-information and the claim fails, whatever the primary comparison says. This is
-declared before the run, not added after a favourable result.
+So the falsification is split to match where each control has content:
+
+* **At fixed payload, feed a WRONG estimate.** `adaptive` rescored with the
+  context zeroed, which is the normalised nominal plant, so the policy is told
+  it is carrying 1.0x while the plant gives it 3.0x or 5.0x. Same checkpoint,
+  same weights. If `adaptive`-live does not beat `adaptive`-wrong, the live
+  payload value is not doing the work.
+* **On the mixed range, shuffle.** One extra pair at
+  `MULAG_PAYLOAD_RANGE=1.0,5.0` resampled per episode, where environments
+  genuinely differ so a permutation removes the pairing while keeping the exact
+  marginal distribution.
+
+Both are declared here before any scored arm exists. If either control matches
+the live arm, the claim fails whatever the primary comparison says.
 
 ## Success rule
 
