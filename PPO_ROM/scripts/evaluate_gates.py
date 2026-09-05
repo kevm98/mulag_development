@@ -406,6 +406,32 @@ p.add_argument(
     help="Zero the history: same capacity and weights, but cannot adapt online.",
 )
 p.add_argument(
+    "--online_grad_lr",
+    type=float,
+    default=0.0,
+    help=(
+        "Online gradient adaptation of the policy's final layer, per control "
+        "step, against the measured actuator prediction residual (observation "
+        "columns 58:62). 0 disables it. See "
+        "reports/PREREG_ONLINE_GRAD_2026-09-05.md."
+    ),
+)
+p.add_argument(
+    "--online_grad_sham",
+    action="store_true",
+    help=(
+        "Sham control: identical update magnitude and parameter motion, with "
+        "the gradient sign randomised per environment. Separates the direction "
+        "of the gradient from the fact of perturbing the weights."
+    ),
+)
+p.add_argument(
+    "--online_grad_trust",
+    type=float,
+    default=0.05,
+    help="Max absolute deviation of an adapted weight from its frozen value.",
+)
+p.add_argument(
     "--arms_per_env",
     default="",
     help=(
@@ -951,6 +977,92 @@ def _headroom_diagnostic(
         int((binding[breach] == i).sum()) for i in range(measured_headroom.shape[-1])
     ]
     return out
+
+
+ONLINE_GRAD_STATS = {"steps": 0, "quiet": 0.0, "reverted": 0, "resid": 0.0}
+
+
+def _build_online_grad_policy(runner, raw, env_cfg):
+    """Frozen policy whose final layer is updated by gradient descent at runtime.
+
+    The signal is the actuator prediction residual the environment already
+    computes, `(realized - previous_pred) / span`, carried in observation
+    columns 58:62. A positive value means the plant delivered more travel than
+    the forward model predicted, so the command should fall.
+
+    The surrogate loss is `sum_i u_i * d_i`, whose gradient with respect to the
+    actor's parameters is `sum_i d_i * du_i/dtheta`. One descent step therefore
+    moves each commanded channel against its own measured over-delivery, scaled
+    by the policy's own sensitivity. No reward, no rollout, no credit
+    assignment, and no privileged input.
+
+    A full Jacobian of the forward model is not needed: Section 5.3.1 measures
+    the extension-command Jacobian as diagonally dominant at condition number
+    2.14, so the per-axis sign is the load-bearing part.
+    """
+    from tensordict import TensorDict
+
+    actor = runner.alg.actor
+    for parameter in actor.parameters():
+        parameter.requires_grad_(False)
+
+    linears = [m for m in actor.mlp.modules() if isinstance(m, torch.nn.Linear)]
+    if not linears:
+        raise RuntimeError("online gradient adaptation found no Linear layer in the actor")
+    head = linears[-1]
+    head.weight.requires_grad_(True)
+    head.bias.requires_grad_(True)
+    frozen = {"w": head.weight.detach().clone(), "b": head.bias.detach().clone()}
+    trust = float(a.online_grad_trust)
+    opt = torch.optim.SGD([head.weight, head.bias], lr=float(a.online_grad_lr))
+
+    n = int(raw.num_envs)
+    # Sham sign is drawn once per environment and held, so the arm perturbs the
+    # weights exactly as much as the real one but in an uninformative direction.
+    sham_sign = (torch.randint(0, 2, (n, 4), device=a.device).float() * 2.0 - 1.0)
+    # `resid` accumulates the mean absolute prediction residual, which is the
+    # quantity the update actually minimises. The learning rate is selected on
+    # it and never on a scored gate metric.
+    stats = ONLINE_GRAD_STATS
+
+    print(
+        f"[PPO3-1-GATES] online gradient adaptation: lr={a.online_grad_lr} "
+        f"trust={trust} params={head.weight.numel() + head.bias.numel()} "
+        f"mode={'SHAM' if a.online_grad_sham else 'live'}",
+        flush=True,
+    )
+
+    def online_grad_policy(obs):
+        base = obs["policy"] if isinstance(obs, dict) else obs
+        td = TensorDict({"policy": base}, batch_size=[base.shape[0]])
+        with torch.enable_grad():
+            action = actor(td)
+            # Columns 58:62 are the actuator prediction residual. The trailing
+            # context columns, if present, sit after the 66 base channels, so
+            # this index is the same for a 66- and a 70-wide observation.
+            d = base[:, 58:62].detach()
+            stats["resid"] += float(d.abs().mean().detach().cpu())
+            if a.online_grad_sham:
+                d = d * sham_sign[: d.shape[0]]
+            # A quiet command makes the mismatch unidentifiable on that axis.
+            live = (action.detach().abs() > 0.05).float()
+            stats["quiet"] += float((1.0 - live).mean().detach().cpu())
+            stats["steps"] += 1
+            loss = (action * d * live).sum(dim=-1).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+        with torch.no_grad():
+            head.weight.copy_(frozen["w"] + (head.weight - frozen["w"]).clamp(-trust, trust))
+            head.bias.copy_(frozen["b"] + (head.bias - frozen["b"]).clamp(-trust, trust))
+            if not torch.isfinite(head.weight).all() or not torch.isfinite(head.bias).all():
+                head.weight.copy_(frozen["w"])
+                head.bias.copy_(frozen["b"])
+                stats["reverted"] += 1
+        return action.detach()
+
+    online_grad_policy.stats = stats
+    return online_grad_policy
 
 
 @torch.no_grad()
@@ -1942,6 +2054,45 @@ def main() -> None:
                 )
         configure_terrain_gpu_physx_memory(env_cfg, int(a.num_envs))
 
+        # ---- viewport camera, RENDERING ONLY -------------------------------
+        # Touches env_cfg.viewer and nothing else, so no measurement path is
+        # affected; it only decides where the recording camera sits. Driven by
+        # environment variables so the CLI signature is unchanged.
+        #
+        # The default viewer eye (7.5, 7.5, 7.5) looks at the world origin, but
+        # the truck STARTS at x = -25.4 m and drives +26 m, so with the default
+        # the machine is a distant speck for most of the run. MULAG_VIEW_FOLLOW=1
+        # pins the camera to the truck (origin_type "asset_root", asset "robot")
+        # so the eye/lookat below become an OFFSET that rides along with it.
+        import os as _osv
+        if _osv.environ.get("MULAG_VIEW_EYE") or _osv.environ.get("MULAG_VIEW_FOLLOW"):
+            def _triple(name, default):
+                raw_v = _osv.environ.get(name)
+                if not raw_v:
+                    return default
+                parts = tuple(float(v) for v in raw_v.split(","))
+                if len(parts) != 3:
+                    raise SystemExit(f"{name} takes three comma-separated numbers")
+                return parts
+            viewer = getattr(env_cfg, "viewer", None)
+            if viewer is not None:
+                viewer.eye = _triple("MULAG_VIEW_EYE", viewer.eye)
+                viewer.lookat = _triple("MULAG_VIEW_LOOKAT", viewer.lookat)
+                if _osv.environ.get("MULAG_VIEW_FOLLOW"):
+                    viewer.origin_type = "asset_root"
+                    viewer.asset_name = _osv.environ.get("MULAG_VIEW_ASSET", "robot")
+                    viewer.env_index = int(_osv.environ.get("MULAG_VIEW_ENV", "0"))
+                res = _osv.environ.get("MULAG_VIEW_RES")
+                if res:
+                    w, h = (int(v) for v in res.split(","))
+                    viewer.resolution = (w, h)
+                print(
+                    f"[PPO3-1-GATES] viewer eye={viewer.eye} lookat={viewer.lookat} "
+                    f"origin={viewer.origin_type} asset={viewer.asset_name} "
+                    f"res={viewer.resolution}",
+                    flush=True,
+                )
+
         env = gym.make(
             TASK_ID, cfg=env_cfg,
             render_mode="rgb_array" if getattr(a, "video", False) else None,
@@ -1981,6 +2132,8 @@ def main() -> None:
             policy = runner.get_inference_policy(device=a.device)
             if getattr(a, "residual_checkpoint", None):
                 policy = _build_residual_policy(runner, raw, env_cfg)
+            elif float(getattr(a, "online_grad_lr", 0.0)) > 0.0:
+                policy = _build_online_grad_policy(runner, raw, env_cfg)
         profiler = cProfile.Profile() if a.profile_out else None
         if profiler is not None:
             profiler.enable()
@@ -2344,6 +2497,18 @@ def main() -> None:
         # artefact rather than only in the launch command.
         "residual_checkpoint": str(getattr(a, "residual_checkpoint", "") or ""),
         "residual_no_history": bool(getattr(a, "residual_no_history", False)),
+        "online_grad_lr": float(getattr(a, "online_grad_lr", 0.0)),
+        "online_grad_sham": bool(getattr(a, "online_grad_sham", False)),
+        "online_grad_trust": float(getattr(a, "online_grad_trust", 0.0)),
+        "online_grad_diag": (
+            {
+                "mean_abs_prediction_residual": ONLINE_GRAD_STATS["resid"] / max(ONLINE_GRAD_STATS["steps"], 1),
+                "quiet_axis_fraction": ONLINE_GRAD_STATS["quiet"] / max(ONLINE_GRAD_STATS["steps"], 1),
+                "nonfinite_reverts": ONLINE_GRAD_STATS["reverted"],
+                "steps": ONLINE_GRAD_STATS["steps"],
+            }
+            if ONLINE_GRAD_STATS["steps"] else {}
+        ),
         "residual_history_cols": RESIDUAL_HISTORY_COLS,
         "deployment_factor_enabled": bool(
             getattr(env_cfg, "deployment_factor_enabled", False)
