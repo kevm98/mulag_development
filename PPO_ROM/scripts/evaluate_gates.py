@@ -426,6 +426,43 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--task_bias_y",
+    type=float,
+    default=0.0,
+    help=(
+        "Task-space reference offset on the tracking line, metres. The policy "
+        "is shown lateral error measured against a line displaced by this much "
+        "(observation column 10 becomes e_lat - b_Y); the SCORED error is still "
+        "measured against the true line. Everything downstream of the "
+        "observation -- policy, FD, plant -- is untouched. See "
+        "reports/PREREG_ORACLE_PHI_2026-09-06.md."
+    ),
+)
+p.add_argument(
+    "--task_bias_z",
+    type=float,
+    default=0.0,
+    help=(
+        "Task-space reference offset on the cut-height target, metres. "
+        "cut_height_error is relu(height - reference) and zero in contact, so "
+        "raising the reference by b_Z makes the observed error relu(e_cut - "
+        "b_Z): positive lifts the cutter, negative pushes it down. Staying "
+        "inside the relu keeps the channel non-negative, i.e. inside the "
+        "distribution the frozen policy was trained on. The SCORED error uses "
+        "the nominal reference."
+    ),
+)
+p.add_argument(
+    "--paired_task_bias",
+    default="",
+    help=(
+        "Sweep task-space offsets paired per environment inside ONE process, "
+        "as 'bY:bZ,bY:bZ,...' in metres. The first entry is the baseline and "
+        "should be 0:0. Pairing on the environment cancels the terrain, path "
+        "and plant draw, which across-process comparison cannot."
+    ),
+)
+p.add_argument(
     "--valve_probe_amp",
     type=float,
     default=0.0,
@@ -1050,6 +1087,73 @@ def _build_probe_policy(runner, raw, env_cfg):
 
 
 PROBE_LOG = []
+
+
+# Mutable so --paired_task_bias can change the offset between rollouts without
+# rebuilding the policy: a rebuilt policy would also reset rsl_rl's normaliser
+# bookkeeping, and the arms would then differ by more than the offset.
+TASK_BIAS = {"y": 0.0, "z": 0.0}
+
+# Observation columns carrying the two scored task errors. Fixed at the front of
+# build_verge_observation's layout (col 9 cut height, col 10 lateral) and ahead
+# of every optional block, so they do not move with the model-error, contact,
+# head-frame or context appends.
+CUT_ERROR_COL = 9
+LATERAL_ERROR_COL = 10
+
+
+def _build_task_bias_policy(runner, raw, env_cfg):
+    """Frozen policy driven against a displaced task-space reference.
+
+    This is the oracle probe of PREREG_ORACLE_PHI_2026-09-06: it asks whether a
+    two-parameter correction EXISTS that improves both scored channels at a
+    given payload, before any estimator is built to find it online. Nothing is
+    learned and nothing adapts; the offset is a constant supplied on the
+    command line.
+
+    The offset is applied to the observation only:
+
+        cut     relu(e_cut - b_Z)   -- exactly what raising the contact
+                                       reference by b_Z produces, since
+                                       e_cut = relu(h - reference) and is zero
+                                       in contact. Staying inside the relu
+                                       keeps the channel non-negative, which is
+                                       the only sign the frozen policy has ever
+                                       seen on it.
+        lateral e_lat - b_Y         -- exactly what displacing the tracking
+                                       line by b_Y produces, since
+                                       e_lat = cutter_y - line_y.
+
+    The scored quantities are read from the environment, not from the
+    observation, so they remain the true errors against the true reference.
+    """
+    base_policy = runner.get_inference_policy(device=a.device)
+
+    def task_bias_policy(obs):
+        base = obs["policy"] if isinstance(obs, dict) else obs
+        b_y = float(TASK_BIAS["y"])
+        b_z = float(TASK_BIAS["z"])
+        if b_y == 0.0 and b_z == 0.0:
+            # Bit-for-bit the frozen base, so the b=0 arm is the instrument
+            # check of invariant 1 rather than an approximation to it.
+            return base_policy(obs)
+        shifted = base.clone()
+        shifted[:, CUT_ERROR_COL] = torch.relu(
+            shifted[:, CUT_ERROR_COL] - b_z
+        )
+        shifted[:, LATERAL_ERROR_COL] = shifted[:, LATERAL_ERROR_COL] - b_y
+        if isinstance(obs, dict):
+            payload = dict(obs)
+            payload["policy"] = shifted
+            return base_policy(payload)
+        return base_policy(shifted)
+
+    print(
+        f"[PPO3-1-GATES] task-space reference offset: b_Y={a.task_bias_y} m "
+        f"b_Z={a.task_bias_z} m (observation only; scoring unchanged)",
+        flush=True,
+    )
+    return task_bias_policy
 
 
 ONLINE_GRAD_STATS = {"steps": 0, "quiet": 0.0, "reverted": 0, "resid": 0.0}
@@ -1774,6 +1878,15 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 / active_steps.sum(dim=0).clamp_min(1)
             )
         ],
+        # Per-environment ground contact, the clearance guard that pairs with
+        # the two error channels. Needed per env because the Z reference offset
+        # can trade contact for cut-height error and the aggregate hides it.
+        "per_env_contact_fraction": [
+            float(v) for v in (
+                (contact_steps * active_steps).sum(dim=0)
+                / active_steps.sum(dim=0).clamp_min(1)
+            )
+        ],
         "per_env_headroom": _per_env_headroom(
             raw, headroom_cyl_steps, active_steps
         ),
@@ -2273,6 +2386,14 @@ def main() -> None:
                 policy = _build_probe_policy(runner, raw, env_cfg)
             elif abs(float(getattr(a, "online_grad_lr", 0.0))) > 0.0:
                 policy = _build_online_grad_policy(runner, raw, env_cfg)
+            elif (
+                float(getattr(a, "task_bias_y", 0.0)) != 0.0
+                or float(getattr(a, "task_bias_z", 0.0)) != 0.0
+                or getattr(a, "paired_task_bias", "")
+            ):
+                TASK_BIAS["y"] = float(a.task_bias_y)
+                TASK_BIAS["z"] = float(a.task_bias_z)
+                policy = _build_task_bias_policy(runner, raw, env_cfg)
         profiler = cProfile.Profile() if a.profile_out else None
         if profiler is not None:
             profiler.enable()
@@ -2342,6 +2463,56 @@ def main() -> None:
                     for arm in arms
                 }
                 per_mesh[str(mesh)] = result
+            elif a.paired_task_bias:
+                # The oracle probe. One process, one plant draw, one terrain:
+                # every offset is rolled against the SAME environments, so the
+                # comparison is paired and the across-run spread that makes
+                # marginal effects unreadable (invariant 19) does not enter.
+                pairs = []
+                for item in a.paired_task_bias.split(","):
+                    item = item.strip()
+                    if not item:
+                        continue
+                    b_y, b_z = (float(v) for v in item.split(":"))
+                    pairs.append((b_y, b_z))
+                if pairs and pairs[0] != (0.0, 0.0):
+                    raise SystemExit(
+                        "--paired_task_bias must start with the 0:0 baseline, "
+                        "so every offset is read against the frozen base "
+                        "measured in the same process; got "
+                        f"{pairs[0][0]}:{pairs[0][1]}."
+                    )
+                res = {}
+                for b_y, b_z in pairs:
+                    TASK_BIAS["y"] = b_y
+                    TASK_BIAS["z"] = b_z
+                    print(
+                        f"[PPO3-1-GATES] paired task bias: b_Y={b_y} b_Z={b_z}",
+                        flush=True,
+                    )
+                    res[f"{b_y}:{b_z}"] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                TASK_BIAS["y"] = float(a.task_bias_y)
+                TASK_BIAS["z"] = float(a.task_bias_z)
+                base = res[f"{pairs[0][0]}:{pairs[0][1]}"]
+                base["paired_task_bias"] = {
+                    k: {
+                        "per_env_lateral_m": r["per_env_lateral_m"],
+                        "per_env_cut_error_m": r["per_env_cut_error_m"],
+                        # The guard. cut_height_error is relu'd and zero in
+                        # contact, so an offset that buries the cutter scores a
+                        # perfect cut height by destroying clearance. A Z win
+                        # is only real if contact does not run away with it.
+                        "per_env_contact_fraction": r["per_env_contact_fraction"],
+                        "worst_family_ground_contact_fraction": r[
+                            "worst_family_ground_contact_fraction"
+                        ],
+                        "safety_violation_rate": r["safety_violation_rate"],
+                    }
+                    for k, r in res.items()
+                }
+                per_mesh[str(mesh)] = base
             elif a.paired_mass_scale:
                 levels = [float(x) for x in a.paired_mass_scale.split(",") if x.strip()]
                 view = raw.robot.root_physx_view
