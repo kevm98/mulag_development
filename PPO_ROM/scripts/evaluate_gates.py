@@ -463,6 +463,23 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--paired_smoothing",
+    default="",
+    help=(
+        "Sweep the command-smoothing knobs paired per environment inside ONE "
+        "process, as 'base,beta:rate,beta:rate,...'. The first entry must be "
+        "the literal 'base', which leaves the configured values untouched so "
+        "the sweep is anchored to the frozen baseline measured in the same "
+        "process. beta is sole_action_filter (filtered = beta*previous + "
+        "(1-beta)*raw, so HIGHER is gentler) and rate is sole_max_action_rate "
+        "(the per-step clamp, so LOWER is gentler). Both are read from cfg "
+        "every step, so changing them between rollouts needs no rebuild. "
+        "Motivated by RESULT_rootcause_contact_2026-09-06.md: the heavy-payload "
+        "failure is impact and rebound with command authority to spare, and "
+        "these are the two knobs that act on impact rather than on position."
+    ),
+)
+p.add_argument(
     "--valve_probe_amp",
     type=float,
     default=0.0,
@@ -2511,6 +2528,59 @@ def main() -> None:
                         "safety_violation_rate": r["safety_violation_rate"],
                     }
                     for k, r in res.items()
+                }
+                per_mesh[str(mesh)] = base
+            elif a.paired_smoothing:
+                items = [x.strip() for x in a.paired_smoothing.split(",") if x.strip()]
+                if not items or items[0] != "base":
+                    raise SystemExit(
+                        "--paired_smoothing must start with the literal 'base' so "
+                        "the sweep is anchored to the configured baseline measured "
+                        f"in this same process; got {items[:1]}."
+                    )
+                beta0 = float(getattr(env_cfg, "sole_action_filter", 0.75))
+                rate0 = float(getattr(env_cfg, "sole_max_action_rate", 0.20))
+                print(
+                    f"[PPO3-1-GATES] smoothing baseline: beta={beta0} rate={rate0}",
+                    flush=True,
+                )
+                res = {}
+                for item in items:
+                    if item == "base":
+                        beta, rate = beta0, rate0
+                    else:
+                        beta, rate = (float(v) for v in item.split(":"))
+                    # Written onto the cfg the env actually reads each step.
+                    raw.cfg.sole_action_filter = beta
+                    raw.cfg.sole_max_action_rate = rate
+                    print(
+                        f"[PPO3-1-GATES] paired smoothing: beta={beta} rate={rate}",
+                        flush=True,
+                    )
+                    res[f"{beta}:{rate}"] = roll_mesh(
+                        raw, policy, int(a.steps), mesh, teacher=bool(a.teacher)
+                    )
+                raw.cfg.sole_action_filter = beta0
+                raw.cfg.sole_max_action_rate = rate0
+                base = res[f"{beta0}:{rate0}"]
+                base["paired_smoothing"] = {
+                    "baseline_key": f"{beta0}:{rate0}",
+                    "arms": {
+                        k: {
+                            "per_env_lateral_m": r["per_env_lateral_m"],
+                            "per_env_cut_error_m": r["per_env_cut_error_m"],
+                            "per_env_contact_fraction": r["per_env_contact_fraction"],
+                            "worst_family_ground_contact_fraction": r[
+                                "worst_family_ground_contact_fraction"
+                            ],
+                            "safety_violation_rate": r["safety_violation_rate"],
+                            "p95_tool_acceleration_mps2": r[
+                                "p95_tool_acceleration_mps2"
+                            ],
+                            "hard_impact_step_fraction": r["hard_impact_step_fraction"],
+                        }
+                        for k, r in res.items()
+                    },
                 }
                 per_mesh[str(mesh)] = base
             elif a.paired_mass_scale:
