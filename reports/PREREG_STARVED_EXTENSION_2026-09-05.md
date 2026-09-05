@@ -1,4 +1,4 @@
-# Pre-registration addendum: extending the starved-encoder campaign to 15 seeds
+# Pre-registration addendum: extending the starved-encoder campaign to 10 seeds
 
 Written 2026-09-05, **after** the first five seeds were scored and **before** any
 extension seed was trained. This is an extension decided on the strength of an
@@ -33,9 +33,14 @@ Nothing except the number of seeds. Same frozen base, same starved encoder
 same 400 iterations, same alpha, same final-checkpoint rule, same three reserved
 meshes, same 528 paired environments per seed.
 
-Ten additional seeds: **1, 2, 3, 4, 5, 6, 8, 9, 10, 11.** These are the first ten
-positive integers excluding 7, which is already used. The list is fixed here so
-it cannot be tuned, and no seed is dropped after the fact for any reason.
+Five additional seeds: **1, 2, 3, 4, 5.** These are the first five positive
+integers, none of which is already used. The list is fixed here so it cannot be
+tuned, and no seed is dropped after the fact for any reason.
+
+An earlier draft of this addendum declared ten seeds (1-6, 8-11) for a 15-seed
+campaign. It was cut to five for run time before any extension seed was trained,
+and the five kept are the first five of that declared list rather than a
+selection made later.
 
 ## Fixed before the first extension run
 
@@ -44,9 +49,9 @@ it cannot be tuned, and no seed is dropped after the fact for any reason.
   non-inferiority bound (cut height 10 %, lateral 1.5 %).
 - **Statistic:** unchanged. Paired per-environment median difference, percentile
   bootstrap B = 20000, percentage as the median log-ratio.
-- **Campaign verdict over all 15 seeds:** positive only if **8 or more of 15**
+- **Campaign verdict over all 10 seeds:** positive only if **6 or more of 10**
   pass the primary, which is the same median-seed rule as before.
-- **Reporting:** the original five and the ten extension seeds are reported
+- **Reporting:** the original five and the five extension seeds are reported
   separately as well as pooled. The 2-of-5 result is not replaced by the pooled
   number.
 
@@ -63,10 +68,10 @@ frozen base is kept and flagged, as seed 7 is.
 
 ## Declared outcomes
 
-- **Positive:** >= 8 of 15 pass. Live history is a real if unreliable effect on
+- **Positive:** >= 6 of 10 pass. Live history is a real if unreliable effect on
   this plant.
-- **Negative:** < 8 of 15. The first campaign's verdict is confirmed at three
-  times the sample size, and the thesis reports that live history is not a
-  reliable source of gain here.
+- **Negative:** < 6 of 10. The first campaign's verdict is confirmed at twice the
+  sample size, and the thesis reports that live history is not a reliable source
+  of gain here.
 - Either way the encoder explanation stays eliminated, since the starved encoder
   is used throughout.
