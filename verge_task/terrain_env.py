@@ -4856,6 +4856,26 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         # rather than being wrong in level. "Do not intervene unless confidently
         # loaded" belongs in the structure, not in the hope that a regression
         # lands near zero.
+        # Freeze the estimate after this many seconds of episode time. The
+        # policy keeps whatever it had learned up to that instant and cannot
+        # follow anything later. Set just before a mid-episode payload step,
+        # this is the falsification for the adaptation claim itself: if the
+        # live arm does not beat the frozen one, the benefit is conditioning
+        # averaged over the episode rather than tracking the change.
+        freeze_s = float(os.environ.get("MULAG_ESTIMATOR_FREEZE_S", "0.0"))
+        if freeze_s > 0.0:
+            elapsed = self.episode_length_buf.to(ema.dtype) * float(self.step_dt)
+            held = getattr(self, "_payload_ema_held", None)
+            if held is None or held.shape[0] != ema.shape[0]:
+                held = torch.zeros_like(ema)
+            past = elapsed >= freeze_s
+            # Latch the value at the crossing, then hold it for the rest of the
+            # episode; before the crossing keep tracking normally.
+            held = torch.where(past, held, ema)
+            self._payload_ema_held = held
+            ema = torch.where(past, held, ema)
+            self._payload_ema = ema
+
         dead = float(os.environ.get("MULAG_ESTIMATOR_DEADBAND", "0.0"))
         if dead > 0.0:
             ema = torch.where(ema.abs() < dead, torch.zeros_like(ema), ema)
