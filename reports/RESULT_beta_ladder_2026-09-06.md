@@ -63,5 +63,27 @@ instrument's floor on every channel.
    ablation on the selection mesh and is not a licence to re-roll the headline
    on the reserved meshes.
 4. **The ladder hit its edge.** 0.005 is the slowest rung tested and is the
-   best, so the optimum may lie beyond it. That is an open direction, reported
-   as a boundary rather than extended silently.
+   best AT 3.0x, so the optimum may lie beyond it there. Reported as a boundary
+   rather than extended silently.
+
+## CORRECTION, same day: beta is payload-dependent
+
+The ladder above ran only at payload 3.0x, and the conclusion "slower is better"
+was stated without qualification. Scored afterwards at 1.0x and 5.0x:
+
+| payload | beta = 0.02 | beta = 0.005 |
+|---|---|---|
+| 1.0x | +11.3 %* / -43.9 %* | +48.6 %* / -38.0 %* |
+| 3.0x | +74.6 %* / +11.5 % | **+143.6 %* / +16.1 %*** |
+| 5.0x | **+1508.0 %* / +216.3 %*** | +331.1 %* / +129.6 %* |
+
+At 5.0x the slower setting is dramatically WORSE, +331 % against +1508 % on cut
+and +130 % against +216 % on lateral. The plausible reason is that at heavy
+payload the estimate must REACH its value quickly to be useful, and a 200-step
+time constant spends too much of the episode under-conditioned.
+
+So there is no single best beta. Slower helps at moderate load and hurts at
+heavy load, `beta = 0.02` remains the best overall choice, and the held-out
+result stands exactly where it was measured. Generalising a single-payload
+ablation to a global recommendation was an error, and the ladder's conclusion is
+restricted to the payload it was run at.
