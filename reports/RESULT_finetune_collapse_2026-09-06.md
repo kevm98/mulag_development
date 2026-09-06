@@ -70,3 +70,35 @@ Stage A scoring was cut after the payload 3.0 block. Scoring the same damaged
 policies at 5.0, 1.0 and mixed would have spent about an hour of GPU restating
 that the fine-tune broke them. The smoothing oracle is unaffected: it runs on the
 frozen base.
+
+## Stage A, scored, and declared void
+
+The payload 3.0x block completed before scoring was cut. Mesh 2718, 176
+environments, paired per environment:
+
+| arm | cut | lateral | contact | safety |
+|---|---:|---:|---:|---:|
+| frozen base | 16.70 mm | 99.66 mm | 0.788 | 0.112 |
+| blind | 1782.01 mm | 59.52 mm | 0.012 | 0.959 |
+| adaptive | 107.97 mm | 616.53 mm | 0.609 | 0.277 |
+| adaptive, wrong context | 13.75 mm | 771.41 mm | 0.844 | 0.079 |
+
+Every trained arm carries 600-770 mm of lateral error against the frozen base's
+99.66 mm. The primary comparison reads `blind -> adaptive` at +1591.9 % on cut
+and -89.7 % on lateral, which is one broken controller beating another on one
+axis and losing on the other.
+
+The falsification is incoherent in the same way: feeding the adaptive policy a
+WRONG context improved its cut error (107.97 -> 13.75 mm) and its contact
+(0.609 -> 0.844). A control that improves the arm it is meant to degrade is not
+measuring what it was built to measure.
+
+**Stage A is therefore declared void as a task result.** It is not reported as
+evidence for or against payload conditioning. The pre-registered rule is not
+applied to it, because the precondition every arm of that rule assumes -- that
+the arms are functioning controllers differing only in plant information -- does
+not hold.
+
+What survives is the diagnosis: the unanchored fine-tune is the wrong vehicle,
+and `--train_context_only` removes the failure by construction rather than by
+retuning. That campaign replaces this one.
