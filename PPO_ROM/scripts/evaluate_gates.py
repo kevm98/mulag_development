@@ -463,6 +463,18 @@ p.add_argument(
     ),
 )
 p.add_argument(
+    "--adapt_trace",
+    default="",
+    help=(
+        "Record the per-step adaptation trace to this .json: true payload, the "
+        "online estimate, and the task errors, averaged across environments. "
+        "This is the figure the adaptive-control literature actually asks for "
+        "-- estimated parameter against true parameter over time, and tracking "
+        "error through the transient -- rather than another table of episode "
+        "aggregates."
+    ),
+)
+p.add_argument(
     "--obs_dump",
     default="",
     help=(
@@ -1129,6 +1141,10 @@ PROBE_LOG = []
 # `global` declaration and it cannot depend on whether that site is a function.
 OBS_DUMP = {"on": False, "x": [], "y": []}
 
+# Per-step adaptation trace: true payload, online estimate, task errors.
+ADAPT_TRACE = {"on": False, "t": [], "true_payload": [], "est_payload": [],
+               "cut_mm": [], "lateral_mm": [], "contact": []}
+
 
 # Mutable so --paired_task_bias can change the offset between rollouts without
 # rebuilding the policy: a rebuilt policy would also reset rsl_rl's normaliser
@@ -1499,6 +1515,22 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 f"~{_elapsed / _step * (int(steps) - _step):.0f}s left",
                 flush=True,
             )
+        if ADAPT_TRACE["on"]:
+            _true = getattr(raw, "_mass_step_scale_now", None)
+            _est = getattr(raw, "_payload_ema", None)
+            ADAPT_TRACE["t"].append(float(_step) * float(raw.step_dt))
+            # True payload as a multiple of base; the estimate is carried in
+            # normalised context units, so invert (m - 1) / 0.5 to compare them
+            # on the same axis.
+            ADAPT_TRACE["true_payload"].append(
+                float(_true.mean()) if _true is not None else float("nan")
+            )
+            ADAPT_TRACE["est_payload"].append(
+                float((_est * 0.5 + 1.0).mean()) if _est is not None else float("nan")
+            )
+            ADAPT_TRACE["cut_mm"].append(float(raw.cut_height_error().abs().mean()) * 1000.0)
+            ADAPT_TRACE["lateral_mm"].append(float(raw.verge_lateral_error().abs().mean()) * 1000.0)
+            ADAPT_TRACE["contact"].append(float(raw.cutter_ground_contact().float().mean()))
         if OBS_DUMP["on"] and _step % max(int(a.obs_dump_every), 1) == 0:
             _base = obs["policy"] if isinstance(obs, dict) else obs
             # The label comes from the ENV, not the observation: under
@@ -2077,6 +2109,9 @@ def main() -> None:
         assert_speed_channel_normalized(payload, a.vehicle_speed_kmh)
 
     per_mesh: dict[str, dict] = {}
+    if a.adapt_trace:
+        ADAPT_TRACE["on"] = True
+        print(f"[PPO3-1-GATES] adaptation trace -> {a.adapt_trace}", flush=True)
     if a.obs_dump:
         OBS_DUMP["on"] = True
         print(f"[PPO3-1-GATES] obs dump -> {a.obs_dump} "
@@ -2960,6 +2995,14 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report, indent=2))
         print(f"[PPO3-1-GATES] wrote {path}", flush=True)
+
+    if ADAPT_TRACE["on"] and ADAPT_TRACE["t"]:
+        _tp = Path(a.adapt_trace)
+        _tp.parent.mkdir(parents=True, exist_ok=True)
+        _tp.write_text(json.dumps(
+            {k: v for k, v in ADAPT_TRACE.items() if k != "on"}, indent=1))
+        print(f"[PPO3-1-GATES] wrote adaptation trace {_tp} "
+              f"({len(ADAPT_TRACE['t'])} steps)", flush=True)
 
     if OBS_DUMP["on"] and OBS_DUMP["x"]:
         import numpy as _np
