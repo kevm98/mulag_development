@@ -1139,7 +1139,7 @@ PROBE_LOG = []
 # Filled when --obs_dump is given; features never include the context columns.
 # A always-present dict rather than a rebindable None, so no call site needs a
 # `global` declaration and it cannot depend on whether that site is a function.
-OBS_DUMP = {"on": False, "x": [], "y": []}
+OBS_DUMP = {"on": False, "x": [], "y": [], "n_envs": 0, "stride": 1}
 
 # Per-step adaptation trace: true payload, online estimate, task errors.
 ADAPT_TRACE = {"on": False, "t": [], "true_payload": [], "est_payload": [],
@@ -1547,6 +1547,12 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
             ADAPT_TRACE["lateral_mm"].append(float(raw.verge_lateral_error().abs().mean()) * 1000.0)
             ADAPT_TRACE["contact"].append(float(raw.cutter_ground_contact().float().mean()))
         if OBS_DUMP["on"] and _step % max(int(a.obs_dump_every), 1) == 0:
+            # Layout is captured HERE, inside the rollout, because `raw` is a
+            # parameter of this function and the scene is alive. Reading
+            # raw.num_envs at save time resolves through self.scene, which is
+            # torn down by then; reading it at argument-parse time is worse
+            # still, since `raw` does not exist yet.
+            OBS_DUMP["n_envs"] = int(raw.num_envs)
             _base = obs["policy"] if isinstance(obs, dict) else obs
             # The label comes from the ENV, not the observation: under
             # MULAG_CONTEXT_ABLATE the observation's context is zeroed or
@@ -2129,6 +2135,7 @@ def main() -> None:
         print(f"[PPO3-1-GATES] adaptation trace -> {a.adapt_trace}", flush=True)
     if a.obs_dump:
         OBS_DUMP["on"] = True
+        OBS_DUMP["stride"] = int(a.obs_dump_every)
         print(f"[PPO3-1-GATES] obs dump -> {a.obs_dump} "
               f"(every {a.obs_dump_every} steps, 66 task columns, no context)",
               flush=True)
@@ -3048,14 +3055,14 @@ def main() -> None:
         # (steps, envs, features). Windows are only reconstructible when the
         # sampling stride is 1; at any other stride the rows are not contiguous
         # in time and a convolution over them would be meaningless.
+        _ne = int(OBS_DUMP.get("n_envs", 0))
+        _st = int(OBS_DUMP.get("stride", 1))
         _np.savez_compressed(
             _dump, x=_x, y=_y,
-            n_envs=_np.int32(int(raw.num_envs)),
-            stride=_np.int32(int(a.obs_dump_every)),
+            n_envs=_np.int32(_ne), stride=_np.int32(_st),
         )
         print(f"[PPO3-1-GATES] wrote obs dump {_dump} "
-              f"x={_x.shape} y={_y.shape} n_envs={int(raw.num_envs)} "
-              f"stride={int(a.obs_dump_every)}", flush=True)
+              f"x={_x.shape} y={_y.shape} n_envs={_ne} stride={_st}", flush=True)
 
     env.close()
     simulation_app.close()
