@@ -31,8 +31,16 @@ done
 # --- per-seed estimators: each fit from ITS OWN policy's rollout -------------
 # The regression is on the observation distribution that policy induces, so
 # reusing another seed's fit would leak that seed's behaviour into this one.
-for S in 23 101; do
+# Seed 17 is fitted here too, from ITS OWN rollout with THIS script. An earlier
+# version reused outputs/estimator/ctxonly_fit.npz for seed 17: that file is a
+# 66-feature linear fit from a pre-degree-2 script, while seeds 23 and 101 get
+# 132-feature quadratic fits. Mixing estimator families across seeds makes any
+# seed-17 difference unattributable, so it is refitted like the others.
+for S in 17 23 101; do
   C=$(ck $S); CKPT=logs/rsl_rl/ppo_id_aam_fd/ctxonly${S}/model_${C}.pt
+  if [ -f "$R/outputs/estimator_final/s${S}_fit.npz" ]; then
+    echo "FIT_REUSE_s${S} (already fitted by this script)"; continue
+  fi
   echo "--- estimator collect seed $S $(TZ=Europe/Berlin date +%H:%M) ---"
   run "
 cd /workspace/projects/rrlab_mulag
@@ -55,7 +63,6 @@ cd /workspace/projects/rrlab_mulag
   [ -f "$R/outputs/estimator_final/s${S}_fit.npz" ] || { echo "FINAL_ABORT no fit seed $S"; exit 1; }
   echo "FIT_OK_s${S}"
 done
-cp $R/outputs/estimator/ctxonly_fit.npz $R/outputs/estimator_final/s17_fit.npz 2>/dev/null
 
 # --- Frozen: once per mass, shared across seeds -----------------------------
 C17=$(ck 17)
