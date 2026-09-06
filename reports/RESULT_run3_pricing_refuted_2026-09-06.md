@@ -55,3 +55,45 @@ That is a third independent confirmation that the cut-height channel's
 run-to-run floor is far worse than the 10 % the project's success rule assumes,
 and it further supports scoring ground contact, which read 0.803 against 0.750
 across the same pair.
+
+## Payload 5.0x: the intervention backfired
+
+| run | arm | cut | lateral | contact | safety |
+|---|---|---:|---:|---:|---:|
+| 1 | ctxzero | 328.50 mm | 455.85 mm | 0.539 | 0.363 |
+| 1 | ctxlive | 45.97 mm | 385.95 mm | 0.634 | 0.299 |
+| 3 | ctxzero | 246.66 mm | 377.64 mm | 0.610 | 0.286 |
+| 3 | ctxlive | 16.21 mm | **745.30 mm** | 0.794 | 0.123 |
+
+Paired: run 1 is +166.8 %* cut / **+0.2 %** lateral, a pass. Run 3 is +939.6 %*
+cut / **-51.7 %*** lateral, a clear fail.
+
+Multiplying the lateral penalty by eight made lateral **worse**, 385.95 ->
+745.30 mm. Not neutral, backwards. Together with the null at 3.0x, the reward
+weight does not control this behaviour in either direction.
+
+## A structural hypothesis
+
+With only the four context columns trainable, the policy's reachable behaviours
+are a very low-dimensional family: 1024 parameters entering one layer cannot
+restructure the controller, only slide it along whatever curve those columns
+parameterise. If better cut and contact co-vary with worse lateral along that
+curve, then a reward weight can choose WHERE on the curve the run lands but
+cannot bend the curve, which is exactly the pattern observed -- an eight-fold
+price change moving the operating point without ever buying lateral back.
+
+That would also explain how the online arm escapes it. The EMA does not select a
+different fixed point on the curve; it produces a TIME-VARYING trajectory
+through it, starting at nominal and converging. A trajectory is not reachable by
+any constant context value, whatever the reward weights.
+
+This is a hypothesis with one supporting pattern, not a finding. The beta ladder
+tests its central claim directly.
+
+## Run 3 is abandoned as a direction
+
+The run-1 configuration stays the basis of the reported result. Run 3's value is
+entirely negative: it removes reward pricing from the list of explanations, and
+it contributes a fourth A/A data point, since run 1 and run 3 `ctxzero` are the
+same frozen policy by construction and read 328.50 against 246.66 mm on cut at
+5.0x, 33 % apart.
