@@ -74,6 +74,23 @@ def label(res):
     return f"trade-off ({other} worse)", False
 
 
+def compare_gain(ref, arm):
+    """For quantities where LARGER is better, e.g. ground contact fraction.
+
+    Reported as the paired median difference in points, not a percentage: a
+    fraction bounded in [0, 1] has no useful log-ratio near either end, and the
+    quantity a reader wants is "how many more steps in contact".
+    """
+    random.seed(0)
+    n = min(len(ref), len(arm))
+    ref, arm = ref[:n], arm[:n]
+    diffs = [y - x for x, y in zip(ref, arm)]
+    boot = sorted(st.median([diffs[random.randrange(n)] for _ in range(n)])
+                  for _ in range(B))
+    lo, hi = boot[int(0.025 * B)], boot[int(0.975 * B)]
+    return dict(delta=st.median(diffs), lo=lo, hi=hi, sig=(lo > 0 or hi < 0))
+
+
 def pair(ref_row, arm_row):
     return {
         name: compare([v * 1000.0 for v in ref_row[key]],
@@ -108,7 +125,8 @@ def run(root, mesh, payload):
               f"{r['safety_violation_rate']:7.3f}")
 
     cell = lambda r: f"{r['pct']:+9.1f}%{'*' if r['sig'] else ' '}"
-    print(f"\n{'comparison':>34}  {'cut':>10}  {'lateral':>10}   outcome")
+    print(f"\n{'comparison':>34}  {'cut':>10}  {'lateral':>10}  "
+          f"{'contact':>8}  outcome")
     out = {}
     # ctxzero is the reference, NOT base. Both are the same policy by
     # construction, but ctxzero is the same CHECKPOINT FILE scored in the same
@@ -129,7 +147,15 @@ def run(root, mesh, payload):
             continue
         res = pair(have[ref], have[arm])
         lab, ok = label(res)
-        print(f"{tag:>34}  {cell(res['cut'])}  {cell(res['lateral'])}   {lab}")
+        # Ground contact is scored too. It measures the same physics as cut
+        # height -- cut_height_error is relu(h - reference) and exactly zero in
+        # contact, corr(contact, log cut) = -0.975 -- with roughly a thirteenth
+        # of the run-to-run noise (3% against 40%), so it is the channel a
+        # decision rule can actually resolve.
+        con = compare_gain(have[ref]["per_env_contact_fraction"],
+                           have[arm]["per_env_contact_fraction"])
+        print(f"{tag:>34}  {cell(res['cut'])}  {cell(res['lateral'])}  "
+              f"{con['delta']:+7.3f}{'*' if con['sig'] else ' '}  {lab}")
         out[(ref, arm)] = (ok, res)
 
     chk = out.get(("base", "ctxzero"))
