@@ -2473,6 +2473,24 @@ def main() -> None:
             runner = OnPolicyRunner(
                 wrapped, runner_cfg.to_dict(), log_dir=None, device=a.device
             )
+            # A FiLM-trained checkpoint carries mlp.film / mlp.head / mlp.tail
+            # instead of the plain mlp.N keys, so the actor must be wrapped
+            # BEFORE load or the state_dict does not match. Detected from the
+            # checkpoint itself rather than a flag, so a FiLM checkpoint cannot
+            # be scored as a plain one by forgetting to pass something.
+            _peek = torch.load(str(checkpoint_path), map_location="cpu",
+                               weights_only=False)
+            _sd = _peek.get("model_state_dict") or _peek.get("actor_state_dict") or {}
+            if any(k.startswith("mlp.film.") for k in _sd):
+                from verge_task.film_adapter import FiLMWrap
+
+                _nctx = int(env_cfg.observation_space) - 66
+                runner.alg.actor.mlp = FiLMWrap(
+                    runner.alg.actor.mlp, n_ctx=_nctx
+                ).to(a.device)
+                print(f"[PPO3-1-GATES] FiLM checkpoint detected: actor wrapped "
+                      f"before load, n_ctx={_nctx}", flush=True)
+            del _peek, _sd
             runner.load(
                 str(checkpoint_path),
                 load_cfg={
