@@ -33,6 +33,7 @@ compensate for the estimator's known shrinkage.
 | 3.0x | run1 | +74.6 %* | +11.5 % | +0.039* | Pareto |
 | 3.0x | arma3 | **-70.5 %*** | +21.7 %* | **-0.241*** | fail |
 | 5.0x | run1 | +1508.0 %* | +216.3 %* | +0.241* | joint |
+| 5.0x | arma3 | **-57.8 %*** | +235.6 %* | **-0.315*** | fail |
 
 **The nominal lateral harm IS removed**: -43.9 %* becomes +2.5 %, non-significant
 and indistinguishable from the frozen base. The literature's diagnosis was right
@@ -66,6 +67,38 @@ Per the pre-registration, this ends the patching. The claim is scoped in writing
 That gating is operationally reasonable, since the machine's load state is known
 in practice, but it is a limitation of the method and is reported as one rather
 than presented as a design choice.
+
+## The structural reading, which unifies three results
+
+A-RMA improves lateral at EVERY payload (+2.5 %, +21.7 %*, +235.6 %*) and
+destroys cut and contact at EVERY payload (-43.3 %*, -70.5 %*, -57.8 %*;
+contact -0.047, -0.241, -0.315). It did not repair a defect. It moved the policy
+to the opposite end of a trade-off.
+
+That unifies three otherwise separate observations:
+
+* **run 1**, trained on the true context, lands at the cut/contact end.
+* **arma3**, trained on the noisy estimate, lands at the lateral end.
+* **run 3**, which multiplied the lateral price eightfold, moved the operating
+  point without ever buying lateral back
+  (`RESULT_run3_pricing_refuted_2026-09-06.md`).
+
+The common explanation is that **with only the four context columns trainable,
+the reachable behaviours form a roughly one-dimensional family in which cut and
+contact trade against lateral**. 1024 parameters entering one layer cannot
+restructure the controller; they can only slide it along whatever curve those
+columns parameterise. Different training signals select different points on that
+curve and none of them bends it.
+
+This is why four nominal fixes all traded rather than fixed, and it converts the
+nominal limitation from an unexplained defect into a structural property of the
+method with a stated cause.
+
+**What it implies for escaping the trade-off.** More adaptation capacity than
+four input columns -- for example modulating hidden activations rather than the
+input layer, which can express a richer family -- or rebalancing the objective
+during the original distillation rather than afterwards, when the base policy's
+own trade-off is already fixed. Neither is tested here and neither is claimed.
 
 ## What is unaffected
 
