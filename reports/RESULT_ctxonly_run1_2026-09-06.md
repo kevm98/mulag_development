@@ -57,7 +57,18 @@ addressed: the heavy-payload failure was impact and rebound with command
 authority to spare, and a policy told what it is carrying keeps its cutter on
 the ground.
 
-## Why lateral collapsed: an objective bug, not the mechanism
+## Why lateral collapsed
+
+**SUPERSEDED by `CORRECTION_lateral_diagnosis_2026-09-06.md`.** The section
+below attributed the collapse to a saturated Gaussian kernel. That is wrong:
+a second, LINEAR lateral term (`dense_lateral_error_weight * clamp(|e|, 3.0)`)
+carries gradient everywhere, so lateral was never without a learning signal. The
+real cause is pricing -- the policy traded 0.42 per step of lateral cost for
+about 3.0 of cut and contact reward, which is correct behaviour under those
+weights. The kernel analysis below is kept as the record of what was measured
+and what was concluded from it.
+
+### Original section, superseded
 
 Training-time lateral error ran **0.18-0.55 m** against a Gaussian kernel of
 **sigma = 0.09 m**. `exp(-(e/sigma)^2)` is then between 1e-7 and 1e-11, and the
