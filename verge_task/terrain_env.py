@@ -373,6 +373,47 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                           float(self.cfg.sim.dt) * float(self.cfg.decimation))),
             1.0e-6,
         )
+        # PERIODIC payload, for the experiment a single step cannot decide.
+        # The freeze ablation showed an estimate latched BEFORE a one-shot step
+        # performs as well as one that follows it, because a single change in a
+        # 15 s episode is covered by one early identification. A payload that
+        # alternates every half-period cannot be: the estimate must be revised
+        # repeatedly or it is wrong most of the time. Only on such a plant can
+        # "tracks the payload" be distinguished from "identified it once".
+        period = float(getattr(self.cfg, "deployment_mass_period_s", 0.0) or 0.0)
+        if period > 0.0:
+            phase = getattr(self, "_mass_period_phase", None)
+            if phase is None:
+                # Per-environment phase offset, so the fleet does not switch in
+                # lockstep and a timer cannot be learned in place of sensing.
+                index = torch.arange(self.num_envs, device=self.device)
+                phase = (index.to(torch.float32) * 0.37) % period
+                self._mass_period_phase = phase
+            half = period * 0.5
+            elapsed = self._mass_step_elapsed_s + phase
+            heavy = (torch.floor(elapsed / half).to(torch.long) % 2) == 1
+            target = torch.where(
+                heavy,
+                torch.full_like(self._mass_step_scale_now, scale),
+                torch.ones_like(self._mass_step_scale_now),
+            )
+            self._mass_step_elapsed_s = self._mass_step_elapsed_s + dt
+            changed = target != self._mass_step_scale_now
+            # Always true in periodic mode so the context reads the CURRENT
+            # scale rather than the latched per-episode draw.
+            self._mass_step_applied[:] = True
+            if bool(changed.any()):
+                ids = torch.nonzero(changed, as_tuple=False).flatten()
+                body_p = int(self._deployment_factor_body_id)
+                m = self._deployment_factor_baseline_masses.clone()
+                m[ids.to(m.device), body_p] = (
+                    self._deployment_factor_baseline_masses[ids.to(m.device), body_p]
+                    * target[ids].to(m.device)
+                )
+                self.robot.root_physx_view.set_masses(m, ids.detach().cpu())
+                self._mass_step_scale_now[ids] = target[ids]
+            return
+
         due = (self._mass_step_elapsed_s >= per_env_step_time) & (~self._mass_step_applied)
         self._mass_step_elapsed_s = self._mass_step_elapsed_s + dt
         if not bool(due.any()):

@@ -229,6 +229,19 @@ class PpoIDAAMFDEnvCfg(Ppo41IDFDEnvCfg):
             self.plant_perturbation_pair_period = period
             self.payload_scale_pair_period = period
         self.mixed_plant_enabled = bool(int(os.environ.get("MULAG_MIXED_PLANT", "0")))
+        if os.environ.get("MULAG_MASS_PERIOD_S"):
+            # Payload alternates between base and base*MULAG_MASS_STEP_SCALE
+            # every half period, with a per-environment phase offset. Needed
+            # because a single mid-episode step is covered by one early
+            # identification, so it cannot separate tracking from conditioning.
+            self.deployment_mass_period_s = float(
+                os.environ["MULAG_MASS_PERIOD_S"]
+            )
+            self.deployment_mass_step_scale = float(
+                os.environ.get("MULAG_MASS_STEP_SCALE", "3.0")
+            )
+            self.deployment_mass_step_time_s = 0.0
+            self.deployment_factor_enabled = True
         if os.environ.get("MULAG_MASS_STEP_TIME_S"):
             # Mid-episode plant change. This is what makes ONLINE adaptation
             # necessary rather than optional: a context drawn at reset is stale
