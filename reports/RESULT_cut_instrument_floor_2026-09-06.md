@@ -59,3 +59,42 @@ direction, and the honest report of such an outcome is "below the instrument".
 Lateral, contact, hard impacts and the violation rate carry more of the weight
 for exactly this reason, and the root-cause report already established that on
 this plant those are the mechanism rather than side statistics.
+
+
+## The consequence for the success rule, and a better channel
+
+The pre-registered rule (Table 7.7, and every campaign in this project) allows
+the non-primary channel to worsen by up to **10 % on cut height**. That bound
+came from an A/A that measured -1.7 %.
+
+If the instrument's own floor on cut is nearer 40 %, the 10 % bound is not
+operable: an arm can breach it by noise alone, in either direction, and no
+single pair of runs at n = 176 can verify non-inferiority at a resolution four
+times finer than the measurement. Every "trade-off (cut worse)" verdict in this
+project that turns on a cut movement under ~40 % is therefore unsafe, including
+ones recorded tonight.
+
+### Ground contact is the same physics with a thirteenth of the noise
+
+Across every nominally equivalent frozen-base run at payload 3.0x tonight:
+
+| quantity | values | spread |
+|---|---|---|
+| cut median | 15.67, 16.70, 16.91, 23.31, 23.56 mm | ~40 % |
+| ground contact | 0.776, 0.783, 0.788, 0.795, 0.803 | **~3 %** |
+
+`RESULT_rootcause_contact_2026-09-06.md` already measured that cut-height error
+is almost entirely contact loss: corr(contact, log cut) = -0.975 across arms and
+-0.909 across environments within one arm. `cut_height_error` is
+`relu(h - reference)` and exactly zero in contact, so it is a censored,
+heavy-tailed function of the same underlying quantity -- which is precisely why
+its median is unstable while the fraction it derives from is not.
+
+**Recommendation.** Score ground contact fraction as the primary vertical
+channel and report cut height alongside it. It measures the same mechanism, it
+is what the E5 criterion already gates on, and it is roughly thirteen times more
+stable. Cut height in millimetres remains the quantity a reader wants to see, so
+it should still be quoted -- but a decision rule should not hang on a statistic
+whose A/A floor is four times its own bound.
+
+This applies to the thesis's existing tables, not only to tonight's work.
