@@ -63,3 +63,30 @@ would not have failed loudly; it would have scored an undertrained stage-1
 policy and labelled it the arm. Scoring was intercepted before it ran and both
 arms are scored at the same final index, with the run aborted if the two arms
 did not train to equal length.
+
+## The blind twin, measured after training
+
+| checkpoint | base cols | alpha | tau | delay | mass_scale |
+|---|---:|---:|---:|---:|---:|
+| blind `model_1596` | 0.134125 | 0.000000 | 0.000000 | 0.000000 | **0.000000** |
+| adaptive `model_1596` | 0.144944 | 0.000000 | 0.000000 | 0.000000 | **0.039994** |
+
+The blind arm's payload weight is still EXACTLY zero after 1596 iterations. Its
+context is zeroed every step, so those columns receive no gradient and cannot
+move. It is therefore structurally incapable of using the payload while being
+identical in width, architecture and parameter count.
+
+Both arms moved their task columns off the base's 0.125463, to 0.134125 and
+0.144944, so both genuinely trained on the task rather than idling.
+
+This is what makes the comparison tight. The two arms
+
+* started as literally the same policy, because the base's context weights are
+  exactly zero so the context value could not change its output;
+* trained for the same 1596 iterations, on the same plant, at the same seed,
+  under the same objective, with the run aborted if the two lengths differed;
+* differ only in whether the payload channel carried information, and that
+  difference is visible in the weights rather than assumed.
+
+Any task difference between them is therefore attributable to the payload
+channel. Whether there IS one is the gate's business, not this file's.
