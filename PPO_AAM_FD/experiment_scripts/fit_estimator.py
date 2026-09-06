@@ -14,7 +14,11 @@ the fixed-payload runs are held out, so the reported accuracy is not a
 training fit. A ridge that only works on the run it was fitted to would sail
 through an in-sample number and fail the moment it is deployed.
 
-Usage:  fit_estimator.py --dir outputs/estimator --out outputs/estimator/payload_fit.npz
+Usage:  fit_estimator.py --dir outputs/estimator --prefix ctxonly \
+                        --out outputs/estimator/ctxonly_fit.npz
+
+--prefix selects which run's dumps to use, so a campaign that replaces the
+policy does not silently fit on the previous campaign's data.
 """
 import glob
 import os
@@ -54,14 +58,29 @@ if __name__ == "__main__":
     out = (sys.argv[sys.argv.index("--out") + 1]
            if "--out" in sys.argv else os.path.join(root, "payload_fit.npz"))
 
-    train_path = os.path.join(root, "adaptive_mixed.npz")
+    prefix = (sys.argv[sys.argv.index("--prefix") + 1]
+              if "--prefix" in sys.argv else "adaptive")
+    train_path = os.path.join(root, f"{prefix}_mixed.npz")
     if not os.path.exists(train_path):
-        raise SystemExit(f"training set {train_path} missing")
+        # Auto-discover rather than die on a prefix mismatch. A campaign that
+        # renames its dumps should not lose the estimator at the last step of a
+        # multi-hour run; the newest mixed-payload dump is the right training
+        # set by construction, since that is the run that just produced it.
+        candidates = sorted(glob.glob(os.path.join(root, "*_mixed.npz")),
+                            key=os.path.getmtime)
+        if not candidates:
+            raise SystemExit(
+                f"no mixed-payload dump under {root} (looked for "
+                f"{prefix}_mixed.npz and *_mixed.npz)"
+            )
+        train_path = candidates[-1]
+        prefix = os.path.basename(train_path)[: -len("_mixed.npz")]
+        print(f"prefix auto-detected as {prefix!r} from {train_path}")
     xtr, ytr = load(train_path)
     print(f"train: {train_path}  x={xtr.shape}  payload range "
           f"{1 + 0.5 * ytr.min():.2f}x - {1 + 0.5 * ytr.max():.2f}x")
 
-    tests = sorted(p for p in glob.glob(os.path.join(root, "adaptive_p*.npz")))
+    tests = sorted(p for p in glob.glob(os.path.join(root, f"{prefix}_p*.npz")))
     if not tests:
         print("WARNING: no held-out fixed-payload dumps; accuracy would be in-sample")
 
