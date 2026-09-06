@@ -76,6 +76,44 @@ to 0.09 was calibrated at that scale. On the 1-5x payload range the errors are
 this sigma is regime-dependent and must be set from the error scale the run
 actually visits, not inherited.
 
+## All three payloads
+
+Primary is `ctxzero -> ctxlive`, paired per environment, B = 20000.
+
+| payload | cut | lateral | verdict |
+|---|---:|---:|---|
+| 1.0x | +6.9 %, ns | -1.7 %, ns | no change |
+| 3.0x | +408.6 %* | -63.7 %* | fail, lateral |
+| 5.0x | +166.8 %* | +0.2 %, ns | **pass** |
+
+`ctxzero -> ctxlive` at 1.0x moves NEITHER channel significantly. Payload
+conditioning leaves the nominal plant alone, which is the required behaviour and
+the thing a fixed task-space offset could not express. At 1.0x the A/A row reads
+-40.6 %* on cut between two runs of the same policy, independently reproducing
+the instrument floor.
+
+Payload 5.0x, the arms in full:
+
+| arm | cut | lateral | contact | p95 accel | safety |
+|---|---:|---:|---:|---:|---:|
+| `ctxzero` | 328.50 mm | 455.85 mm | 0.539 | 173.1 | 0.363 |
+| `ctxlive` | 45.97 mm | 385.95 mm | 0.634 | 75.1 | 0.299 |
+
+Every axis improves, and the A/A row at this payload is non-significant on both
+channels, so the effect is above the instrument.
+
+### The caveat on the 5.0x pass, which matters
+
+Lateral there is 455.85 -> 385.95 mm. "Maintained" is true under the rule, but
+**both arms are failing to track the line**: neither is a working line-tracker
+at 5x, so the pass is earned in a regime where lateral is already lost for
+everyone. The cut, contact, acceleration and safety gains are real and large;
+the claim "the controller works at 5x payload" is NOT supported by them.
+
+This makes run 2 more important than the 5.0x pass. The question worth answering
+is whether conditioning can hold the line AND keep the cutter down once lateral
+has gradient, and that is what sigma = 0.25 tests.
+
 ## Verdict
 
 **Fails the pre-registered rule.** One channel improves with its interval
