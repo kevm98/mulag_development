@@ -363,6 +363,24 @@ p.add_argument(
     help="Zero the resumed critic output head after loading changed reward semantics.",
 )
 p.add_argument(
+    "--train_context_only",
+    action="store_true",
+    help=(
+        "Train ONLY the actor's context columns: freeze every actor parameter "
+        "and mask the input layer's gradient so just the context slice moves. "
+        "The point is that this CANNOT walk away from the distilled behaviour. "
+        "A nominal plant normalises to the zero context vector, so with the "
+        "base's zeroed context weights the policy is exactly the frozen one at "
+        "iteration 0 and stays exactly the frozen one wherever the context is "
+        "nominal; all it can learn is how to modulate itself by the payload. "
+        "Measured 2026-09-06: an unanchored full-policy fine-tune on the wide "
+        "payload range dropped ground contact from 0.788 to 0.457 (adaptive) "
+        "and 0.023 (blind), i.e. PPO bought lateral error by flying the cutter "
+        "off the ground. This is the fix for that, and it is ~256 parameters "
+        "rather than the whole actor."
+    ),
+)
+p.add_argument(
     "--freeze_actor_iterations",
     type=int,
     default=0,
@@ -1459,6 +1477,34 @@ def main() -> None:
             with torch.no_grad():
                 critic_output.weight.zero_()
                 critic_output.bias.zero_()
+        if a.train_context_only:
+            actor = runner.alg.actor
+            linears = [m for m in actor.mlp.modules()
+                       if isinstance(m, torch.nn.Linear)]
+            if not linears:
+                raise RuntimeError("--train_context_only found no Linear layer")
+            first = linears[0]
+            width = int(first.weight.shape[1])
+            n_ctx = int(raw.cfg.observation_space) - 66
+            if n_ctx <= 0 or width != int(raw.cfg.observation_space):
+                raise RuntimeError(
+                    "--train_context_only needs a context slot: input width "
+                    f"{width}, observation_space {raw.cfg.observation_space}"
+                )
+            for parameter in actor.parameters():
+                parameter.requires_grad_(False)
+            first.weight.requires_grad_(True)
+            # requires_grad alone would train the whole first layer, so the
+            # task columns are masked out of the gradient every backward pass.
+            _mask = torch.zeros_like(first.weight)
+            _mask[:, width - n_ctx:] = 1.0
+            first.weight.register_hook(lambda g: g * _mask)
+            print(
+                f"[PPO3-SOLE] train_context_only: {n_ctx} context columns of "
+                f"{width}, {first.weight.shape[0] * n_ctx} trainable actor "
+                f"parameters, everything else frozen",
+                flush=True,
+            )
         if os.environ.get("MULAG_RMA_ENCODER"):
             # RMA Phase 1 proper: mu is trained JOINTLY with the policy under
             # PPO. Installed AFTER runner.load so the warm start is in place
