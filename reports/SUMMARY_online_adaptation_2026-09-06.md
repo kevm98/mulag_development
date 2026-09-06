@@ -23,10 +23,36 @@ policy bit for bit.
 
 ## The claim, as supported
 
-> Payload-conditioned online adaptation delivers large joint improvements at
-> heavy and at time-varying payload, from an estimate that never reads ground
-> truth, and **degrades lateral tracking at nominal payload**, where it should
-> be gated off.
+> Online payload estimation **recovers ground contact when a frozen controller
+> is losing it**, producing large joint improvements at heavy payload
+> (held-out, 4/4) and on a large time-varying excursion -- from an estimate that
+> never reads ground truth -- **at the cost of lateral tracking when contact is
+> already adequate**.
+
+**The governing rule, which predicts every configuration measured:**
+
+| configuration | frozen-policy contact | outcome |
+|---|---:|---|
+| constant 5.0x | 0.539 | joint pass |
+| step 1.0 -> 5.0x | 0.728 | joint pass |
+| constant 3.0x | 0.803 | Pareto pass |
+| step 1.0 -> 3.0x | 0.841 | fail |
+| step 2.0 -> 5.0x | 0.871 | fail |
+| constant 1.0x | 0.954 | fail |
+
+Monotone in the frozen policy's ground contact. The arm makes exactly one trade
+-- contact for lateral -- and whether it pays depends on how much contact there
+is to recover. The nominal-payload limitation is the special case with the most
+contact, not a separate defect.
+
+This follows from the structural finding: four trainable context columns can
+only slide the policy along a cut/contact-versus-lateral curve, so the trade is
+always the same one.
+
+**Withdrawn:** an earlier form of this document claimed "adaptation works on
+time-varying plants" on the strength of the 1.0 -> 5.0x step. Two further step
+configurations were then run and both fail. One of three passes, and the claim
+in that form over-read a single favourable configuration.
 
 ### Constant heavy payload, HELD-OUT meshes
 
@@ -48,15 +74,17 @@ Payload steps mid-episode at 6 s +- 2 s of jitter, in a 15.0 s episode. A plant
 gate is run on the FROZEN policy first: it must land between the two static
 plants, and does (57 % and 38 % of the way, with all five metrics bracketed).
 
-| dose | cut | lateral | contact | outcome |
+| step | cut | lateral | contact | outcome |
 |---|---:|---:|---:|---|
-| 1.0 -> 3.0x | +175.4 %* | -13.8 %* | +0.058* | fail, lateral |
+| 1.0 -> 3.0x | +175.4 %* | -13.8 %* | +0.058* | fail |
 | 1.0 -> 5.0x | **+636.1 %*** | **+52.0 %*** | **+0.121*** | **joint** |
+| 2.0 -> 5.0x | +28.1 %* | -23.1 %* | +0.022* | fail |
 
-The benefit grows with the size of the change (+175 % to +636 % on cut), which
-is what adaptation should do and what a better-tuned FIXED controller would not.
-The 3.0x failure is the nominal defect leaking in: that step spends its first
-six seconds at nominal. (`RESULT_massstep_2026-09-06.md`)
+**One of three passes.** The 2.0 -> 5.0x step carries no nominal phase and fails
+anyway, which refutes the earlier account that the 3.0x failure came from its
+nominal opening. What separates them is the frozen policy's contact: 0.728 where
+the arm wins, 0.841 and 0.871 where it trades.
+(`RESULT_massstep_2026-09-06.md`)
 
 ## Ablations
 
