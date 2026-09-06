@@ -38,6 +38,8 @@ sleep 8
 
 echo "=== [2/4] trace figure ==="; date -u +%FT%TZ
 ./trace.sh
-echo "=== [3/4] held-out mass step + [4/4] seeds ==="; date -u +%FT%TZ
+echo "=== [3/5] FiLM: the second degree of freedom ==="; date -u +%FT%TZ
+./film.sh
+echo "=== [4/5] held-out mass step + [5/5] seeds ==="; date -u +%FT%TZ
 ./finish.sh
 echo "=== queue complete $(date -u +%FT%TZ) ==="
