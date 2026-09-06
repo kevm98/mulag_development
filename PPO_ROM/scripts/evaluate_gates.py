@@ -1143,7 +1143,11 @@ OBS_DUMP = {"on": False, "x": [], "y": []}
 
 # Per-step adaptation trace: true payload, online estimate, task errors.
 ADAPT_TRACE = {"on": False, "t": [], "true_payload": [], "est_payload": [],
-               "cut_mm": [], "lateral_mm": [], "contact": []}
+               "cut_mm": [], "lateral_mm": [], "contact": [],
+               # Individual environments: the periodic plant phase-offsets each
+               # one, so only a single environment shows the square wave.
+               "true_env0": [], "est_env0": [], "true_env1": [], "est_env1": [],
+               "true_env2": [], "est_env2": []}
 
 
 # Mutable so --paired_task_bias can change the offset between rollouts without
@@ -1522,12 +1526,23 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
             # True payload as a multiple of base; the estimate is carried in
             # normalised context units, so invert (m - 1) / 0.5 to compare them
             # on the same axis.
+            # Fleet MEAN washes out the signal: the periodic plant gives each
+            # environment its own phase, so at any instant about half are light
+            # and half heavy and the mean is flat. Record individual
+            # environments as well, which is what the figure actually needs.
             ADAPT_TRACE["true_payload"].append(
                 float(_true.mean()) if _true is not None else float("nan")
             )
             ADAPT_TRACE["est_payload"].append(
                 float((_est * 0.5 + 1.0).mean()) if _est is not None else float("nan")
             )
+            for _k in (0, 1, 2):
+                ADAPT_TRACE[f"true_env{_k}"].append(
+                    float(_true[_k]) if _true is not None else float("nan")
+                )
+                ADAPT_TRACE[f"est_env{_k}"].append(
+                    float(_est[_k] * 0.5 + 1.0) if _est is not None else float("nan")
+                )
             ADAPT_TRACE["cut_mm"].append(float(raw.cut_height_error().abs().mean()) * 1000.0)
             ADAPT_TRACE["lateral_mm"].append(float(raw.verge_lateral_error().abs().mean()) * 1000.0)
             ADAPT_TRACE["contact"].append(float(raw.cutter_ground_contact().float().mean()))
