@@ -3026,9 +3026,18 @@ def main() -> None:
         _dump.parent.mkdir(parents=True, exist_ok=True)
         _x = torch.cat(OBS_DUMP["x"], dim=0).numpy()
         _y = torch.cat(OBS_DUMP["y"], dim=0).numpy()
-        _np.savez_compressed(_dump, x=_x, y=_y)
+        # Record the layout so a temporal model can reshape the dump back into
+        # (steps, envs, features). Windows are only reconstructible when the
+        # sampling stride is 1; at any other stride the rows are not contiguous
+        # in time and a convolution over them would be meaningless.
+        _np.savez_compressed(
+            _dump, x=_x, y=_y,
+            n_envs=_np.int32(int(raw.num_envs)),
+            stride=_np.int32(int(a.obs_dump_every)),
+        )
         print(f"[PPO3-1-GATES] wrote obs dump {_dump} "
-              f"x={_x.shape} y={_y.shape}", flush=True)
+              f"x={_x.shape} y={_y.shape} n_envs={int(raw.num_envs)} "
+              f"stride={int(a.obs_dump_every)}", flush=True)
 
     env.close()
     simulation_app.close()
