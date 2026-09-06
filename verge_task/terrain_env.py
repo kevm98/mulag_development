@@ -4848,6 +4848,17 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
         ema = (1.0 - beta) * ema + beta * raw_estimate.detach()
         self._payload_ema = ema
 
+        # Deadband. Below this the estimate is forced to exactly nominal, so
+        # the policy is bit-for-bit the frozen one on a plant that does not need
+        # it. Measured 2026-09-06: at payload 1.0x the online arm loses lateral
+        # (45.99 -> 81.50 mm) and halving the estimator's bias barely helped
+        # (79.65 mm), so the harm tracks the estimate being NONZERO and jittery
+        # rather than being wrong in level. "Do not intervene unless confidently
+        # loaded" belongs in the structure, not in the hope that a regression
+        # lands near zero.
+        dead = float(os.environ.get("MULAG_ESTIMATOR_DEADBAND", "0.0"))
+        if dead > 0.0:
+            ema = torch.where(ema.abs() < dead, torch.zeros_like(ema), ema)
         out = context.clone()
         out[:, 3] = ema
         return out
