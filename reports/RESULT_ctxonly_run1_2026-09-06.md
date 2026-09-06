@@ -144,3 +144,30 @@ What it establishes, which no earlier campaign did:
 Run 2 (`ctxonly17w`) repeats it with `--lateral_tracking_std_m 0.25`, which puts
 the gradient peak at 0.18 m, inside the range the policy occupies. Nothing else
 changes.
+
+## Appendix: the deadband, scored at all three payloads and not adopted
+
+`MULAG_ESTIMATOR_DEADBAND=1.0` forces the estimate to exactly nominal below a
+1.5x-equivalent threshold. Against `ctxzero`, mesh 2718:
+
+| payload | arm | cut | lateral |
+|---|---|---:|---:|
+| 1.0x | ctxest | +11.3 %* | -43.9 %* |
+| 1.0x | ctxest + deadband | +26.7 %* | **-48.2 %*** |
+| 3.0x | ctxest | +74.6 %* | +11.5 % |
+| 3.0x | ctxest + deadband | +134.5 %* | -1.0 % |
+| 5.0x | ctxest | +1508.0 %* | +216.3 %* |
+| 5.0x | ctxest + deadband | +1321.8 %* | +127.2 %* |
+
+It fails at the payload it was built for and costs lateral at 5.0x. Not adopted.
+
+The mechanism of its failure is understood and was self-inflicted: gating the
+OUTPUT makes the context jump discontinuously whenever the estimate wobbles
+across the threshold, which is exactly the abrupt arrival the beta ladder had
+already shown to be harmful. Classical adaptive control places the dead zone on
+the UPDATE LAW rather than the output signal, and that distinction is the whole
+reason the classical form works.
+
+Scored at all three payloads deliberately: a fix must be checked where it is
+supposed to help AND where it might silently cost, and reporting only 1.0x would
+have hidden the 5.0x regression.
