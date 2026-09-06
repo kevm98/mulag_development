@@ -110,11 +110,20 @@ def run(root, mesh, payload):
     cell = lambda r: f"{r['pct']:+9.1f}%{'*' if r['sig'] else ' '}"
     print(f"\n{'comparison':>34}  {'cut':>10}  {'lateral':>10}   outcome")
     out = {}
+    # ctxzero is the reference, NOT base. Both are the same policy by
+    # construction, but ctxzero is the same CHECKPOINT FILE scored in the same
+    # campaign, so it shares whatever run-level conditions the live arm had.
+    # base is a different file scored in a different run, and the free A/A on
+    # 2026-09-06 measured that route at -40.9% on cut between two runs identical
+    # by construction (16.70 vs 23.56 mm, base-at-3.0x ranging 15.67-23.56 across
+    # five nominally equivalent runs). Comparing against base imports that noise;
+    # comparing against ctxzero does not.
     for ref, arm, tag in (
-        ("base", "ctxzero", "CHECK     base -> ctxzero (null?)"),
-        ("base", "ctxlive", "CEILING   base -> ctxlive (oracle)"),
-        ("base", "ctxest", "DEPLOY    base -> ctxest (online)"),
+        ("ctxzero", "ctxlive", "PRIMARY   ctxzero -> ctxlive (oracle)"),
+        ("ctxzero", "ctxest", "DEPLOY    ctxzero -> ctxest (online)"),
         ("ctxlive", "ctxest", "GAP       ctxlive -> ctxest"),
+        ("base", "ctxzero", "A/A       base -> ctxzero (instrument)"),
+        ("base", "ctxlive", "CONTEXT   base -> ctxlive (noisy route)"),
     ):
         if ref not in have or arm not in have:
             continue
@@ -125,9 +134,12 @@ def run(root, mesh, payload):
 
     chk = out.get(("base", "ctxzero"))
     if chk and (chk[1]["cut"]["sig"] or chk[1]["lateral"]["sig"]):
-        print("\n  WARNING: base -> ctxzero is NOT a null. The freeze leaked, or "
-              "the zeroed\n  context is not reproducing the frozen policy. Treat "
-              "the other rows as suspect.")
+        print(f"\n  A/A NOTE: base -> ctxzero is not a null "
+              f"(cut {chk[1]['cut']['pct']:+.1f}%, "
+              f"lateral {chk[1]['lateral']['pct']:+.1f}%). These two are the same "
+              f"policy by\n  construction, so this row is the INSTRUMENT's floor "
+              f"on this pair of runs, not a\n  freeze leak. Any effect in the "
+              f"PRIMARY row smaller than this is not readable.")
     return out
 
 
@@ -151,8 +163,8 @@ if __name__ == "__main__":
         if not out:
             print(f"  {payload}x  incomplete")
             continue
-        for key, tag in ((("base", "ctxlive"), "oracle"),
-                         (("base", "ctxest"), "ONLINE")):
+        for key, tag in ((("ctxzero", "ctxlive"), "oracle"),
+                         (("ctxzero", "ctxest"), "ONLINE")):
             if key in out:
                 ok, res = out[key]
                 print(f"  {payload}x {tag:>7}  {'PASS' if ok else 'fail'}  "
