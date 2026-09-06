@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Experiment A: the adaptation test proper -- payload STEPS mid-episode.
 #
+# TIMING CORRECTED. The first attempt scheduled the step at 20 s +- 8 s, but a
+# 900-step rollout at control_dt = 1/60 s lasts exactly 15.0 s, so the step could
+# only fire in the last 0-3 s of roughly a fifth of the environments. The plant
+# sanity check caught it: the frozen policy on the "stepping" plant read cut
+# 4.17 mm against 3.23 mm on a constant nominal plant, where a real step to 3.0x
+# should have pushed it toward the 16.91 mm it scores at constant 3.0x. Those
+# reports were deleted rather than kept.
+#
+# 6 s +- 2 s fires at 4-8 s, leaving 7-11 s of post-step episode to measure.
+#
 # Everything before this held payload constant per episode, which measures
 # conditioning, not adaptation. Here every environment starts at its base mass
-# and steps at 20 s +- 8 s of jitter. The jitter is the point: a fixed instant
+# and steps at 6 s +- 2 s of jitter. The jitter is the point: a fixed instant
 # could be compensated on a timer without sensing anything.
 #
 # MULAG_MASS_BIMODAL is deliberately OMITTED. Invariant 21: setting it assigns
@@ -41,8 +51,8 @@ export MULAG_ESTIMATOR_BETA=0.005" ;;
 cd /workspace/projects/rrlab_mulag
 export MULAG_DIRECT_VALVE=1
 export MULAG_RMA_CONTEXT=1
-export MULAG_MASS_STEP_TIME_S=20.0
-export MULAG_MASS_STEP_JITTER_S=8.0
+export MULAG_MASS_STEP_TIME_S=6.0
+export MULAG_MASS_STEP_JITTER_S=2.0
 export MULAG_MASS_STEP_SCALE=$STEP
 export MULAG_CONTEXT_ABLATE=$ABL
 $EX
