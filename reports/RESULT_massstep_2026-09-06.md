@@ -23,6 +23,39 @@ scheduled at 20 s +- 8 s, and a 900-step rollout at `control_dt = 1/60 s` lasts
 environments. The frozen policy then read 4.17 mm against 3.23 mm on a constant
 nominal plant, which is what exposed it. Those reports were deleted.
 
+## Refinement to the gate, from the loaded-to-loaded case
+
+The "fraction of the way between the two static plants" form of the gate assumes
+the stepping plant interpolates between them. That assumption fails when the
+post-step plant is a catastrophic failure mode. Measured on the 2.0 -> 5.0x step:
+
+| plant | cut | lateral | contact | impacts | safety |
+|---|---:|---:|---:|---:|---:|
+| constant 2.0x | 2.91 mm | 59.44 mm | 0.911 | 0.372 | 0.036 |
+| STEP 2.0 -> 5.0x | 8.97 mm | 61.31 mm | 0.871 | 0.405 | 0.048 |
+| constant 5.0x | 512.47 mm | 601.62 mm | 0.408 | 0.268 | 0.475 |
+
+The fraction is 1 %, which reads as a failed gate. It is not. A policy starting
+at 5.0x fails from t = 0 and never recovers; a policy starting at 2.0x, where it
+is healthy, and perturbed at 6 s spends nine seconds at 5.0x FROM A GOOD STATE.
+Those are different trajectories, so no interpolation between the two static
+runs is expected.
+
+**The gate is therefore stated against the PRE-step plant only:** the frozen
+policy on the stepping plant must differ from the pre-step constant plant, in
+the direction of the post-step plant. That comparison is assumption-free. Here
+all four independent quantities move correctly -- cut 2.91 -> 8.97 mm, contact
+0.911 -> 0.871, impacts 0.372 -> 0.405, safety 0.036 -> 0.048 -- so the step
+fired.
+
+The interpolation form remains useful where the post-step plant is degraded
+rather than failed, as in the 1.0 -> 3.0x case (57 %), and is reported there.
+
+Note also that constant 5.0x reads 512.47 mm here against 328.50 mm in an
+earlier run of the same configuration. That is the cut channel's run-to-run
+spread again, and it is worst exactly where the controller is failing, which is
+a further reason to weight ground contact over cut height.
+
 ## Result
 
 | dose | arm | cut | lateral | contact | accel | safety |
