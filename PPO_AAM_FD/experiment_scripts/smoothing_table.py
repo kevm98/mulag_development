@@ -100,6 +100,36 @@ def table(path, payload):
               f"{arm['p95_tool_acceleration_mps2']:7.1f} "
               f"{arm['safety_violation_rate']:7.3f}   {lab}")
 
+    # The A/A. An arm whose settings match the baseline to within a rounding
+    # nudge is a repeat of the baseline placed LAST in the process. Any gap
+    # between them is not a parameter effect; it is what the sweep layout costs
+    # an arm for not being first, and it bounds every other row in this table.
+    b_beta, b_rate = (float(v) for v in key0.split(":"))
+    for key, arm in arms.items():
+        if key == key0:
+            continue
+        beta, rate = (float(v) for v in key.split(":"))
+        if abs(beta - b_beta) < 5e-3 and abs(rate - b_rate) < 5e-3:
+            res = {
+                "cut": compare(b_cut, [v * 1000.0 for v in arm["per_env_cut_error_m"]]),
+                "lateral": compare(b_lat, [v * 1000.0 for v in arm["per_env_lateral_m"]]),
+            }
+            gap_c, gap_l = res["cut"], res["lateral"]
+            print(f"\n  A/A CONTROL {key} vs baseline {key0}: "
+                  f"cut {gap_c['pct']:+.1f}%{'*' if gap_c['sig'] else ''}, "
+                  f"lateral {gap_l['pct']:+.1f}%{'*' if gap_l['sig'] else ''}, "
+                  f"contact {st.mean(arm['per_env_contact_fraction']):.3f} "
+                  f"vs {st.mean(base['per_env_contact_fraction']):.3f}")
+            if gap_c["sig"] or gap_l["sig"]:
+                print("  The two identical settings DIFFER. The sweep layout "
+                      "penalises later arms, so\n  every row above is measured "
+                      "against a privileged reference and the negatives in this\n"
+                      "  table are not safe to read as parameter effects.")
+            else:
+                print("  The two identical settings agree. The layout is not "
+                      "penalising later arms, so\n  the rows above are parameter "
+                      "effects and the negatives stand.")
+
     if winners:
         best = max(winners, key=lambda w: min(w[1]["cut"]["pct"],
                                               w[1]["lateral"]["pct"]))
