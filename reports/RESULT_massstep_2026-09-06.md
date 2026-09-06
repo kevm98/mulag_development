@@ -109,3 +109,54 @@ window) is queued to settle which sentence is true, and its reading was declared
 before it ran.
 
 Also outstanding: selection mesh only, and one seed.
+
+## The loaded-to-loaded step, and a correction to the scope
+
+The 2.0 -> 5.0x step carries NO nominal phase, so it was run to isolate the
+adaptation claim from the nominal defect. It fails anyway.
+
+| arm | cut | lateral | contact | impacts | accel | safety |
+|---|---:|---:|---:|---:|---:|---:|
+| ctxzero | 8.97 mm | 61.31 mm | 0.871 | 0.405 | 66.3 | 0.048 |
+| ctxest | 9.07 mm | 80.06 mm | 0.920 | 0.523 | 49.7 | 0.017 |
+
+Paired: cut **+28.1 %***, lateral **-23.1 %***, contact +0.022*. **Fail.**
+
+### The earlier explanation was wrong
+
+This file previously attributed the 1.0 -> 3.0x lateral failure to that step's
+first six seconds sitting at nominal. That cannot be the explanation here, since
+both phases are loaded. The nominal-phase account is withdrawn.
+
+### All three steps, and what actually predicts them
+
+| step | cut | lateral | outcome | frozen-policy contact |
+|---|---:|---:|---|---:|
+| 1.0 -> 3.0x | +175.4 %* | -13.8 %* | fail | 0.841 |
+| 1.0 -> 5.0x | +636.1 %* | +52.0 %* | **pass** | **0.728** |
+| 2.0 -> 5.0x | +28.1 %* | -23.1 %* | fail | 0.871 |
+
+**One of three step configurations passes.** The claim "adaptation works on
+time-varying plants" over-read a single favourable configuration and is
+withdrawn in that form.
+
+What predicts the outcome is how much ground contact the FROZEN policy is
+losing. The arm buys contact at the cost of lateral. At 0.728 that trade is
+overwhelmingly worth it; at 0.841 and 0.871 the lateral cost exceeds the gain.
+
+### The scope, restated
+
+> The arm helps when the frozen controller is **losing ground contact**, and
+> costs lateral tracking when it is not.
+
+This single rule covers every result measured: it passes at constant 3.0x and
+5.0x and on the 1.0 -> 5.0x step, where the frozen policy's contact is 0.803,
+0.539 and 0.728; it fails at constant 1.0x and on the two steps where contact is
+0.954, 0.841 and 0.871. It subsumes the "nominal payload" limitation as the
+special case where contact is highest.
+
+It is also consistent with the structural reading in
+`RESULT_arma3_2026-09-06.md`: four context columns can only slide the policy
+along a cut/contact-versus-lateral curve, so the arm always makes the same
+trade, and whether that trade pays depends entirely on how much contact there is
+to recover.
