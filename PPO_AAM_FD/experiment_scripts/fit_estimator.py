@@ -27,9 +27,19 @@ import sys
 import numpy as np
 
 
+DEGREE = 2
+
+
 def load(path):
     d = np.load(path)
     return d["x"].astype(np.float64), d["y"].astype(np.float64)
+
+
+def expand(x):
+    """Degree-2 features. The linear fit over-reads the nominal plant as 1.41x,
+    which cost 46 -> 82 mm of lateral error at payload 1.0x when deployed;
+    squares bring that to 1.14x (estimator_models.py, 2026-09-06)."""
+    return np.hstack([x, x * x]) if DEGREE >= 2 else x
 
 
 def fit_ridge(x, y, lam):
@@ -76,7 +86,9 @@ if __name__ == "__main__":
         train_path = candidates[-1]
         prefix = os.path.basename(train_path)[: -len("_mixed.npz")]
         print(f"prefix auto-detected as {prefix!r} from {train_path}")
-    xtr, ytr = load(train_path)
+    xtr_raw, ytr = load(train_path)
+    n_base = xtr_raw.shape[1]
+    xtr = expand(xtr_raw)
     print(f"train: {train_path}  x={xtr.shape}  payload range "
           f"{1 + 0.5 * ytr.min():.2f}x - {1 + 0.5 * ytr.max():.2f}x")
 
@@ -94,7 +106,7 @@ if __name__ == "__main__":
         errs = []
         for path in tests:
             xte, yte = load(path)
-            _, rmse, _ = score(w, b, mu, sigma, xte, yte)
+            _, rmse, _ = score(w, b, mu, sigma, expand(xte), yte)
             errs.append(rmse)
         held = float(np.mean(errs)) * 0.5 if errs else float("nan")
         print(f"{lam:>10.0f} {r2tr:>9.3f} {held:>19.3f}")
@@ -106,7 +118,7 @@ if __name__ == "__main__":
     print(f"\nselected lambda = {lam:.0f}")
     for path in tests:
         xte, yte = load(path)
-        pred, rmse, r2 = score(w, b, mu, sigma, xte, yte)
+        pred, rmse, r2 = score(w, b, mu, sigma, expand(xte), yte)
         true_x = 1 + 0.5 * float(np.mean(yte))
         pred_x = 1 + 0.5 * float(np.mean(pred))
         print(f"  {os.path.basename(path):>24}  true {true_x:.2f}x  "
@@ -114,5 +126,6 @@ if __name__ == "__main__":
               f"bias {pred_x - true_x:+.3f}x")
 
     np.savez(out, w=w.astype(np.float32), b=np.float32(b),
-             mu=mu.astype(np.float32), sigma=sigma.astype(np.float32))
+             mu=mu.astype(np.float32), sigma=sigma.astype(np.float32),
+             degree=np.int32(DEGREE), n_base=np.int32(n_base))
     print(f"\nwrote {out}")

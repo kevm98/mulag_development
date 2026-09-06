@@ -4815,13 +4815,25 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
                 )
                 for k in ("w", "b", "mu", "sigma")
             }
+            for k in ("degree", "n_base"):
+                if k in data:
+                    fit[k] = int(data[k])
             self._payload_fit = fit
             print(
                 f"[MULAG] online payload estimator loaded from {path}",
                 flush=True,
             )
 
-        features = base_obs[:, : fit["mu"].numel()]
+        # Polynomial degree travels IN the fit file, so a deployed estimator
+        # cannot silently disagree with the one that was validated offline.
+        # Degree 2 exists because the linear fit over-reads the nominal plant as
+        # 1.41x, which told the policy it was carrying a heavy cutter when it
+        # was not and cost 46 -> 82 mm of lateral error at payload 1.0x.
+        degree = int(fit.get("degree", 1))
+        n_base = int(fit["n_base"]) if "n_base" in fit else fit["mu"].numel()
+        features = base_obs[:, :n_base]
+        if degree >= 2:
+            features = torch.cat((features, features * features), dim=-1)
         z = (features - fit["mu"]) / fit["sigma"].clamp_min(1.0e-6)
         raw_estimate = z @ fit["w"] + fit["b"]
 
