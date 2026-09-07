@@ -212,7 +212,7 @@ main text.
     \midrule
     PhysX physics substep           & $\unit[120]{Hz}$ & $\unit[8.33]{ms}$ \\
     Policy and control step         & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
-    AF history encoder and residual & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
+    AF payload estimate and context  & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
     Inverse, forward and ROM models & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
     Offline AAM inference           & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
     Simscape logging grid           & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
@@ -231,7 +231,8 @@ giving a $\unit[333]{ms}$ window, and applies no output smoother.
 \begin{table}[H]
   \centering
   \caption{Frozen artifacts and their SHA-256 digests, truncated to the first
-  $32$ hexadecimal digits. Residual arms are evaluated on the frozen AF base.}
+  $32$ hexadecimal digits. The context-column checkpoints share the frozen AF
+  base and differ only in their $1\,024$ trained parameters.}
   \label{tab:app:hashes}
   \scriptsize
   \begin{tabular}{lll}
@@ -246,12 +247,12 @@ giving a $\unit[333]{ms}$ window, and applies no output smoother.
     \texttt{rom\_s6\_aligned/model\_598.pt} & R policy & \texttt{ce7e3ab9649b1193f123f9f91107bbf8} \\
     \texttt{idfd\_s6\_aligned/model\_598.pt} & IF policy & \texttt{06533b8e8614b0ad982dd8c238a17772} \\
     \texttt{distilled\_v1/phase1\_init\_70.pt} & AF frozen base & \texttt{641e476cfcd765a8d68a17980d6cbbf2} \\
-    \texttt{rebal17\_history/model\_399.pt} & AF residual, seed $17$ & \texttt{ea39150fd2919ce96aa1acdbbdc9d65d} \\
-    \texttt{rebal23\_history/model\_399.pt} & AF residual, seed $23$ & \texttt{63da26e9b9710b2f54715d7d70e82d59} \\
-    \texttt{rebal101\_history/model\_399.pt} & AF residual, seed $101$ & \texttt{f5a400f3b7e66b46a0cca11142a67d70} \\
-    \texttt{rebal42\_history/model\_399.pt} & AF residual, seed $42$ & \texttt{5cafe571d429ea8181989ad87c2ad558} \\
-    \texttt{rebal7\_history/model\_399.pt} & AF residual, seed $7$ & \texttt{4e5c3041987c20685e928ac0d5fac192} \\
-    \texttt{rebal17\_nohistory/model\_399.pt} & zero-history control & \texttt{c8b001b27ded55f2f32d5fe47d022a0a} \\
+    \texttt{ctxonly17/model\_1596.pt} & AF context columns, seed $17$ & \texttt{805da12505d214ca9f40c405cf02e505} \\
+    \texttt{ctxonly23/model\_1596.pt} & AF context columns, seed $23$ & \texttt{79778e16722bbf2ace1b5c0e680a47dd} \\
+    \texttt{ctxonly101/model\_1596.pt} & AF context columns, seed $101$ & \texttt{80b15d39d0b61ed3ae5ac72b248d9329} \\
+    \texttt{s17\_fit.npz} & payload estimator, seed $17$ & \texttt{1b48070e035f05b07f52449ee2a42b83} \\
+    \texttt{s23\_fit.npz} & payload estimator, seed $23$ & \texttt{422a5f498b03426ab2fe26d52d724174} \\
+    \texttt{s101\_fit.npz} & payload estimator, seed $101$ & \texttt{d7abd08b30d0489f8da593f3c5c0541e} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -296,23 +297,18 @@ the control loop. Its velocity output is retained as a diagnostic.
 \clearpage
 \section{Policy Observation Layout}
 
-The deployed actor receives $66$ values in every stack. AF carries its history
-window separately and does not widen the actor input. The final twelve values
+The deployed actor receives $66$ task values in every stack. AF appends four
+plant-context columns, giving a $70$-value input. The final twelve task values
 make actuator prediction and cylinder tracking errors visible to the otherwise
 memoryless actor.
 
-What the AF history encoder reads is a separate contract and is read off the
-frozen checkpoint rather than asserted. In \texttt{model\_399.pt} of the AF
-seed-$17$ arm, the observation normaliser has width $1470$ and the encoder's
-first layer is $64 \times 70$: $70$ base columns for the actor, and a
-$20$-step window of $70$ values per step, being the $66$ observation channels
-above plus the four previously applied valve commands. Reconstructing the
-encoder, temporal convolutions, latent projection and head from those shapes
-gives $53\,836$ trainable parameters, the figure quoted in
-Section~\ref{sec:ctrl:af-residual}. The encoder therefore sees the terrain
-profile, the task errors and the commanded target lead, and the exclusion
-contract of Section~\ref{sec:data:history-features} applies to the offline AAM
-only.
+The context width is read off the frozen checkpoint rather than asserted. In
+\texttt{model\_1596.pt} of each context-column arm the actor's first layer is
+$256 \times 70$, of which the last four columns are the context and carry
+$1\,024$ trainable parameters; the preceding $66$ columns are bit-identical
+across the three seeds, which is the check that the gradient mask held. Only
+the payload channel is non-constant in this campaign, and the exclusion contract
+of Section~\ref{sec:data:history-features} applies to the offline AAM only.
 
 \begin{table}[H]
   \centering

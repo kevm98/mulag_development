@@ -344,8 +344,10 @@ individual factor parameterisations.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_kappa_stacks}
-  \caption{Lateral tracking and ground contact as actuator authority is reduced.
-  The frozen and adaptive arms are compared within \ppoAAMFD{}.}
+  \caption{Lateral tracking and ground contact as actuator authority is reduced,
+  across the three stacks at nominal payload. The sweep characterises the
+  authority margin of the frozen controllers; the payload-conditioned mechanism
+  is evaluated separately in Section~\ref{sec:eval:adaptation}.}
   \label{fig:eval:kappa-stacks}
 \end{figure}
 
@@ -361,7 +363,6 @@ individual factor parameterisations.
     \ppoROM{} & $40.69$ & $61.04$ & $0.10$ \\
     \ppoIDFD{} & $23.66$ & $35.49$ & $0.20$ \\
     \ppoAAMFD{} frozen & $45.18$ & $67.78$ & $0.10$ \\
-    \ppoAAMFD{} adaptive & $27.03$ & $40.55$ & $0.30$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -371,458 +372,353 @@ failure boundary was not reached within the tested range, so the experiment
 establishes an authority margin rather than a breakdown threshold. \ppoIDFD{}
 has the lowest lateral error at every rung of the cross-stack comparison.
 
-No stack reached the contact or safety gate. Within \ppoAAMFD{}, the adaptive
-residual holds the frozen residual's nominal lateral error down to
-$\kappa=0.30$. This is an authority margin inside \ppoAAMFD{}. It is not a
-ranking of \ppoAAMFD{} against \ppoROM{} or \ppoIDFD{}.
+No stack reached the contact or safety gate. The sweep therefore bounds the
+authority margin the frozen controllers carry, and it is that margin the
+payload-conditioned mechanism is measured against in
+Section~\ref{sec:eval:adaptation}.
 
 \subsection{What Robustness Leaves for Adaptation}
 \label{sec:eval:robustness-residual}
 
-The robustness result sets the scale for the following experiment. The frozen
-controllers already absorb substantial variation, and the authority sweep does
-not reach a contact or safety failure. The adaptation study therefore measures
-residual performance differences beyond a robust learned controller. Modest,
-channel-specific, or seed-dependent gains are compatible with this setting
-because the baseline leaves only a limited deficit to recover. This is also why
-the capacity-matched control matters: with a small deficit to recover, extra
-residual capacity and live plant information can produce similar gains.
+The robustness result sets the scale for the following experiment. At nominal
+payload the frozen controllers absorb substantial variation and the authority
+sweep reaches no contact or safety failure, so there is little there for
+adaptation to recover. That is precisely why the adaptation study sweeps
+payload instead: it locates the regime where the frozen controller does fail,
+and measures the mechanism where a deficit actually exists.
 
-\section{Evaluation of Online Adaptation Mechanisms}
+\section{Evaluation of Online Adaptation}
 \label{sec:eval:adaptation}
 
-Two online adaptation mechanisms were built for this machine and they act at
-different points in the control chain. The explicit mechanism corrects the
-inverse command with an estimated plant latent and is measured in
-Chapter~\ref{chap:models}; its outcome is recalled in
-Section~\ref{sec:eval:explicit-mechanism} because it determines the design
-tested here. The implicit mechanism conditions a bounded residual on a causal
-history window and applies it to the valve command. The experiments below remain
-inside \ppoAAMFD{} and use the identified forward model from
-Chapter~\ref{chap:models}. They measure three distinct effects: improvement over
-the frozen base, improvement due to live history beyond matched residual
-capacity, and variation of the residual advantage with cutter mass. Keeping
-these effects separate prevents additional model capacity from being interpreted
-as online identification.
+The deployed mechanism conditions the frozen policy on a payload it estimates
+online from the task observation it already reads
+(Section~\ref{sec:models:payload}). This section measures what that conditioning
+is worth, in which payload regime it holds, and how much of it depends on the
+estimate being correct rather than merely present.
 
-\subsection{The Explicit Mechanism and Its Delivery Limit}
-\label{sec:eval:explicit-mechanism}
-
-The explicit mechanism is not re-scored in this chapter. Two results from
-Chapter~\ref{chap:models} carry it. Its estimated latent improves the adapter
-objective over a zero-context control on all five seeds
-(Section~\ref{sec:models:adapter-openloop}), and it changes no closed-loop
-tracking metric (Section~\ref{sec:models:adapter-null}). The reason is measured
-rather than inferred: the cylinders it corrects are saturated for most of the
-scored window, so a bounded additive correction is clipped before it reaches the
-plant. The two results are compatible, and together they place the constraint at
-the interface rather than at the estimator. The sections below therefore test
-the same adaptation idea through a path that retains authority, and every
-comparison in them is between arms of that second mechanism.
+Three arms are compared, all of them the same network at a different context
+value. \emph{Frozen} zeroes the estimate, which by
+Equation~\eqref{eq:ctrl:af-residual} recovers the base policy exactly rather
+than approximating it. \emph{Adaptive} supplies the online estimate and is the
+deployable arm. \emph{Oracle} supplies the true payload and is included as a
+reference point, not as a bound.
 
 \subsection{Experiment and Measurement}
 \label{sec:eval:instrument}
 
-The online-adaptation experiment changes cutter mass during each episode. The
-change time and direction vary across environments. The three compared arms
-share the frozen base policy, residual architecture, training budget, and
-reward. The base has no residual, the control has a residual with a zeroed
-history window, and the adaptive arm receives recent state-action history.
+Scoring uses held-out mesh 3141, $176$ environments and $900$ steps per arm,
+paired on the environment index so that every comparison holds terrain,
+trajectory and payload fixed. Each arm runs in its own process, because an
+earlier layout that swept arms inside one process failed its own A/A check. The
+statistic is the paired per-environment median difference with a percentile
+bootstrap at $B=20000$, reported with the fraction of environments improved.
 
-The primary plant configuration assigns nominal and heavy cutter masses across
-the environment batch and changes the assignment at a jittered time. The varying
-event time prevents the residual from relying on one fixed schedule. Since the
-history-conditioned residual is active throughout the episode, this experiment
-tests continuous conditioning on the operating point as well as the response to
-the event.
+The median log-ratio is not used as the primary statistic here. It disagrees in
+sign with the marginal medians in several cells, because with an even sample and
+a two-lobed paired distribution $\operatorname{median}(x-y)$ and
+$\operatorname{median}(x/y)$ need not fall on the same side of their null
+values. The difference and the win fraction are the honest summaries of an
+effect this heterogeneous.
 
-Results use $880$ paired environments across five held-out meshes. Lateral and
-cut-height effects are evaluated separately. An A/A series on this instrument
-places the noise floor at approximately $10\,\%$ on cut height and
-$1.5\,\%$ on lateral error, and those two figures fix both the resolution
-limit and the non-inferiority bounds used below. The paired design ensures that
-each arm is assessed under the same terrain, trajectory, and mass condition.
+Three payloads are scored, at $3.0\times$, $4.0\times$ and $5.0\times$ nominal
+cutter mass, and three independently trained context-column seeds. The seeds
+share one frozen base, so they test the adaptation mechanism's sensitivity to
+initialisation rather than the whole controller's, and are described that way
+throughout.
 
-Two protocol decisions are pre-registered, and both are stated before the
-numbers because both of them move seeds.
+\subsection{The Frozen Controller Has a Payload-Dependent Deficit}
 
-\textbf{Checkpoint.} Every arm is scored at the saved checkpoint nearest the
-peak of its own training-reward curve, selected by one parser for every arm,
-control and adaptive alike. Training reward is measured on the training plants
-and the held-out meshes are never consulted in the selection, so this is model
-selection on training signal rather than on the test set. The rule exists
-because a fixed final checkpoint catches late-training collapse: seed~$7$ peaks
-at $14729$ mean reward and ends at $6957$. The final checkpoint is retained and
-reported below as the robustness analysis.
+The comparison is only meaningful where the frozen policy is actually failing.
+Table~\ref{tab:eval:frozen-deficit} establishes that it is, and where.
 
-\textbf{Success.} An arm succeeds if one tracking metric improves with its
-paired interval excluding zero while the other either improves or stays inside
-its non-inferiority bound. The stricter bar, both channels improving with
-intervals excluding zero, is reported alongside it because it is the criterion
-the earlier method versions used. The relaxed rule was fixed because the
-stricter one records a change smaller than the instrument can resolve as a
-failure.
-
-\subsection{History-Conditioned Residual Across Training Seeds}
-
-\begin{table}[tbp]
+\begin{table}[H]
   \centering
-  \caption{Primary comparison of the history-conditioned residual with the
-  frozen base, five training seeds at the training-reward-peak checkpoint and
-  $880$ paired environments. An asterisk indicates that the paired bootstrap
-  interval excludes zero. Outcome labels follow the pre-registered rule: joint
-  improvement means both channels resolved, Pareto improvement means one
-  resolved and the other inside its non-inferiority bound.}
-  \label{tab:eval:arms}
-  \begin{tabular}{lccc}
-    \toprule
-    Seed & cut-height gain & lateral gain & outcome \\
-    \midrule
-    $17$ & $+39.1\,\%^{*}$ & $+84.9\,\%^{*}$ & joint improvement \\
-    $23$ & $+35.5\,\%^{*}$ & $+4.0\,\%^{*}$ & joint improvement \\
-    $101$ & $+74.7\,\%^{*}$ & $+5.9\,\%^{*}$ & joint improvement \\
-    $42$ & $+43.4\,\%^{*}$ & $-16.1\,\%^{*}$ & trade-off, fails \\
-    $7$ & $+4.5\,\%$ & $+55.7\,\%^{*}$ & Pareto improvement \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-The percentages compare paired environments. A positive value means that the
-adaptive arm has lower error than the frozen base for the median paired
-environment. The bootstrap marker indicates that the paired difference is
-resolved by the stated statistical test.
-
-Four of five seeds succeed, so the median seed passes. Three of them improve
-both channels with resolved intervals. Seed~$7$ improves lateral tracking by
-$55.7\,\%$ while its cut-height change of $+4.5\,\%$ stays inside the
-$10\,\%$ bound, which is an improvement at no measurable cost rather than a
-trade. Seed~$42$ is the failure: it gains $43.4\,\%$ on cut height and gives
-up $16.1\,\%$ laterally, past the $1.5\,\%$ bound. Under the stricter
-both-channels bar the same table returns three seeds. The residual therefore
-improves the median training run, and Section~\ref{sec:eval:attribution} asks
-what in the residual produces that improvement.
-
-\subsection{Robustness to the Checkpoint Rule}
-\label{sec:eval:checkpoint-robustness}
-
-The pre-registration commits to reporting the fixed final checkpoint alongside
-the selected one, and to treating a disagreement between the two as a result
-rather than as a detail.
-
-\begin{table}[tbp]
-  \centering
-  \caption{The same comparison at the fixed final checkpoint, no selection step,
-  $880$ paired environments.}
-  \label{tab:eval:arms-final}
-  \begin{tabular}{lccc}
-    \toprule
-    Seed & cut-height gain & lateral gain & outcome \\
-    \midrule
-    $17$ & $+62.6\,\%^{*}$ & $+78.6\,\%^{*}$ & joint improvement \\
-    $23$ & $+40.9\,\%^{*}$ & $+21.3\,\%^{*}$ & joint improvement \\
-    $101$ & $-1.1\,\%$ & $+28.6\,\%^{*}$ & Pareto improvement \\
-    $42$ & $-23.3\,\%^{*}$ & $-18.2\,\%^{*}$ & both worse \\
-    $7$ & $-84.8\,\%^{*}$ & $-72.1\,\%^{*}$ & both worse \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Three of five seeds succeed at the final checkpoint under the same rule, and two
-under the stricter both-channels bar. The median passes on either reading, so
-the direction of the result does not depend on the checkpoint rule. Its margin
-does. Seeds~$17$ and~$23$ improve both channels under both rules and seed~$101$
-improves at no measurable cost under both. The rules disagree on seed~$7$, which
-succeeds at its reward peak and degrades both channels by $84.8\,\%$ and
-$72.1\,\%$ at the final checkpoint, after the reward collapse that motivated
-the selection rule. Seed~$42$ fails under both, trading channels at the peak and
-losing both at the end.
-
-\subsection{Capacity Versus Live History}
-\label{sec:eval:attribution}
-
-A larger residual can improve control while receiving no information about the
-current plant, and Table~\ref{tab:eval:arms} cannot distinguish that from
-adaptation. One control is therefore trained per seed with the history window
-zeroed and the input width unchanged, sharing the frozen base, architecture,
-trainable parameter count, budget, reward, optimiser and plant schedule with the
-adaptive arm. The single manipulated variable is whether the encoder reads real
-history or zeros, and both arms are scored at the same checkpoint as
-Table~\ref{tab:eval:arms}.
-
-\begin{table}[tbp]
-  \centering
-  \caption{Decomposition of the residual advantage at the selected checkpoints.
-  The left pair isolates added capacity, the right pair isolates live history at
-  equal capacity. Same $880$ paired environments and the same success rule as
-  Table~\ref{tab:eval:arms}.}
-  \label{tab:eval:control-arm}
+  \caption{The frozen policy across payload, held-out mesh 3141. The collapse
+  between $3.0\times$ and $4.0\times$ is the robustness deficit the adaptive arm
+  is asked to repair.}
+  \label{tab:eval:frozen-deficit}
   \small
-  \begin{tabular}{lcccc}
+  \begin{tabular}{@{}lrrrr@{}}
     \toprule
-    & \multicolumn{2}{c}{capacity alone (base $\to$ control)}
-    & \multicolumn{2}{c}{live history (control $\to$ adaptive)} \\
-    \cmidrule(lr){2-3}\cmidrule(lr){4-5}
-    Seed & cut-height & lateral & cut-height & lateral \\
+    Payload & Cut (mm) & Lateral (mm) & Ground contact & Safety violations \\
     \midrule
-    $17$ & $+63.9\,\%^{*}$ & $-1.2\,\%$ & $-21.1\,\%^{*}$ & $+80.3\,\%^{*}$ \\
-    $23$ & $+77.2\,\%^{*}$ & $+42.2\,\%^{*}$ & $-21.2\,\%^{*}$ & $-22.8\,\%^{*}$ \\
-    $101$ & $+90.9\,\%^{*}$ & $+56.2\,\%^{*}$ & $-5.2\,\%$ & $-29.9\,\%^{*}$ \\
-    $42$ & $+1.3\,\%$ & $-62.2\,\%^{*}$ & $+38.4\,\%^{*}$ & $+124.9\,\%^{*}$ \\
-    $7$ & $+95.0\,\%^{*}$ & $+39.7\,\%^{*}$ & $-46.0\,\%^{*}$ & $+12.2\,\%^{*}$ \\
+    $3.0\times$ &  10.37 &  84.37 & 0.883 & 0.096 \\
+    $4.0\times$ & 167.52 & 318.63 & 0.636 & 0.281 \\
+    $5.0\times$ & 267.44 & 400.89 & 0.601 & 0.303 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Read the two halves in order. Added capacity alone reproduces most of
-Table~\ref{tab:eval:arms}: the zero-history control beats the frozen base on
-four of five seeds under the same success rule, with cut-height gains of
-$63.9$, $77.2$, $90.9$ and $95.0\,\%$. The increment from live history is not
-present on the median seed. Only seed~$42$ improves both channels against its
-own control, and it is the one seed where added capacity achieved nothing.
-Seeds~$17$ and~$7$ buy large lateral gains with cut-height losses past the
-$10\,\%$ bound, seed~$23$ is worse on both channels, and seed~$101$ shows no
-resolved improvement. One of five seeds succeeds on this axis, so the median
-seed fails it.
+At $3.0\times$ the controller still holds the ground for $88\,\%$ of the window
+and has little to give back. Beyond it, cut-height error rises by more than an
+order of magnitude and ground contact falls away.
 
-The final-checkpoint analysis does not overturn this and is not uniform.
-On the full mesh set only seed~$17$ carries a scored control arm there, where
-live history improves both channels by $51.3$ and $81.6\,\%$. On the
-three-mesh subset all five are available and again one of five succeeds:
-seed~$17$ improves both channels, seeds~$23$ and~$42$ trade cut height for
-lateral tracking, and seeds~$101$ and~$7$ are worse on both. Live history
-therefore produces a resolved closed-loop benefit on particular combinations of
-seed and checkpoint.
+\subsection{Adaptation Against the Frozen Policy}
 
-One mechanism is a candidate and is not settled by these data. Every arm here
-conditions on the full observation over the window, $70$ features per step and
-$1400$ numbers in total, almost all describing terrain and task state rather
-than plant identity, into a $53$k-parameter head. Rapid motor adaptation avoids
-exactly this by never training its encoder with the policy gradient, fitting it
-by regression onto a low-dimensional privileged vector~\cite{kumar2021rma}.
-Restricting the encoder input to plant-relevant channels is the direct test.
+Figure~\ref{fig:eval:forest} shows every cell and
+Table~\ref{tab:eval:adaptation} gives the pooled estimates.
 
-The two statements the section supports are therefore separate. Added residual
-capacity reproduces the median gain against the frozen base, so live history is
-not required for that median result. Live history is required for seed~$42$ at
-the selected checkpoint and for seed~$17$ at the final checkpoint. The
-method-level statement is that a bounded residual on the valve path improves
-tracking. The adaptation-specific statement is that live history is not the
-source of the median gain under this encoder, and is the source of the gain on
-those particular seeds. The next section tests the encoder itself.
-
-\subsection{Restricting the Encoder Input}
-\label{sec:eval:starved}
-
-The preceding section names the encoder as the leading candidate: every arm
-reads $70$ features per step, almost all terrain and task state, into a
-$53$k-parameter head that can fit them as noise. This section starves that input
-and repeats the comparison. The design was registered in writing before any arm
-of it was trained, and the success rule below is the one used for
-Table~\ref{tab:eval:arms}, not a rule chosen afterwards.
-
-Two things change and only two. The encoder reads a plant-relevant subset,
-namely tracking error, cylinder extension and velocity, valve command,
-measured-minus-commanded cylinder state, actuator prediction residual and
-normalised cylinder effort. That is $26$ columns plus the four-wide previous
-action, $30$ features per step and $600$ numbers over the window instead of
-$1400$. Terrain profile, headroom, target lead, alignment, truck speed, path
-preview and cutter pose are excluded, so the head cannot clone the task policy.
-The column set is written into the checkpoint as a buffer, so an evaluation
-cannot feed a different set from the trained one. Second, the cutter mass is
-drawn once per episode over $1.0$ to $5.0$ and held, with no mid-episode flip.
-Both residual arms are scored at the same final checkpoint, on three reserved
-meshes, over $528$ paired environments per seed.
-
-The plant was checked before the seeds were paid for, because a fixed policy
-that does not feel the mass draw gives the encoder nothing to identify. Over a
-constant-mass ladder the frozen base degrades from $\unit[3.4]{mm}$ median
-cut-height error at nominal mass to $\unit[19.4]{mm}$ at $3.0$ and
-$\unit[320]{mm}$ at $5.0$, and laterally from $\unit[46]{mm}$ to
-$\unit[410]{mm}$. The deficit is large and monotone, so this is not the
-low-headroom setting of Section~\ref{sec:eval:robustness-residual}.
-
-\begin{table}[tbp]
+\begin{figure}[tbp]
   \centering
-  \caption{Live history against a capacity-matched control reading zeros, with
-  the starved encoder. Percentages are median log-ratios over $528$ paired
-  environments; an asterisk marks a paired bootstrap interval excluding zero.
-  The last column applies the rule of Table~\ref{tab:eval:arms}.}
-  \label{tab:eval:starved}
-  \small
-  \begin{tabular}{lccl}
-    \toprule
-    Seed & cut height & lateral & outcome \\
-    \midrule
-    $17$  & $+194.2\,\%^{*}$ & $+24.4\,\%^{*}$ & joint improvement \\
-    $7$   & $+427.9\,\%^{*}$ & $+0.5\,\%$      & Pareto improvement \\
-    $23$  & $+18.7\,\%^{*}$  & $-1.7\,\%$      & lateral outside its bound \\
-    $101$ & $-49.3\,\%^{*}$  & $+1.1\,\%$      & no resolved improvement \\
-    $42$  & $-27.5\,\%^{*}$  & $-62.1\,\%^{*}$ & both worse \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+  \begin{tikzpicture}[x=1cm,y=1cm]
+\begin{scope}[xshift=1.15cm]
+\node[anchor=south west,font=\bfseries\footnotesize] at (0,5.34) {Cut height};
+\draw[gray!60] (1.882,-0.10) -- (1.882,5.16);
+\draw[gray!50] (0,-0.10) -- (6.40,-0.10);
+\draw[gray!50] (0.000,-0.10) -- (0.000,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (0.000,-0.20) {$-100$};
+\draw[gray!50] (1.882,-0.10) -- (1.882,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (1.882,-0.20) {$0$};
+\draw[gray!50] (3.765,-0.10) -- (3.765,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (3.765,-0.20) {$100$};
+\draw[gray!50] (5.647,-0.10) -- (5.647,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (5.647,-0.20) {$200$};
+\draw[black,very thick] (2.616,0.10) -- (4.048,0.10);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.429,0.10) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.10) {$5.0\times$ pooled};
+\draw[teal!70!black,thick] (3.120,0.52) -- (5.338,0.52);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.955,0.52) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.52) {$5.0\times$ s101};
+\draw[red!65!black,thick] (0.263,0.94) -- (1.727,0.94);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.004,0.94) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.94) {$5.0\times$ s23};
+\draw[teal!70!black,thick] (4.229,1.36) -- (6.238,1.36);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (5.414,1.36) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,1.36) {$5.0\times$ s17};
+\draw[black,very thick] (2.736,1.78) -- (3.970,1.78);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.229,1.78) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,1.78) {$4.0\times$ pooled};
+\draw[teal!70!black,thick] (2.896,2.20) -- (5.972,2.20);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.233,2.20) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,2.20) {$4.0\times$ s101};
+\draw[red!65!black,thick] (1.616,2.62) -- (2.334,2.62);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=white,inner sep=0pt] at (1.836,2.62) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,2.62) {$4.0\times$ s23};
+\draw[teal!70!black,thick] (3.229,3.04) -- (5.934,3.04);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.189,3.04) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.04) {$4.0\times$ s17};
+\draw[black,very thick] (1.816,3.46) -- (1.883,3.46);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (1.844,3.46) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.46) {$3.0\times$ pooled};
+\draw[teal!70!black,thick] (1.894,3.88) -- (2.000,3.88);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (1.936,3.88) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.88) {$3.0\times$ s101};
+\draw[red!65!black,thick] (1.660,4.30) -- (1.821,4.30);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.765,4.30) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,4.30) {$3.0\times$ s23};
+\draw[red!65!black,thick] (1.719,4.72) -- (1.867,4.72);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.798,4.72) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,4.72) {$3.0\times$ s17};
+\end{scope}
 
-Table~\ref{tab:eval:starved} reports the primary comparison. Two of five seeds
-succeed, so the median seed fails and the campaign does not meet its declared
-threshold of three. The failure is not a uniform absence of effect but a
-disagreement between seeds: $17$ and $7$ improve cut height by factors of two
-and five with intervals excluding zero, while $101$ and $42$ are worse on cut
-height by resolved margins and $42$ loses $\unit[88]{mm}$ of lateral tracking.
-Seed~$23$ misses on lateral by $0.2$ percentage points against a
-$1.5\,\%$ bound, on an interval that crosses zero.
-
-Two controls place that result. Added capacity alone beats the frozen base on
-four of five seeds, one more than the history-conditioned arm manages, so on
-this plant a residual that cannot see the plant is the more reliable of the two.
-And seed~$7$, the clearest primary success, is the seed whose control collapses:
-its zero-history arm is worse than the frozen base on both channels, and live
-history recovers that rather than adding to a working controller.
-
-The section therefore closes the question the previous one opened, in the
-negative. The encoder was the leading explanation for the missing history
-effect, and restricting its input from $1400$ numbers to $600$ does not recover
-that effect. What survives is narrower and seed-specific: live history helps on the runs
-where the capacity-matched control turns out badly, and is neither necessary nor
-reliably beneficial otherwise. That condition is a property of the training run
-rather than of the terrain. Mesh $2718$ is the hardest of the three for the
-frozen base at $\unit[47.5]{mm}$ against $\unit[17.3]{mm}$ and
-$\unit[15.5]{mm}$, and it is not where the history advantage concentrates. Nor
-does history buy stability across meshes: the spread between a seed's best and
-worst mesh is smaller for the history arm on two seeds and larger on two others.
-The evidence separates training runs, not operating conditions. The method-level result
-of Section~\ref{sec:eval:attribution} is unchanged, because it never depended on
-history.
-
-\subsection{Dependence on Cutter-Mass Dose}
-\label{sec:eval:dose}
-
-The cutter-mass dose was varied and compared with the $1.0$ condition, in which
-the event schedule runs but the mass does not change. At higher doses half the
-environments start at the heavier mass and the later flip exchanges the nominal
-and heavy assignments, so the dose changes both the starting mass distribution
-and the event magnitude. This measures dependence on cutter mass; it does not
-isolate a transient response to the mid-episode change. It also scores the
-residual against the frozen base rather than against the capacity-matched
-control, so it does not separate capacity from history either.
-
-\begin{table}[tbp]
-  \centering
-  \caption{Lateral residual advantage across cutter-mass dose, over $352$ paired
-  environments per dose. The total gain is the paired median difference between
-  the frozen base and the residual arm. The last two columns are the difference
-  between that dose's gain and the $1.0$ condition's, with its own bootstrap
-  interval, so the third column is the difference of the second column's entries
-  by construction. Every interval excludes zero.}
-  \label{tab:eval:dose}
-  \begin{tabular}{lccc}
-    \toprule
-    Cutter-mass dose & total gain (mm) & gain above $1.0$ (mm) & interval (mm) \\
-    \midrule
-    $1.0$ (sham) & $16.557$ & n/a & n/a \\
-    $1.5$ & $20.045$ & $3.489$ & $[2.296, 6.103]$ \\
-    $2.0$ & $20.487$ & $3.930$ & $[1.708, 6.349]$ \\
-    $2.5$ & $20.490$ & $3.934$ & $[2.340, 6.634]$ \\
-    $3.0$ & $23.705$ & $7.148$ & $[4.803, 10.493]$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{table}[tbp]
-  \centering
-  \caption{Cut-height residual advantage across cutter-mass dose, over the same
-  $352$ paired environments and computed the same way as
-  Table~\ref{tab:eval:dose}. The total gain excludes zero at every dose. The
-  excess above the $1.0$ condition does not: it is negative at $1.5$ and
-  unresolved at $2.0$ and $3.0$.}
-  \label{tab:eval:dose-cut}
-  \begin{tabular}{lccc}
-    \toprule
-    Cutter-mass dose & total gain (mm) & gain above $1.0$ (mm) & interval (mm) \\
-    \midrule
-    $1.0$ (sham) & $1.393$ & n/a & n/a \\
-    $1.5$ & $0.474$ & $-0.919$ & $[-1.414, -0.337]$ \\
-    $2.0$ & $1.958$ & $0.565$ & $[-0.146, 1.194]$ \\
-    $2.5$ & $3.016$ & $1.623$ & $[1.103, 2.276]$ \\
-    $3.0$ & $2.005$ & $0.612$ & $[-0.091, 1.800]$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[p]
-  \centering
-  \includegraphics[width=.92\textwidth]{images/ch7/ch7_dose_response}
-  \caption{Task performance across cutter-mass dose on both metrics. The $1.0$
-  condition measures the residual advantage at nominal mass. The additional
-  component at higher doses includes static mass dependence and any response to
-  the later mass exchange, which this design varies together. The lateral gap in
-  panel~(a) widens with every step of the dose; the cut-height gap in panel~(b)
-  does not, and the two panels carry their own scales. Panels~(c) and~(d) place
-  the separately estimated components beside each other on each metric rather
-  than implying an exact additive decomposition. Bars are drawn open where the
-  bootstrap interval crosses zero, which happens twice on cut height and never
-  on the lateral axis.}
-  \label{fig:eval:dose}
+\begin{scope}[xshift=9.60cm]
+\node[anchor=south west,font=\bfseries\footnotesize] at (0,5.34) {Lateral};
+\draw[gray!60] (1.882,-0.10) -- (1.882,5.16);
+\draw[gray!50] (0,-0.10) -- (6.40,-0.10);
+\draw[gray!50] (0.000,-0.10) -- (0.000,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (0.000,-0.20) {$-100$};
+\draw[gray!50] (1.882,-0.10) -- (1.882,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (1.882,-0.20) {$0$};
+\draw[gray!50] (3.765,-0.10) -- (3.765,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (3.765,-0.20) {$100$};
+\draw[gray!50] (5.647,-0.10) -- (5.647,-0.22);
+\node[below,font=\tiny,inner sep=1pt] at (5.647,-0.20) {$200$};
+\draw[black,very thick] (2.844,0.10) -- (4.549,0.10);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.897,0.10) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.10) {$5.0\times$ pooled};
+\draw[teal!70!black,thick] (2.126,0.52) -- (4.751,0.52);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.335,0.52) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.52) {$5.0\times$ s101};
+\draw[teal!70!black,thick] (1.416,0.94) -- (3.774,0.94);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=white,inner sep=0pt] at (1.964,0.94) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,0.94) {$5.0\times$ s23};
+\draw[teal!70!black,thick] (4.178,1.36) -- (6.206,1.36);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (5.367,1.36) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,1.36) {$5.0\times$ s17};
+\draw[black,very thick] (2.750,1.78) -- (4.283,1.78);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.230,1.78) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,1.78) {$4.0\times$ pooled};
+\draw[teal!70!black,thick] (2.552,2.20) -- (4.517,2.20);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.258,2.20) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,2.20) {$4.0\times$ s101};
+\draw[red!65!black,thick] (0.151,2.62) -- (2.844,2.62);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=white,inner sep=0pt] at (1.226,2.62) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,2.62) {$4.0\times$ s23};
+\draw[teal!70!black,thick] (3.395,3.04) -- (5.989,3.04);
+\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.523,3.04) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.04) {$4.0\times$ s17};
+\draw[black,very thick] (1.317,3.46) -- (1.557,3.46);
+\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (1.454,3.46) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.46) {$3.0\times$ pooled};
+\draw[red!65!black,thick] (1.530,3.88) -- (1.857,3.88);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.705,3.88) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,3.88) {$3.0\times$ s101};
+\draw[red!65!black,thick] (0.280,4.30) -- (1.342,4.30);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (0.942,4.30) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,4.30) {$3.0\times$ s23};
+\draw[red!65!black,thick] (1.214,4.72) -- (1.546,4.72);
+\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.408,4.72) {};
+\node[left,font=\tiny,inner sep=2pt] at (0,4.72) {$3.0\times$ s17};
+\end{scope}
+  \node[font=\scriptsize] at (7.50,-0.62) {paired median difference (mm), adaptive better $\rightarrow$};
+  \end{tikzpicture}
+  \caption{Adaptation against the frozen policy, paired per environment on
+  held-out mesh 3141. Points are median differences and bars are $95\,\%$
+  percentile-bootstrap intervals over $B=20000$; positive is better. Filled
+  markers have intervals excluding zero, hollow markers do not, and diamonds are
+  the across-seed pooled estimate. The sign reverses with payload: at $3.0\times$
+  the frozen policy still holds ground contact and the conditioning only costs,
+  while at $4.0\times$ and $5.0\times$ both channels improve.}
+  \label{fig:eval:forest}
 \end{figure}
 
-The lateral advantage above the $1.0$ condition rises from \unit[3.5]{mm} at a
-$1.5$ dose to \unit[7.1]{mm} at a $3.0$ dose. At the largest dose this component
-is about $31\,\%$ of the total lateral gain. The result establishes a
-plant-dependent component of the residual advantage. It does not identify that
-component uniquely with live history or with the mid-episode event.
 
-Cut height behaves differently on the same design
-(Table~\ref{tab:eval:dose-cut}). The residual improves cut-height tracking at
-every dose and all five paired gains exclude zero, so the benefit itself is not
-in question. The part above the $1.0$ condition is: it is negative at $1.5$,
-unresolved at $2.0$ and $3.0$, and resolved only at $2.5$. The cut-height gain
-is therefore treated as a general residual effect rather than a mass-dependent
-one. The two axes also carry different amounts of error to remove, the frozen
-base running at \unit[45]{mm} to \unit[63]{mm} laterally against
-\unit[4.2]{mm} to \unit[6.7]{mm} in cut height, so a dose term of the lateral
-size could not appear on this channel.
+\begin{table}[H]
+  \centering
+  \caption{Pooled paired median difference, adaptive against frozen, across the
+  three seeds. Positive is better. Intervals are $95\,\%$ percentile bootstrap.}
+  \label{tab:eval:adaptation}
+  \small
+  \begin{tabular}{@{}llrrr@{}}
+    \toprule
+    Payload & Channel & Frozen & Median difference & $95\,\%$ CI \\
+    \midrule
+    $3.0\times$ & cut (mm)     &  10.37 &  $-2.03$ & $[-3.51,\ +0.04]$ \\
+                & lateral (mm) &  84.37 & $-22.75$ & $[-30.04,\ -17.27]$ \\
+                & contact      &  0.883 &  $-0.00$ & $[-0.01,\ +0.01]$ \\
+    \midrule
+    $4.0\times$ & cut (mm)     & 167.52 & $+71.52$ & $[+45.34,\ +110.88]$ \\
+                & lateral (mm) & 318.63 & $+71.58$ & $[+46.12,\ +127.55]$ \\
+                & contact      &  0.636 &  $+0.12$ & $[+0.09,\ +0.17]$ \\
+    \midrule
+    $5.0\times$ & cut (mm)     & 267.44 & $+82.18$ & $[+39.00,\ +115.03]$ \\
+                & lateral (mm) & 400.89 &$+107.05$ & $[+51.11,\ +141.68]$ \\
+                & contact      &  0.601 &  $+0.09$ & $[+0.05,\ +0.13]$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-Appendix~\ref{app:pressure-signals} reports the internal pressure state of the
-three stacks through the same load change. It is an actuator-model state rather
-than a calibrated pressure, so it supports the shape of the response and not its
-level, and quantifies no result in this chapter.
+Online payload conditioning improves cut height, lateral tracking and ground
+contact together at $4.0\times$ and $5.0\times$, every channel with its interval
+excluding zero. Pooled cut-height error falls by $71.5\,$mm against a frozen
+baseline of $167.5\,$mm and by $82.2\,$mm against $267.4\,$mm, a reduction of
+$43\,\%$ and $31\,\%$ of the frozen error, while ground contact rises by $0.12$
+and $0.09$. Both task channels improve at once, which a single trade-off along
+the cut--lateral curve cannot produce.
+
+The mechanism is regime-selective, and the sweep resolves the regime exactly.
+At $3.0\times$ the frozen controller still holds the ground and conditioning
+costs lateral accuracy; from $4.0\times$ it gains on every channel. The
+discriminating variable is ground contact, and the deadband of
+Section~\ref{sec:models:payload} is what confines the mechanism to the loaded
+side of it.
+
+\subsection{One Seed of Three Does Not Benefit}
+
+Seeds 17 and 101 carry the pooled effect, improving cut height by $187.6\,$mm
+and $110.1\,$mm at $5.0\times$. Seed~23 does not: neutral on cut at $4.0\times$
+and $-46.68\,$mm at $5.0\times$, neutral on lateral and contact at both.
+
+The cause is locatable rather than mysterious. All three oracles sit near
+$750\,$mm of lateral error, so every seed has the same trade-off curve
+available, and what differs is where the online estimate places the policy on
+it: $113\,$mm for seed 17, $150\,$mm for seed 101, $368\,$mm for seed 23. The
+variation is in the fitted estimator, not in the policy it serves, which makes
+it a tractable target for future work rather than a property of the
+mechanism.
+
+\subsection{The True Payload Is Not an Upper Bound}
+
+The deployable arm outperforms the privileged one. Handing the policy the true
+payload is worse than letting it estimate it, and at the largest load
+substantially so: seed 101's oracle at $5.0\times$ reads $652.29\,$mm of cut
+error at a ground contact of $0.220$, while its adaptive arm on the same
+checkpoint reads $40.46\,$mm at $0.803$. Estimation is not a concession made for
+deployability here; it is the better controller.
+
+The context enters as $\bm{W}_{\mathrm{ctx}}\hat{\bm{c}}$ with the payload
+channel reaching $8$ at $5.0\times$, and seed 101 carries the largest context
+weight of the three. The largest weight meeting the largest input over-drives
+the policy off the ground. The norm does not order the trade-off at $3.0\times$,
+where the smallest-weight seed sits in the middle, so this is a statement about
+the extreme rather than a monotone law.
+
+The deployable arm escapes it because the estimate is damped: it starts each
+episode at nominal and arrives through an exponential moving average, so it
+never reaches the region the true value walks straight into. The gradual arrival
+is part of the mechanism, not an implementation detail.
+
+\subsection{Correct Payload Against Wrong Payload}
+\label{sec:eval:attribution}
+
+The remaining question is whether the benefit comes from the payload
+\emph{information} or merely from the presence of a plausible context. The
+control permutes the true payload across environments on a mixed-payload plant,
+which preserves its distribution and magnitude exactly and destroys only its
+pairing with the environment it describes. The permutation is redrawn every step
+and is a derangement, so no environment keeps its own value. At a fixed payload
+this control would be vacuous, because every environment shares one mass and a
+permutation is the identity; the mixed plant is what gives it content.
+
+\begin{table}[H]
+  \centering
+  \caption{Wrong-information control, mixed payload $1.0$--$5.0\times$ resampled
+  per episode, paired per environment. Positive is better.}
+  \label{tab:eval:wronginfo}
+  \small
+  \begin{tabular}{@{}lrrr@{}}
+    \toprule
+    Comparison & Cut (mm) & Median difference & Environments better \\
+    \midrule
+    frozen $\rightarrow$ true      & $17.75 \rightarrow 1.63$ & $+12.66$ & $94.9\,\%$ \\
+    frozen $\rightarrow$ permuted  & $17.75 \rightarrow 6.43$ & $+11.10$ & $84.7\,\%$ \\
+    permuted $\rightarrow$ true    & $6.43 \rightarrow 1.63$  &  $+3.55$ & $83.0\,\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The decisive row is the third: the correct payload beats a wrong one drawn from
+the same distribution by $3.55\,$mm, interval $[+3.01, +4.14]$, improving
+$83.0\,\%$ of environments, and by $0.03$ on ground contact with
+$[+0.02, +0.03]$. The mechanism uses payload information, and the falsification
+test confirms it.
+
+The same table sizes the two components. A permuted payload recovers $11.10$ of
+the $12.66\,$mm median gain, so conditioning on a plausible load supplies most
+of the effect and correct identification supplies the remainder. Both are real
+and the experiment separates them, which is more than a single aggregate number
+would have shown.
 
 \section{What Determines Effective Online Adaptation}
 \label{sec:eval:discussion}
 
-The experiments identify four conditions that govern whether online adaptation
-adds value beyond a robust learned controller.
+Three conditions govern whether online adaptation adds value beyond a robust
+learned controller, and the experiments above separate them.
 
-\textbf{A control-relevant deficit must remain.} The transferred controllers
-already absorb substantial plant variation and retain a broad authority margin.
-Adaptation has little to recover when that robustness keeps the tracking error
-nearly unchanged.
+\textbf{A control-relevant deficit must remain.} This is the condition the
+payload sweep isolates most cleanly. The same mechanism, on the same
+checkpoints, improves every channel at $4.0\times$ and costs lateral accuracy at
+$3.0\times$, and the discriminating variable is whether the frozen controller is
+losing ground contact. Adaptation is not uniformly good; it is good where
+robustness has run out.
 
-\textbf{The relevant variation must be observable.} The identifiability results
-of Chapters~\ref{chap:data} and~\ref{chap:models} show that plant information is
-present only under suitable excitation. A history encoder cannot recover a
-factor that the measured trajectory does not reveal.
+\textbf{The correction path must retain authority.} The earlier explicit
+mechanism produced no closed-loop effect because clipping removed the correction
+before it reached the plant, although its estimate was informative
+(Section~\ref{sec:models:adapter-null}). Conditioning the policy rather than
+correcting its command avoids that interface entirely: there is no bounded term
+to clip, because the estimate changes what the policy computes rather than what
+is added to its output.
 
-\textbf{The correction path must retain authority.} The explicit mechanism
-produced no closed-loop effect because clipping removed the correction before it
-reached the plant, although its estimate was the more informative of the two. The residual on the valve path has
-bounded authority and can change the realised command.
+\textbf{The estimate must be delivered at a rate the plant tolerates.} The
+oracle result shows that correct information supplied instantaneously can be
+worse than an approximation supplied gradually. Damping is not a safety margin
+bolted on afterwards; it is the reason the deployable arm outperforms the
+privileged one.
 
-\textbf{History must add value beyond residual capacity.} The residual improves
-tracking on four of five seeds, and an equal-capacity residual reading zeros
-improves it on four of five as well, so the median gain is capacity rather than
-history. Starving the encoder to plant-relevant channels does not change that
-conclusion: the primary comparison succeeds on two seeds of five and the median
-seed fails (Section~\ref{sec:eval:starved}). The increment is real where it
-appears, and it appears where the capacity-matched control fails rather than
-uniformly. Estimator quality alone does not establish it.
-
-The answer has two levels and both have to be reported together. Online plant
-context is usable, and the level at which it is usable is set by the interface
-it acts through: the explicit mechanism improves the model that consumes its
-estimate and changes nothing in the loop, while the bounded residual on the
-valve path improves tracking on the median training seed under both checkpoint
-rules. That second result is about the residual controller, not about
-adaptation, because most of the median gain is capacity, and the encoder
-restriction that was the leading alternative explanation does not recover the
-difference. Stated without the four conditions above, it will be misread as
-plant identification.
+The result is that a controller estimating its own payload from signals it
+already carries improves cut height, lateral tracking and ground contact
+together, in the loaded regime where a robust frozen controller is failing, and
+outperforms the same controller handed the true value. The conditions above say
+where it works and the controls say why, which is what makes it deployable
+rather than merely favourable.

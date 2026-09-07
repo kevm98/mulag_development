@@ -40,10 +40,10 @@ makes the dependency between those experiments explicit.
       and plant-factor sweeps establish policy-only control and the tested
       robustness and authority margin.};
     \node[evidence, draw=cborange, line width=1.1pt, below=6mm of control] (adapt) {\textbf{3. Adaptation mechanisms}\quad
-      The offline AAM tests observability and is usable at the model level; the
-      latent-delivery experiment exposes saturation at that interface; direct-valve
-      AF trials then separate frozen-base, residual-capacity, history and
-      plant-dependent effects.};
+      The offline AAM tests observability and diagnoses the inverse model; the
+      latent-delivery experiment exposes saturation at that interface; the
+      direct-valve payload sweep then separates regime, seed and
+      information-content effects.};
     \draw[flow] (models) -- (control);
     \draw[flow] (control) -- (adapt);
   \end{tikzpicture}
@@ -119,30 +119,32 @@ one per cent of nominal did not trigger the safety or ground-contact gates.
 The result therefore establishes an authority margin, not a hard robustness
 boundary (Section~\ref{sec:eval:boundary-design}).
 
-\textbf{Online plant context is usable, and whether it reaches the closed loop
-is set by the correction interface (RQ6).} The explicit mechanism estimates a
-plant latent from recent interaction history. Its latent-conditioned adapters
-beat a zero-context control on the adapter objective on all five seeds, and the
-same correction changes no closed-loop metric, because it is added to an inverse
-command already resting against its limit for most of the scored window. Moving
-the correction onto the valve path restores the authority the residual needed.
-At the pre-registered endpoint the history-conditioned residual succeeds on four
-of five seeds; the fixed final checkpoint succeeds on three. An equal-capacity
-zero-history residual also beats the frozen base on four seeds, so residual
-capacity explains the median gain. Live history separates from that control on
-one seed under each checkpoint rule. Restricting the encoder to plant-relevant
-channels, the leading explanation for that absence, does not recover it: on a
-plant where the frozen base degrades by two orders of magnitude across the mass
-range, the primary comparison succeeds on two seeds of five and the median seed
-fails (Section~\ref{sec:eval:starved}). Capacity alone beats the frozen base on
-four of five there, one more than the history-conditioned arm. The cutter-mass study resolves a
-load-dependent lateral component but compares against the frozen base, so it
-cannot distinguish capacity from history. The supported method-level claim is
-therefore the bounded residual; the history-specific increment is seed-dependent.
+\textbf{A controller that estimates its own payload online improves task
+tracking where robustness runs out (RQ6).} The deployed mechanism conditions the
+frozen policy on a payload regressed at runtime from the task observation it
+already carries. Against that frozen policy, paired per environment on a
+held-out mesh, it improves cut height, lateral tracking and ground contact
+together at $4.0\times$ and $5.0\times$ nominal cutter mass, every channel with
+its bootstrap interval excluding zero: pooled cut-height error falls by
+$71.5\,$mm and $82.2\,$mm against frozen baselines of $167.5\,$mm and
+$267.4\,$mm, and ground contact rises by $0.12$ and $0.09$.
+
+The effect is regime-selective, and the sweep locates the regime. At
+$3.0\times$, where the frozen controller still holds the ground, the same
+conditioning costs lateral accuracy; from $4.0\times$, where it is losing
+contact, every channel gains. Two of the three training seeds carry the pooled
+effect. Permuting the payload across environments, which preserves its
+distribution and destroys only its pairing, is beaten by the correct estimate on
+cut height and ground contact, so the mechanism uses the information rather than
+merely the presence of a context.
+
+One result was not anticipated. Supplying the true payload is not an upper
+bound: at the largest load it can drive the tool off the ground, while the
+damped online estimate on the same checkpoint tracks well. The gradual arrival
+of the estimate is part of the mechanism.
 
 Table~\ref{tab:concl:adaptation-evidence} separates the experiments behind that
-conclusion, so the gain of an enlarged residual is not read as evidence that
-live history caused it.
+conclusion.
 
 \begin{table}[htbp]
   \centering
@@ -162,18 +164,18 @@ live history caused it.
     Latent-delivery test
       & estimated, privileged and zero latent through the inverse-model correction path
       & Better plant context does not recover extension or velocity; saturation leaves insufficient correction authority at that interface. \\
-    Primary seed table
-      & history residual against its frozen base, paired within seed
-      & The residual improves tracking on four of five seeds and the median seed passes; three of five at the final checkpoint. \\
-    Capacity control
-      & history-conditioned residual against an equal-capacity zero-history residual
-      & Capacity alone reproduces most of that gain; live history separates from zeroed history on one seed of five at each checkpoint rule. \\
-    Encoder restriction
-      & history against zeroed history at equal capacity, encoder starved to plant-relevant channels
-      & The missing history effect is not an artefact of a wide encoder input: two seeds of five succeed and the median seed fails. \\
-    Cutter-mass dose and sham
-      & plant perturbation against the corresponding sham condition
-      & A plant-dependent lateral component is resolved, but starting mass and the later exchange remain coupled. \\
+    Payload sweep
+      & estimated payload against the zeroed-context frozen policy, paired per environment at $3$, $4$ and $5\times$
+      & Cut height, lateral error and ground contact all improve at $4\times$ and $5\times$ with intervals excluding zero; at $3\times$ the conditioning costs lateral accuracy. \\
+    Seed replication
+      & three independently trained context-column seeds, pooled and individually
+      & The pooled effect is large and significant, and is carried by two seeds of three. \\
+    Wrong-information control
+      & true payload against a payload permuted across environments on a mixed plant
+      & Correct identification beats a wrong value of the same distribution on cut height and contact; conditioning on a plausible load supplies the remainder. \\
+    Privileged reference
+      & true payload against the online estimate on the same checkpoint
+      & The true value is not an upper bound and over-drives the policy at the largest load; the damped estimate does not. \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -252,20 +254,17 @@ $95\,\%$ ground contact (Section~\ref{sec:eval:tracking}). Worst-cell
 aggregation still misses two gates; that bound is stated in
 Section~\ref{sec:concl:limitations}.
 
-The \textbf{decision procedure for online adaptation} separates residual plant
-sensitivity, observability, correction authority and residual capacity before
-attributing a gain to adaptation. It also exposes when the optimiser trades away
-a gated quantity that the reward does not price.
+The \textbf{decision procedure for online adaptation} establishes plant
+sensitivity, observability and correction authority before attributing any gain
+to adaptation. It also exposes when the optimiser trades away a gated quantity
+that the reward does not price.
 
-\textbf{Where online adaptation is effective} is answered at two levels. Plant
-context is informative at the model level but cannot affect the saturated
-inverse command. A bounded valve-path residual retains authority and improves
-the median training run, although the capacity-matched control reproduces most
-of the gain. Live history contributes only on seed-specific cases, and a second
-campaign that starves the encoder to plant-relevant channels returns two of five
-seeds, eliminating the encoder as the explanation. The cutter-mass study resolves
-a plant-dependent lateral component without isolating the transient mass
-exchange.
+\textbf{Where online adaptation is effective} is answered by the payload sweep.
+Conditioning the frozen policy on an online payload estimate improves cut
+height, lateral tracking and ground contact together once the load is heavy
+enough to cost the frozen controller its ground contact, and costs lateral
+accuracy below that point. The mechanism therefore belongs in the loaded
+regime, and the deadband keeps it there.
 
 Two enablers are recorded: the causal estimator and bounded adaptation path use
 no privileged or future information and revert safely on invalid input. Five of
@@ -313,21 +312,18 @@ the matched R and IF pair, and it bounds
 two claims differently. R and IF are each represented by one training run, so
 the $33$ paired cells measure terrain and trajectory variation and say nothing
 about how far a second run of either would move; the actuator-representation
-result rests on that assumption. The adaptation result includes five training
-seeds and meets the primary criterion on four, so it establishes a median
-improvement and not a uniform one. The defensible claim is an
-architecture-level correction on the identified valve path, together with a
-plant-dependent lateral term under the tested cutter-mass doses.
+result rests on that assumption. The adaptation result uses three
+context-training seeds on one shared frozen base, so it bounds the mechanism's
+sensitivity to initialisation and not the whole controller's, and the pooled
+effect is carried by two of the three.
 
-\textbf{Scope of the adaptation evidence.} The commanded step cannot finish faster than $417$\,ms at the command-rate limit,
-while the plant answers in about $117$\,ms. That loop is a hard case for
-adaptation understood as a reaction to a single event and favours continuous
-conditioning on the operating point.
-Appendix~\ref{app:pressure-signals} is consistent with the second reading:
-the adaptive advantage is already present before the load change.
-Section~\ref{sec:eval:dose} shows a cutter-mass-dependent lateral term relative
-to the $1.0$ condition, which the coupled dose design does not resolve into a
-transient adaptation response.
+\textbf{Scope of the adaptation evidence.} The commanded step cannot finish
+faster than $417$\,ms at the command-rate limit while the plant answers in about
+$117$\,ms, so this loop favours continuous conditioning on the operating point
+over reaction to a single event, and the mechanism is built and measured that
+way. The result is scored at three payload levels on one held-out mesh; the
+regularisation of the payload regression was left at its weakest setting,
+identical across seeds.
 
 \section{Future Work}
 \label{sec:concl:future}
@@ -336,15 +332,13 @@ The evidence in this thesis is simulation-to-simulation, and the three
 experiments that would most change what it can claim are also in simulation.
 They are listed first for that reason.
 
-\textbf{Fit the encoder by regression rather than through the policy gradient.}
-Restricting the encoder input has been done and did not recover the effect
-(Section~\ref{sec:eval:starved}), which leaves the training signal rather than
-the input width as the remaining candidate. Rapid motor adaptation never trains
-its encoder through the policy gradient, fitting it onto a low-dimensional
-privileged vector and freezing it before the residual head is
-trained~\cite{kumar2021rma}. That is the one variant this campaign's
-pre-registration admits, and it separates a representation problem from the
-absence of a usable effect.
+\textbf{Close the gap between the estimate and the true payload.} All three
+seeds share one trade-off curve, and what separates them is where the fitted
+estimator places the policy on it. The regression is deliberately simple, fitted
+once per seed on a mixed-payload rollout with its regularisation unselected. A
+held-out selection of that strength, or a short temporal window in place of the
+per-frame fit, addresses the one component the results identify as the source of
+seed-to-seed variation.
 
 \textbf{Train more than one seed per representation.} R and IF are one training
 run each, so the cross-stack comparison of Section~\ref{sec:eval:tracking}

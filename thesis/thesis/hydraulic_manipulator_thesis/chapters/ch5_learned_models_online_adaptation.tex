@@ -501,12 +501,11 @@ valve command, as described in Section~\ref{sec:ctrl:ppo-aamfd}.
 
 This section describes the encoder trained offline against the plant context of
 Section~\ref{sec:data:system-dynamics}, on the frozen collection of
-Section~\ref{sec:data:isaaclab}. Its purpose is evidentiary: it establishes that
-plant identity is recoverable from causal observable history at all, which is a
-precondition for anything built on top of it. The encoder deployed in
-\ppoAAMFD{} is trained differently (Section~\ref{sec:ctrl:af-encoder}), so the
-results below measure the information in the history rather than describing the
-deployed component.
+Section~\ref{sec:data:isaaclab}. Its purpose is evidentiary and diagnostic: it
+establishes that plant identity is recoverable from causal observable history at
+all, and it is the instrument used to judge whether the inverse model can be
+trusted to carry a correction. It is not a deployed component, and nothing in
+\ppoAAMFD{} consumes it.
 
 The offline AAM estimates $\latenthat=\mathrm{AAM}(\bm{H}_t)$ from deployment
 history. Each row contains five joint positions, five joint velocities, four
@@ -553,12 +552,10 @@ a positive result could not be attributed to head size alone.
   \end{tabular}
 \end{table}
 
-Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop, the
-prototype ID adapter is bypassed until 20 rows are available, and a causal
-five-prediction rolling mean adds $\unit[250]{ms}$ lag. That smoother belongs to
-this offline encoder and not to \ppoAAMFD, whose residual consumes its history
-window directly, so the latency stated here does not apply to the adaptive
-result of Chapter~\ref{chap:evaluation}.
+Inference runs at $\unit[20]{Hz}$ inside the $\unit[60]{Hz}$ control loop and a
+causal five-prediction rolling mean adds $\unit[250]{ms}$ lag. Both belong to
+this offline encoder, so neither applies to the adaptive result of
+Chapter~\ref{chap:evaluation}.
 
 \subsection{Information Content of the Estimated Latent}
 \label{sec:models:aam-content}
@@ -577,19 +574,16 @@ through pressure, which the controller does not integrate. Estimating named
 physical quantities would improve interpretation but requires an explicit
 plant model~\cite{hu2026bayesian}.
 
-\section{Latent-Delivery Test Through the Inverse Model}
+\section{Why the Correction Does Not Act on the Inverse Command}
 \label{sec:models:adapter}
 
-This section evaluates the explicit adaptation mechanism of RQ6, in which a
-causally estimated plant latent conditions a bounded correction. The earlier
-prototype applies that correction to the inverse model's output, the direct
-adaptation point while the inverse model remains in the command path. The
-closed-loop evidence below shows it has too little authority, and the prototype
-is retained because that result determines the redesign of
-Section~\ref{sec:ctrl:ppo-aamfd}.
+An earlier prototype conditioned a bounded correction on $\latenthat$ and added
+it to the frozen inverse model's valve command. It is reported here in short
+because its negative result is what fixes the architecture of
+Chapter~\ref{chap:control}, not because the mechanism is carried forward.
 
-The frozen ID produces $\bm{u}_{\mathrm{base}}=\mathrm{ID}(\bm{s},\bm{r})$.
-The adapter adds a bounded latent-conditioned residual:
+The frozen ID produces $\bm{u}_{\mathrm{base}}=\mathrm{ID}(\bm{s},\bm{r})$ and
+the adapter adds a residual bounded to $0.15$:
 %
 \begin{equation}
   \label{eq:models:adapter}
@@ -597,137 +591,91 @@ The adapter adds a bounded latent-conditioned residual:
     \bm{u}_{\mathrm{base}} + g_\psi(\bm{s}, \bm{r}, \bm{u}_{\mathrm{base}},
     \latenthat)\bigr).
 \end{equation}
-%
-Training minimises valve-command MSE at the exact ROM tick, with the residual
-bounded to $0.15$, and the ID, FD and policy are frozen. This route uses a
-separately trained 68-input latent-conditioned policy, so disabling the ID
-residual restores the baseline actuator path but not the baseline actor. Final
-AF removes that asymmetry (Section~\ref{sec:ctrl:af-residual}).
-
-Figure~\ref{fig:models:aam-architecture} shows the causal convolutional stack
-and the bounded adapter that consumes its estimate. It documents the earlier
-prototype, not the final AF architecture. The final history-residual path is
-shown separately in Figure~\ref{fig:ctrl:aam-stack}.
 
 \begin{figure}[H]
   \centering
   \includegraphics[page=5,width=\textwidth]{images/ch5/ch5_network_architectures}
-  \caption{Earlier offline AAM and ID-adapter prototype. Four causal
+  \caption{The offline AAM and the ID-adapter prototype. Four causal
   convolutional blocks map a 20-step history of 18 observable features to the
-  two-value estimate $\hat{\bm{z}}$. The bounded adapter combines this estimate
-  with the ID inputs and corrects the frozen ID valve command. This prototype
-  is retained as diagnostic evidence; deployed AF omits the inverse model and
-  trains its history encoder and actor residual jointly under PPO.}
+  two-value estimate $\hat{\bm{z}}$, and the bounded adapter combines it with
+  the ID inputs to correct the frozen ID valve command. Both are diagnostic.
+  The deployed stack omits the inverse model and conditions its frozen actor on
+  an estimated payload instead (Section~\ref{sec:models:payload}).}
   \label{fig:models:aam-architecture}
 \end{figure}
 
-\subsection{Model-Level Adaptation Benefit}
+\subsection{The Information Is Present and Usable}
 \label{sec:models:adapter-openloop}
 
-The residual cap is $0.15$, and the frozen ID already explains about $84\,\%$
-of valve-command variance (Section~\ref{sec:models:id-trust}). The adapter can
-therefore make only small corrections. Section~\ref{sec:models:chain}
-tests latent information without this ceiling.
+On the adapter's own held-out objective, both a privileged and an estimated
+latent beat a zeroed one in $5/5$ seeds, differenced within seed. The effect is
+consistent but small, and the ordering between the two latent arms is not
+resolved at five seeds. What the count supports is that a causally estimated
+latent carries information a model consuming it can use, stated at the level of
+the adapter objective rather than as a tracking result.
 
-Three matched adapter arms use a zeroed, estimated or privileged latent. Across
-five seeds, both latent arms improve validation loss over the zeroed arm in
-$5/5$ cases. The quantity is the adapter's held-out validation loss on the
-frozen-FD next-state objective, and the arms are differenced within seed, so the
-paired improvement is the reported number rather than the level. Mean paired
-improvements are $0.0037$ for the privileged latent and $0.0118$ for the AAM
-estimate. The effect is consistent but small.
-
-The ordering between the two latent arms is not a result. The estimate improves
-the loss by about three times as much as the privileged latent, which is the
-wrong direction for a causal estimate of a quantity the privileged arm is handed
-exactly, and with five seeds and no interval on the between-arm difference it is
-not resolved. What the $5/5$ count supports is that both beat the zeroed arm,
-not that the estimate beats privileged context.
-
-This is the one measurement in which online plant context acts without the
-closed loop in the way, and it is reproducible across every seed: a causally
-estimated latent carries information that the model consuming it can use, and
-the estimate is not worse than privileged context on this objective. The result
-is stated at the level of the adapter objective. It is not a tracking result,
-and the sections below measure what happens to it in the loop.
-
-Masking pressure and force does not strengthen the result: the privileged
-latent helps in only $2/5$ seeds and variance increases by about one order of
-magnitude.
-
-\subsection{Closed-Loop Evidence and Its Bound}
+\subsection{It Does Not Survive the Command Path}
 \label{sec:models:adapter-null}
 
-Closed-loop ablations compare the full stack with zeroed, shuffled, frozen and
-mean latents, plus a sham plant change. None consistently improves lateral
-error, cut-height error or impacts.
+Closed-loop ablations against zeroed, shuffled, frozen and mean latents, plus a
+sham plant change, improve none of lateral error, cut-height error or impacts.
+Valve saturation explains why: cylinder 1 is saturated for about $92\,\%$ of the
+scored window, cylinder 2 for $67$--$82\,\%$ and cylinder 4 for $50$--$57\,\%$,
+and control-effort ratios across the plant change are $1.005$--$1.009$. A
+bounded additive correction has little authority under those
+conditions~\cite{sofrony2024antiwindup}. Reducing the lead cap lowers
+cylinder-1 saturation from $0.91$ to $0.14$ but triples cut-height error, so the
+task sits close to the plant capability limit
+(Section~\ref{sec:sys:capability}).
 
-Valve saturation limits the test: cylinder 1 is saturated for about $92\,\%$ of
-the scored window, cylinder 2 for $67$--$82\,\%$, and cylinder 4 for
-$50$--$57\,\%$. Control-effort ratios before and after the plant change are
-$1.005$--$1.009$. A bounded additive correction has little authority under
-these conditions~\cite{sofrony2024antiwindup}.
-
-Reducing the lead cap lowers cylinder-1 saturation from $0.91$ to $0.14$ but
-triples cut-height error. The task is therefore close to the plant capability
-limit (Section~\ref{sec:sys:capability}).
-
-\subsection{Propagation of the Latent Advantage}
+\subsection{Where the Chain Breaks}
 \label{sec:models:chain}
 
-The chain gate compares
-$SD_0(\bm{s},\bm{u})$, $SD_z(\bm{s},\bm{u},\latent)$ and
-$SD_z(\bm{s},\bm{u},\latenthat)$ under the frozen protocol with paired
-bootstrap intervals. Neither the true nor estimated latent improves extension
-or velocity over $SD_0$ with an interval excluding zero. Within this evaluated
-surrogate chain, replacing the causal estimate with privileged context does not
-recover extension or velocity performance. Estimation error is therefore not
-the dominant observed bottleneck in this test; the measurable bottleneck is
-delivery through the saturated command path. The latent advantage remains in
-pressure, as it was for the separately trained pair of
-Section~\ref{sec:data:system-dynamics}.
+Under the frozen protocol with paired bootstrap intervals, neither the true nor
+the estimated latent improves extension or velocity over a context-free
+surrogate. Substituting privileged context for the causal estimate recovers
+nothing, so estimation error is not the bottleneck this test resolves. Every
+stage up to the command holds and the benefit stops at delivery, against a
+command already resting on its clip.
 
-Every stage of the chain up to the command holds: plant identity is present, a
-causal estimator recovers it, the estimate is as informative as a privileged
-one, and it improves a model that consumes it. The benefit stops at delivery. The
-correction is
-added to a command already resting against its own clip for most of the scored
-window, so the authority to act on the information does not exist at the point
-where the information arrives. A limit of that shape is not addressed by a
-better estimator or a larger latent, nor by reducing the demand, since lowering
-the lead cap buys headroom at the cost of tripling cut-height error
-(Section~\ref{sec:models:adapter-null}).
+Two consequences follow, and both are structural rather than a matter of tuning.
+A better estimator or a wider latent does not address a limit of this shape, so
+Chapter~\ref{chap:control} removes the inverse model from the adaptive path and
+leaves the policy commanding the valve directly, where authority remains. And an
+unconstrained latent is the wrong thing to deliver even once authority exists:
+what this one carries is mainly seal condition, which acts through pressure, the
+channel the reduced-order model reproduces worst and the one the controller does
+not integrate. The deployed mechanism therefore conditions on a single named
+quantity the controller can act on rather than on a learned code.
 
-The prototype does not show that the plant estimate is useless. It shows that an
-estimate obtained from identification does not affect the plant if it is added to
-a saturated inverse command. The limit is delivery. Chapter~\ref{chap:control}
-therefore removes the inverse model from the adaptive path and applies the
-residual to the valve command of the identified forward model.
+\section{The Deployed Online Payload Estimator}
+\label{sec:models:payload}
 
-One alternative explanation is not excluded by these measurements, and it is
-worth stating in one place because its parts are reported separately. Everything
-the explicit mechanism carries runs through pressure. The source Simscape
-pressure signal is wrong in level by roughly a factor of four, at
-$\unit[116]{MPa}$ to $\unit[122]{MPa}$ against a
-$\unit[27.6]{MPa}$ relief setting (Section~\ref{sec:sys:simscape-validation}).
-The reduced-order model reproduces pressure increments at $R^2=0.06$ to $0.09$,
-its weakest channel by a wide margin (Section~\ref{sec:models:rom}). The latent
-decodes seal condition at $R^2=0.956$ and nothing else above $0.45$
-(Section~\ref{sec:models:aam-content}), and seal condition acts through
-pressure. The paired dataset advantage of
-Section~\ref{sec:data:sd-audit} sits entirely in the same channel. A
-two-dimensional latent that is effectively one-dimensional, encoding a factor
-that acts through the state the model reproduces worst, on a plant whose source
-pressure level is wrong, is a second candidate account of why nothing arrives in
-the closed loop. Saturation is the mechanism the measurements here resolve,
-because substituting the privileged latent recovers nothing and the command is
-against its clip for most of the scored window; the pressure account is not
-resolved against it, and separating them would need a source model with a
-correct pressure level. Section~\ref{sec:sys:simscape-validation} argues that
-standardisation makes the level harmless to every trained network, which holds
-for a standardised input and does not hold for
-Equation~\eqref{eq:models:rom-pressure}, where pressure enters under a square
-root and against a hard relief clip.
+The quantity the deployed controller conditions on is the cutter payload,
+normalised as $(m-1)/0.5$ so that a nominal cutter maps to zero. It is estimated
+at runtime by ridge regression on the $66$ task channels of the policy
+observation, extended with their squares, standardised, and read out as a single
+scalar. Nothing privileged enters it.
+
+Three choices matter for what the estimate means in the loop. It is fitted
+\emph{after} policy training, on a mixed-payload rollout of the policy it will
+serve, because the regression is on the observation distribution that policy
+induces; each training seed therefore receives its own fit. It is smoothed by an
+exponential moving average that resets to nominal at every episode boundary, so
+each episode begins with the machine not knowing what it carries and working it
+out while driving. And a deadband holds it at exactly nominal until the evidence
+is strong enough to leave it, which keeps the deployed controller bit-for-bit
+frozen on a plant that does not need the correction.
+
+The degree-two term is not decoration. A linear fit reads the nominal plant as
+$1.41\times$, which tells the policy it is carrying a heavy cutter when it is
+not; adding the squares brings that to $1.14\times$. The regularisation
+strength was not selected on held-out data and is left at its weakest rung,
+identical across seeds, so it cannot account for differences between them.
+
+What this estimator is worth is not established here. It is established in the
+closed loop, in Section~\ref{sec:eval:adaptation}, against a frozen arm and
+against a permuted-payload control.
 
 \section{Training and Model-Selection Protocol}
 \label{sec:models:training}
