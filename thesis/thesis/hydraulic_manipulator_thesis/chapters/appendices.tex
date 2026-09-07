@@ -202,8 +202,7 @@ main text.
 \begin{table}[H]
   \centering
   \caption{Rates of the simulation, control and learned components. The offline
-  AAM and deployed AF encoder are listed separately because they use different
-  history grids.}
+  AAM runs on its own grid and is a diagnostic, not part of the deployed loop.}
   \label{tab:app:rates}
   \small
   \begin{tabular}{lll}
@@ -346,44 +345,47 @@ of Section~\ref{sec:data:history-features} applies to the offline AAM only.
   \end{tabular}
 \end{table}
 
-\section{Internal Model Pressure State, Not a Physical Pressure}
-\label{app:pressure-signals}
+\section{Per-Environment Spread and the Choice of Statistic}
+\label{app:paired-spread}
 
-The pressure-state analysis is mechanistic support only. It verifies that the
-internal hydraulic state changes across the load event; it is not used to
-quantify adaptation performance or hydraulic accuracy. Figure~\ref{fig:eval:pressure-stacks}
-shows the internal state per cylinder for all three stacks on the same plant and
-aligned on the same event.
+Every closed-loop comparison in Chapter~\ref{chap:evaluation} is reported as a
+paired median difference rather than as a mean or a ratio. Figure~\ref{fig:app:paired}
+shows why, by drawing every environment's paired difference instead of
+summarising it.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{images/ch7/ch7_pressure_stacks}
-  \caption{Median differential pressure per cylinder through the change of load,
-  $151$ environments aligned on their own flip instant. The quantity is each
-  stack's own actuator-model state, internal to the command ROM for \ppoROM{}
-  and the forward model's recursive state for the other two, so the panels show
-  what each controller believes about the hydraulics rather than a common
-  measurement, and each panel carries its own scale. The slew and boom~I panels
-  mark where \ppoROM{} sits on its \unit[1500]{bar} numerical guard.}
-  \label{fig:eval:pressure-stacks}
+  \includegraphics[width=\textwidth]{images/appendix/app_paired_differences}
+  \caption{Per-environment paired differences, sorted, pooled over the three
+  seeds on held-out mesh 3141. Positive is better. The dashed curve in the left
+  column is the A/A control of Section~\ref{sec:eval:adaptation}, in which both
+  arms are the same frozen policy and every difference is therefore noise.}
+  \label{fig:app:paired}
 \end{figure}
 
-Two properties of the signal govern how the figure is read. The pressure state
-is not a calibrated pressure on any stack: in this window the medians run to
-\unit[2295]{bar} and the peaks to \unit[3784]{bar}, which is past what a
-cylinder of this size could develop. The rod-force channel carries no supervised
-weight and pressure-increment accuracy is only $R^2 = 0.06$ to $0.09$
-(Section~\ref{sec:models:rom}). On \ppoROM{} the excursions are additionally
-clipped by the \unit[1500]{bar} numerical guard, which binds on the slew and
-the first boom cylinder and not on the other two. There is therefore no common
-physical level the panels can be read against, and each cylinder is drawn on its
-own scale. What the figure supports is the shape of the response either side of
-the change, not the level.
+Two properties of the spread govern how any of these comparisons may be read.
 
-Read that way, the traces show that the model-derived pressure state responds
-through the event. The adaptive advantage is already present before it, which is
-consistent with continuous conditioning on the operating point. The uncalibrated
-state is not evidence for the magnitude or cause of the tracking improvement.
+The distribution is wide and two-lobed. At $4.0\times$ the paired differences
+run from roughly $-1100$ to $+1050\,$mm on cut height while the median
+difference is $+71.5\,$mm, so the centre of the distribution and its extremes
+carry different information and no single environment is evidence of anything.
+
+More importantly, the A/A control has almost the same spread. Two runs of the
+identical frozen policy, differing only in the fifth significant figure of the
+payload, disagree by up to $\pm 1000\,$mm on individual environments while their
+median difference is $-0.65\,$mm. The per-environment scatter is therefore
+dominated by chaotic divergence of the contact dynamics rather than by anything
+the treatment does, and it is not reduced by running longer or by adding
+environments.
+
+What separates the two curves is the offset, not the shape: the treatment curve
+sits above the A/A curve across the whole range, which is the effect the paired
+median and its bootstrap interval measure. A mean would be governed by the tails
+that the A/A control shows to be noise, and a median log-ratio changes sign
+against the marginal medians on a two-lobed distribution
+(Section~\ref{sec:eval:instrument}). The paired median difference and the
+fraction of environments improved are the two summaries that survive this
+spread, and they are what the chapter reports.
 
 \section{Reference-Anchored PPO in Full}
 \label{app:anchored-ppo}
@@ -555,9 +557,14 @@ The closed-loop results of Chapter~\ref{chap:evaluation} are generated by the
 scripts under \texttt{experiments/E1} through \texttt{experiments/E6}. Each
 experiment directory records the evaluated model, mesh set, trajectory families,
 carrier speed and scored horizon in its manifest. AF arms are trained and scored
-under \texttt{PPO\_AAM\_FD/experiment\_scripts}; the paired seed statistics are
-recomputed from \texttt{outputs/rif\_delay} by
-\texttt{experiments/E3/code/seed\_table.py}. The paired cross-stack statistics
+under \texttt{PPO\_AAM\_FD/experiment\_scripts}. The adaptation tables and figures
+are recomputed from \texttt{outputs/final}, \texttt{outputs/heldout8191},
+\texttt{outputs/aa\_floor} and \texttt{outputs/kappa\_loaded} by
+\texttt{final\_table.py}, \texttt{robust\_table.py},
+\texttt{heldout8191\_table.py}, \texttt{wronginfo\_table.py},
+\texttt{make\_adaptation\_figure.py}, \texttt{make\_kappa\_figure.py} and
+\texttt{make\_appendix\_figure.py} in that directory, so every reported number
+and every plotted point comes from the same stored reports. The paired cross-stack statistics
 of Table~\ref{tab:eval:paired-rif}, including the leave-one-family-out
 aggregate, are recomputed from the frozen E1 reports by
 \texttt{experiments/E1/code/rif\_paired.py}. Model-level results use the frozen

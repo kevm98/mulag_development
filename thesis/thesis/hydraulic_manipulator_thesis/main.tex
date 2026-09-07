@@ -86,7 +86,7 @@ investigates how learned hydraulic dynamics can be transferred into efficient
 robot simulation, used for reinforcement-learning control and extended with
 online adaptation on a verge-mowing manipulator.
 
-Two actuator representations are identified from the same Simscape data: a
+Alternative actuator representations are identified from the same Simscape data: a
 modular inverse--forward chain and a structurally constrained,
 command-conditioned reduced-order model. Open-loop excitation and command
 ablation test whether each model responds to the valve input, since low
@@ -94,22 +94,24 @@ prediction error alone can conceal a model that merely extrapolates smooth
 state trajectories. The models are embedded in GPU-parallel PhysX training. A
 classical controller supplies privileged demonstrations during training, then a
 distilled policy replaces it completely at deployment. Evaluation covers held-out
-meshes, eleven trajectory families and sixteen reserved plant configurations.
+meshes, varied trajectory families and reserved plant configurations.
 
-Both actuator representations support closed-loop control but produce different
-trade-offs. Across $33$ matched evaluation cells, the inverse--forward chain has
-$9.3$\,mm lower median lateral error, whereas the reduced-order model has
-$1.7$\,mm lower median cut-height error; neither mean difference is resolved.
-Online adaptation extends a frozen direct-valve actor with four context columns
-driven by a payload estimate inferred from its existing $66$-channel
-observation. At four and five times nominal payload on held-out mesh 3141,
-adaptation reduces median cut-height error by $71.5$ and $82.2$\,mm, reduces
-lateral error by $71.6$ and $107.1$\,mm, and increases ground contact by $0.12$
-and $0.09$, respectively. Every pooled confidence interval excludes zero, and
-the effects repeat on a second reserved mesh. At three times nominal payload,
-where the frozen controller still maintains contact, conditioning instead
-worsens lateral accuracy. Correct payload estimates outperform permuted ones,
-although plausible but mispaired loads recover most of the gain.
+The actuator representations support closed-loop control but produce different
+trade-offs. The inverse--forward chain has lower median lateral error, whereas
+the reduced-order model has lower median cut-height error; neither mean
+difference is resolved. Online adaptation extends a frozen direct-valve actor
+with context columns driven by a payload estimate inferred from the task
+observation already available to the controller. Under heavy payloads, where
+the frozen policy loses ground contact, adaptation improves cut-height error,
+lateral error and ground contact together. The pooled confidence intervals
+support each improvement, and the effects repeat on an independently reserved
+mesh.
+Under a moderate payload that the frozen controller still handles, conditioning
+instead worsens lateral accuracy. Correct payload estimates outperform permuted
+ones, although plausible but mispaired loads recover most of the gain. The
+benefit therefore combines conditioning on a plausible load with information
+from online identification, and it is limited to the regime in which the frozen
+controller has a control-relevant deficit.
 
 The results show that prediction accuracy must be accompanied by a test of
 control authority, actuator representation changes the learned controller, and
