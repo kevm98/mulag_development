@@ -159,7 +159,7 @@ Four requirements governed collection and preparation.
     state history does not already carry, which is a property of the
     \emph{experiment}, not of the network~\cite{ljung1999system,
     isermann2011identification}.
-  \item[R3: variation across a plant family.] Robust training and latent
+  \item[R3: variation across a plant family.] Robust training and online
     adaptation both need many plants rather than one. The variation must be
     physically meaningful, must demonstrably change the measured response, and
     must be recorded per run, because the privileged plant context of
@@ -415,7 +415,7 @@ because delay here is an \emph{emergent} property of flow, compliance and load
 rather than a free parameter. It is measured as a response property of each run
 (Chapter~\ref{chap:evaluation}) rather than supplied to any model as a known
 factor: handing an estimator a factor the real machine would never publish is
-the same mistake as handing it the true latent.
+the same mistake as handing it the true payload.
 
 \subsection{Domains and Factor Design}
 \label{sec:data:domains}
@@ -673,25 +673,26 @@ alongside the audit it makes possible.
 \subsection{On-Policy AF Adaptation Rollouts}
 \label{sec:data:onpolicy}
 
-The residual that carries the adaptation result in \ppoAAMFD{} is not trained
-from the frozen collection above. It has no dataset, no stopped-gradient latent
-target and no run-level splits, because its encoder never regresses a target:
-the encoder and the residual head are optimised together under the
-reinforcement objective, so their training data is the on-policy experience the
-stack generates as it learns.
+The context columns that carry the adaptation result in \ppoAAMFD{} are not
+trained from the frozen collection above. They have no dataset and no run-level
+splits, because they are optimised under the reinforcement objective, so their
+training data is the on-policy experience the stack generates as it learns.
 
 What replaces the dataset is a plant design, since on-policy training makes the
 training distribution a property of the environment rather than of a file. The
-cutter mass is drawn from two well-separated modes and flips between them
-\emph{mid-episode}. The flip instant is jittered per environment so it cannot be
-anticipated on a timer, and the direction is balanced across environments so it
-cannot be assumed. This design makes recent history potentially informative:
-the active regime cannot be inferred from a fixed timer, and one fixed
-compromise need not be optimal in both regimes. It creates an opportunity for
-history-conditioned control without assuming that history will be beneficial.
-Whether live history contributes beyond additional residual capacity is tested
-explicitly against a capacity-matched zero-history control in
-Section~\ref{sec:eval:adaptation}.
+cutter mass is resampled per episode across a range spanning one to five times
+nominal. One fixed compromise is then unlikely to suit the whole family, which
+is what gives a controller something to gain from knowing which member it is
+driving, without assuming in advance that it will.
+
+The estimator that supplies that knowledge at deployment does have a dataset,
+and it is collected after policy training rather than before: a mixed-payload
+rollout of the trained policy, with the $66$ task channels regressed onto the
+payload that produced them. It is refitted for each training seed, because the
+regression is on the observation distribution that policy induces and a
+different policy induces a different one. Whether the correct payload
+contributes beyond conditioning on any plausible one is tested against a
+permuted-payload control in Section~\ref{sec:eval:adaptation}.
 
 One property of the frozen collection is inherited unchanged: the plant is still
 the deployment plant, so the change of training regime does not substitute a

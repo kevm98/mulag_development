@@ -115,12 +115,12 @@ pressure dependence that makes the machine difficult to control. What is needed
 is a representation cheap enough to train against and faithful enough that the
 resulting policy controls something close to the real actuator.
 
-Learned actuator models and latent-conditioned adaptation are both established
+Learned actuator models and payload-conditioned adaptation are both established
 techniques. What remains unclear is how such models should be identified so that
 they retain the command dependence a controller needs, whether they transfer
-between simulators without retraining, and where a correction retains command
-authority once the models are used in control. Representation and transfer are
-established first because the residual is applied to an identified plant rather
+between simulators without retraining, and what a controller must know about its
+load once the models are used in control. Representation and transfer are
+established first because the adaptation acts through an identified plant rather
 than replacing one. Online adaptation is evaluated last so that any remaining
 gain can be interpreted against the transferred model and the robustness of the
 fixed controller. The order follows the dependencies among the claims. The
@@ -130,8 +130,8 @@ research statement is as follows:
 Three policy--actuator stacks are compared, each carrying a short label used
 throughout. \emph{R} (\ppoROMfull) uses the command-conditioned reduced-order
 model. \emph{IF} (\ppoIDFDfull) uses the frozen inverse and forward pair.
-\emph{AF} (\ppoAAMFDfull) adds a history-conditioned bounded residual on the
-valve command. The labels name complete stacks rather than actuator models
+\emph{AF} (\ppoAAMFDfull) drops the inverse model and commands the valve
+directly, which is where command authority remains. The labels name complete stacks rather than actuator models
 alone, and Section~\ref{sec:ctrl:ppo-aamfd} gives their construction. One point
 is worth fixing here because the name invites the opposite reading: the offline
 AAM of Chapter~\ref{chap:models} is a diagnostic estimator and is not loaded in
@@ -161,28 +161,20 @@ remains for adaptation once the first four are settled. The six questions are:
     deployed controller while acting through learned actuator dynamics?
   \item How does the choice of actuator representation affect tracking, command
     behaviour, latency and robustness under plant variation?
-  \item Where plant variation survives robust training, which online
-    adaptation mechanisms exploit it, and how do the representation of the
-    plant context and the location of the correction determine whether their
-    benefit reaches closed-loop tracking?
+  \item Where plant variation survives robust training, can a controller
+    estimate its own payload online and condition on it, and in which regime
+    does that conditioning improve closed-loop tracking rather than cost it?
 \end{enumerate}
 
-RQ6 compares two adaptation mechanisms, and they are kept apart throughout
-because the thesis studies both and deploys only one. The \emph{explicit}
-mechanism estimates a low-dimensional plant latent decodable against the true
-factors, which is what the AAM of Section~\ref{sec:models:aam} produces, and
-corrects the inverse command with it. It is the mechanism the identifiability
-evidence concerns, and the one whose benefit stops at the command interface. The
-\emph{implicit} mechanism, which is the deployed one, conditions a bounded
-residual on a causal state--action history window and trains its encoder end to
-end for control (Section~\ref{sec:ctrl:af-residual}). Its internal
-representation is not constrained to identify physical parameters and is not
-tested for that, so it is described throughout as history-conditioned adaptation
-with an implicit control-relevant context, not as latent identification. Neither
-label is extended to the third arm used below. A residual reading a zeroed
-history window receives no information about the current plant, so it is a
-capacity control rather than an adaptation mechanism, and the frozen stacks are
-robust controllers rather than adaptive ones.
+RQ6 concerns one deployed mechanism. The policy receives a payload estimate
+computed at runtime from the task observation it already carries, and only the
+context columns of an otherwise frozen policy are trained, so zeroing the
+estimate recovers the frozen controller exactly
+(Section~\ref{sec:ctrl:af-residual}). What the policy is given is a single
+physical quantity rather than an unconstrained code, and it is tested as such.
+The AAM of Section~\ref{sec:models:aam} is not part of this path. It is an
+offline diagnostic used to judge whether the inverse model can be trusted, and
+the frozen stacks are robust controllers rather than adaptive ones.
 
 The first question is answered in Chapters~\ref{chap:data}
 and~\ref{chap:models}, the second and third in Chapter~\ref{chap:models}, the
@@ -237,19 +229,19 @@ terrain following in that configuration
 
 \textbf{A Decision Procedure for Online Adaptation:} A matched protocol that
 asks, in order, whether plant identity is present in the identification data,
-what a privileged plant encoding does in the closed loop, and only then trains a
-deployable history estimator. Either of the first two measurements can show that
-a residual would have nothing to act on
+what a privileged plant encoding does in the closed loop, and only then fits a
+deployable estimator of it. Either of the first two measurements can show that a
+correction would have nothing to act on
 (Chapters~\ref{chap:models} and~\ref{chap:evaluation}).
 
-\textbf{Where Online Adaptation Is Effective:} A comparison of two adaptation
-mechanisms on one machine under one protocol, separating the level at which each
-acts. The explicit mechanism is informative but undeliverable, because its
-correction is added to a command already resting against its own limit. Removing
-the inverse model lets a history-conditioned residual act on the valve command
-directly, and matched ablations then separate what the residual's added capacity
-contributes from what live history contributes
-(Chapter~\ref{chap:evaluation}).
+\textbf{Where Online Adaptation Is Effective:} An online payload-conditioned
+controller measured on one machine under one protocol, with the regime in which
+it helps identified rather than assumed. It improves cut height, lateral
+tracking and ground contact together where a heavy payload costs the frozen
+controller ground contact, and costs lateral accuracy where the frozen
+controller is not failing. Permuting the payload across environments separates
+what correct identification contributes from what conditioning on any plausible
+load contributes (Chapter~\ref{chap:evaluation}).
 
 Chapter~\ref{chap:conclusion} restates these six with the measurements attached.
 They are stated here as claims and there as results, so the evidence is given
@@ -311,9 +303,9 @@ open-loop collection that repairs it.
 answers the next two research questions. It presents the inverse model, the
 forward model, the evidence that supervised accuracy alone does not establish
 command authority, and the reduced-order model that serves as the deployment
-plant. It closes on the privileged latent, the causal estimator that recovers a
-deployable substitute from history, and the finding that the estimate's benefit
-stops at the command interface rather than at the estimator.
+plant. It closes on the AAM as a diagnostic for whether the inverse model can be
+trusted, and on the online payload estimator the deployed controller conditions
+on.
 
 \textbf{Chapter~\ref{chap:control}} describes the control framework and its
 integration with the simulator, and answers the fourth research question. It

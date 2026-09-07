@@ -190,29 +190,18 @@ itself and would carry no information about the policy.
 
 \subsection{Policy Definition}
 
-The deployed controller is a memoryless Gaussian multilayer perceptron. It maps
-a $66$-value observation to four normalised actions, one desired motion command
-per hydraulic cylinder, and that is the entire control law. Actor and critic
-are separate networks with hidden widths $256$--$128$--$64$ and ELU
-activations, over empirically normalised observations. The optimiser is
-PPO~\cite{schulman2017proximal} as supplied by RSL-RL, the implementation used
-for the GPU-parallel legged-locomotion results this setup
-follows~\cite{rudin2022learning}. This description is of
-the base policy, and it is shared by all three stacks: the actor width is the
-same $66$ in each, and \ppoAAMFD{} deploys this network frozen and unmodified
-rather than a widened variant of it. Two things differ for \ppoAAMFD{} and are
-treated where they arise. Its four actions are interpreted as valve commands
-rather than as desired cylinder increments
-(Section~\ref{sec:ctrl:af-fd-sufficient}), and the deployed controller is this
-policy plus an additive residual whose own encoder reads a history window
-carried alongside the observation, leaving the base actor's input unchanged
+The deployed controller is a memoryless Gaussian multilayer perceptron mapping
+a $66$-value observation to four normalised actions. Actor and critic are
+separate networks with hidden widths $256$--$128$--$64$, ELU activations and
+empirically normalised observations. PPO~\cite{schulman2017proximal} is supplied
+by RSL-RL~\cite{rudin2022learning}. This base policy is shared by all three
+stacks; \ppoAAMFD{} freezes it and widens the actor input by four plant-context
+columns, of which only the payload channel carries information here
 (Section~\ref{sec:ctrl:af-residual}).
 
-The base policy is not itself a residual and has no nominal command to correct.
-The \ppoAAMFD{} residual is added around this recoverable frozen base. Temporal
-inference is assigned to a separate encoder
-(Section~\ref{sec:ctrl:af-encoder}), while the truck's forward motion remains
-scripted.
+The four actions denote desired cylinder increments in R and IF and valve
+commands in AF (Section~\ref{sec:ctrl:af-fd-sufficient}). The base policy has no
+nominal controller beneath it, and the truck's forward motion remains scripted.
 
 \subsection{The Observation Vector}
 
@@ -228,32 +217,22 @@ actuator interface, ten of pose and context, and twelve of model error.
   \caption{The $66$-value policy observation, drawn to scale by group. The
   channels combine measurements, derived quantities and actuator-model
   estimates. No trajectory-family
-  label, physical factor vector or latent estimate enters the actor. AF keeps
-  this $66$-channel input unchanged and carries its causal history separately.}
+  label or physical factor vector enters the actor. AF appends four context
+  columns to this input, carrying the payload estimated online from these same
+  channels.}
   \label{fig:ctrl:observation}
 \end{figure}
 
-The last group of twelve channels describes the actuator rather than the task,
-carrying its standing error as the cylinder tracking residual, the actuator
-prediction residual and the normalised cylinder effort. They exist as a direct
-consequence of the policy being memoryless. Forming an error requires
-differencing position across two steps and comparing against a prediction issued
-on the previous step, and a feedforward network can construct neither from a
-single observation, so without these channels the model error the policy is
-asked to compensate is absent from the input rather than merely hard to see.
-This was measured: across ten training blocks the p01 head alignment sat at
-$0.79$--$0.80$ and did not respond to changes in the feedforward source or the
-levelling gain.
+The last twelve channels carry cylinder tracking residual, actuator prediction
+residual and normalised effort. A memoryless network cannot form these temporal
+errors from one observation, and without them the error to be corrected is
+absent from its input. Across ten training blocks, p01 head alignment remained
+at $0.79$--$0.80$ when only the feedforward source or levelling gain changed.
 
-This group is also what makes the matched pair comparable, and it cuts two ways.
-Under the ROM the tracking residual is near zero, because the ROM reaches what
-it is told; under a learned ID--FD path it is the model's standing error. The
-same contract therefore gives each policy an honest view of its own actuator,
-and at the same time hands \ppoIDFD{} a closed-loop correction signal that
-\ppoROM{} has structurally little use for. Part of the R--IF gap in
-Chapter~\ref{chap:evaluation} may reflect the value of correcting against a
-standing residual rather than the actuator representation, and the shared
-observation contract cannot separate the two.
+This shared contract also limits attribution. The tracking residual is near zero
+under R but carries the ID--FD path's standing error under IF, giving IF a useful
+closed-loop correction signal. The R--IF comparison therefore cannot separate
+the actuator representation from the value of that signal.
 
 \subsection{The Action and Its Bounds}
 
@@ -293,13 +272,11 @@ This is the cylinder-increment reading of the action, used by \ppoROM{} and
 to span the admissible valve range, so the cylinder-space stages do not carry
 the same meaning there.
 
-The lead cap is an anti-windup device and it is load-bearing, which is how the
-per-axis split was arrived at. An earlier configuration used $\unit[18]{mm}$ on
-every cylinder; relaxing it to $\unit[50]{mm}$ halved lateral error on the two
-families needing a sustained standing offset (\texttt{lane\_change\_hold}
-$0.4833 \to 0.2310$, \texttt{boom\_sweep} $0.3745 \to 0.1602$), while the same
-relaxation on cylinder~4 drove head alignment from $0.9507$ to $0.4636$. The
-$\unit[18]{mm}$ value is historical and no reported result uses it.
+The lead cap is load-bearing. Raising it to $\unit[50]{mm}$ halved lateral error
+on \texttt{lane\_change\_hold} ($0.4833 \to 0.2310$) and
+\texttt{boom\_sweep} ($0.3745 \to 0.1602$), but applying the same value to
+cylinder~4 reduced head alignment from $0.9507$ to $0.4636$. This measured split
+sets the per-axis limits above.
 
 The chain also fixes the capability ceiling: four millimetres of cylinder travel
 per step is the entire authority budget, which produces the
@@ -308,15 +285,10 @@ which the reference paths are derived.
 
 \subsection{The Reward Function}
 
-The reward of the final \ppoROM{} task has ten bounded terms, listed in
-Table~\ref{tab:ctrl:reward}.\footnote{It replaces an inherited formulation
-carrying $53$ weighted reward fields, at which size the optimum was not
-something a designer could reason about: three separate terms turned out to be
-working against the task without being noticed for thirteen training
-campaigns.} Three are positive and describe the task; seven are penalties on how
-the machine behaves while doing it. All retain a live gradient beyond the
-acceptance boundary, so a policy already inside a gate still has a direction to
-improve in. Three rules govern them, each adopted after a measured failure.
+The final \ppoROM{} reward has ten bounded terms
+(Table~\ref{tab:ctrl:reward}): three task rewards and seven behaviour penalties.
+All retain a gradient beyond the acceptance boundary. Three rules govern them,
+each adopted after a measured failure.
 
 \paragraph{No Gaussian Shaping}
 The earlier reward priced tracking as $w\exp[-(e/s)^2]$, which is effectively
@@ -349,20 +321,10 @@ outscore legitimate behaviour.
 
 \paragraph{Fixed Sign Convention}
 The three task terms are non-negative and the seven safety terms non-positive.
-This is what makes worst-case (CVaR) weighting~\cite{rockafellar2000cvar} safe
-to add later: scaling a
-non-positive term by a factor $\ge 1$ can only lower the return, whereas
-up-weighting a \emph{positive} reward for the worst environments pays the policy
-to be bad, as measured in the earlier stack.\footnote{Three terms of that
-earlier formulation were removed on measured evidence rather than preference.
-The \emph{action-magnitude} penalty on $\operatorname{mean}(a^2)$ charged for
-precisely the sustained offset that \texttt{lane\_change\_hold},
-\texttt{offset\_return} and \texttt{boom\_sweep} structurally require, so the
-policy learned to return to neutral, which is the one thing ``hold an offset''
-forbids. The \emph{head barrier} was replaced because the head group dwarfed
-lateral tracking, and the \emph{clearance barrier} was disabled because
-measured contact, cylinder headroom and cut-height error proved more reliable
-signals of the same condition.}
+This makes worst-case (CVaR) weighting~\cite{rockafellar2000cvar} safe: scaling
+a non-positive term by a factor $\ge 1$ can only lower return. Earlier positive
+worst-case weights instead rewarded poor environments, while an action-magnitude
+penalty discouraged the sustained offsets required by three path families.
 
 \begin{table}[tb]
   \centering
@@ -432,24 +394,13 @@ the actor and $10^{-4}$ for the critic, entropy coefficient $0.001$, an
 exploration standard deviation fixed at $0.15$ and excluded from the gradient,
 and frozen observation normalisers.
 
-Three of those departures are structural rather than tuning. The discount is
-reduced because the episode is long in simulation steps but locally controlled,
-so an action should be credited for correcting the terrain state it faces rather
-than for a return hundreds of steps later that the critic cannot resolve. The
-actor learning rate sits an order of magnitude below the critic's so that the
-actor is deliberately the slow variable. And the adaptive schedule is dropped
-because the anchored formulation already constrains the update through an
-explicit divergence bound; two competing step-size controllers would make
-neither attributable.
-
-The exploration settings are also specific to this architecture. A zero action
-here means the arm does not move at all rather than that it tracks nominally, so
-the initial standard deviation was raised from $0.05$ to $0.30$ to let the
-policy discover the command directions before refining them. On the terrain
-task, where distillation supplies a competent starting point, it is reduced
-again and \emph{held fixed} rather than initialised, for the reason taken up in
-Section~\ref{sec:ctrl:anchored}. Exact values for any reported run are read from
-that run's frozen manifest.
+These departures reflect the locally controlled task and the anchor. The shorter
+discount credits actions for the terrain state they face, the actor changes more
+slowly than the critic, and the fixed learning rate avoids competing with the
+explicit divergence bound. Because zero action leaves the arm stationary, early
+training used a standard deviation of $0.30$ to discover command directions.
+Distilled terrain policies instead use the smaller fixed value above. Exact run
+values remain recorded in each frozen manifest.
 
 \section{Training Protocol and the Distillation Finding}
 \label{sec:ctrl:training}
@@ -501,24 +452,11 @@ feasible set, the measured content of the finding is
   \vartheta_{\mathrm{distilled}} \in \mathcal{F}.
 \end{equation}
 %
-Distillation lands inside $\mathcal{F}$ because the teacher was constructed to
-satisfy the gates, not to maximize $J$. Unconstrained ascent on $J$ from that
-point therefore leaves $\mathcal{F}$ by construction. This is the optimiser
-working correctly on the wrong functional, and it is why the remedy is a
-constraint on the ascent rather than a repair of the reward.
-
-Two consequences follow, both protocol. Unconstrained fine-tuning is
-inadmissible, and both the pre- and post-fine-tune checkpoints are reported in
-every case. And the gate metrics are logged \emph{during} training rather than
-only at the end, since a curve reporting the scalar reward alone would have
-shown a success here.
-
-The general form applies beyond this machine. Where a competent teacher exists
-and the evaluation criterion is not the reward, reward-based fine-tuning is not
-automatically an improvement step: distillation transfers the intent, PPO
-optimises the proxy, and the divergence grows with distance from the policy
-where the two were measured to agree. The remedy is to bound that distance, not
-to abandon reward optimisation.
+The teacher places the distilled policy inside $\mathcal{F}$, whereas
+unconstrained ascent optimises a different functional and may leave it. The
+protocol therefore reports both checkpoints, logs gate metrics during training
+and constrains policy drift from the point where reward and evaluation were
+known to agree.
 
 \section{Reference-Anchored PPO}
 \label{sec:ctrl:anchored}
@@ -587,15 +525,10 @@ which is the second reason for fixing $\sigma$: with a free standard deviation,
 entropy collapse shrinks $D_{\mathrm{ref}}$ while the commanded action moves, so
 the constraint would report compliance during the drift it exists to prevent.
 
-The direction is load-bearing. Forward KL is mass-covering: it charges
-$\pi_\vartheta$ wherever $\pi_{\mathrm{ref}}$ has density and $\pi_\vartheta$
-does not, and therefore penalizes the \emph{abandonment} of reference
-behaviour. The reverse direction is mode-seeking and would permit the policy to
-collapse onto a subset of reference behaviour at no cost, which is the observed failure, in which one competence was dropped to buy another. It
-follows that the term is a behaviour-cloning anchor evaluated on the policy's
-own state distribution, rather than the reverse-KL regulariser of soft
-reinforcement learning. Its lineage is demonstration-regularised policy
-gradient~\cite{rajeswaran2018dapg}, not the Boltzmann-optimum family.
+Forward KL penalises abandoning any reference behaviour; reverse KL could
+collapse onto a subset, reproducing the observed trade between competencies.
+The term is therefore a behaviour-cloning anchor on the live policy's states,
+following demonstration-regularised policy gradient~\cite{rajeswaran2018dapg}.
 
 The actor objective is
 %
@@ -663,25 +596,13 @@ relative to the old anchor is not meaningful relative to the new one. The
 critic's are retained: it is fitting the same return, and its calibration is
 expensive to rebuild.
 
-This is the structural point of the construction. The policy is at all times
-within a bounded divergence of a checkpoint that has been verified against
-$\bm{G}$, and the anchor advances only through verified checkpoints. The
-evaluation criterion therefore enters the training loop instead of appearing
-only at the end. The optimiser still ascends the proxy. It simply can never
-travel far from the last point at which proxy and intent were measured to
-agree. In this construction distillation is no longer the endpoint: it is
-$\vartheta_{\mathrm{ref}}^{(0)}$.
-
-The procedure has five stages. Stage~1 distils a feasible actor from the teacher
-and then removes the teacher, so every later rollout is teacher-free. Stage~2
-warms the critic with the actor and its normalisers frozen, and sets the first
-verified anchor. Stages~3 and~4 repeat per block: train inside the frozen
-reference bound, restoring the actor from a snapshot whenever either divergence
-bound is exceeded or either is non-finite, then score every saved checkpoint on
-at least three held-out meshes, aggregate each gate to the worst mesh and worst
-path family, and promote a passing checkpoint to reference. Stage~5 returns the
-last promoted checkpoint. Algorithm~\ref{alg:ctrl:anchored} in
-Appendix~\ref{app:anchored-ppo} gives it in full.
+The anchor advances only through checkpoints verified against $\bm{G}$, bringing
+the evaluation criterion into training. Distillation supplies the first anchor;
+the critic is warmed with actor and normalisers frozen; each later block trains
+within the fixed bound, rolls back rejected updates, scores checkpoints on at
+least three held-out meshes and promotes only a passing checkpoint. The last
+promotion is returned. Algorithm~\ref{alg:ctrl:anchored} in
+Appendix~\ref{app:anchored-ppo} gives the full procedure.
 
 
 
@@ -715,29 +636,22 @@ gates certify each promotion.
 \section{R: Reference Actuator Baseline}
 \label{sec:ctrl:ppo-rom}
 
-\ppoROM{} is the reference condition of this thesis. The policy emits desired
-cylinder motion, the frozen command ROM converts it to a cylinder position
-target, and PhysX closes the loop. There is no online adaptation anywhere in
-the stack. The truck is scripted over a $\unit[26]{m}$ strip at one constant
-speed drawn per episode from $2$ to $\unit[7]{km/h}$, the eleven path families
-of Section~\ref{sec:sys:task} are distributed across environments within a
-single run, and the terrain mesh is drawn per environment so that no policy can
-memorize one ground surface.
+\ppoROM{} is the reference condition. The policy emits desired cylinder motion,
+the frozen command ROM converts it to a cylinder target, and PhysX closes the
+loop. The scripted truck crosses a $\unit[26]{m}$ strip at a constant speed
+drawn per episode from $2$ to $\unit[7]{km/h}$; path families and terrain meshes
+are distributed across environments.
 
 It is a reference condition rather than a competitor: ROM-plus-PhysX \emph{is}
 the deployment plant, so \ppoROM{}'s actuator coincides with the plant. What
 that does to its tracking advantage is stated in
 Section~\ref{sec:ctrl:matching}.
 
-The policy is produced by the three-layer construction of this chapter:
-distillation from the privileged DLS teacher to a feasible student, critic
-warm-up with the actor frozen, and reference-anchored PPO in blocks under
-Equations~\eqref{eq:ctrl:anchored-loss} and~\eqref{eq:ctrl:bounds}. The final
-block produced checkpoints $280$ to $329$. The last iterate was not taken,
-because PPO can raise mean return while damaging a single path family.
-Candidates were scored on held-out meshes against the eight gates, aggregated to
-the worst mesh and, for tracking-critical gates, the worst path family.
-Chapter~\ref{chap:evaluation} reports the final common-protocol evaluation.
+The policy follows the chapter's three-stage construction: distillation, frozen
+actor critic warm-up and reference-anchored PPO. Checkpoints $280$--$329$ were
+scored on held-out meshes against the eight gates, with worst-mesh and, where
+applicable, worst-family aggregation. Chapter~\ref{chap:evaluation} reports the
+common-protocol evaluation.
 
 \section{IF: Non-Adaptive Learned Baseline}
 \label{sec:ctrl:ppo-idfd}
@@ -751,9 +665,6 @@ extension increment. PhysX receives the same bounded cylinder target as before.
 Task, terrain families, meshes, observation contract, action chain, reward,
 gates and the PPO update are inherited unchanged, so the actuator
 representation is the only free variable between the two stacks.
-
-It is the honest control for \ppoROM{}, and the stack in which the inverse model
-is carried in the command path and is adequate there.
 
 \emph{Robust} here means what Section~\ref{sec:fund:domain-randomization} means
 by it: trained across the randomised plant family, applying one fixed response
@@ -790,11 +701,11 @@ comparison.
 \label{sec:ctrl:ppo-aamfd}
 
 Table~\ref{tab:ctrl:af-matching} states what AF shares with R and IF and what it
-does not. AF is not a matched replacement for IF: it answers whether a
-history-conditioned correction can improve a frozen direct-valve controller once
-the saturated inverse-model command path has been removed. The matched
+does not. AF is not a matched replacement for IF: it answers whether conditioning on an
+online payload estimate can improve a frozen direct-valve controller once the
+saturated inverse-model command path has been removed. The matched
 actuator-representation comparison remains R against IF, and adaptation is
-evaluated inside AF against its own frozen and capacity-matched controls. This
+evaluated inside AF against its own frozen and wrong-information controls. This
 is stated once here and not repeated.
 
 \begin{table}[H]
@@ -808,8 +719,8 @@ is stated once here and not repeated.
     Dimension & Matched? & Detail \\
     \midrule
     Task, terrain, reward, gates & yes & identical across all three stacks \\
-    Base $66$-channel observation & yes & AF carries its causal history
-      separately \\
+    Base $66$-channel observation & yes & AF appends four context columns
+      derived from these channels \\
     Action contract & no & AF emits the valve command directly, not a
       bounded cylinder increment \\
     Training seed & no & AF trains at a different seed \\
@@ -828,29 +739,23 @@ stacks:
 %
 \begin{equation}
   \label{eq:ctrl:af-path}
-  \pi_{\mathrm{frozen}} + \text{history residual}
+  \pi_{\mathrm{frozen}}(\bm{o},\, \hat{\bm{c}})
   \;\longrightarrow\; \bm{u}
   \;\longrightarrow\; f_{\mathrm{FD}}
   \;\longrightarrow\; \text{PhysX} .
 \end{equation}
 %
 The inverse model is absent from the command path. The final AF stack is the
-frozen direct-valve base actor, a jointly trained causal history encoder and
-bounded residual head, and the frozen strict forward model; the offline AAM of
-Chapter~\ref{chap:models} is not part of it. Disabling the residual exactly
-recovers the frozen base and the zero-history arm preserves the same trainable
-capacity, which are the controlled comparisons used in
-Chapter~\ref{chap:evaluation}.
+frozen direct-valve base actor, four trained context columns carrying the
+estimate $\hat{\bm{c}}$, and the frozen strict forward model; the offline AAM of
+Chapter~\ref{chap:models} is not part of it. Zeroing the estimate exactly
+recovers the frozen base, and permuting it across environments preserves its
+distribution while destroying its pairing, which are the controlled comparisons
+used in Chapter~\ref{chap:evaluation}.
 
-That the inverse model is genuinely out of the loop is a verified property
-rather than a claim about intent. Under the direct-valve configuration the
-adaptation-site instrumentation reports zero valve elements attributable to the
-inverse model and zero adapter applications at that site across a complete run,
-where all three counters would be non-zero if the inverse model were in the
-path. The actuator key recorded inside the
-checkpoints still reads \texttt{id\_aam\_fd}, retained so that previously
-trained checkpoints remain loadable; it is a legacy identifier, not a
-description of the runtime path.
+Instrumentation confirms that the direct-valve path applies neither inverse-model
+valve elements nor adapters at that site. The checkpoint key
+\texttt{id\_aam\_fd} is retained only for compatibility with earlier runs.
 
 \begin{figure}[!htbp]
   \centering
@@ -908,7 +813,7 @@ same, which makes a null through that path uninterpretable: it cannot separate a
 task that is not adaptation-limited from credit clipped before it reached the
 metric. Nothing here retracts what is claimed for \ppoIDFD{}, where the command
 is consumed as issued. The final stack emits the valve command directly, so the
-residual acts on the same bounded command as the policy.
+conditioning acts on the same bounded command as the policy.
 
 \subsection{Sufficiency of the Forward Model}
 \label{sec:ctrl:af-fd-sufficient}
@@ -934,87 +839,57 @@ was rejected.
 \subsection{The Residual Controller}
 \label{sec:ctrl:af-residual}
 
-Adaptation enters as an additive, bounded residual on the valve command:
+Adaptation enters through the actor input rather than through its output. The
+$66$-value observation is extended by four normalised plant-context channels,
+and the actor's first layer is widened to receive them:
 %
 \begin{equation}
   \label{eq:ctrl:af-residual}
-  \bm{u} = \operatorname{clip}\bigl(
-    \bm{u}_0 + \alpha \tanh
-    \bigl( g_\psi(\bm{o},\, \phi(\bm{H}_t)) \bigr),\, -1,\, 1 \bigr),
+  \bm{u} = \pi_{\mathrm{frozen}}\bigl( \bm{o},\, \hat{\bm{c}} \bigr)
+  = \operatorname{base}(\bm{o}) + \bm{W}_{\mathrm{ctx}} \hat{\bm{c}} ,
   \qquad
-  \bm{u}_0 = \pi_{\mathrm{frozen}}(\bm{o}) ,
+  \hat{\bm{c}} = \bm{0} \;\Rightarrow\; \bm{u} = \operatorname{base}(\bm{o}) .
 \end{equation}
 %
-where $\phi$ is a temporal-convolution encoder over a window of
-$(\text{state},\, \text{action})$ pairs and $g_\psi$ is a small
-multilayer perceptron producing a per-cylinder correction. Only $\phi$ and
-$g_\psi$ are trained: $53\,836$ parameters against a $59\,588$-parameter frozen
-base.
+Only $\bm{W}_{\mathrm{ctx}}$ is trained: $1\,024$ parameters against a
+$59\,588$-parameter frozen base, with the input-layer gradient masked to the
+four context columns and every other parameter left untouched.
 
-Three construction choices make the comparison in
-Chapter~\ref{chap:evaluation} a single-variable one, and each was verified
-rather than assumed. The final layer of $g_\psi$ is zero-initialised and
-$\tanh(0) = 0$, so at construction the residual is exactly zero and the wrapped
-policy reproduces the frozen base bit for bit, at a measured maximum absolute
-action difference of $0.0$. Every arm of an ablation therefore begins as the
-identical policy, and any end-state difference is attributable to the residual
-having been learned rather than to the task having been relearned. The
-correction is bounded by $\alpha\tanh(\cdot)$ regardless of what the head
-produces: with head weights drawn from $\mathcal{N}(0,\, 50)$ the output
-saturates at exactly $\alpha$ and remains finite, so a bad update degrades
-accuracy instead of emitting a non-finite action, which matters because a
-non-finite action written into the history buffer would poison the entire
-window. And the residual scale can be set to zero at evaluation time without
-touching any other part of the stack, in which case the stack reduces to the
-frozen base exactly.
+The identity on the right is what makes the comparison exact rather than
+approximate. Nominal is the zero vector, so the frozen arm is not a separately
+trained control but the same network evaluated at $\hat{\bm{c}} = \bm{0}$, and
+it is recovered bit for bit. The base task columns are verified identical across
+training seeds after adaptation training, which confirms the mask held.
 
-This last property improves on the earlier latent-conditioned design, whose
-actor was itself a $68$-input network, so that disabling the residual restored
-the baseline actuator path but not the baseline actor and the ablation was never
-quite single-variable. Under \ppoAAMFD{} the base actor is the distilled policy
-unmodified, the residual carries the whole of the context dependence, and
-disabling it recovers the baseline in full.
-
-The history window is carried in the observation vector rather than in a buffer
-held inside the module, because PPO calls the actor many times per update epoch
-and a module-held buffer would be advanced by the optimisation loop and
-desynchronise from the simulation. The causal convention is fixed throughout:
-the estimate at step $t$ uses $\bm{x}_{t-k:t-1}$ and $\bm{a}_{t-k:t-1}$ and does
-not include step $t$.
+The payload channel is normalised as $(m - 1)/0.5$, so a nominal cutter maps to
+zero and a fivefold payload to eight. The estimate itself is not learned end to
+end. It is a ridge regression on the $66$ task channels, fitted offline on
+rollouts of the policy it will serve, then applied at runtime and smoothed by an
+exponential moving average that is reset to nominal at every episode boundary.
+A deadband holds the estimate at exactly nominal until the evidence is strong
+enough to leave it, so on a plant that does not need the correction the deployed
+controller is the frozen one.
 
 \subsection{Freezing the Base Policy}
 \label{sec:ctrl:af-frozen}
 
-Freezing the base is structural rather than a tuning preference, and the
-alternative was closed by measurement before the residual route was adopted.
-Under a trajectory-regularised fine-tune with a reference-KL anchor the policy
-is stable but cannot acquire a new input dependence, because the anchor's
-reference is context-blind by construction, so any context-dependent behaviour
-increases KL to that reference and is penalised. A gradient multiplier of $1000$
-applied to the context columns alone moved action sensitivity only from
-$0.001\,\%$ to $0.004\,\%$ of action scale over $400$ iterations, and masking
-the anchor at $\bm{z}=\bm{0}$ reached $0.005\,\%$. The anchor is not the
-blocker, however: without it PPO walks away from the distilled behaviour,
-trading line tracking for ground contact because that raises its objective.
+The base is frozen because anchored fine-tuning suppresses new context
+dependence, while removing the anchor lets PPO trade line tracking for ground
+contact. Even a $1000$-fold gradient multiplier moved action sensitivity only
+from $0.001\,\%$ to $0.004\,\%$ of scale over $400$ iterations; masking the
+anchor reached $0.005\,\%$. Training the context columns against a frozen base
+avoids that suppression entirely, since the anchor never applies to them.
 
-A residual head has no anchor. It is new capacity whose only function is to
-depend on the latent, so nothing opposes that dependence. Measured on the same
-stack, the trained residual's action responds to its history at $3.35\,\%$ of
-action scale, roughly $840$ times the anchored route.
-
-\subsection{Training of the Adaptation Encoder}
+\subsection{Training of the Context Columns}
 \label{sec:ctrl:af-encoder}
 
-The encoder $\phi$ and the head $g_\psi$ are trained together under the
-reinforcement objective rather than against an auxiliary identification target.
-This is the concurrent scheme of Ji et al.~\cite{ji2022concurrent}. The resulting
-representation is therefore optimised for control utility under the training
-objective, rather than for reconstruction of privileged plant parameters.
-
-An offline dynamics objective does not by itself guarantee a control-relevant
-history representation. The adaptation module is therefore assessed
-behaviourally in Chapter~\ref{chap:evaluation}, through action sensitivity to
-history and the closed-loop comparison with the frozen base.
+The context columns are trained under the reinforcement objective on the true
+payload, and the estimator that replaces it at deployment is fitted afterwards
+on rollouts of the trained policy. Separating the two matters: the regression
+is on the observation distribution that policy induces, so an estimator fitted
+from one policy does not transfer to another, and each training seed receives
+its own fit. Nothing constrains which of the four context channels the policy
+uses. Chapter~\ref{chap:evaluation} reports which it selects.
 
 \subsection{Consistency With the Plant Dynamics}
 \label{sec:ctrl:af-consistency}
@@ -1022,69 +897,45 @@ history and the closed-loop comparison with the frozen base.
 Two consistency requirements follow from the system model of
 Chapter~\ref{chap:system}, and both are met by construction.
 
-The first is causality. Each history row carries the $66$-value policy
-observation and the four previously applied valve commands, $70$ values per
-step, all of them quantities the deployed stack produces at runtime. The
-privileged factor vector, the true latent, future rows and any hidden simulator
-state are excluded, and the estimate at step $t$ is formed without step $t$, so
-nothing enters the deployed path that would be unavailable on the physical
-machine.
+The first is causality. The estimate is formed from the $66$-value policy
+observation alone, every channel of which the deployed stack already produces at
+runtime. The privileged factor vector, the true payload and any hidden simulator
+state are excluded, so nothing enters the deployed path that would be
+unavailable on the physical machine. The estimate also starts each episode at
+nominal, which is the sense in which the machine works out what it is carrying
+while driving rather than being told.
 
-The task reference is not excluded, and that separates this contract from the
-explicit estimator's in Section~\ref{sec:data:history-features}, where the
-reference is masked so the latent describes the plant rather than the
-trajectory. No such mask was imposed here, because the encoder is trained under
-the reinforcement objective rather than against a latent target. Most of what it
-reads therefore describes terrain and task state rather than plant identity.
-Section~\ref{sec:eval:adaptation} treats that as the leading candidate
-explanation for the adaptation result, and
-Section~\ref{sec:eval:starved} tests it directly.
+The task reference is not excluded, so the regression could in principle read
+terrain and task state rather than load.
+Section~\ref{sec:eval:attribution} tests that directly by permuting the payload
+across environments, which leaves the distribution of the context untouched and
+destroys only its correspondence to the plant it describes.
 
-The second is a qualification rather than a guarantee. Under \ppoAAMFD{} the
-pressure differences supplied to the encoder are recursive states of the frozen
-forward model, not measurements of the plant, so the encoder observes the plant
-through the forward model's representation of it and its estimate is consistent
-with the true dynamics only to the extent that the forward model is.
-Section~\ref{sec:ctrl:af-fd-sufficient} bounds that extent. This limit on the
-interpretation of the latent is carried into Chapter~\ref{chap:evaluation}
-rather than resolved here.
-
-The stack does not claim a physically named estimate. The residual is trained to
-improve the task, and the quantity $\phi$ extracts is whatever serves that
-objective; it is not constrained to correspond to seal condition, compliance,
-supply pressure or any other named factor. Recovering named physical quantities
-would require an explicit plant model and a different estimator, noted as future
-work in Chapter~\ref{chap:conclusion}.
+The pressure differences among those channels are recursive states of the frozen
+forward model rather than plant measurements. The estimate is therefore faithful
+only to the extent bounded in Section~\ref{sec:ctrl:af-fd-sufficient}.
 
 \subsection{Scope of the Claims}
 \label{sec:ctrl:af-claims}
 
-The stack is complete and its interfaces are verified. The residual authority
-$\alpha$ is a genuine tuned hyperparameter and is reported as one rather than
-presented as a natural constant. The deployed value is $\alpha = 0.5$. At
-$\alpha = 0.15$ the residual is not merely less effective but actively worse
-than the base it corrects, by $28.3\,\%$ on cut-height error paired across
-$528$ environments, with the interval on the paired difference excluding zero. A
-bounded correction needs enough authority to matter, and below that threshold it
-contributes noise rather than adaptation; no value of $\alpha$ should therefore
-be read as incidental.
+The smoothing rate of the estimate is a tuned hyperparameter, and its effect is
+not neutral: the gradual arrival of the estimate is part of the mechanism rather
+than an implementation detail, to the point that supplying the true payload
+immediately is not an upper bound on what the estimate achieves
+(Section~\ref{sec:eval:adaptation}).
 The adaptation claim is made inside \ppoAAMFD{}, on the identified forward
-model: frozen base, capacity-matched residual without history, and
-history-conditioned residual. Chapter~\ref{chap:evaluation} separates
-architecture-level evidence that the correction can reach the plant from
-method-level evidence about whether the improvement replicates across training
-seeds.
+model: frozen base, online estimate, and true payload. Chapter~\ref{chap:evaluation}
+separates architecture-level evidence that the conditioning can reach the plant
+from method-level evidence about whether the improvement replicates across
+training seeds, and reports the payload regime in which it holds.
 
 \section{IsaacLab Integration and Timing}
 \label{sec:ctrl:integration}
 
-Four rates run concurrently and Table~\ref{tab:app:rates} lists them: PhysX
-integrates at $\unit[120]{Hz}$, the policy acts at $\unit[60]{Hz}$ under a
-decimation of two, and the learned actuator models advance on a $\unit[20]{Hz}$
-grid of $\unit[0.05]{s}$ model ticks. The AF history encoder and residual are
-evaluated with the policy at $\unit[60]{Hz}$. No
-single one of these is ``the control frequency'', and reporting a scalar rate
-for this system would misdescribe every one of the three stacks.
+Table~\ref{tab:app:rates} lists the concurrent rates: PhysX integrates at
+$\unit[120]{Hz}$, the policy and its payload estimate run at $\unit[60]{Hz}$, and the
+learned actuator models advance at $\unit[20]{Hz}$. No single value describes
+the whole control loop.
 
 The relationship between the $\unit[60]{Hz}$ and $\unit[20]{Hz}$ layers is where
 integration errors hide, so it is fixed by construction rather than by
@@ -1095,60 +946,38 @@ average, and the target integrator accumulates in reference space, because
 integrating against the measured extension turns a static hold into a slow
 ratchet (Chapter~\ref{chap:system}).
 
-Order within a tick is fixed and asserted at run time. The history encoder
-consumes the window ending at the previous tick and produces its estimate before
-the actuator path runs, so no quantity computed at the current tick can
-influence its own estimate. History buffers are per-environment and cleared on
-episode boundaries, since the vectorised environments reset asynchronously and a
-shared buffer would leak one episode into the next. Both properties are checked
-rather than assumed: a runtime check replays a trace and asserts bit-exact
-agreement between the online estimate and an offline causal recomputation.
-Checkpoint loading then compares the stored normalisation statistics, feature
-contract and history length of every learned component against what the
-environment expects, and aborts on a mismatch.
+Within each tick, the encoder consumes history ending at the previous tick before
+the actuator path runs. Per-environment buffers are cleared on asynchronous
+resets. A trace replay checks bit-exact agreement with an offline causal
+recomputation, and checkpoint loading rejects mismatched normalisation,
+features or history length.
 
 \section{Constraints and Fair-Comparison Rules}
 \label{sec:ctrl:constraints}
 
 \subsection{Limits and Safeguards}
 
-Authority is bounded at four independent places, and the redundancy is
-deliberate because each bound protects against a different failure. The action
-chain of Section~\ref{sec:ctrl:ppo} limits the rate of change of the command,
-fades authority as cylinder travel headroom is consumed, and caps how far the
-integrated target may lead the measured extension. The actuator path clips the
-valve command to its per-axis limits. The environment terminates an episode on
-the safety conditions of Section~\ref{sec:sys:evaluation-criteria} rather than
-letting it accumulate reward in a state an operator would stop. And every
-learned component falls back to a defined behaviour on a non-finite output.
+Authority is bounded by the action-chain rate, travel shield and lead cap, then
+by per-axis valve limits. The environment terminates on the safety conditions of
+Section~\ref{sec:sys:evaluation-criteria}, and every learned component has a
+defined fallback for non-finite output.
 
-Preflight runs before any training or evaluation and refuses to start on a
-violated precondition. The check that does the most work asserts that the
-commanded reference stays inside the measured actuator authority ceiling of
-Section~\ref{sec:sys:capability}: the cylinders move the cutter laterally at
-most $\unit[0.240]{m/s}$, so a path family demanding more is infeasible by
-construction and no reward, critic or optimiser change could recover it.
-Terrain is derived from that ceiling, and the preflight assertion keeps the two
-from drifting apart.
+Preflight also asserts that each reference remains within the measured
+$\unit[0.240]{m/s}$ lateral authority ceiling of
+Section~\ref{sec:sys:capability}; a faster path would be infeasible regardless of
+the reward or optimiser.
 
 \subsection{Matching Rules and Comparison Controls}
 \label{sec:ctrl:matching}
 
-This thesis does not present a three-way ranking of the stacks. Two distinct
-comparisons are made, each with its own matching rule and each carrying one
-claim.
+Two comparisons carry distinct claims; the thesis does not rank all three
+stacks.
 
 \paragraph{The Matched Pair: R Against IF}
-The representation claim rests on \ppoROM{} and \ppoIDFD, which agree on every
-recorded training field and differ only in the actuator path. Held identical
-across the pair are the verge task and its eleven path families, the terrain
-generator and the held-out mesh set, the reward function of
-Table~\ref{tab:ctrl:reward}, the action chain and its authority budget, the
-eight evaluation gates and their aggregation to the worst mesh and worst path
-family, episode length, actor and critic capacity, and the three-layer training
-construction of distillation, critic warm-up and reference-anchored PPO. That
-pair is a controlled single-variable comparison and is the only place an
-across-stack number is read as such.
+The representation claim rests on \ppoROM{} and \ppoIDFD, which differ only in
+the actuator path. Their task, paths, terrain and held-out meshes, reward,
+action bounds, gates, episode length, networks and training construction are
+identical. Only this pair supports an across-stack comparison.
 
 One departure is declared. Because the command ROM plus PhysX \emph{is} the
 deployment plant (Section~\ref{sec:models:rom-calibration}), \ppoROM's tracking
@@ -1157,27 +986,16 @@ approximates the actuator better than an identified pair: one of the two defines
 the target.
 
 \paragraph{The Paired Comparison: AF Against Its Own Frozen Base}
-The adaptation claim is made within the adaptive stack, against the frozen base
-policy it was built from, and the matching is exact. The arms share the frozen
-base policy, the residual architecture, the trainable capacity, the training
-budget, the reward and the evaluation conditions, and every arm begins as
-bit-for-bit the same policy (Section~\ref{sec:ctrl:af-residual}). The single
-manipulated variable is whether the residual may see the
-$(\text{state},\, \text{action})$ history it is conditioned on. A
-capacity-matched control is trained at every seed, and the arms are paired
-environment by environment, so scenario variation is differenced out rather than
-averaged over and the comparison is made within a seed rather than across one at
-all five. The primary evaluation scores every arm at the saved checkpoint
-nearest its own training-reward peak, chosen by one rule for every arm and
-without consulting held-out performance; the fixed final checkpoint is reported
-beside it as a robustness analysis
+The adaptation claim is made within AF. Its arms share the frozen base,
+training budget, reward and evaluation conditions, and are the same network
+evaluated at different context values (Section~\ref{sec:ctrl:af-residual}).
+Estimated, zeroed and permuted context are compared within seed and paired
+environment by environment. The
+primary checkpoint rule uses training reward without consulting held-out
+performance; the fixed final checkpoint provides a robustness analysis
 (Sections~\ref{sec:eval:attribution} and~\ref{sec:eval:adaptation}).
 
 \paragraph{Fine-Tuning Budgets Must Be Matched or Reported}
-An unmatched fine-tuning budget is itself a treatment, for the reason
-established in Section~\ref{sec:ctrl:finding}: reward ascent moves a policy off
-the evaluation criterion. Comparing a distilled baseline against a separately
-optimised adaptive policy and attributing the difference to adaptation is
-therefore not permitted. The paired construction above satisfies this by design;
-the rule is stated because it constrains any stack added to this comparison
-later.
+Because reward ascent can move a policy away from the evaluation criterion
+(Section~\ref{sec:ctrl:finding}), fine-tuning budgets must be matched or reported
+as an additional treatment. The paired AF construction satisfies this rule.

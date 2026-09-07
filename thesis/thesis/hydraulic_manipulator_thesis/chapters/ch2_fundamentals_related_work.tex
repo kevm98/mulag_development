@@ -184,7 +184,7 @@ hydraulic actuators~\cite{yao2000adaptive}. On the face of it this is the
 closest classical answer to the problem of this thesis, because it targets
 exactly the drifting parameters just described, and because it is the one
 classical family that ships a proof rather than an empirical trend, in direct
-contrast to the residual studied here (Section~\ref{sec:ctrl:af-claims}). ARC
+contrast to the adaptation studied here (Section~\ref{sec:ctrl:af-claims}). ARC
 buys that guarantee by assuming a known parametric structure for the plant: the
 orifice, chamber and friction terms must be derived correctly in advance, with
 only their coefficients left uncertain. That is exactly the assumption
@@ -201,9 +201,11 @@ a recursive estimator in the same way. The valve also saturates for much of the
 scored window on this machine (Section~\ref{sec:models:adapter}), where the
 regressor stops reflecting the applied input and adaptation has to be suspended
 or explicitly compensated~\cite{sofrony2024antiwindup}. Both limits belong to
-the task rather than to the estimator, so they carry over to the learned
-adaptation of this thesis. They are measured there
-(Section~\ref{sec:models:adapter-null}) rather than assumed away.
+the task rather than to the estimator, so they bear on any correction applied to
+the command on this machine. They are measured
+(Section~\ref{sec:models:adapter-null}) rather than assumed away, and they are
+part of why the deployed mechanism conditions the policy instead of correcting
+its command.
 
 The scope of that argument should be stated plainly. No classical adaptive
 baseline is run in this thesis. The experiments of
@@ -348,11 +350,12 @@ the estimator retains are the directions the controller needs. Liu et al.~\cite{
 does not hold, where a low-dimensional adapter drops factors that act through
 separate channels, and add training phases to recover them. Chapter~\ref{chap:models} finds the same
 mismatch here in a sharper form, and the finding is quoted forward because it
-is why the deployed stack departs from this line: what the estimate carries is
-mainly seal condition, which acts through pressure, and pressure is the one
-channel the controller does not integrate
-(Section~\ref{sec:models:aam-content}). Further adapter phases would not close
-that gap, because the loss is at delivery rather than at estimation.
+is why the deployed stack departs from this line: what an unconstrained
+estimate carries here is mainly seal condition, which acts through pressure, and
+pressure is the one channel the controller does not integrate
+(Section~\ref{sec:models:aam-content}). The deployed controller therefore
+conditions on a single physical quantity it can act on, the payload, rather than
+on a learned code.
 
 Unlike classical online parameter estimation~\cite{astrom1995adaptive}, the
 learned latent need not have a direct physical interpretation. It can be given
@@ -411,13 +414,13 @@ sole controller: no analytic controller runs underneath it at deployment, so
 the runtime correction of residual RL is not the construction used here.
 
 One clarification belongs here, because the vocabulary collides. The adaptive
-stack of Chapter~\ref{chap:control} does add a bounded term to its own frozen
-actor, but that term is not a residual in the sense of this subsection. There
-is no classical controller beneath it to correct, and its purpose is not to
-supply a prior that accelerates learning. It is an online adaptation mechanism
-internal to the reinforcement-learning policy, whose only function is to carry
-the dependence on inferred plant context that a frozen actor cannot express. It
-therefore belongs to the latent-adaptation line of
+stack of Chapter~\ref{chap:control} does modify its own frozen actor, but not by
+adding a residual in the sense of this subsection. There is no classical
+controller beneath it to correct, and its purpose is not to supply a prior that
+accelerates learning. It is an online adaptation mechanism internal to the
+reinforcement-learning policy, whose only function is to carry the dependence on
+inferred plant context that a frozen actor cannot express. It therefore belongs
+to the adaptation line of
 Section~\ref{sec:fund:adaptation} and is compared against that literature, not
 against residual policy learning.
 
@@ -517,11 +520,10 @@ than designed for.
   \centering
   \caption{Positioning against the reviewed lines of work. Parenthesized marks
   denote partial or implicit coverage. Column III is parenthesized for this
-  thesis because the deployed route is history-conditioned residual control
-  rather than the identified-latent adaptation of
-  \cite{lee2020learning,kumar2021rma}, and because the plant-dependent part of
-  its benefit is resolved in the lateral channel only
-  (Section~\ref{sec:eval:adaptation}).}
+  thesis because the deployed route conditions on a single estimated physical
+  quantity rather than on the learned latent of
+  \cite{lee2020learning,kumar2021rma}, and because its benefit is confined to
+  the loaded regime (Section~\ref{sec:eval:adaptation}).}
   \label{tab:fund:positioning}
   \small
   \setlength{\tabcolsep}{3pt}
@@ -551,14 +553,13 @@ than designed for.
   \end{tabular}
 \end{table}
 
-Column III carries a parenthesis, and the reason is specific. Causal recovery of
-the latent was established (Section~\ref{sec:models:chain}), but its closed-loop
-benefit was not, and on the inverse-model path it could not be, for the
-saturation reason developed in Section~\ref{sec:ctrl:af-no-id}. What
-\ppoAAMFD{} deploys is therefore a bounded residual on the valve command,
-conditioned on one second of observable history, rather than identified-latent
-adaptation. Section~\ref{sec:eval:adaptation} measures what that residual
-recovers and how much of it live history accounts for.
+Column III carries a parenthesis, and the reason is specific. What
+\ppoAAMFD{} deploys is a policy conditioned on one estimated physical quantity,
+the payload, recovered online from the task observation it already carries,
+rather than the anonymous latent of the canonical architecture.
+Section~\ref{sec:eval:adaptation} measures what that conditioning recovers, in
+which payload regime it helps, and how much of the gain survives when the
+payload is permuted across environments.
 
 The contribution remains the complete experimental chain: identifiable cylinder
 data, structurally constrained models fast enough for parallel training, online
