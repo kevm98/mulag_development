@@ -38,7 +38,7 @@ def load(path):
 def expand(x):
     """Degree-2 features. The linear fit over-reads the nominal plant as 1.41x,
     which cost 46 -> 82 mm of lateral error at payload 1.0x when deployed;
-    squares bring that to 1.14x (estimator_models.py, 2026-09-06)."""
+    squares bring that to 1.14x (measured 2026-09-06)."""
     return np.hstack([x, x * x]) if DEGREE >= 2 else x
 
 

@@ -363,20 +363,6 @@ p.add_argument(
     help="Zero the resumed critic output head after loading changed reward semantics.",
 )
 p.add_argument(
-    "--train_film",
-    action="store_true",
-    help=(
-        "Train ONLY a payload-conditioned FiLM layer on the actor's first "
-        "hidden representation, freezing everything else. Four context columns "
-        "give the policy one degree of freedom and its reachable behaviours "
-        "form a single cut/contact-versus-lateral curve, which is why lateral "
-        "fails wherever there is no contact left to trade. FiLM sets a per-unit "
-        "scale and shift instead, so the payload can act differently on each "
-        "hidden unit. Zero-initialised, so it is an exact identity at "
-        "construction and every arm starts as the same policy."
-    ),
-)
-p.add_argument(
     "--train_context_only",
     action="store_true",
     help=(
@@ -1491,33 +1477,6 @@ def main() -> None:
             with torch.no_grad():
                 critic_output.weight.zero_()
                 critic_output.bias.zero_()
-        if a.train_film:
-            from verge_task.film_adapter import FiLMWrap
-
-            actor = runner.alg.actor
-            n_ctx = int(raw.cfg.observation_space) - 66
-            if n_ctx <= 0:
-                raise RuntimeError("--train_film needs a context slot")
-            wrapped = FiLMWrap(actor.mlp, n_ctx=n_ctx).to(a.device)
-            # Verify the identity BEFORE training: a FiLM layer that is not an
-            # exact identity at construction would make every arm start from a
-            # different policy and the ablation would be uninterpretable.
-            with torch.no_grad():
-                probe = torch.randn(8, int(raw.cfg.observation_space), device=a.device)
-                delta = float((wrapped(probe) - actor.mlp(probe)).abs().max())
-            if delta > 1e-6:
-                raise RuntimeError(f"FiLM is not an identity at init: {delta}")
-            actor.mlp = wrapped
-            for parameter in actor.parameters():
-                parameter.requires_grad_(False)
-            for parameter in wrapped.film_parameters():
-                parameter.requires_grad_(True)
-            n_train = sum(p.numel() for p in wrapped.film_parameters())
-            print(
-                f"[PPO3-SOLE] train_film: {n_train} trainable parameters, "
-                f"identity verified to {delta:.2e}, everything else frozen",
-                flush=True,
-            )
         if a.train_context_only:
             actor = runner.alg.actor
             linears = [m for m in actor.mlp.modules()
