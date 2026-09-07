@@ -214,11 +214,11 @@ actuator interface, ten of pose and context, and twelve of model error.
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch6/ch6_observation}
-  \caption{The policy observation contract, drawn to scale by group. The first
-  $66$ channels combine measurements, derived quantities and actuator-model
-  estimates and are shared by R, IF and AF. AF alone appends the four white
-  context boxes at indices $66$--$70$; only the payload channel is non-constant
-  in the reported campaign.}
+  \caption{The policy observation contract, drawn to scale by group. The six
+  coloured blocks form the shared $66$-channel task input used by R, IF and AF.
+  AF alone appends the four white plant-context inputs in the slice $66{:}70$;
+  payload is the only non-constant channel in that AF-only group for the
+  reported campaign.}
   \label{fig:ctrl:observation}
 \end{figure}
 
@@ -760,15 +760,16 @@ valve elements nor adapters at that site. The checkpoint key
   \centering
   \makebox[\textwidth][c]{%
     \includegraphics[width=1.08\textwidth]{images/ch6/ch6_aam_stack}}
-  \caption{Training and deployment path of AF. At deployment, a ridge estimator
-  maps the shared $66$ task channels to four context values, applies smoothing
-  and a deadband, and appends them to the actor input. The frozen base actor and
-  the trained context columns produce the valve command, which drives the frozen
-  forward model and shared PhysX task. During training the true payload is
-  available only to the four context columns, and PPO updates only their
-  $1\,024$ weights. The estimator is fitted afterwards on trained-policy
-  rollouts. Dashed paths denote parameter updates and fitting data; no inverse
-  model enters the AF command path.}
+  \caption{AF training and deployment. In the deployed path, the estimator maps
+  the shared $66$-channel task input to four context values, applies the shown
+  EMA and deadband, and appends them to form the $66+4$ actor input. The AF actor
+  combines its frozen base with the trained $\bm{W}_{\mathrm{ctx}}$ columns and
+  sends the valve command through the Frozen FD block to the shared PhysX task.
+  In the training and estimator-fit path, the true payload is available only to
+  the four AF-only context inputs, PPO updates only the $1\,024$ weights in
+  $\bm{W}_{\mathrm{ctx}}$, and the ridge estimator is fitted afterwards on
+  trained-policy rollouts. Dashed paths denote parameter updates and fitting
+  data; no inverse model enters the AF command path.}
 \label{fig:ctrl:aam-stack}
 \end{figure}
 

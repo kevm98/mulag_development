@@ -454,6 +454,50 @@ share one frozen base, so they test the adaptation mechanism's sensitivity to
 initialisation rather than the whole controller's, and are described that way
 throughout.
 
+\subsection{What the Instrument Can Resolve}
+
+Before reading any effect, the instrument is measured against itself. Two arms
+are run at $4.0\times$, both the frozen policy, differing only in the fifth
+significant figure of the payload, a $0.0025\,\%$ mass change that is physically
+negligible but forces a different random draw. Any difference reported is noise,
+and it bounds what this campaign may call an effect.
+
+\begin{table}[H]
+  \centering
+  \caption{A/A control at $4.0\times$ payload, mesh 3141, paired per
+  environment. Both arms are the same frozen policy.}
+  \label{tab:eval:aa}
+  \small
+  \begin{tabular}{@{}lrrl@{}}
+    \toprule
+    Channel & Median difference & $95\,\%$ CI & Verdict \\
+    \midrule
+    cut (mm)     & $-0.65$ & $[-9.67,\ +6.96]$   & not significant \\
+    lateral (mm) & $-5.14$ & $[-35.08,\ +13.41]$ & not significant \\
+    contact      & $-0.01$ & $[-0.04,\ +0.02]$   & not significant \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+No channel separates, which is the required outcome. The pooled effects reported
+below sit well outside these bounds: at $4.0\times$ the lower end of the cut
+interval is $+45.34\,$mm against an A/A upper bound of $+6.96\,$mm, lateral
+$+46.12\,$mm against $+13.41\,$mm, and contact $+0.09$ against $+0.02$. The
+headline effects are between five and ten times the noise the instrument
+generates on its own.
+
+One detail of this table justifies the choice of statistic. The two arms'
+marginal medians differ substantially on cut, $134.83$ against $153.71\,$mm,
+while their paired difference is $-0.65\,$mm. Marginal medians move under
+resampling in a way the paired difference does not, which is why the paired
+difference is the primary statistic throughout.
+
+A caveat travels with it. This floor is measured at $4.0\times$, where the
+frozen controller is failing and its variance is correspondingly large. It
+therefore bounds the claims made at $4.0\times$ and $5.0\times$ but does not
+bound the smaller lateral regression reported at $3.0\times$, which would need
+its own A/A on a stable plant.
+
 \subsection{The Frozen Controller Has a Payload-Dependent Deficit}
 
 The comparison is only meaningful where the frozen policy is actually failing.
