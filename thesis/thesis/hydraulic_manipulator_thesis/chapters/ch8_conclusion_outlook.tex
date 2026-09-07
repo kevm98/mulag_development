@@ -254,7 +254,7 @@ the command.
 \textbf{Policy-only control through learned hydraulics} stands, with the
 classical teacher removed and the distilled policy acting as the entire
 controller. Worst-cell aggregation still misses two gates
-(Section~\ref{sec:concl:limitations}).
+(Section~\ref{sec:eval:tracking}).
 
 \textbf{The decision procedure for online adaptation} stands. Plant
 sensitivity, observability and correction authority are established before any
@@ -270,60 +270,6 @@ lateral accuracy below that point.
 Two enablers are recorded: the online estimator uses no privileged or future
 information and reverts to nominal on weak evidence, and five of the eight
 promotion gates separate the matched pair (Section~\ref{sec:sys:gates}).
-
-\section{Limitations}
-\label{sec:concl:limitations}
-\label{sec:conclusion:limitations}
-
-\textbf{Scope of plant validation.} The evidence is simulation-to-simulation,
-and the deployment plant is itself a learned model. No claim here is a claim
-about hardware.
-
-\textbf{Scope of hydraulic observability.} The differential pressure the estimator consumes is produced by the actuator
-model rather than measured, so transferring the model-level result to hardware
-requires instrumentation the FME~500 does not carry. An observation contract
-remains unresolved alongside this: every result uses the pressure-inclusive row,
-while the stricter deployable alternative excludes measured differential
-pressure. Since the estimator's advantage is concentrated in that channel, the
-deployable variant should be expected to perform worse, and by how much is not
-established.
-
-\textbf{Scope of controller comparison.} On worst-mesh, worst-family statistics
-both stacks fail the lateral gate and \ppoIDFD{} does not satisfy the
-head-alignment gate under worst-case aggregation
-(Section~\ref{sec:eval:tracking}), so neither stack satisfies the whole
-eight-gate evaluation contract. The closed-loop comparisons resolve differences to a few per cent over $33$
-paired conditions and do not establish equivalence. The available plant
-variation bounds the disturbance rather than the architecture, and more tightly
-than the sweep's labels suggest. A stack has been shown to tolerate what
-actually reached it, which on the inverse and forward plant is a mechanical
-perturbation only, plus a generic reduction of realised actuator motion. Median
-lateral error first reaches $1.5$ times its full-authority value at
-$\kappa = 0.20$ for \ppoIDFD{} and $\kappa = 0.10$ for \ppoROM{}, and no stack
-reaches the pre-declared breakdown gate down to $\kappa = 0.01$
-(Section~\ref{sec:eval:boundary-design}). That is an authority margin, not a
-demonstration of hydraulic robustness. The three
-stacks are matched on evaluation but not on training budget, so the comparison
-describes three deployed controllers rather than three equally tuned training
-procedures.
-
-\textbf{Scope of training variation.} Policy-training variation is not quantified for
-the matched R and IF pair, and it bounds
-two claims differently. R and IF are each represented by one training run, so
-the $33$ paired cells measure terrain and trajectory variation and say nothing
-about how far a second run of either would move; the actuator-representation
-result rests on that assumption. The adaptation result uses three
-context-training seeds on one shared frozen base, so it bounds the mechanism's
-sensitivity to initialisation and not the whole controller's, and the pooled
-effect is carried by two of the three.
-
-\textbf{Scope of the adaptation evidence.} The commanded step cannot finish
-faster than $417$\,ms at the command-rate limit while the plant answers in about
-$117$\,ms, so this loop favours continuous conditioning on the operating point
-over reaction to a single event, and the mechanism is built and measured that
-way. The result is scored at three payload levels on one held-out mesh; the
-regularisation of the payload regression was left at its weakest setting,
-identical across seeds.
 
 \section{Future Work}
 \label{sec:concl:future}

@@ -77,45 +77,44 @@ this achievement possible.
 % stacks R / IF / AF, principal results,
 % contribution. State results according to completed evidence.)
 \RRLABabstract{Abstract}{%
-Hydraulic manipulators are hard to control precisely. The actuator response is
-nonlinear, depends on load and supply pressure, and varies between machines.
-Simulating those effects faithfully is possible but far too slow for
-reinforcement learning, while commanding joint positions directly discards the
-behaviour that makes the machine difficult.
+Hydraulic manipulators are difficult to control accurately because actuator
+response is nonlinear and changes with load, supply pressure and machine
+condition. High-fidelity hydraulic simulation captures these effects but is too
+slow for large-scale reinforcement learning, whereas direct joint control omits
+the actuator behaviour that governs deployment performance. This thesis
+investigates how learned hydraulic dynamics can be transferred into efficient
+robot simulation, used for reinforcement-learning control and extended with
+online adaptation on a verge-mowing manipulator.
 
-This thesis asks how hydraulic actuator dynamics learned from a high-fidelity
-Simscape model of a verge mowing arm can be reduced, transferred into an
-efficient robotic simulation and used for reinforcement-learning control. Two
-actuator representations are identified from the same data: a modular inverse
-and forward chain, which transfers frozen, and a structurally constrained
-reduced-order model, which receives a bounded calibration against the deployment
-plant. A model can score well on supervised prediction while ignoring the valve
-command a controller must use, so excitation design and command ablation are
-established as admission tests for a learned actuator. Both representations
-carry a distilled policy that replaces the classical teacher entirely, and in a
-matched comparison over held-out meshes, trajectory families and reserved plant
-configurations the two produce different tracking and command behaviour.
+Two actuator representations are identified from the same Simscape data: a
+modular inverse--forward chain and a structurally constrained,
+command-conditioned reduced-order model. Open-loop excitation and command
+ablation test whether each model responds to the valve input, since low
+prediction error alone can conceal a model that merely extrapolates smooth
+state trajectories. The models are embedded in GPU-parallel PhysX training. A
+classical controller supplies privileged demonstrations during training, then a
+distilled policy replaces it completely at deployment. Evaluation covers held-out
+meshes, eleven trajectory families and sixteen reserved plant configurations.
 
-Online adaptation is examined last. The deployed policy carries a payload
-estimate computed at runtime from the task observation it already receives,
-never from a privileged read. Only the context columns of an otherwise frozen
-policy are trained, so zeroing the estimate recovers the frozen controller
-exactly. All three training seeds place their entire context weight on the
-payload channel unprompted. Where a four to fivefold payload costs the frozen
-controller ground contact, the adaptive policy improves cut height, lateral
-tracking and ground contact together, paired over a held-out mesh with every
-pooled confidence interval excluding zero, though two seeds of three carry the
-effect. At a payload the frozen controller still handles, the same
-conditioning costs lateral accuracy, so the mechanism belongs in the loaded
-regime rather than everywhere. Permuting the payload across environments,
-which preserves its distribution and destroys only its pairing, is beaten by
-the correct estimate but recovers most of the gain alone: the benefit is part
-conditioning on a plausible load and part online identification. The true
-payload is not an upper bound: at the largest load it can drive the tool off
-the ground, because the estimate's gradual arrival is itself part of the
-mechanism. Effective control of this machine therefore depends not only on
-model accuracy and policy robustness, but on conditioning the controller on a
-load it infers for itself.
+Both actuator representations support closed-loop control but produce different
+trade-offs. Across $33$ matched evaluation cells, the inverse--forward chain has
+$9.3$\,mm lower median lateral error, whereas the reduced-order model has
+$1.7$\,mm lower median cut-height error; neither mean difference is resolved.
+Online adaptation extends a frozen direct-valve actor with four context columns
+driven by a payload estimate inferred from its existing $66$-channel
+observation. At four and five times nominal payload on held-out mesh 3141,
+adaptation reduces median cut-height error by $71.5$ and $82.2$\,mm, reduces
+lateral error by $71.6$ and $107.1$\,mm, and increases ground contact by $0.12$
+and $0.09$, respectively. Every pooled confidence interval excludes zero, and
+the effects repeat on a second reserved mesh. At three times nominal payload,
+where the frozen controller still maintains contact, conditioning instead
+worsens lateral accuracy. Correct payload estimates outperform permuted ones,
+although plausible but mispaired loads recover most of the gain.
+
+The results show that prediction accuracy must be accompanied by a test of
+control authority, actuator representation changes the learned controller, and
+online adaptation is useful when a control-relevant robustness deficit remains
+and the correction retains authority.
 }
 
 % Table of contents
