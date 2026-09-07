@@ -344,17 +344,21 @@ individual factor parameterisations.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_kappa_stacks}
-  \caption{Lateral tracking and ground contact as actuator authority is reduced,
-  across the three stacks at nominal payload. The sweep characterises the
-  authority margin of the frozen controllers; the payload-conditioned mechanism
-  is evaluated separately in Section~\ref{sec:eval:adaptation}.}
+  \caption{Lateral tracking and ground contact as actuator authority
+  $\kappa$ is reduced, on mesh $1337$ at $4.0$\,km/h. Left: nominal payload,
+  where every stack degrades as authority is withdrawn. Right: $4.0\times$
+  payload, where the frozen controller is \emph{worst at full authority} and
+  improves as authority is cut, while the payload-conditioned arm is flat and
+  already near the frozen controller's best point. Rows share a vertical scale
+  so the two payloads are directly comparable.}
   \label{fig:eval:kappa-stacks}
 \end{figure}
 
 \begin{table}[tbp]
   \centering
   \caption{Authority at which median lateral error first reaches $1.5$ times
-  its full-authority value.}
+  its full-authority value, at nominal payload. The statistic is undefined under
+  load, where lateral error never rises to that threshold as authority falls.}
   \label{tab:eval:kappa}
   \begin{tabular}{lccc}
     \toprule
@@ -372,10 +376,34 @@ failure boundary was not reached within the tested range, so the experiment
 establishes an authority margin rather than a breakdown threshold. \ppoIDFD{}
 has the lowest lateral error at every rung of the cross-stack comparison.
 
-No stack reached the contact or safety gate. The sweep therefore bounds the
-authority margin the frozen controllers carry, and it is that margin the
-payload-conditioned mechanism is measured against in
-Section~\ref{sec:eval:adaptation}.
+No stack reached the contact or safety gate, so at nominal payload the sweep
+bounds an authority margin rather than locating a breakdown.
+
+Under load the same axis behaves differently, and the difference is the useful
+part. At $4.0\times$ payload the frozen controller is worst at \emph{full}
+authority, at $330.9$\,mm lateral, $184.9$\,mm cut and $0.475$ ground contact,
+and improves monotonically as authority is withdrawn, reaching $105.9$\,mm,
+$11.7$\,mm and $0.829$ at $\kappa=0.1$. Withdrawing authority is not a stress
+under load; it is a remedy. That is the impact-and-rebound failure mode of
+Section~\ref{sec:eval:robustness} seen from the actuator side: the heavy tool
+carries too much authority into the ground, and throttling it damps the
+overshoot.
+
+The payload-conditioned arm reaches the same place without giving anything up.
+At full authority it reads $115.7$\,mm lateral and $0.824$ contact, within
+$10$\,mm and $0.005$ of the best the frozen controller achieves anywhere on the
+authority axis, and it stays flat as $\kappa$ falls. The two curves cross near
+$\kappa \approx 0.6$: below that the frozen controller is already damped, has
+stopped losing ground, and the conditioning costs a little lateral accuracy,
+which is the same regime dependence the payload sweep shows at $3.0\times$.
+
+The distinction that matters for deployment is that authority is a fixed setting
+and payload is not. De-rating the actuator to $\kappa=0.1$ buys the loaded
+improvement and charges for it permanently at nominal load, where the same stack
+degrades from $45$\,mm to $72$\,mm lateral. Conditioning on an estimated payload
+buys the loaded improvement at full authority and, through the deadband, leaves
+the nominal case bit-for-bit unchanged. One is a compromise; the other is
+conditional.
 
 \subsection{What Robustness Leaves for Adaptation}
 \label{sec:eval:robustness-residual}
@@ -460,115 +488,15 @@ Table~\ref{tab:eval:adaptation} gives the pooled estimates.
 
 \begin{figure}[tbp]
   \centering
-  \begin{tikzpicture}[x=1cm,y=1cm]
-\begin{scope}[xshift=1.15cm]
-\node[anchor=south west,font=\bfseries\footnotesize] at (0,5.34) {Cut height};
-\draw[gray!60] (1.882,-0.10) -- (1.882,5.16);
-\draw[gray!50] (0,-0.10) -- (6.40,-0.10);
-\draw[gray!50] (0.000,-0.10) -- (0.000,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (0.000,-0.20) {$-100$};
-\draw[gray!50] (1.882,-0.10) -- (1.882,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (1.882,-0.20) {$0$};
-\draw[gray!50] (3.765,-0.10) -- (3.765,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (3.765,-0.20) {$100$};
-\draw[gray!50] (5.647,-0.10) -- (5.647,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (5.647,-0.20) {$200$};
-\draw[black,very thick] (2.616,0.10) -- (4.048,0.10);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.429,0.10) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.10) {$5.0\times$ pooled};
-\draw[teal!70!black,thick] (3.120,0.52) -- (5.338,0.52);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.955,0.52) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.52) {$5.0\times$ s101};
-\draw[red!65!black,thick] (0.263,0.94) -- (1.727,0.94);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.004,0.94) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.94) {$5.0\times$ s23};
-\draw[teal!70!black,thick] (4.229,1.36) -- (6.238,1.36);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (5.414,1.36) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,1.36) {$5.0\times$ s17};
-\draw[black,very thick] (2.736,1.78) -- (3.970,1.78);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.229,1.78) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,1.78) {$4.0\times$ pooled};
-\draw[teal!70!black,thick] (2.896,2.20) -- (5.972,2.20);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.233,2.20) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,2.20) {$4.0\times$ s101};
-\draw[red!65!black,thick] (1.616,2.62) -- (2.334,2.62);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=white,inner sep=0pt] at (1.836,2.62) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,2.62) {$4.0\times$ s23};
-\draw[teal!70!black,thick] (3.229,3.04) -- (5.934,3.04);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.189,3.04) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.04) {$4.0\times$ s17};
-\draw[black,very thick] (1.816,3.46) -- (1.883,3.46);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (1.844,3.46) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.46) {$3.0\times$ pooled};
-\draw[teal!70!black,thick] (1.894,3.88) -- (2.000,3.88);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (1.936,3.88) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.88) {$3.0\times$ s101};
-\draw[red!65!black,thick] (1.660,4.30) -- (1.821,4.30);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.765,4.30) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,4.30) {$3.0\times$ s23};
-\draw[red!65!black,thick] (1.719,4.72) -- (1.867,4.72);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.798,4.72) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,4.72) {$3.0\times$ s17};
-\end{scope}
-
-\begin{scope}[xshift=9.60cm]
-\node[anchor=south west,font=\bfseries\footnotesize] at (0,5.34) {Lateral};
-\draw[gray!60] (1.882,-0.10) -- (1.882,5.16);
-\draw[gray!50] (0,-0.10) -- (6.40,-0.10);
-\draw[gray!50] (0.000,-0.10) -- (0.000,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (0.000,-0.20) {$-100$};
-\draw[gray!50] (1.882,-0.10) -- (1.882,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (1.882,-0.20) {$0$};
-\draw[gray!50] (3.765,-0.10) -- (3.765,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (3.765,-0.20) {$100$};
-\draw[gray!50] (5.647,-0.10) -- (5.647,-0.22);
-\node[below,font=\tiny,inner sep=1pt] at (5.647,-0.20) {$200$};
-\draw[black,very thick] (2.844,0.10) -- (4.549,0.10);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.897,0.10) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.10) {$5.0\times$ pooled};
-\draw[teal!70!black,thick] (2.126,0.52) -- (4.751,0.52);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.335,0.52) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.52) {$5.0\times$ s101};
-\draw[teal!70!black,thick] (1.416,0.94) -- (3.774,0.94);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=white,inner sep=0pt] at (1.964,0.94) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,0.94) {$5.0\times$ s23};
-\draw[teal!70!black,thick] (4.178,1.36) -- (6.206,1.36);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (5.367,1.36) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,1.36) {$5.0\times$ s17};
-\draw[black,very thick] (2.750,1.78) -- (4.283,1.78);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (3.230,1.78) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,1.78) {$4.0\times$ pooled};
-\draw[teal!70!black,thick] (2.552,2.20) -- (4.517,2.20);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (3.258,2.20) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,2.20) {$4.0\times$ s101};
-\draw[red!65!black,thick] (0.151,2.62) -- (2.844,2.62);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=white,inner sep=0pt] at (1.226,2.62) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,2.62) {$4.0\times$ s23};
-\draw[teal!70!black,thick] (3.395,3.04) -- (5.989,3.04);
-\node[circle,minimum size=4pt,draw=teal!70!black,fill=teal!70!black,inner sep=0pt] at (4.523,3.04) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.04) {$4.0\times$ s17};
-\draw[black,very thick] (1.317,3.46) -- (1.557,3.46);
-\node[diamond,minimum size=4pt,draw=black,fill=black,inner sep=0pt] at (1.454,3.46) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.46) {$3.0\times$ pooled};
-\draw[red!65!black,thick] (1.530,3.88) -- (1.857,3.88);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.705,3.88) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,3.88) {$3.0\times$ s101};
-\draw[red!65!black,thick] (0.280,4.30) -- (1.342,4.30);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (0.942,4.30) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,4.30) {$3.0\times$ s23};
-\draw[red!65!black,thick] (1.214,4.72) -- (1.546,4.72);
-\node[circle,minimum size=4pt,draw=red!65!black,fill=red!65!black,inner sep=0pt] at (1.408,4.72) {};
-\node[left,font=\tiny,inner sep=2pt] at (0,4.72) {$3.0\times$ s17};
-\end{scope}
-  \node[font=\scriptsize] at (7.50,-0.62) {paired median difference (mm), adaptive better $\rightarrow$};
-  \end{tikzpicture}
-  \caption{Adaptation against the frozen policy, paired per environment on
-  held-out mesh 3141. Points are median differences and bars are $95\,\%$
-  percentile-bootstrap intervals over $B=20000$; positive is better. Filled
-  markers have intervals excluding zero, hollow markers do not, and diamonds are
-  the across-seed pooled estimate. The sign reverses with payload: at $3.0\times$
-  the frozen policy still holds ground contact and the conditioning only costs,
-  while at $4.0\times$ and $5.0\times$ both channels improve.}
+  \includegraphics[width=\textwidth]{images/ch7/ch7_adaptation_forest}
+  \caption{Online payload conditioning against the frozen policy, paired per
+  environment on held-out mesh 3141. Points are median differences and bars are
+  $95\,\%$ percentile-bootstrap intervals over $B=20000$; positive is better.
+  Filled markers have intervals excluding zero, hollow markers do not, and
+  diamonds are the across-seed pooled estimate. The sign turns with payload: at
+  $3.0\times$ the frozen policy still holds ground contact and the conditioning
+  only costs, while at $4.0\times$ and $5.0\times$ cut height, lateral error and
+  ground contact improve together.}
   \label{fig:eval:forest}
 \end{figure}
 
