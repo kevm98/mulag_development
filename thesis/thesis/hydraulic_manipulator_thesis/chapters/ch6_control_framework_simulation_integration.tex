@@ -214,12 +214,11 @@ actuator interface, ten of pose and context, and twelve of model error.
 \begin{figure}[tb]
   \centering
   \includegraphics[width=\textwidth]{images/ch6/ch6_observation}
-  \caption{The $66$-value policy observation, drawn to scale by group. The
-  channels combine measurements, derived quantities and actuator-model
-  estimates. No trajectory-family
-  label or physical factor vector enters the actor. AF appends four context
-  columns to this input, carrying the payload estimated online from these same
-  channels.}
+  \caption{The policy observation contract, drawn to scale by group. The first
+  $66$ channels combine measurements, derived quantities and actuator-model
+  estimates and are shared by R, IF and AF. AF alone appends the four white
+  context boxes at indices $66$--$70$; only the payload channel is non-constant
+  in the reported campaign.}
   \label{fig:ctrl:observation}
 \end{figure}
 
@@ -761,16 +760,15 @@ valve elements nor adapters at that site. The checkpoint key
   \centering
   \makebox[\textwidth][c]{%
     \includegraphics[width=1.08\textwidth]{images/ch6/ch6_aam_stack}}
-  \caption{Training and deployment path of AF. The frozen base actor emits the
-  valve command $\bm{u}_0$. A temporal encoder and residual head use causal
-  state--action history to add the bounded correction of
-  Equation~\eqref{eq:ctrl:af-residual}. Only these two modules receive the PPO
-  task gradient; the base actor and strict forward model remain frozen. The
-  composed valve command drives the forward model and the shared PhysX
-  verge-following task. The actor input remains $66$ channels; the history
-  window is carried separately and is not part of that count. Dashed paths
-  denote PPO updates and rollout feedback. No privileged factor vector or
-  inverse model enters the AF command path.}
+  \caption{Training and deployment path of AF. At deployment, a ridge estimator
+  maps the shared $66$ task channels to four context values, applies smoothing
+  and a deadband, and appends them to the actor input. The frozen base actor and
+  the trained context columns produce the valve command, which drives the frozen
+  forward model and shared PhysX task. During training the true payload is
+  available only to the four context columns, and PPO updates only their
+  $1\,024$ weights. The estimator is fitted afterwards on trained-policy
+  rollouts. Dashed paths denote parameter updates and fitting data; no inverse
+  model enters the AF command path.}
 \label{fig:ctrl:aam-stack}
 \end{figure}
 

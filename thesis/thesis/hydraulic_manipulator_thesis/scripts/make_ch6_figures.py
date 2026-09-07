@@ -4,7 +4,8 @@
 Produces
     images/ch6_teacher_student.pdf   schematic: privileged teacher, shared
                                      action chain, distillation, deployed loop
-    images/ch6_observation.pdf       the 66-channel observation, by group
+    images/ch6_observation.pdf       shared 66-channel observation plus the
+                                     four AF-only context columns
     images/ch6_action_chain.pdf      raw action -> PhysX cylinder target
     images/ch6_distillation.pdf      measured DAgger history (real data)
 
@@ -230,7 +231,7 @@ def teacher_student():
 
 
 # --------------------------------------------------------------------------
-# Figure 2: the 66-channel observation, by group
+# Figure 2: shared observation and the AF-only context extension
 # --------------------------------------------------------------------------
 def observation():
     W, H = CANVAS, 730
@@ -264,11 +265,14 @@ def observation():
          "#F8EFEF", "#B99490", INK),
     ]
 
-    x0, x1 = 40, 960
-    y, bar_h = 92, 62
-    scale = (x1 - x0) / 66
+    x0, base_x1, x1 = 40, 900, 960
+    y, bar_h = 100, 62
+    scale = (base_x1 - x0) / 66
 
-    s.append(T(500, 54, "The 66-value policy observation", 26, INK, "bold"))
+    s.append(T(500, 44, "The policy observation contract", 26, INK, "bold"))
+    s.append(T((x0 + base_x1) / 2, 78, "SHARED BY R, IF AND AF", 17,
+               MUTED, "bold"))
+    s.append(T((base_x1 + x1) / 2, 78, "AF ONLY", 17, RED, "bold"))
 
     for start_i, width, _n, _d, fill, stroke, dark in groups:
         gx = x0 + start_i * scale
@@ -279,9 +283,29 @@ def observation():
         s.append(f'<line x1="{gx}" y1="{y + bar_h + 6}" x2="{gx}" '
                  f'y2="{y + bar_h + 16}" stroke="{MUTED}" stroke-width="1.4"/>')
         s.append(T(gx, y + bar_h + 34, str(start_i), 17, MUTED))
+    s.append(f'<line x1="{base_x1}" y1="{y + bar_h + 6}" x2="{base_x1}" '
+             f'y2="{y + bar_h + 16}" stroke="{MUTED}" stroke-width="1.4"/>')
+    s.append(T(base_x1, y + bar_h + 34, "66", 17, MUTED))
+
+    # The context extension is deliberately unfilled: it is absent from R and
+    # IF and is appended only to the AF actor.  Draw the four inputs separately
+    # so they cannot be mistaken for another shared observation group.
+    context_gap = 2
+    context_w = (x1 - base_x1 - 3 * context_gap) / 4
+    for index in range(4):
+        gx = base_x1 + index * (context_w + context_gap)
+        s.append(rect(gx, y, context_w, bar_h, "#FFFFFF", RED, 2.2, 5))
     s.append(f'<line x1="{x1}" y1="{y + bar_h + 6}" x2="{x1}" '
              f'y2="{y + bar_h + 16}" stroke="{MUTED}" stroke-width="1.4"/>')
-    s.append(T(x1, y + bar_h + 34, "66", 17, MUTED))
+    s.append(T(x1, y + bar_h + 34, "70", 17, MUTED))
+
+    s.append(rect(665, 226, 295, 86, "#FFFFFF", RED, 2.0, 8))
+    s.append(T(682, 251, "plant context &#8212; channels 66:70", 18,
+               INK, "bold", "start"))
+    s.append(T(682, 275, "four AF-only inputs; payload is the", 17,
+               INK, "normal", "start"))
+    s.append(T(682, 296, "only non-constant channel here", 17,
+               INK, "normal", "start"))
 
     ry = 226
     for (start_i, width, name, detail, fill, stroke, dark) in groups:

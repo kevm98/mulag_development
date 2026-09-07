@@ -541,11 +541,57 @@ discriminating variable is ground contact, and the deadband of
 Section~\ref{sec:models:payload} is what confines the mechanism to the loaded
 side of it.
 
+\subsection{Repetition on a Second Held-Out Mesh}
+
+Mesh 8191 was reserved and has not been used to design, diagnose or read this
+campaign. It is harder terrain than 3141: the frozen policy there reads
+$221.8$\,mm cut and $309.2$\,mm lateral at $4.0\times$, and $394.5$\,mm and
+$505.2$\,mm at $5.0\times$. Table~\ref{tab:eval:mesh8191} repeats the comparison
+on it with the same statistic.
+
+\begin{table}[H]
+  \centering
+  \caption{Independent repetition on reserved mesh 8191. Pooled paired median
+  difference across the three seeds; positive is better, intervals are
+  $95\,\%$ percentile bootstrap.}
+  \label{tab:eval:mesh8191}
+  \small
+  \begin{tabular}{@{}llrrr@{}}
+    \toprule
+    Payload & Channel & Frozen & Median difference & $95\,\%$ CI \\
+    \midrule
+    $4.0\times$ & cut (mm)     & 221.79 &  $+96.80$ & $[+64.68,\ +143.23]$ \\
+                & lateral (mm) & 309.16 & $+109.70$ & $[+86.04,\ +145.22]$ \\
+                & contact      &  0.591 &   $+0.15$ & $[+0.12,\ +0.19]$ \\
+    \midrule
+    $5.0\times$ & cut (mm)     & 394.53 & $+169.40$ & $[+107.29,\ +214.10]$ \\
+                & lateral (mm) & 505.16 & $+240.05$ & $[+202.92,\ +284.83]$ \\
+                & contact      &  0.474 &   $+0.17$ & $[+0.13,\ +0.20]$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Every pooled effect repeats with its interval excluding zero, and every one is
+larger than on 3141, which follows from the larger deficit available on harder
+terrain. Lateral error improves in all six seed-by-payload cells individually,
+each with its own interval excluding zero.
+
+That last point revises one reading of the previous section. Seed~23's lateral
+regression does not repeat here: it improves lateral by $89.5$\,mm at
+$4.0\times$ and $182.6$\,mm at $5.0\times$, both significant. Its shortfall on
+the vertical channels does repeat, neutral on cut at $4.0\times$ and
+$-56.2$\,mm at $5.0\times$. The seed-dependence is therefore specific to cut
+height and ground contact, and the lateral improvement holds across both meshes
+and all three seeds.
+
 \subsection{One Seed of Three Does Not Benefit}
 
-Seeds 17 and 101 carry the pooled effect, improving cut height by $187.6\,$mm
-and $110.1\,$mm at $5.0\times$. Seed~23 does not: neutral on cut at $4.0\times$
-and $-46.68\,$mm at $5.0\times$, neutral on lateral and contact at both.
+Seeds 17 and 101 carry the pooled effect on the vertical channels, improving
+cut height by $187.6\,$mm and $110.1\,$mm at $5.0\times$. Seed~23 does not:
+neutral on cut at $4.0\times$ and $-46.68\,$mm at $5.0\times$, with contact
+following the same pattern on both meshes. Its lateral behaviour is not a
+seed effect, since it improves lateral significantly at both payloads on mesh
+8191 (Table~\ref{tab:eval:mesh8191}).
 
 The cause is locatable rather than mysterious. All three oracles sit near
 $750\,$mm of lateral error, so every seed has the same trade-off curve
