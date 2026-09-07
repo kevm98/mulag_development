@@ -123,18 +123,21 @@ boundary (Section~\ref{sec:eval:boundary-design}).
 \textbf{A controller that estimates its own payload online improves task
 tracking where robustness runs out (RQ6).} The deployed mechanism conditions the
 frozen policy on a payload regressed at runtime from the task observation it
-already carries. Against that frozen policy, paired per environment on a
-held-out mesh, it improves cut height, lateral tracking and ground contact
+already carries. Against that frozen policy, paired per environment on two
+held-out meshes, it improves cut height, lateral tracking and ground contact
 together at $4.0\times$ and $5.0\times$ nominal cutter mass, every channel with
-its bootstrap interval excluding zero: pooled cut-height error falls by
-$71.5\,$mm and $82.2\,$mm against frozen baselines of $167.5\,$mm and
-$267.4\,$mm, and ground contact rises by $0.12$ and $0.09$.
+its bootstrap interval excluding zero. On mesh 3141 pooled cut-height error
+falls by $71.5\,$mm and $82.2\,$mm against frozen baselines of $167.5\,$mm and
+$267.4\,$mm, with ground contact rising by $0.12$ and $0.09$; on the reserved
+mesh 8191 the same comparison gives $96.8\,$mm and $169.4\,$mm against harder
+baselines, with contact rising by $0.15$ and $0.17$.
 
 The effect is regime-selective, and the sweep locates the regime. At
 $3.0\times$, where the frozen controller still holds the ground, the same
 conditioning costs lateral accuracy; from $4.0\times$, where it is losing
 contact, every channel gains. Two of the three training seeds carry the pooled
-effect. Permuting the payload across environments, which preserves its
+effect on the vertical channels; lateral error improves in every seed and at
+both payloads on the reserved mesh. Permuting the payload across environments, which preserves its
 distribution and destroys only its pairing, is beaten by the correct estimate on
 cut height and ground contact, so the mechanism uses the information rather than
 merely the presence of a context.
@@ -170,7 +173,13 @@ conclusion.
       & Cut height, lateral error and ground contact all improve at $4\times$ and $5\times$ with intervals excluding zero; at $3\times$ the conditioning costs lateral accuracy. \\
     Seed replication
       & three independently trained context-column seeds, pooled and individually
-      & The pooled effect is large and significant, and is carried by two seeds of three. \\
+      & The pooled effect is large and significant, and is carried by two seeds of three on the vertical channels. \\
+    Mesh repetition
+      & the same comparison on reserved mesh 8191, never used to design or read the campaign
+      & Every pooled effect repeats with its interval excluding zero and is larger on the harder terrain; lateral improves in all six seed-by-payload cells. \\
+    A/A control
+      & two runs of the identical frozen policy at $4\times$, paired per environment
+      & No channel separates, so the reported effects are five to ten times the difference the instrument reports between identical arms. \\
     Wrong-information control
       & true payload against a payload permuted across environments on a mixed plant
       & Correct identification beats a wrong value of the same distribution on cut height and contact; conditioning on a plausible load supplies the remainder. \\
