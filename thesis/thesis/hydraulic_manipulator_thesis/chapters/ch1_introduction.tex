@@ -120,8 +120,8 @@ techniques. What remains unclear is how such models should be identified so that
 they retain the command dependence a controller needs, whether they transfer
 between simulators without retraining, and what a controller must know about its
 load once the models are used in control. Representation and transfer are
-established first because the adaptation acts through an identified plant rather
-than replacing one. Online adaptation is evaluated last so that any remaining
+established first because the adaptation acts through an identified actuator
+model rather than replacing one. Online adaptation is evaluated last so that any remaining
 gain can be interpreted against the transferred model and the robustness of the
 fixed controller. The order follows the dependencies among the claims. The
 research statement is as follows:
@@ -176,10 +176,52 @@ The AAM of Section~\ref{sec:models:aam} is not part of this path. It is an
 offline diagnostic used to judge whether the inverse model can be trusted, and
 the frozen stacks are robust controllers rather than adaptive ones.
 
-The first question is answered in Chapters~\ref{chap:data}
-and~\ref{chap:models}, the second and third in Chapter~\ref{chap:models}, the
-fourth in Chapter~\ref{chap:control}, and the last two in
-Chapter~\ref{chap:evaluation}.
+Table~\ref{tab:intro:rq-map} maps each question to the method that answers it,
+the experiment that tests it and the claim that survives.
+
+\begin{table}[H]
+  \centering
+  \caption{Research questions, the evidence that answers them, and where each
+  is established. The final column states the claim as it is made, not as the
+  raw numbers might suggest.}
+  \label{tab:intro:rq-map}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{@{}cp{.24\textwidth}p{.24\textwidth}p{.34\textwidth}c@{}}
+    \toprule
+    RQ & Method & Experiment & Claim & Ch. \\
+    \midrule
+    1 & Simscape excitation design and identifiability audit
+      & command ablation on the forward model
+      & Supervised accuracy does not establish command dependence; open-loop
+        excitation recovers it
+      & \ref{chap:data}, \ref{chap:models} \\
+    2 & Frozen inverse and forward transfer
+      & one-step and rollout error in IsaacLab
+      & The pair transfers without deployment-specific retraining
+      & \ref{chap:models} \\
+    3 & Structurally constrained reduced-order model
+      & bounded calibration against the deployment plant
+      & Fast and stable enough for parallel training; a learned surrogate, not
+        an identified plant
+      & \ref{chap:models} \\
+    4 & DLS teacher, distillation, reference-anchored PPO
+      & policy-only closed-loop terrain following
+      & The distilled policy is the entire deployed controller
+      & \ref{chap:control} \\
+    5 & Matched R against IF
+      & $33$ paired cells over held-out meshes and families
+      & The two realised controllers differ in tracking and command behaviour;
+        retraining variance is not estimated
+      & \ref{chap:evaluation} \\
+    6 & Online payload estimate on frozen context columns
+      & payload sweep, two held-out meshes, A/A floor, permuted-payload control
+      & Cut, lateral and contact improve together where the frozen controller
+        is losing ground contact
+      & \ref{chap:evaluation} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 RQ6 is the question named in the title and is deliberately placed last, since it
 is only worth asking once the preceding questions have established that the
@@ -225,7 +267,9 @@ controller supplies privileged demonstrations during training and is then
 removed, leaving the distilled policy as the entire deployed controller, acting
 through learned actuator dynamics. Both representations support closed-loop
 terrain following in that configuration
-(Chapters~\ref{chap:control} and~\ref{chap:evaluation}).
+(Chapters~\ref{chap:control} and~\ref{chap:evaluation}). One training run
+exists per representation, so this compares two realised controllers and does
+not estimate what retraining either would produce.
 
 \textbf{A Decision Procedure for Online Adaptation:} A matched protocol that
 asks, in order, whether plant identity is present in the identification data,

@@ -575,9 +575,9 @@ same analysis. The three tested stacks are:
     followed by the strict forward model, forming the robust learned
     baseline.
   \item[\ppoAAMFD.] The policy emits the valve command directly and the
-    inverse model leaves the path. A causal history encoder conditions a
-    bounded residual on that command, which the same forward model realises
-    ahead of PhysX.
+    inverse model leaves the path. The frozen actor's input is widened by four
+    context columns carrying a payload estimated online, and the same forward
+    model realises the resulting command ahead of PhysX.
 \end{description}
 
 All stacks share the task, terrain, trajectories, deployment factors and
@@ -590,8 +590,35 @@ on the matched pair and on within-stack paired ablations rather than on a
 three-way contrast (Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system}
 now grounds this comparison in the concrete machine.
 
-The remaining gap concerns the interaction between these established
-techniques: whether hydraulic actuators identified for control retain command
-authority after transfer, and under which plant conditions a
-history-conditioned correction on the identified valve path adds value beyond
-randomisation and matched residual capacity.
+\subsection*{Synthesis}
+
+Each element used here is established somewhere. Hydraulic actuators have been
+modelled and controlled with maintained physical models for
+decades~\cite{mattila2017survey,jelali2003hydraulic}. Learned actuator
+surrogates transfer measured behaviour into parallel simulation for legged
+machines~\cite{hwangbo2019learning,rudin2022learning}. Reinforcement learning
+has been applied to hydraulic
+excavators~\cite{egli2020towards,egli2022general}. Latent online adaptation
+recovers a plant code from history and conditions a policy on
+it~\cite{lee2020learning,kumar2021rma}. Classical priors are transferred into
+policies by distillation~\cite{ross2011reduction}.
+
+What has not been established is the combination on one machine under one
+protocol: that an actuator identified from high-fidelity simulation retains
+\emph{command} dependence after transfer, that a policy can control through it
+with the classical controller removed, and that an online estimate of the
+operating condition improves closed-loop task tracking under exactly the plant
+conditions where that policy's learned robustness has run out.
+
+Two distinctions separate the adaptation used here from the latent-adaptation
+line it is closest to. What is estimated is a \emph{named physical quantity},
+the payload, rather than an anonymous code whose retained directions are
+assumed to be the ones control needs; the failure mode Liu et
+al.~\cite{liu2025frma} describe therefore cannot arise, because the quantity is
+chosen rather than discovered. And what the estimate feeds is a frozen policy
+widened by four columns rather than a jointly trained encoder, so the
+unadapted controller is recovered exactly by zeroing the estimate and the
+comparison has no capacity confound. The cost of those choices is generality:
+this mechanism adapts to one factor, and Section~\ref{sec:eval:adaptation}
+shows it earns its place only in the regime where that factor is what is
+breaking the controller.

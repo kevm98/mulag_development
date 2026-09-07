@@ -233,43 +233,43 @@ but its time constant remains to be determined on the deployed stack.
 \section{Contributions}
 
 Section~\ref{sec:intro:contributions} stated six contributions. Their standing
-at the end of the work is as follows, with the supporting evidence as summarised
-above rather than repeated.
+at the end of the work is set out below. The evidence is as summarised in
+Section~\ref{sec:concl:findings} and is not repeated here.
 
-\textbf{Transferable hydraulic actuator learning} is delivered through two
-Simscape-identified representations realised in IsaacLab; the inverse model
-transfers without retraining. The \textbf{reduced-order actuator model} is a
-bounded, differentiable surrogate suitable for GPU-parallel training and serves
-as the calibrated deployment plant. Its clamped constants are not identified
-physical parameters (Section~\ref{sec:models:rom}).
+\textbf{Transferable hydraulic actuator learning} stands. Two
+Simscape-identified representations are realised in IsaacLab and the inverse
+model transfers without retraining.
 
-The \textbf{control-relevant identification and validation} procedure combines
-input ablation, which exposed a forward model without command authority, with an
-identifiability audit of the excitation envelope.
+\textbf{The reduced-order actuator model} stands as a bounded, differentiable
+surrogate fast enough for GPU-parallel training, and serves as the calibrated
+deployment plant. It is a structurally constrained learned surrogate: its
+clamped constants are not identified physical parameters
+(Section~\ref{sec:models:rom}).
 
-\textbf{Policy-only control through learned hydraulics} is demonstrated. After
-the classical teacher is removed, \ppoIDFD{} holds a mean lateral error of
-\unit[70]{mm} and a median of \unit[28]{mm} over $33$ held-out cells at
-$95\,\%$ ground contact (Section~\ref{sec:eval:tracking}). Worst-cell
-aggregation still misses two gates; that bound is stated in
-Section~\ref{sec:concl:limitations}.
+\textbf{Control-relevant identification and validation} stands, combining input
+ablation with an identifiability audit of the excitation envelope. Its value is
+the negative result it produced: a forward model can score well and still ignore
+the command.
 
-The \textbf{decision procedure for online adaptation} establishes plant
-sensitivity, observability and correction authority before attributing any gain
-to adaptation. It also exposes when the optimiser trades away a gated quantity
-that the reward does not price.
+\textbf{Policy-only control through learned hydraulics} stands, with the
+classical teacher removed and the distilled policy acting as the entire
+controller. Worst-cell aggregation still misses two gates
+(Section~\ref{sec:concl:limitations}).
 
-\textbf{Where online adaptation is effective} is answered by the payload sweep.
-Conditioning the frozen policy on an online payload estimate improves cut
-height, lateral tracking and ground contact together once the load is heavy
-enough to cost the frozen controller its ground contact, and costs lateral
-accuracy below that point. The mechanism therefore belongs in the loaded
-regime, and the deadband keeps it there.
+\textbf{The decision procedure for online adaptation} stands. Plant
+sensitivity, observability and correction authority are established before any
+gain is attributed to adaptation, which is what turned the first mechanism's
+null into a diagnosis rather than a dead end.
 
-Two enablers are recorded: the causal estimator and bounded adaptation path use
-no privileged or future information and revert safely on invalid input. Five of
-the eight promotion gates separate the matched pair
-(Section~\ref{sec:sys:gates}).
+\textbf{Where online adaptation is effective} is answered, and answered
+conditionally. Conditioning a frozen policy on an online payload estimate
+improves cut height, lateral tracking and ground contact together once the load
+is heavy enough to cost the frozen controller its ground contact, and costs
+lateral accuracy below that point.
+
+Two enablers are recorded: the online estimator uses no privileged or future
+information and reverts to nominal on weak evidence, and five of the eight
+promotion gates separate the matched pair (Section~\ref{sec:sys:gates}).
 
 \section{Limitations}
 \label{sec:concl:limitations}

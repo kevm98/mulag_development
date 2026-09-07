@@ -92,10 +92,11 @@ reduced-order model, which receives a bounded calibration against the deployment
 plant. A model can score well on supervised prediction while ignoring the valve
 command a controller must use, so excitation design and command ablation are
 established as admission tests for a learned actuator. Both representations
-carry a distilled policy that replaces the classical teacher entirely, and a
+carry a distilled policy that replaces the classical teacher entirely, and in a
 matched comparison over held-out meshes, trajectory families and reserved plant
-configurations shows that the choice of representation changes tracking, command
-behaviour and robustness.
+configurations the two produce different tracking and command behaviour. One
+training run exists per representation, so that compares two realised
+controllers rather than estimating what retraining either would produce.
 
 Online adaptation is examined last. The deployed policy carries a payload
 estimate computed at runtime from the task observation it already receives,
