@@ -6,10 +6,11 @@
 This chapter evaluates the closed-loop stacks defined in Chapter~\ref{chap:control}
 as an evidence chain. Sections~7.2 to~7.4 first ask whether the actuator
 representation matters in closed loop and how much plant variation the trained
-controllers already absorb. Section~7.5 then asks what remains for a residual to
-recover inside \ppoAAMFD{}, whether live history explains that recovery, and
-whether any component varies with cutter mass. Section~7.6 states the conditions
-under which the evidence supports online adaptation.
+controllers already absorb. Section~7.5 then asks what remains for online
+adaptation to recover inside \ppoAAMFD{}, in which payload regime it recovers
+it, and how much of the gain depends on the payload estimate being correct.
+Section~7.6 states the conditions under which the evidence supports online
+adaptation.
 
 \section{Experimental Protocol}
 \label{sec:eval:hypotheses}
@@ -21,8 +22,8 @@ All closed-loop results use held-out terrain meshes, eleven trajectory families,
 a truck speed of \unit[4]{km/h}, a \unit[26]{m} scoring window, and sixteen
 reserved plant configurations. The matched comparison is between \ppoROM{} and
 \ppoIDFD{}. Adaptation is assessed only inside \ppoAAMFD{}, by comparing a
-frozen base, a capacity-matched residual without history, and a
-history-conditioned residual.
+frozen base, the online payload estimate and the true payload, with a
+permuted-payload control.
 
 The results are paired by environment or by mesh and trajectory family. Error
 metrics are reported separately for lateral tracking and cut height because the

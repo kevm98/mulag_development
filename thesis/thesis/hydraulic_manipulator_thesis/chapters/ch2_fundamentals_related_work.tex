@@ -372,9 +372,9 @@ enters the command path rather than the predictor, because a better prediction
 helps only if something downstream acts on it.
 
 The offline AAM developed in Chapter~\ref{chap:models} tests whether one second
-of observable history contains recoverable plant information. It is not the
-encoder deployed in AF, which trains its own history encoder end to end with
-the residual under the task objective rather than against an offline target
+of observable history contains recoverable plant information. It is not what AF
+deploys, which is a payload regressed from the current observation and fed to
+the frozen policy through four context columns
 (Section~\ref{sec:ctrl:af-encoder} details the training scheme). The two routes
 therefore answer different questions: the former tests identifiability; the
 latter tests control-relevant adaptation. The experiments also keep robust
