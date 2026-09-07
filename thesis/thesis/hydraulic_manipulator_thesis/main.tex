@@ -97,23 +97,26 @@ matched comparison over held-out meshes, trajectory families and reserved plant
 configurations shows that the choice of representation changes tracking, command
 behaviour and robustness.
 
-Online adaptation is examined last, as two mechanisms rather than one. The
-explicit mechanism estimates a plant latent from recent interaction history and
-corrects the inverse command with it. It is informative but undeliverable:
-latent-conditioned adapters beat a zero-context control on the adapter objective
-on all five seeds, yet no closed-loop metric changes, because the inverse command
-is saturated for most of the scored window and the correction is clipped before
-it reaches the plant. The implicit mechanism conditions a bounded residual on a
-causal history window and applies it to the valve command, where authority
-remains. It improves tracking on four of five training seeds under the
-pre-registered rule, while a capacity-matched residual reading zeroed history
-reproduces most of that gain. A second pre-registered campaign restricts the
-encoder to plant-relevant channels, on a plant where the frozen controller
-degrades by two orders of magnitude across the load range, and the median seed
-still fails: the missing history effect is not an artefact of a wide encoder
-input. Effective control of this machine therefore depends not only on model
-accuracy and policy robustness, but on where the correction acts and on whether
-live history adds anything beyond residual capacity.
+Online adaptation is examined last. The deployed policy carries a payload
+estimate computed at runtime from the task observation it already receives,
+never from a privileged read. Only the context columns of an otherwise frozen
+policy are trained, so zeroing the estimate recovers the frozen controller
+exactly. All three training seeds place their entire context weight on the
+payload channel unprompted. Where a four to fivefold payload costs the frozen
+controller ground contact, the adaptive policy improves cut height, lateral
+tracking and ground contact together, paired over a held-out mesh with every
+pooled confidence interval excluding zero, though two seeds of three carry the
+effect. At a payload the frozen controller still handles, the same
+conditioning costs lateral accuracy, so the mechanism belongs in the loaded
+regime rather than everywhere. Permuting the payload across environments,
+which preserves its distribution and destroys only its pairing, is beaten by
+the correct estimate but recovers most of the gain alone: the benefit is part
+conditioning on a plausible load and part online identification. The true
+payload is not an upper bound: at the largest load it can drive the tool off
+the ground, because the estimate's gradual arrival is itself part of the
+mechanism. Effective control of this machine therefore depends not only on
+model accuracy and policy robustness, but on conditioning the controller on a
+load it infers for itself.
 }
 
 % Table of contents
