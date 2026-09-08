@@ -104,7 +104,7 @@ def build():
     s.append(rect(20, 76, 1360, 244, "#F3F4F5", "#CDD1D4", 1.6, 0))
     s.append(txt(38, 112, "DEPLOYED PATH", 27, BLUE, "bold", "start"))
     s.append(rect(20, 350, 1360, 300, "#F3F4F5", "#CDD1D4", 1.6, 0))
-    s.append(txt(38, 388, "TRAINING AND ESTIMATOR FIT", 27, RED, "bold",
+    s.append(txt(38, 388, "TRAINING AND ESTIMATOR FIT", 25, RED, "bold",
                  "start"))
 
     # R and IF stop at the common 66-channel task observation.  AF estimates

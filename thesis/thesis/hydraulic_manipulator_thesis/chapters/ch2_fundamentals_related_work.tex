@@ -556,18 +556,29 @@ The contribution remains the complete experimental chain: identifiable cylinder
 data, structurally constrained models fast enough for parallel training, online
 adaptation and a common evaluation protocol. Adaptation is reported as a
 conditional mechanism, with positive and negative training seeds kept in the
-same analysis. Three stacks are tested, defined in
-Sections~\ref{sec:ctrl:ppo-rom} to~\ref{sec:ctrl:ppo-aamfd}: \ppoROM{} drives a
-command-conditioned ROM, \ppoIDFD{} drives the frozen inverse and strict
-forward models through the same policy interface, and \ppoAAMFD{} emits the
-valve command directly from an actor widened by four context columns carrying
-an online payload estimate. \ppoROM{} and \ppoIDFD{} share the action contract
-and form the matched pair; \ppoAAMFD{} does not, and is compared with its own
-frozen base. Because the ROM is calibrated to the deployment plant, causal
-architectural claims rest on that matched pair and on within-stack paired
-ablations rather than on a three-way contrast
-(Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system} now grounds the
-comparison in the concrete machine.
+same analysis. The three tested stacks are:
+
+\begin{description}
+  \item[\ppoROM.] A command-conditioned ROM realises the policy's desired
+    cylinder motion. It is the reference and the only actuator calibrated to
+    the deployment plant (Section~\ref{sec:ctrl:constraints}).
+  \item[\ppoIDFD.] The same policy interface drives the frozen inverse model
+    followed by the strict forward model, forming the robust learned baseline.
+  \item[\ppoAAMFD.] The policy emits the valve command directly and the
+    inverse model leaves the path. The frozen actor's input is widened by four
+    context columns carrying a payload estimated online, and the same forward
+    model realises the resulting command ahead of PhysX.
+\end{description}
+
+All stacks share the task, terrain, trajectories, deployment factors and
+evaluation gates. \ppoROM{} and \ppoIDFD{} additionally share the action
+contract and form the matched pair; \ppoAAMFD{} does not, because its policy
+chooses a valve command rather than a cylinder increment, and it is therefore
+compared with its own frozen base rather than ranked against the others. The
+ROM is calibrated to the deployment plant, so causal architectural claims rely
+on the matched pair and on within-stack paired ablations rather than on a
+three-way contrast (Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system}
+now grounds this comparison in the concrete machine.
 
 Two distinctions separate the adaptation used here from the latent-adaptation
 line it is closest to. What is estimated is a \emph{named physical quantity},
