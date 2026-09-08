@@ -271,61 +271,27 @@ actuator representation and the transfer assumptions made for it.
 \section{Thesis Structure}
 \label{sec:intro:structure}
 
-This thesis investigates how hydraulic actuator dynamics learned from
-high-fidelity simulation can be reduced, transferred into a computationally
-efficient robotic simulation and used for reinforcement-learning control,
-grounding that investigation in the identifiability of the actuator models and
-in the robustness of the controllers built on them. The document is organised as
-follows:
-
-\textbf{Chapter~\ref{chap:fundamentals}} establishes the background against
-which the remainder is read. It covers the actuation chain, the kinematic tools
-underlying the classical controller, conventional model-based control of
-hydraulic uncertainty, learned dynamics models and the pitfalls of identifying
-them from closed-loop data, domain randomisation and latent adaptation. The
-chapter closes by stating the gap that remains and where the three control
-stacks sit against it.
-
-\textbf{Chapter~\ref{chap:system}} analyses the platform, taking the MULAG
-FME~500 on a Unimog carrier as the case study. It describes the rigid bodies and
-the serial chain they form, the mappings between task space and cylinder space,
-and the high-fidelity Simscape model the actuator data derives from. It also
-fixes what the controller may observe and the evaluation gates every later
-result is scored against.
-
-\textbf{Chapter~\ref{chap:data}} presents the data generation strategy and
-answers the first research question. It describes the excitation design, the
-randomised factor set that defines the family of plants, and the procedures that
-keep training, validation and reserved test configurations separate. It then
-reports the identifiability audit, including the measured finding that
-excitation gathered under a task controller does not separate plants and the
-open-loop collection that repairs it.
-
-\textbf{Chapter~\ref{chap:models}} develops the learned actuator models and
-answers the next two research questions. It presents the inverse model, the
-forward model, the evidence that supervised accuracy alone does not establish
-command authority, and the reduced-order model that serves as the deployment
-plant. It closes on the AAM as a diagnostic for whether the inverse model can be
-trusted, and on the online payload estimator the deployed controller conditions
-on.
-
-\textbf{Chapter~\ref{chap:control}} describes the control framework and its
-integration with the simulator, and answers the fourth research question. It
-presents the damped least-squares teacher, the observation and action interfaces
-the stacks hold in common, the distillation of the teacher into a student
-policy, and the reference-anchored fine-tuning that keeps further optimisation
-admissible. It then assembles the three deployed stacks and states which
-comparison each one can carry.
-
-\textbf{Chapter~\ref{chap:evaluation}} reports the experimental evaluation and
-answers the last two research questions. It compares the matched pair on
-tracking, command behaviour and dynamic response, and measures how much of the
-randomised factor draw reaches each plant. It closes on online adaptation,
-measured inside the adaptive stack against its own frozen base and a
+The document follows the dependency between the experiments.
+Chapter~\ref{chap:fundamentals} reviews the actuation chain, the kinematic
+tools behind the classical controller, learned dynamics models and the pitfalls
+of identifying them from closed-loop data, domain randomisation and latent
+adaptation, and closes on the gap that remains.
+Chapter~\ref{chap:system} analyses the MULAG FME~500 platform, the mappings
+between task and cylinder space and the high-fidelity Simscape model the
+actuator data derives from, and fixes what the controller may observe and the
+gates every later result is scored against.
+Chapter~\ref{chap:data} presents the excitation design, the randomised factor
+set and the splits, then reports the identifiability audit and the open-loop
+collection it forced.
+Chapter~\ref{chap:models} develops the inverse, forward and reduced-order
+models, the evidence that supervised accuracy alone does not establish command
+authority, the AAM diagnostic and the online payload estimator.
+Chapter~\ref{chap:control} presents the damped least-squares teacher, the
+shared observation and action interfaces, distillation and reference-anchored
+fine-tuning, and assembles the three deployed stacks.
+Chapter~\ref{chap:evaluation} compares the matched pair on tracking, command
+behaviour and dynamic response, measures how much of the factor draw reaches
+each plant, and closes on online adaptation against a frozen base and a
 permuted-payload control.
-
-\textbf{Chapter~\ref{chap:conclusion}} concludes the thesis. It summarises what
-the work establishes and what it does not, states the design implications that
-follow, and records the limitations of the evidence. It ends with the future
-work, which begins with the simulation experiments that would most change what
-the thesis can claim and ends with transfer to the physical machine.
+Chapter~\ref{chap:conclusion} states what the work establishes and what it does
+not, records the limitations of the evidence, and ends with the future work.

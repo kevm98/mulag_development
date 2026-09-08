@@ -507,13 +507,14 @@ distillation, and (V) a matched actuator comparison.
 What the table does and does not assert is worth fixing before it is read. The
 rows are lines of work, not individual papers, and the criteria are the ones
 this thesis needs rather than a neutral taxonomy of the field. Every criterion
-is individually established somewhere, several of them for decades, and
-single works cover more of a row than a coarse mark can show. The latent
-adaptation row in particular samples a large and active literature; it is read
-here for the assumption those constructions share, that the factor directions
-an estimator retains are the directions the controller needs, and not for
-coverage. The claim is the combination on one machine under one protocol, measured
-rather than designed for.
+is individually established somewhere, several of them for decades, and single
+works cover more of a row than a coarse mark can show. What has not been
+established is the combination on one machine under one protocol: that an
+actuator identified from high-fidelity simulation retains \emph{command}
+dependence after transfer, that a policy can control through it with the
+classical controller removed, and that an online estimate of the operating
+condition improves closed-loop tracking under exactly the plant conditions
+where that policy's learned robustness has run out.
 
 \begin{table}[H]
   \centering
@@ -551,62 +552,22 @@ rather than designed for.
   \end{tabular}
 \end{table}
 
-Column III deserves a note, because what satisfies it here differs in kind from
-the row above. What \ppoAAMFD{} deploys is a policy conditioned on one estimated
-physical quantity, the payload, recovered online from the task observation it
-already carries, rather than the anonymous latent of the canonical
-architecture. Section~\ref{sec:eval:adaptation} measures what that conditioning
-recovers on two held-out meshes, in which payload regime it helps, and how much
-of the gain survives when the payload is permuted across environments.
-
 The contribution remains the complete experimental chain: identifiable cylinder
 data, structurally constrained models fast enough for parallel training, online
 adaptation and a common evaluation protocol. Adaptation is reported as a
 conditional mechanism, with positive and negative training seeds kept in the
-same analysis. The three tested stacks are:
-
-\begin{description}
-  \item[\ppoROM.] A command-conditioned ROM realises the policy's desired
-    cylinder motion. It is the reference and the only actuator calibrated to
-    the deployment plant (Section~\ref{sec:ctrl:constraints}).
-  \item[\ppoIDFD.] The same policy interface drives the frozen inverse model
-    followed by the strict forward model, forming the robust learned
-    baseline.
-  \item[\ppoAAMFD.] The policy emits the valve command directly and the
-    inverse model leaves the path. The frozen actor's input is widened by four
-    context columns carrying a payload estimated online, and the same forward
-    model realises the resulting command ahead of PhysX.
-\end{description}
-
-All stacks share the task, terrain, trajectories, deployment factors and
-evaluation gates. \ppoROM{} and \ppoIDFD{} additionally share the action
-contract and form the matched pair; \ppoAAMFD{} does not, because its policy
-chooses a valve command rather than a cylinder increment, and it is therefore
-compared with its own frozen base rather than ranked against the others. The
-ROM is calibrated to the deployment plant, so causal architectural claims rely
-on the matched pair and on within-stack paired ablations rather than on a
-three-way contrast (Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system}
-now grounds this comparison in the concrete machine.
-
-\subsection*{Synthesis}
-
-Each element used here is established somewhere. Hydraulic actuators have been
-modelled and controlled with maintained physical models for
-decades~\cite{mattila2017survey,jelali2003hydraulic}. Learned actuator
-surrogates transfer measured behaviour into parallel simulation for legged
-machines~\cite{hwangbo2019learning,rudin2022learning}. Reinforcement learning
-has been applied to hydraulic
-excavators~\cite{egli2020towards,egli2022general}. Latent online adaptation
-recovers a plant code from history and conditions a policy on
-it~\cite{lee2020learning,kumar2021rma}. Classical priors are transferred into
-policies by distillation~\cite{ross2011reduction}.
-
-What has not been established is the combination on one machine under one
-protocol: that an actuator identified from high-fidelity simulation retains
-\emph{command} dependence after transfer, that a policy can control through it
-with the classical controller removed, and that an online estimate of the
-operating condition improves closed-loop task tracking under exactly the plant
-conditions where that policy's learned robustness has run out.
+same analysis. Three stacks are tested, defined in
+Sections~\ref{sec:ctrl:ppo-rom} to~\ref{sec:ctrl:ppo-aamfd}: \ppoROM{} drives a
+command-conditioned ROM, \ppoIDFD{} drives the frozen inverse and strict
+forward models through the same policy interface, and \ppoAAMFD{} emits the
+valve command directly from an actor widened by four context columns carrying
+an online payload estimate. \ppoROM{} and \ppoIDFD{} share the action contract
+and form the matched pair; \ppoAAMFD{} does not, and is compared with its own
+frozen base. Because the ROM is calibrated to the deployment plant, causal
+architectural claims rest on that matched pair and on within-stack paired
+ablations rather than on a three-way contrast
+(Section~\ref{sec:ctrl:matching}). Chapter~\ref{chap:system} now grounds the
+comparison in the concrete machine.
 
 Two distinctions separate the adaptation used here from the latent-adaptation
 line it is closest to. What is estimated is a \emph{named physical quantity},
