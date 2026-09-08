@@ -190,56 +190,6 @@ conclusion.
   \end{tabular}
 \end{table}
 
-\section{Design Implications}
-
-The design implications follow the same sequence: actuator identification,
-policy training and plant adaptation.
-
-\subsection*{Identification and Transfer}
-
-\textbf{Design the excitation for identifiability, and test the model by input
-ablation.} Task-control data can make state and command nearly redundant.
-Dedicated excitation makes command effects identifiable. A learned actuator
-should therefore be accepted on both prediction accuracy and loss of performance
-when the command input is removed.
-
-\textbf{Embed known physics and bound learned corrections.} The reduced-order
-model propagates pressure, force, velocity, and extension through explicit
-updates. Its learned terms are bounded, preventing unphysical state changes
-inside the training loop. This structure also represents the pressure dependence
-of valve authority directly.
-
-\textbf{Prefer a frozen model with a bounded, gated correction to retraining.}
-The inverse model transferred at millimetre scale and remained frozen. A
-$\unit[3]{mm}$ correction absorbed the deployment offset, vanished at zero
-command and preserved the original data through replay, confining
-deployment-specific behaviour to a bounded component.
-
-\subsection*{Control Methodology}
-
-\textbf{Constrain policy updates when the reward is not the evaluation
-criterion.} The physical evaluation gates and the reward are not identical. A
-forward-KL anchor to a verified reference policy bounds policy drift, and the
-anchor advances only through checkpoints that satisfy the gates. Reward terms
-should represent quantities that are also treated as evaluation constraints.
-
-\textbf{Where no baseline is inherited, the action contract is the safety
-argument.} Zero action leaves the arm stationary. A rate limit, filter, travel
-shield, command scale and per-axis anti-windup cap bound its authority. The cap
-must be resolved per axis because the value that recovers boom offsets damages
-head alignment on cylinder~4 (Section~\ref{sec:ctrl:ppo}).
-
-\subsection*{Plant Adaptation}
-
-\textbf{Measure identifiability and correction authority before training an
-estimator.} The identifiability envelope determines whether plant identity is
-present in the data. The delivered-stress check determines whether a
-perturbation reaches the plant and whether a correction can influence the
-command. Both tests should precede estimator training.
-
-Filtering may be needed when a changing estimate enters a memoryless policy,
-but its time constant remains to be determined on the deployed stack.
-
 \section{Contributions}
 
 Section~\ref{sec:intro:contributions} stated six contributions. Their standing

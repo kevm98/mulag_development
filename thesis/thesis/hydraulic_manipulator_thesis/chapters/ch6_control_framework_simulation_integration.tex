@@ -599,10 +599,49 @@ the evaluation criterion into training. Distillation supplies the first anchor;
 the critic is warmed with actor and normalisers frozen; each later block trains
 within the fixed bound, rolls back rejected updates, scores checkpoints on at
 least three held-out meshes and promotes only a passing checkpoint. The last
-promotion is returned. Algorithm~\ref{alg:ctrl:anchored} in
-Appendix~\ref{app:anchored-ppo} gives the full procedure.
+promotion is returned. Algorithm~\ref{alg:ctrl:anchored} states the procedure.
 
-
+\begin{algorithm}[!ht]
+  \footnotesize
+  \DontPrintSemicolon
+  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+  \Input{teacher $\pi_T$; gate test $\bm{G}(\vartheta)\preceq\bm{g}^{\star}$;
+    $M$ blocks; bounds $\delta_{\mathrm{upd}}=0.01$,
+    $\delta_{\mathrm{ref}}=0.05$}
+  \Output{last promoted actor $\vartheta^{\star}$}
+  \BlankLine
+  distil $\vartheta$ from $\pi_T$ on DAgger states, then remove $\pi_T$
+    \tcp*{teacher-free thereafter}
+  freeze $\vartheta$ and the observation normalisers; fit the critic for $150$
+    iterations\;
+  $\vartheta_{\mathrm{ref}}\leftarrow\vartheta$;\quad
+    $\vartheta^{\star}\leftarrow\vartheta$\;
+  \For{block $m\leftarrow0$ \KwTo $M-1$}{
+    freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
+    \For{each PPO iteration}{
+      roll out $\pi_{\vartheta}$ as sole controller; snapshot
+        $\mathcal{S}\leftarrow(\vartheta,\text{optimiser})$\;
+      update on Equation~\eqref{eq:ctrl:anchored-loss}, stopping the epoch once
+        $D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$\;
+      recompute $(D_{\mathrm{upd}},D_{\mathrm{ref}})$ on the full rollout\;
+      \lIf{either bound is exceeded or non-finite}{restore $\mathcal{S}$
+        atomically}
+    }
+    score every checkpoint on $\ge 3$ held-out meshes, aggregating each gate to
+      the worst mesh\;
+    \If{some checkpoint satisfies $\bm{G}\preceq\bm{g}^{\star}$}{
+      $\vartheta^{\star}\leftarrow$ that checkpoint by the fixed selection
+        rule;\quad
+      $\vartheta\leftarrow\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
+      reset the actor optimiser moments; retain the critic state\;
+    }
+  }
+  \Return{$\vartheta^{\star}$}\;
+  \caption{Reference-anchored PPO. The teacher is used only for distillation,
+  every rollout is controlled by $\pi_\vartheta$ alone, and the frozen
+  reference moves only when a checkpoint passes every gate.}
+  \label{alg:ctrl:anchored}
+\end{algorithm}
 
 \subsection{Theoretical Status}
 \label{sec:ctrl:theory}
@@ -622,7 +661,7 @@ trajectories, Pinsker's inequality and the boundedness of every gate metric give
 $|\mathbb{E}_{\pi_\vartheta}[g] - \mathbb{E}_{\pi_{\mathrm{ref}}}[g]|
 \le 2 G_{\max}\sqrt{H \delta_{\mathrm{ref}}/2}$ for a metric $g$ with
 $\|g\|_\infty \le G_{\max}$ over a horizon $H$
-(Appendix~\ref{app:kl-bound} derives this bound step by step). At the
+(Appendix~\ref{app:kl-bound} derives it). At the
 production horizon of $2808$ steps and $\delta_{\mathrm{ref}} = 0.05$ the
 right-hand side exceeds sixteen, which for a metric bounded in $[0,1]$ is
 vacuous, and there is a further measure mismatch because the constraint is

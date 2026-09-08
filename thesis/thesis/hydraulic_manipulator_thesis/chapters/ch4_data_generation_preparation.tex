@@ -192,8 +192,7 @@ batch is a curriculum rather than a homogeneous pool: run~1 is the nominal
 plant, runs 2--251 randomise only the hydraulics, runs 252--501 only the
 mechanics, and runs 502--1000 both (Figure~\ref{fig:data:design}(a)), so a
 modelling failure can be attributed to one axis by retraining on one block.
-Appendix~\ref{app:dataset} lists the axes and
-Appendix~\ref{app:data:curriculum} the generation procedure.
+Appendix~\ref{app:dataset} lists the axes.
 
 \begin{figure}[tb]
   \centering
@@ -225,9 +224,8 @@ motion.
 \section{Closed-Loop Data Collection}
 \label{sec:data:closed-loop}
 
-Algorithm~\ref{alg:data:closed-loop} in Appendix~\ref{app:data:curriculum}
-gives the procedure that produced the curriculum above. The parameter table is
-fixed before simulation and each run receives a new reference path.
+The parameter table that produced the curriculum above is fixed before any
+simulation runs, and each run receives a new reference path.
 
 \subsection{The Controller as a Data-Collection Instrument}
 
@@ -739,9 +737,11 @@ checks remain meaningful.
 \label{sec:data:diagnostics}
 
 No dataset in this thesis is used before it passes an explicit audit,
-for the reason given at the end of
-Section~\ref{sec:data:open-loop}. The audit of the strict open-loop
-export is reproduced in Table~\ref{tab:data:audit}.
+for the reason given at the end of Section~\ref{sec:data:open-loop}. The strict
+open-loop export passes every check the extraction stage computes: the
+$\unit[0.01]{s}$ sample grid is exact to $9.1\times10^{-15}\,\mathrm{s}$, all
+three increment checks return zero error, no value is non-finite, and
+$93.7\,\%$ of the $25\,600$ rows over four runs are marked valid.
 
 
 

@@ -135,6 +135,19 @@ and the correction retains authority.
     \clearpage
   \endgroup}
 
+% The class issues \cleardoublepage before the bibliography.  The book class
+% gives that parity filler the running head of the preceding chapter, so make
+% every such filler page header-free, matching \RRLABchapterblank above.
+\makeatletter
+\def\cleardoublepage{\clearpage
+  \if@twoside
+    \ifodd\c@page\else
+      \hbox{}\thispagestyle{empty}\newpage
+      \if@twocolumn\hbox{}\newpage\fi
+    \fi
+  \fi}
+\makeatother
+
 % Preserve the template's normal paragraph and heading gaps.  With
 % \flushbottom, pages containing fixed figures or algorithms stretch those
 % gaps to fill the text height, producing conspicuous empty bands mid-page.

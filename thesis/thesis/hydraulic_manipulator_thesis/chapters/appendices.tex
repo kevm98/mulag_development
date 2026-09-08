@@ -1,61 +1,42 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Focused appendices: material needed to interpret or
-%% reproduce the reported experiments, without repeating the
-%% methods chapters.
+%% Focused appendices: only the reference data and the
+%% reproduction record that the main chapters cannot carry.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\chapter{Dataset Ranges and Audit}
+\chapter{Reference Data and Reproducibility Record}
+
+This appendix retains only the reference numbers, digests and entry points that
+the main chapters cannot carry.
+
+\section{Plant Ranges and Frozen Collections}
 \label{app:dataset}
 
-Chapter~\ref{chap:data} describes how the Simscape and IsaacLab collections
-were generated. This appendix retains only the numerical plant ranges, the
-open-loop audit and the frozen deployment split needed to interpret or reproduce
-those collections.
-
-\section{Randomised Plant Ranges}
-
 \begin{table}[H]
   \centering
-  \caption{Randomised hydraulic parameters. The seal-wear coordinate is drawn
-  independently for each cylinder and drives three physically linked
-  quantities.}
+  \caption{Randomised parameters of the Simscape curriculum. Seal wear is drawn
+  per cylinder and drives clearance, leakage and spool lag together; mechanical
+  perturbations apply to each of the fourteen bodies.}
   \label{tab:data:hydraulic}
-  \small
-  \begin{tabular}{llll}
-    \toprule
-    Parameter & Nominal & Randomised range & Acts on \\
-    \midrule
-    Entrained air fraction $\varepsilon_{\mathrm{air}}$
-      & $0.005$ & $0.001$ -- $0.080$ & fluid compliance \\
-    Dead-volume fraction $\varepsilon_{\mathrm{vol}}$
-      & $0.020$ & $0.005$ -- $0.080$ & fluid compliance \\
-    Discharge coefficient $c_d$
-      & $0.70$ & $0.56$ -- $0.84$ & valve flow gain \\
-    Seal wear $w_{\mathrm{seal},i}$
-      & $0$ & $0$ -- $0.25$ per cylinder
-      & clearance, leakage, spool lag \\
-    Relief setting $p_{\mathrm{set}}$
-      & $\unit[27.6]{MPa}$ & $\unit[24.8]{MPa}$ -- $\unit[30.4]{MPa}$
-      & pressure ceiling \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{table}[H]
-  \centering
-  \caption{Randomised mechanical parameters. Rigid-body perturbations are
-  applied independently to each of the fourteen bodies.}
-  \label{tab:data:mechanical}
   \small
   \begin{tabular}{lll}
     \toprule
     Parameter & Nominal & Randomised range \\
     \midrule
+    Entrained air fraction $\varepsilon_{\mathrm{air}}$
+      & $0.005$ & $0.001$ -- $0.080$ \\
+    Dead-volume fraction $\varepsilon_{\mathrm{vol}}$
+      & $0.020$ & $0.005$ -- $0.080$ \\
+    Discharge coefficient $c_d$
+      & $0.70$ & $0.56$ -- $0.84$ \\
+    Seal wear $w_{\mathrm{seal},i}$
+      & $0$ & $0$ -- $0.25$ per cylinder \\
+    Relief setting $p_{\mathrm{set}}$
+      & $\unit[27.6]{MPa}$ & $\unit[24.8]{MPa}$ -- $\unit[30.4]{MPa}$ \\
+    \midrule
     Body mass & CAD value & $\pm 20\,\%$ \\
     Centre-of-mass offset & CAD value & $\pm 5\,\%$ \\
-    Inertia tensor and products & CAD value & consistent with mass draw \\
-    Joint stiffness, J1 and J2 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
-    Joint stiffness, J3 and J4 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
+    Inertia tensor & CAD value & consistent with mass draw \\
+    Joint stiffness, J1--J4 & $\unit[60]{kN/m}$ & $40$ -- $\unit[120]{kN/m}$ \\
     Joint stiffness, J5 & $\unit[25]{kN/m}$ & $15$ -- $\unit[60]{kN/m}$ \\
     Joint damping & $250$ & $100$ -- $600$ \\
     \bottomrule
@@ -64,8 +45,8 @@ those collections.
 
 \begin{table}[H]
   \centering
-  \caption{Six physical factors in the IsaacLab deployment collections. One
-  factor vector is drawn per run and held fixed throughout that run.}
+  \caption{Six physical factors in the IsaacLab deployment collections, one
+  vector drawn per run and held fixed throughout it.}
   \label{tab:data:factors}
   \small
   \begin{tabular}{llll}
@@ -82,127 +63,24 @@ those collections.
   \end{tabular}
 \end{table}
 
-\section{Closed-Loop Curriculum Generation}
-\label{app:data:curriculum}
-
-The procedure that produced the $1\,000$-run Simscape curriculum of
-Section~\ref{sec:data:randomization}. No reported model is trained on it; it is
-recorded so the collection can be reproduced and audited.
-
-\begin{algorithm}[tb]
-  \small
-  \DontPrintSemicolon
-  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
-  \Input{run budget $N=1000$; joint limits $\bm{q}_{\min},\bm{q}_{\max}$;
-    nominal parameters $\bm{\theta}_0$}
-  \Output{dataset $\mathcal{D}=\{(\text{trajectory}_i,\bm{\xi}_i)\}_{i=1}^{N}$}
-  \BlankLine
-  $\mathbf{L}\leftarrow\textsc{LatinHypercube}(N,12)$
-    \tcp*{one design for the whole batch}
-  \For{$i\leftarrow 1$ \KwTo $N$}{
-    assign $i$ to a curriculum block (nominal / hydraulic / mechanical /
-      full)\;
-    $\bm{\xi}_i\leftarrow\textsc{DrawParameters}(\mathbf{L}_i,\text{block})$
-      \tcp*{$\varepsilon_{\mathrm{air}},\varepsilon_{\mathrm{vol}},c_d,
-      w_{\mathrm{seal}},p_{\mathrm{set}}$; masses, CoM, inertia,
-      stiffness}
-  }
-  \For{$i\leftarrow 1$ \KwTo $N$}{
-    inject $\bm{\xi}_i$ into the Simscape model\;
-    $n_w\leftarrow\textsc{RandInt}(12,20)$;\quad
-      $\bm{W}\leftarrow\textsc{LatinHypercube}(n_w,\text{JDOF})$ within
-      $[\bm{q}_{\min},\bm{q}_{\max}]$\;
-    assign each segment a speed class (slow / medium / fast / variable);
-      \textbf{no} dwell\;
-    $\bm{q}_{\mathrm{ref}}(t)\leftarrow\textsc{Interpolate}(\bm{W})$ over
-      $\unit[22]{s}$\;
-    simulate with \texttt{ode23t}; log on the $\unit[0.05]{s}$ grid\;
-    store $(\bm{u},\bm{x},\dot{\bm{x}},\Delta\bm{p},\bm{F},\bm{q},
-      \dot{\bm{q}},\bm{q}_{\mathrm{ref}},\bm{\xi}_i)$\;
-    \lIf{$i \bmod 100 = 0$}{checkpoint $\mathcal{D}$ to disk}
-  }
-  \caption{Closed-loop curriculum generation.}
-  \label{alg:data:closed-loop}
-\end{algorithm}
-
-\section{Open-Loop Export Audit}
-
-\begin{table}[H]
-  \centering
-  \caption{Audit of the strict open-loop excitation export. The extraction
-  stage computes and stores every check.}
-  \label{tab:data:audit}
-  \small
-  \begin{tabular}{lll}
-    \toprule
-    Check & Result & Interpretation \\
-    \midrule
-    Rows, runs, columns & $25\,600$ / $4$ / $49$ & four complete runs \\
-    Median sample time & $\unit[0.01]{s}$ & as commanded \\
-    Maximum sample-time error & $9.1\times10^{-15}\,\mathrm{s}$ & numerically exact grid \\
-    Maximum $\Delta$extension error & $0$ & targets match state differences \\
-    Maximum $\Delta$velocity error & $0$ & targets match state differences \\
-    Maximum $\Delta(\Delta p)$ error & $\unit[0]{Pa}$ & targets match state differences \\
-    Non-finite values & $0$ & no solver escapes \\
-    Valid fraction & $0.937$ & startup, gaps and shutdown excluded \\
-    Command rank & $4$ & all four channels independent \\
-    Lagged excitation rank & $80$ & history matrix full rank \\
-    Valve saturation & $8.5\,\%$ per channel & limits reached but not dominant \\
-    Stroke coverage & $12\,\%$ -- $33\,\%$ & above floor, below target \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\clearpage
-\section{Frozen Deployment Collections}
 \label{app:data:frozen}
-
 The task-controller and open-loop context-identification collections share the
-same factor design, domain composition and run-level split. Each contains $118$
-runs with one fixed factor vector per run. Model-level identification results
-use the open-loop collection for the identifiability reason given in
+same factor design and run-level split. Each contains $118$ runs with one fixed
+factor vector per run: $64$ with all six factors varied, $40$ hydraulic-only,
+$12$ mechanical-only and $2$ nominal, split into $82$ fitting, $20$ validation
+and $16$ held-out test runs. Splitting is at run level, since the factor vector
+is constant within a run and a window-level split would place near-duplicates of
+the same plant in both sets; the manifests store the run identifier, factor key
+and split label. Model-level identification results use the open-loop
+collection for the reason given in
 Section~\ref{sec:data:openloop-collection}.
-
-\begin{table}[H]
-  \centering
-  \caption{Composition of each frozen deployment collection. The $102$ training
-  runs are divided into $82$ fitting and $20$ validation runs; the remaining
-  $16$ runs form the held-out test split.}
-  \label{tab:app:frozen}
-  \small
-  \begin{tabular}{lll}
-    \toprule
-    Domain & Runs & Factors varied \\
-    \midrule
-    \texttt{combined}   & $64$ & all six \\
-    \texttt{hydraulic}  & $40$ & flow, compliance, seal, pressure \\
-    \texttt{mechanical} & $12$ & mass scale, centre-of-mass height \\
-    \texttt{nominal}    & $2$  & none \\
-    \midrule
-    Total                & $118$ & \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Splitting is performed at run level. Since the factor vector is constant within
-a run, a window-level split would place near-duplicates of the same plant in
-both fitting and evaluation sets. The frozen manifests store the run identifier,
-factor key and split label, making the separation directly auditable.
-
-\chapter{Implementation and Reproducibility Record}
-\label{app:implementation}
-
-The methods chapters define the architectures and training procedures. This
-appendix retains only the timing contract, exact input layouts, frozen artifact
-identifiers and reproduction entry points that are cumbersome to include in the
-main text.
 
 \section{Timing Contract}
 
 \begin{table}[H]
   \centering
   \caption{Rates of the simulation, control and learned components. The offline
-  AAM runs on its own grid and is a diagnostic, not part of the deployed loop.}
+  AAM is a diagnostic, not part of the deployed loop.}
   \label{tab:app:rates}
   \small
   \begin{tabular}{lll}
@@ -211,7 +89,7 @@ main text.
     \midrule
     PhysX physics substep           & $\unit[120]{Hz}$ & $\unit[8.33]{ms}$ \\
     Policy and control step         & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
-    AF payload estimate and context  & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
+    AF payload estimate and context & $\unit[60]{Hz}$  & $\unit[16.67]{ms}$ \\
     Inverse, forward and ROM models & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
     Offline AAM inference           & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
     Simscape logging grid           & $\unit[20]{Hz}$  & $\unit[50]{ms}$ \\
@@ -219,19 +97,17 @@ main text.
   \end{tabular}
 \end{table}
 
-The offline AAM reads $20$ rows on the $\unit[20]{Hz}$ grid, giving a
-$\unit[1.0]{s}$ window, and its five-estimate smoother adds
-$\unit[250]{ms}$ of delay. Deployed AF instead reads $20$ control-step rows,
-giving a $\unit[333]{ms}$ window, and applies no output smoother.
+The offline AAM reads $20$ rows on the $\unit[20]{Hz}$ grid, a $\unit[1.0]{s}$
+window, and its five-estimate smoother adds $\unit[250]{ms}$ of delay. Deployed
+AF reads $20$ control-step rows, a $\unit[333]{ms}$ window, with no smoother.
 
-\clearpage
 \section{Frozen Artifacts}
 
 \begin{table}[H]
   \centering
-  \caption{Frozen artifacts and their SHA-256 digests, truncated to the first
-  $32$ hexadecimal digits. The context-column checkpoints share the frozen AF
-  base and differ only in their $1\,024$ trained parameters.}
+  \caption{Frozen artifacts and their SHA-256 digests, truncated to $32$
+  hexadecimal digits. The context-column checkpoints share the frozen AF base
+  and differ only in their $1\,024$ trained parameters.}
   \label{tab:app:hashes}
   \scriptsize
   \begin{tabular}{lll}
@@ -256,323 +132,48 @@ giving a $\unit[333]{ms}$ window, and applies no output smoother.
   \end{tabular}
 \end{table}
 
-\section{Learned-Actuator Interfaces}
-
-Both actuator networks use a linear projection to $512$ units, four pre-norm
-residual blocks, final normalisation and a linear output projection. Their exact
-interfaces are given in Table~\ref{tab:app:idfd}.
-
-\begin{table}[H]
-  \centering
-  \caption{Input and output layouts stored in the frozen inverse and forward
-  model checkpoints.}
-  \label{tab:app:idfd}
-  \small
-  \begin{tabular}{lll}
-    \toprule
-    & Inverse model & Forward model (strict) \\
-    \midrule
-    Input width  & $28$ & $20$ \\
-    Input layout & extension(4), velocity(4),
-                   & valve(4), extension(4), \\
-                 & $\Delta p$(4), force(4),
-                   & velocity(4), $\Delta p$(4), \\
-                 & target $\Delta$extension(4), & force(4) \\
-                 & target $\Delta$velocity(4), $\Delta t$(4) & \\
-    Output width & $4$ & $12$ \\
-    Output layout & valve command(4)
-                  & $\Delta$extension(4), $\Delta$velocity(4), \\
-                  & & $\Delta(\Delta p)$(4) \\
-    Target mode  & normalised $\Delta$ valve command
-                 & normalised $\Delta$ cylinder state \\
-    Parameters   & $2\,124\,292$ & $2\,124\,300$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Only the predicted extension increment of the forward model is integrated in
-the control loop. Its velocity output is retained as a diagnostic.
-
-\clearpage
-\section{Policy Observation Layout}
-
-The deployed actor receives $66$ task values in every stack. AF appends four
-plant-context columns, giving a $70$-value input. The final twelve task values
-make actuator prediction and cylinder tracking errors visible to the otherwise
-memoryless actor.
-
-The context width is read off the frozen checkpoint rather than asserted. In
-\texttt{model\_1596.pt} of each context-column arm the actor's first layer is
-$256 \times 70$, of which the last four columns are the context and carry
-$1\,024$ trainable parameters; the preceding $66$ columns are bit-identical
-across the three seeds, which is the check that the gradient mask held. Only
-the payload channel is non-constant in this campaign, and the exclusion contract
-of Section~\ref{sec:data:history-features} applies to the offline AAM only.
-
-\begin{table}[H]
-  \centering
-  \caption{Policy observation layout. Indices are zero-based and half-open.}
-  \label{tab:app:obs}
-  \small
-  \begin{tabular}{lll}
-    \toprule
-    Index & Width & Contents \\
-    \midrule
-    $0$--$9$   & $9$ & verge height profile ahead of the cutter \\
-    $9$        & $1$ & cut-height error \\
-    $10$       & $1$ & lateral error \\
-    $11$       & $1$ & cutter vertical velocity \\
-    $12$--$16$ & $4$ & measured cylinder extensions \\
-    $16$--$20$ & $4$ & measured cylinder velocities \\
-    $20$--$24$ & $4$ & cylinder headroom, low side \\
-    $24$--$28$ & $4$ & cylinder headroom, high side \\
-    $28$--$32$ & $4$ & previous applied action \\
-    $32$--$36$ & $4$ & current valve commands \\
-    $36$--$40$ & $4$ & actuator-predicted $\Delta$extension \\
-    $40$--$44$ & $4$ & commanded target lead \\
-    $44$       & $1$ & head-down alignment \\
-    $45$       & $1$ & head-down alignment rate \\
-    $46$       & $1$ & truck speed \\
-    $47$       & $1$ & scan valid fraction \\
-    $48$--$50$ & $2$ & cutter local $+Z$ axis in world XY \\
-    $50$       & $1$ & normalised cutter-terrain interaction force \\
-    $51$--$54$ & $3$ & path preview at $0.5$, $1.0$ and $\unit[2.0]{m}$ \\
-    \midrule
-    $54$--$58$ & $4$ & measured minus commanded cylinder state \\
-    $58$--$62$ & $4$ & actuator prediction residual \\
-    $62$--$66$ & $4$ & normalised cylinder effort \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\section{Per-Environment Spread and the Choice of Statistic}
-\label{app:paired-spread}
-
-Every closed-loop comparison in Chapter~\ref{chap:evaluation} is reported as a
-paired median difference rather than as a mean or a ratio. Figure~\ref{fig:app:paired}
-shows why, by drawing every environment's paired difference instead of
-summarising it.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\textwidth]{images/appendix/app_paired_differences}
-  \caption{Per-environment paired differences, sorted, pooled over the three
-  seeds on held-out mesh 3141. Positive is better. The dashed curve in the left
-  column is the A/A control of Section~\ref{sec:eval:adaptation}, in which both
-  arms are the same frozen policy and every difference is therefore noise.}
-  \label{fig:app:paired}
-\end{figure}
-
-Two properties of the spread govern how any of these comparisons may be read.
-
-The distribution is wide and two-lobed. At $4.0\times$ the paired differences
-run from roughly $-1100$ to $+1050\,$mm on cut height while the median
-difference is $+71.5\,$mm, so the centre of the distribution and its extremes
-carry different information and no single environment is evidence of anything.
-
-More importantly, the A/A control has almost the same spread. Two runs of the
-identical frozen policy, differing only in the fifth significant figure of the
-payload, disagree by up to $\pm 1000\,$mm on individual environments while their
-median difference is $-0.65\,$mm. The per-environment scatter is therefore
-dominated by chaotic divergence of the contact dynamics rather than by anything
-the treatment does, and it is not reduced by running longer or by adding
-environments.
-
-What separates the two curves is the offset, not the shape: the treatment curve
-sits above the A/A curve across the whole range, which is the effect the paired
-median and its bootstrap interval measure. A mean would be governed by the tails
-that the A/A control shows to be noise, and a median log-ratio changes sign
-against the marginal medians on a two-lobed distribution
-(Section~\ref{sec:eval:instrument}). The paired median difference and the
-fraction of environments improved are the two summaries that survive this
-spread, and they are what the chapter reports.
-
-\section{Reference-Anchored PPO in Full}
-\label{app:anchored-ppo}
-
-The five-stage procedure summarised in Section~\ref{sec:ctrl:anchored}. The
-teacher is used only in Stage~1; every PPO rollout is controlled by
-$\pi_\vartheta$ alone, and the frozen reference advances only through
-checkpoints that pass every gate.
-
-\begin{algorithm}[!ht]
-  \small
-  \DontPrintSemicolon
-  \SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
-  \Input{teacher $\pi_T$; gate test
-    $\bm{G}(\vartheta)\preceq\bm{g}^{\star}$; $M$ PPO blocks; anchored loss
-    and divergence bounds from Equations~\eqref{eq:ctrl:anchored-loss}
-    and~\eqref{eq:ctrl:bounds}}
-  \Output{last promoted actor $\vartheta^{\star}$ satisfying the gate test}
-  \tcp{\textbf{Stage 1 -- Distil a feasible actor}}
-  $\mathcal{D}\leftarrow$ DAgger states labelled by teacher mean action
-    $\bm{y}^{T}$\;
-  $\vartheta \leftarrow \arg\min_{\vartheta}
-    \mathbb{E}_{(\bm{o},\bm{y}^{T})\sim\mathcal{D}}
-    \bigl[\|\mu_{\vartheta}(\bm{o})-\bm{y}^{T}\|_{2}^{2}\bigr]$\;
-  remove $\pi_T$ from the controller
-    \tcp*{all later rollouts are teacher-free}
-  \tcp{\textbf{Stage 2 -- Warm the critic and set the first anchor}}
-  freeze $\vartheta$ and the observation normalisers\;
-  \For{$j\leftarrow1$ \KwTo $150$}{
-    roll out $\pi_{\vartheta}$ and set
-    $\psi \leftarrow \psi - \eta_{\mathrm{critic}}
-      \nabla_{\psi}\mathcal{L}_{V}(\psi)$\;
-  }
-  verify $\vartheta_{\mathrm{after}}=\vartheta_{\mathrm{before}}$\;
-  $\vartheta_{\mathrm{ref}}\leftarrow\vartheta$;
-    $\vartheta^{\star}\leftarrow\vartheta$
-    \tcp*{initial verified anchor}
-  \For{block $m\leftarrow0$ \KwTo $M-1$}{
-    \tcp{\textbf{Stage 3 -- Train inside the frozen reference bound}}
-    freeze $\vartheta_{\mathrm{ref}}$ for the whole block\;
-    \For{each PPO iteration in block $m$}{
-      collect an on-policy rollout with $\pi_{\vartheta}$ as sole controller\;
-      compute and normalise GAE; save snapshot $\mathcal{S}$;
-        set $\vartheta_{\mathrm{old}}\leftarrow\vartheta$\;
-      \For{$3$ epochs over the rollout minibatches}{
-        \lIf{$\mathrm{KL}(\pi_{\mathrm{old}}\|\pi_{\vartheta})
-          >\delta_{\mathrm{upd}}$}{stop the update epochs}
-        update actor and critic using Equation~\eqref{eq:ctrl:anchored-loss}\;
-      }
-      compute $(D_{\mathrm{upd}},D_{\mathrm{ref}})$ on the full rollout
-        \tcp*{full rollout}
-      \uIf{$D_{\mathrm{upd}}$ or $D_{\mathrm{ref}}$ is non-finite}{
-        restore the complete snapshot $\mathcal{S}$\;
-      }
-      \uElseIf{$D_{\mathrm{upd}}>\delta_{\mathrm{upd}}$ \textbf{or}
-        $D_{\mathrm{ref}}>\delta_{\mathrm{ref}}$}{
-        restore the actor and its optimiser moments from $\mathcal{S}$;
-          retain the new critic fit\;
-      }
-    }
-    \tcp{\textbf{Stage 4 -- Evaluate the block and promote a passing checkpoint}}
-    score every saved checkpoint on at least three held-out terrain meshes\;
-    aggregate each gate to the worst mesh and, for tracking gates, the worst
-      path family\;
-    $\mathcal{C}\leftarrow
-      \{\vartheta_c:\bm{G}(\vartheta_c)\preceq\bm{g}^{\star}\}$\;
-    \eIf{$\mathcal{C}\neq\varnothing$}{
-      choose $\vartheta^{\star}\in\mathcal{C}$ using the fixed checkpoint
-        selection rule\;
-      load $\vartheta\leftarrow\vartheta^{\star}$ and set
-        $\vartheta_{\mathrm{ref}}\leftarrow\vartheta^{\star}$\;
-      reset the actor optimiser moments; retain the critic state\;
-    }{
-      leave $\vartheta_{\mathrm{ref}}$ unchanged; do not promote the block\;
-    }
-  }
-  \tcp{\textbf{Stage 5 -- Return the deployable policy}}
-  \Return{$\vartheta^{\star}=\vartheta_{\mathrm{ref}}$}\;
-  \caption{Five-stage reference-anchored PPO procedure. The teacher is used
-  only in Stage~1. All PPO rollouts are controlled by $\pi_{\vartheta}$ alone,
-  and the frozen reference moves only when a checkpoint passes every gate.}
-  \label{alg:ctrl:anchored}
-\end{algorithm}
-
 \section{Derivation of the Reference-Divergence Gate Bound}
 \label{app:kl-bound}
 
-Section~\ref{sec:ctrl:theory} states, without showing the steps, that a bound
-on the per-step reference divergence $D_{\mathrm{ref}}$ implies a bound on
-gate degradation of the form
-$|\mathbb{E}_{\pi_\vartheta}[g] - \mathbb{E}_{\pi_{\mathrm{ref}}}[g]|
-\le 2 G_{\max}\sqrt{H \delta_{\mathrm{ref}}/2}$. This appendix derives that
-bound and recomputes it at the production horizon, since the number quoted in
-the main text does not match evaluating the formula it cites.
-
-\paragraph{Setup} Let $P_\pi$ denote the distribution over length-$H$
-trajectories $\tau = (s_0, a_0, \ldots, s_{H-1}, a_{H-1})$ induced by rolling
-out policy $\pi$ under the fixed environment transition kernel. Because the
-transition kernel is shared by $\pi_{\mathrm{ref}}$ and $\pi_\vartheta$, it
-cancels from the log-ratio between the two trajectory distributions, and the
-chain rule of KL divergence reduces to a sum of per-step, per-state action
-divergences:
-\begin{equation}
-  \mathrm{KL}(P_{\pi_{\mathrm{ref}}} \,\|\, P_{\pi_\vartheta})
-  = \mathbb{E}_{\tau \sim P_{\pi_{\mathrm{ref}}}}
-    \left[\sum_{t=0}^{H-1}
-    \mathrm{KL}\bigl(\pi_{\mathrm{ref}}(\cdot\mid s_t)\,\|\,
-    \pi_\vartheta(\cdot\mid s_t)\bigr)\right].
-  \label{eq:app:kl-chain}
-\end{equation}
-This step is exact only if the per-step divergences on the right are evaluated
-on states drawn from $\pi_{\mathrm{ref}}$'s own rollout distribution. In the
-actual training loop $D_{\mathrm{ref}}$ is evaluated on states visited by the
-\emph{live} policy $\pi_\vartheta$ (Section~\ref{sec:ctrl:anchored}), not by
-$\pi_{\mathrm{ref}}$, so what follows is the idealised argument the main text
-already flags as carrying a measure mismatch, not a derivation that closes
-that gap.
-
-\paragraph{Chain rule bound} The chain rule for KL divergence is
-standard~\cite{cover2006information}. Bounding every one of the $H$ per-step
-terms by
-the training-time average bound $\delta_{\mathrm{ref}}$ of
-Equation~\eqref{eq:ctrl:bounds} gives
-$\mathrm{KL}(P_{\pi_{\mathrm{ref}}} \| P_{\pi_\vartheta}) \le H\,\delta_{\mathrm{ref}}$.
-
-\paragraph{Pinsker's inequality} \cite{cover2006information} For any two
-distributions $P, Q$ on a common space, total variation distance
-$\delta_{\mathrm{TV}}(P,Q) := \sup_A |P(A) - Q(A)|$ satisfies
-$\delta_{\mathrm{TV}}(P,Q) \le \sqrt{\tfrac{1}{2}\mathrm{KL}(P\|Q)}$. Applied to
-the trajectory distributions,
-\begin{equation}
-  \delta_{\mathrm{TV}}(P_{\pi_{\mathrm{ref}}}, P_{\pi_\vartheta})
-  \le \sqrt{\tfrac{1}{2} H \delta_{\mathrm{ref}}} .
-  \label{eq:app:tv-bound}
-\end{equation}
-
-\paragraph{Bounded-functional bound} For a trajectory functional
-$g:\mathcal{T}\to[0, G_{\max}]$, such as any of the eight gate metrics, the
-standard identity $\sum_\tau |P(\tau)-Q(\tau)| = 2\,\delta_{\mathrm{TV}}(P,Q)$
-gives
-\begin{equation}
-  \bigl|\mathbb{E}_{P_{\pi_{\mathrm{ref}}}}[g] - \mathbb{E}_{P_{\pi_\vartheta}}[g]\bigr|
-  \le G_{\max} \sum_\tau |P_{\pi_{\mathrm{ref}}}(\tau) - P_{\pi_\vartheta}(\tau)|
-  = 2\, G_{\max}\, \delta_{\mathrm{TV}}(P_{\pi_{\mathrm{ref}}}, P_{\pi_\vartheta}) .
-  \label{eq:app:functional-bound}
-\end{equation}
-Combining Equations~\eqref{eq:app:tv-bound} and~\eqref{eq:app:functional-bound}
-gives the quoted bound,
+Let $P_\pi$ be the distribution over length-$H$ trajectories induced by $\pi$
+under the fixed transition kernel. That kernel is shared by
+$\pi_{\mathrm{ref}}$ and $\pi_\vartheta$, so it cancels from the log-ratio and
+the chain rule of KL divergence~\cite{cover2006information} reduces the
+trajectory divergence to a sum of $H$ per-step action divergences on
+$\pi_{\mathrm{ref}}$'s own rollout distribution. Bounding each by the
+training-time bound $\delta_{\mathrm{ref}}$ of
+Equation~\eqref{eq:ctrl:bounds}, applying Pinsker's inequality and using
+$\sum_\tau |P(\tau)-Q(\tau)| = 2\,\delta_{\mathrm{TV}}(P,Q)$ for a functional
+$g$ with $\|g\|_\infty \le G_{\max}$ gives
+%
 \begin{equation}
   \bigl|\mathbb{E}_{\pi_\vartheta}[g] - \mathbb{E}_{\pi_{\mathrm{ref}}}[g]\bigr|
-  \le 2\, G_{\max} \sqrt{\tfrac{H\,\delta_{\mathrm{ref}}}{2}} .
+  \le 2\,G_{\max}\,
+     \delta_{\mathrm{TV}}(P_{\pi_{\mathrm{ref}}}, P_{\pi_\vartheta})
+  \le 2\,G_{\max}\sqrt{\tfrac{H\,\delta_{\mathrm{ref}}}{2}} .
   \label{eq:app:final-bound}
 \end{equation}
-
-\paragraph{Numeric value at the production horizon} At $H = 2808$ steps and
-$\delta_{\mathrm{ref}} = 0.05$, $\sqrt{H\delta_{\mathrm{ref}}/2} =
-\sqrt{70.2} \approx 8.38$. For a gate metric normalised to $[0,1]$,
-$G_{\max}=1$, so Equation~\eqref{eq:app:final-bound} evaluates to
-$2 \times 8.38 \approx 16.76$, the value quoted in
-Section~\ref{sec:ctrl:theory}. A bound of $16.76$ on a $[0,1]$-valued metric is
-vacuous, and it does not close the measure mismatch noted above. The
-construction remains a principled restriction of reward ascent to a
-neighbourhood of a verified policy, not a certificate.
+%
+At the production horizon $H = 2808$ and $\delta_{\mathrm{ref}} = 0.05$ the
+right-hand side is $16.76$, which is vacuous for a gate metric normalised to
+$[0,1]$. The chain-rule step is also exact only on states drawn from
+$\pi_{\mathrm{ref}}$, whereas the training loop evaluates $D_{\mathrm{ref}}$ on
+states the live policy visits. The construction is a principled restriction of
+reward ascent to a neighbourhood of a verified policy, not a certificate.
 
 \section{Reproduction Entry Points}
 \label{app:repro}
 
 The closed-loop results of Chapter~\ref{chap:evaluation} are generated by the
-scripts under \texttt{experiments/E1} through \texttt{experiments/E6}. Each
-experiment directory records the evaluated model, mesh set, trajectory families,
-carrier speed and scored horizon in its manifest. AF arms are trained and scored
-under \texttt{PPO\_AAM\_FD/experiment\_scripts}. The adaptation tables and figures
+scripts under \texttt{experiments/E1} through \texttt{experiments/E6}, each
+recording its model, meshes, trajectory families, carrier speed and scored
+horizon in a manifest. AF arms are trained and scored under
+\texttt{PPO\_AAM\_FD/experiment\_scripts}, and the adaptation tables and figures
 are recomputed from \texttt{outputs/final}, \texttt{outputs/heldout8191},
-\texttt{outputs/aa\_floor} and \texttt{outputs/kappa\_loaded} by
-\texttt{final\_table.py}, \texttt{robust\_table.py},
-\texttt{heldout8191\_table.py}, \texttt{wronginfo\_table.py},
-\texttt{make\_adaptation\_figure.py}, \texttt{make\_kappa\_figure.py} and
-\texttt{make\_appendix\_figure.py} in that directory, so every reported number
-and every plotted point comes from the same stored reports. The paired cross-stack statistics
-of Table~\ref{tab:eval:paired-rif}, including the leave-one-family-out
-aggregate, are recomputed from the frozen E1 reports by
-\texttt{experiments/E1/code/rif\_paired.py}. Model-level results use the frozen
-collections described in Appendix~\ref{app:data:frozen}.
-
-Each pre-registered comparison has a dated design note written before its arms
-were trained, under \texttt{reports/}: the success rule, the checkpoint rule,
-the statistic and the declared outcomes are fixed there and are not re-decided
-after the seeds are seen. Together with the artifact digests in
-Table~\ref{tab:app:hashes}, these records identify the data, models, rules and
-evaluation code behind the reported results.
+\texttt{outputs/aa\_floor} and \texttt{outputs/kappa\_loaded} by the scripts
+there. Model-level results use the frozen collections of
+Appendix~\ref{app:data:frozen}. Each pre-registered comparison also has a dated
+design note under \texttt{reports/} fixing the success rule, checkpoint rule,
+statistic and declared outcomes before its arms were trained; with the digests
+of Table~\ref{tab:app:hashes} they identify the data, models, rules and code
+behind every reported number.
