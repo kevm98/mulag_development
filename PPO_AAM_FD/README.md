@@ -78,6 +78,28 @@ python PPO_AAM_FD/scripts/train_residual_adapter.py \
 Note the flag asymmetry, which has caused mistakes here: training takes
 `--no_history`, scoring takes `--residual_no_history`.
 
+## Trajectory shapes
+
+The cutter's tracked white line, not the truck path. Eleven families, defined as
+`TRACKING_PATH_FAMILIES` in `verge_task/terrain.py` and re-exported by
+`PPO_ROM/path_shapes.py`:
+
+1. `straight`
+2. `lateral_sine`
+3. `s_curve`
+4. `random_spline`
+5. `offset_return`
+6. `boom_sweep`
+7. `lateral_chirp`
+8. `double_s_curve`
+9. `lane_change_hold`
+10. `gaussian_slalom`
+11. `fourier_meander`
+
+The order is load-bearing: each environment is assigned
+`TRACKING_PATH_FAMILIES[(env_index + offset) % 11]`, so a run with eleven or
+more environments covers every family deterministically.
+
 ## Score
 
 ```bash

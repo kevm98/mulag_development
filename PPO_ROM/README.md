@@ -11,6 +11,28 @@ Stable copy of `model_7364.pt`, which resumed runs overwrite:
 logs/rsl_rl/ppo3_1_sole/speed_range_2_7_pathfix_v2_rom/model_promoted_2_7kmh.pt
 ```
 
+## Trajectory shapes
+
+The cutter's tracked white line, not the truck path. Eleven families, defined as
+`TRACKING_PATH_FAMILIES` in `verge_task/terrain.py` and re-exported by
+`PPO_ROM/path_shapes.py`:
+
+1. `straight`
+2. `lateral_sine`
+3. `s_curve`
+4. `random_spline`
+5. `offset_return`
+6. `boom_sweep`
+7. `lateral_chirp`
+8. `double_s_curve`
+9. `lane_change_hold`
+10. `gaussian_slalom`
+11. `fourier_meander`
+
+The order is load-bearing: each environment is assigned
+`TRACKING_PATH_FAMILIES[(env_index + offset) % 11]`, so a run with eleven or
+more environments covers every family deterministically.
+
 ## Visualize
 
 `--unimog_speed` pins one constant truck speed; omit it to sample 2--7 km/h per
