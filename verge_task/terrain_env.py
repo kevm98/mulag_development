@@ -4845,6 +4845,13 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             raise ValueError(
                 "MULAG_CONTEXT_ABLATE=estimated needs MULAG_ESTIMATOR_PATH"
             )
+        # A .pt path selects the 1D CNN estimator over a history window. It
+        # sees the temporal relationship between effort and motion, which is how
+        # payload actually enters the dynamics and which no per-frame regressor
+        # can express. Its receptive field also replaces the EMA, so beta stops
+        # being a hyperparameter the result depends on.
+        if path.endswith(".pt"):
+            return self._estimated_context_cnn(context, base_obs, path)
         fit = getattr(self, "_payload_fit", None)
         if fit is None:
             import numpy as np
@@ -4922,6 +4929,63 @@ class TerrainSolePolicyEnv(SolePolicyEnv):
             ema = torch.where(ema.abs() < dead, torch.zeros_like(ema), ema)
         out = context.clone()
         out[:, 3] = ema
+        return out
+
+    def _estimated_context_cnn(
+        self, context: torch.Tensor, base_obs: torch.Tensor, path: str
+    ) -> torch.Tensor:
+        """Payload from a 1D CNN over a rolling history window.
+
+        The window is held here rather than passed in the observation because
+        ``roll_mesh`` calls the policy exactly once per environment step, so a
+        module-held buffer stays in sync with the simulation. That is the
+        opposite of the training-time requirement, where PPO calls the actor
+        many times per update epoch and a held buffer would desynchronise.
+        """
+        model = getattr(self, "_payload_cnn", None)
+        if model is None:
+            import sys as _sys
+            from pathlib import Path as _Path
+
+            root = str(_Path(__file__).resolve().parents[1])
+            if root not in _sys.path:
+                _sys.path.insert(0, root)
+            from PPO_AAM_FD.experiment_scripts.fit_cnn_estimator import PayloadCNN
+
+            blob = torch.load(path, map_location=context.device, weights_only=False)
+            model = PayloadCNN(int(blob["n_feat"]), int(blob["window"]))
+            model.load_state_dict(blob["state_dict"])
+            model = model.to(context.device).eval()
+            self._payload_cnn = model
+            self._payload_cnn_mu = torch.as_tensor(
+                blob["mu"], dtype=torch.float32, device=context.device)
+            self._payload_cnn_sd = torch.as_tensor(
+                blob["sd"], dtype=torch.float32, device=context.device)
+            self._payload_cnn_window = int(blob["window"])
+            self._payload_hist = None
+            print(f"[MULAG] CNN payload estimator loaded from {path}", flush=True)
+
+        win = self._payload_cnn_window
+        n_feat = int(self._payload_cnn_mu.shape[1])
+        feat = base_obs[:, :n_feat]
+        hist = getattr(self, "_payload_hist", None)
+        if hist is None or hist.shape[0] != context.shape[0]:
+            hist = feat.unsqueeze(-1).repeat(1, 1, win)
+        # A fresh episode must not see the previous one's history.
+        fresh = self.episode_length_buf == 0
+        if bool(fresh.any()):
+            hist = torch.where(
+                fresh[:, None, None], feat.unsqueeze(-1).repeat(1, 1, win), hist
+            )
+        hist = torch.roll(hist, shifts=-1, dims=-1)
+        hist[:, :, -1] = feat
+        self._payload_hist = hist
+
+        with torch.no_grad():
+            z = (hist - self._payload_cnn_mu) / self._payload_cnn_sd
+            estimate = model(z)
+        out = context.clone()
+        out[:, 3] = estimate
         return out
 
     def _ablate_context(
