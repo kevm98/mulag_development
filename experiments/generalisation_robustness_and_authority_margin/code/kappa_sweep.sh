@@ -28,7 +28,7 @@
 # architecture settings, not plant perturbations.
 set -u
 export IMAGE=isaac-lab:2.3.2-rl052
-cd /home/kevinmurera/projects/rrlab_mulag
+cd $HOME/rrlab_mulag
 mkdir -p outputs/kappa outputs/scorelogs
 MESH=${MESH:-1337}
 LADDER=${LADDER:-"1.0 0.8 0.6 0.5 0.4 0.3 0.2 0.1"}
@@ -70,7 +70,7 @@ ${ENVS}
 echo "=== STAGE 0 (gate): kappa 1.0 vs 0.01 on every stack ==="
 for S in AFf AFa R IF; do for K in $STAGE0; do run_one "$S" "$K"; done; done
 echo "STAGE0_DONE $(date -u +%H:%M)"
-python3 PPO_AAM_FD/experiment_scripts/kappa_report.py --stage0 --mesh "$MESH" || true
+python3 experiments/generalisation_robustness_and_authority_margin/code/kappa_report.py --stage0 --mesh "$MESH" || true
 
 if [ "${GATE_ONLY:-0}" = "1" ]; then echo "GATE_ONLY set -- stopping before the ladder"; exit 0; fi
 

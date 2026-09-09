@@ -6,7 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
-SRC = Path(Path.home() / "rrlab_mulag/experiments/E2_transport_delay_and_identifiability/results/chain_delay_by_stack.json")
+SRC = Path(Path.home() / "rrlab_mulag/experiments/actuator_representation_and_dynamic_response/results/chain_delay_by_stack.json")
 C_RED, C_AMBER, C_GRN = "#D31F26", "#C8860D", "#0F8A3C"
 mpl.rcParams.update({
     "font.size": 9, "font.family": "serif",

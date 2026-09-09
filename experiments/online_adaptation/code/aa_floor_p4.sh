@@ -18,7 +18,7 @@
 set -u
 export IMAGE=isaac-lab:2.3.2-rl052
 cd /home/kevinmurera
-R=/home/kevinmurera/projects/rrlab_mulag
+R=$HOME/rrlab_mulag
 MESH=3141; ENVS=176; STEPS=900
 run() { ~/bin/isaaclab-run bash -lc "$1" 2>/dev/null || true; }
 exec >>/home/kevinmurera/aa_floor.log 2>&1

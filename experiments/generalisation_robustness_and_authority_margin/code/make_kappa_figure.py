@@ -23,7 +23,7 @@ try:
 except ModuleNotFoundError:
     mpl = plt = None
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 OUT = REPO / "thesis/thesis/hydraulic_manipulator_thesis/images/ch7"
 OUT.mkdir(parents=True, exist_ok=True)
 

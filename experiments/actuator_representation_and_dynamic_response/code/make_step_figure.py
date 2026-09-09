@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
 R = Path(Path.home() / "rrlab_mulag/outputs/e2_refstep")
-J = Path(Path.home() / "rrlab_mulag/experiments/E2_transport_delay_and_identifiability/results/reference_step_response.json")
+J = Path(Path.home() / "rrlab_mulag/experiments/actuator_representation_and_dynamic_response/results/reference_step_response.json")
 C_RED, C_AMBER, C_GRN = "#D31F26", "#C8860D", "#0F8A3C"
 STACKS = [("ppo_rom", "PPO-ROM", C_RED), ("ppo_id_fd", "PPO-ID-FD", C_AMBER),
           ("ppo_aam_id_fd", "PPO-(AAM)-ID-FD", C_GRN)]

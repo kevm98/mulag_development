@@ -10,10 +10,10 @@ only measurement of control.
 
 ## Run
 
-    bash experiments/E1_tracking_and_control_effort/code/run_e1_tracking.sh
-    python experiments/E1_tracking_and_control_effort/code/summarise_e1.py --root outputs/e1_tracking
+    bash experiments/closed_loop_task_performance/code/run_e1_tracking.sh
+    python experiments/closed_loop_task_performance/code/summarise_e1.py --root outputs/e1_tracking
 
-Figures: `experiments/E1_tracking_and_control_effort/code/make_ch7_figures.py` (writes into the thesis
+Figures: `experiments/closed_loop_task_performance/code/make_ch7_figures.py` (writes into the thesis
 `images/`; also produces the E2 and E4 figures).
 
 ## Unit of analysis — read before quoting any number

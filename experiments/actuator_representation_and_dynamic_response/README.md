@@ -6,11 +6,11 @@ specified and never run.
 
 ## Run
 
-    python experiments/E2_transport_delay_and_identifiability/code/transport_delay.py \
+    python experiments/actuator_representation_and_dynamic_response/code/transport_delay.py \
         --raw-root AAM_module/datasets/rom_openloop_v1 \
         --out outputs/stage31_openloop/transport_delay.json
-    python experiments/E2_transport_delay_and_identifiability/code/excitation_drift.py --raw-root ... --out ...
-    python experiments/E2_transport_delay_and_identifiability/code/online_refinement_probe.py --model-dir ... --root ... --raw-root ...
+    python experiments/actuator_representation_and_dynamic_response/code/excitation_drift.py --raw-root ... --out ...
+    python experiments/actuator_representation_and_dynamic_response/code/online_refinement_probe.py --model-dir ... --root ... --raw-root ...
 
 ## Result — transport delay
 

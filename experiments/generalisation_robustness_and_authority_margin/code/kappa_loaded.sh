@@ -22,7 +22,7 @@
 # to the nominal ones.
 set -u
 export IMAGE=isaac-lab:2.3.2-rl052
-cd /home/kevinmurera/projects/rrlab_mulag
+cd $HOME/rrlab_mulag
 mkdir -p outputs/kappa_loaded outputs/scorelogs
 MESH=${MESH:-1337}
 PAYLOAD=${PAYLOAD:-4.0}

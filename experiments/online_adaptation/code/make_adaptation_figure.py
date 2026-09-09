@@ -22,7 +22,7 @@ try:
 except ModuleNotFoundError:
     mpl = plt = np = None
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "outputs/final"
 OUT = REPO / "thesis/thesis/hydraulic_manipulator_thesis/images/ch7"
 OUT.mkdir(parents=True, exist_ok=True)

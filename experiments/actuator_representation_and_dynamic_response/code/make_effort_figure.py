@@ -6,7 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
-SRC = Path(Path.home() / "rrlab_mulag/experiments/E1_tracking_and_control_effort/results/control_effort.json")
+SRC = Path(Path.home() / "rrlab_mulag/experiments/actuator_representation_and_dynamic_response/results/control_effort.json")
 TR = Path(Path.home() / "rrlab_mulag/outputs/e2_chain")
 C = {"PPO-ROM": "#D31F26", "PPO-ID-FD": "#C8860D", "PPO-(AAM)-ID-FD": "#0F8A3C"}
 KEY = {"PPO-ROM": "ppo_rom", "PPO-ID-FD": "ppo_id_fd",

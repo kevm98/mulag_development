@@ -10,30 +10,26 @@ Stack abbreviations: **R** = PPO-ROM · **IF** = PPO-ID-FD · **AF** = PPO-AAM-F
 
 ## What is here
 
-Only the experiments the current thesis actually draws on.
+One folder per section of thesis Chapter 7, each holding the code that produces
+that section's results and the figures it produces.
 
-| | Question it answers | Stacks | Produces |
-|---|---|---|---|
-| [E1](E1_tracking_and_control_effort/) | How well does each stack track the verge under nominal conditions, and at what control effort? | R · IF | §7.2 `ch7_e1_paths`, `ch7_e1_tracking`; §7.3.5 `ch7_control_effort` |
-| [E2](E2_transport_delay_and_identifiability/) | How much dead time does the actuation chain carry, and is the plant identifiable from the data it produces? | plant property | §7.3.1 delay and step-response tables |
+| Folder | Thesis | Produces |
+|---|---|---|
+| [closed_loop_task_performance](closed_loop_task_performance/) | §7.2 | `ch7_e1_paths`, `ch7_e1_tracking` |
+| [actuator_representation_and_dynamic_response](actuator_representation_and_dynamic_response/) | §7.3 | delay and step-response tables; `ch7_control_effort` |
+| [generalisation_robustness_and_authority_margin](generalisation_robustness_and_authority_margin/) | §7.4 | `ch7_kappa_stacks` |
+| [online_adaptation](online_adaptation/) | §7.5 | `ch7_adaptation_forest` |
 
-`code/` in each folder regenerates its figures. E1 reads `outputs/e1_traces`,
-`outputs/e1_tracking` and `outputs/stage31_openloop`; E2 reads `outputs/e2_chain`
-and `outputs/e2_refstep` plus its own `results/*.json`.
+All code is run from the repository root. Inputs live in `outputs/`:
+`e1_traces` and `e1_tracking` for §7.2, `e2_chain` and `e2_refstep` for §7.3,
+`kappa_loaded` for §7.4, and `final`, `heldout8191` and `aa_floor` for §7.5.
 
-## Not here
-
-The §7.4 authority sweep and the §7.5 adaptation result are **not** produced from
-this folder. Their figures — `ch7_kappa_stacks` and `ch7_adaptation_forest` — are
-built by `PPO_AAM_FD/experiment_scripts/make_kappa_figure.py` and
-`make_adaptation_figure.py` from `outputs/kappa_loaded` and `outputs/final`, as
-the thesis appendix records.
+AF arms are *trained* under `PPO_AAM_FD/experiment_scripts`; the §7.4 and §7.5
+folders here score them and build the reported tables and figures.
 
 E3 to E6 were moved to `archive/experiments_stale_2026-09-09/` on 2026-09-09:
-none of them feeds a figure or table in the current thesis. E3's mid-episode
-plant change was superseded by the `outputs/final` adaptation result, E5's factor
-sweep was withdrawn and its authority ladder replaced by the κ sweep, and E4 and
-E6 were never cited. They are kept as the record of questions asked and answered.
+none feeds a figure or table in the current thesis. They are kept as the record
+of questions asked and answered.
 
 ## Rules that apply to every experiment
 

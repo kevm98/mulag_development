@@ -74,5 +74,5 @@ for seed in $SEEDS; do
 done
 
 say "scoring"
-"$PY" "$ROOT/experiments/E1_tracking_and_control_effort/code/summarise_e1.py" --root "$OUT" \
+"$PY" "$ROOT/experiments/closed_loop_task_performance/code/summarise_e1.py" --root "$OUT" \
   --meshes "$MESHES" --out "$OUT/e1_summary.json" 2>&1 | tee -a "$LOG"
