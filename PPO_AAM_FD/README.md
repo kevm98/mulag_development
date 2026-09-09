@@ -1,82 +1,31 @@
-# PPO-AAM-FD — the adaptive stack
+# PPO-AAM-FD wide verge task
 
-The thesis calls this stack **AF**. It carries the online-adaptation result.
-
-```text
-policy -> valve command -> bounded history-conditioned residual -> frozen FD -> PhysX
-```
-
-The policy emits the valve command itself. There is no inverse model in the
-command path, and that is the point of the architecture: with one in place the
-correction was added to a command already resting on its clip, so an informative
-estimate produced no closed-loop effect. Moving the correction onto a command
-with headroom is what changed the answer. Thesis §6.7.2 and §5.6.3.
-
-Adaptation enters as an additive bounded residual on that command:
+The thesis calls this stack **AF**. PPO emits the valve command itself; there is
+no inverse model in the command path:
 
 ```text
-u = clip(u0 + alpha * tanh(g(o, phi(H))), -1, 1),   u0 = frozen_policy(o)
+policy -> valve command -> frozen FD -> PhysX
 ```
 
-`phi` is a temporal-convolution encoder over 20 rows of `(base observation,
-previous action)` on the 60 Hz control grid, a 333 ms window carried in the
-observation vector rather than in a buffer inside the module. PPO calls the
-actor many times per update, so a module-held buffer would be advanced by the
-optimiser and desynchronise from the simulation.
-
-Only `phi` and `g` train: 53,836 parameters against a 59,588-parameter frozen
-base. `g`'s final layer is zero-initialised and `tanh(0) = 0`, so at
-construction the wrapped policy reproduces the frozen base bit for bit. Setting
-`alpha` to 0 at evaluation recovers the base exactly, which is what makes the
-capacity-matched control a single-variable comparison.
-
-## What it establishes, and what it does not
-
-On the better of two replicating seeds the residual improves cut height by
-62.6 % and lateral tracking by 78.6 % against its own frozen base, over 880
-paired environments on five held-out meshes. A capacity-matched control with its
-history window zeroed does not deliver that gain, so it belongs to the live
-history and not to the added parameters.
-
-Two of five training seeds pass both metrics and the median seed does not meet
-the pre-registered bar. The result is a demonstrated mechanism, not a reliable
-method.
-
-AF is **not** ranked against PPO-ROM or PPO-ID-FD on task error. It does not
-share their action contract: they emit a bounded cylinder increment, AF emits
-the valve command. The quantity the policy chooses is not the same quantity.
-
-## Frozen runtime models
+The policy reads a 70-wide observation: 66 task columns plus the 4-wide RMA
+context `(alpha, tau, delay, mass_scale)`. Two environment variables select this
+stack and must be exported for every command below:
 
 ```text
-logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt   the frozen base
-id_fd_model/best_fd_cylinder_strict.pt                      forward model
+MULAG_DIRECT_VALVE=1    the policy emits the valve command
+MULAG_RMA_CONTEXT=1     append the 4-wide context, observation 66 -> 70
 ```
 
-The retired latent path additionally needs `outputs/stage31_rom/aam_cnn/L20_d64/aam.pt`
-and `outputs/stage31_rom/id_adapter_cnn_l20_s5/zhat_adapter.pt`. Every artifact
-above is tracked, with its SHA-256 in thesis Appendix C.
+Frozen base policy, the subject of every run here:
 
-## Train an arm
-
-Every arm in the thesis was trained with this command, differing only in the
-seed and, for the control, in `--no_history`.
-
-```bash
-export MULAG_DIRECT_VALVE=1 MULAG_RMA_CONTEXT=1
-export MULAG_MASS_BIMODAL=1.0,3.0 MULAG_MASS_STEP_TIME_S=20.0 \
-       MULAG_MASS_STEP_JITTER_S=8.0 MULAG_MASS_STEP_SCALE=3.0
-
-python PPO_AAM_FD/scripts/train_residual_adapter.py \
-  logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
-  --num_envs 256 --iterations 400 --history 20 --latent_dim 8 --alpha 0.5 \
-  --lr 3e-4 --seed 17 \
-  --lateral_tracking_std_m 0.09 --lateral_tracking_weight 4.0 \
-  --log_dir logs/rsl_rl/ppo_id_aam_fd/rebal17_history --headless
+```text
+logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt
+id_fd_model/best_fd_cylinder_strict.pt                     forward model
 ```
 
-Note the flag asymmetry, which has caused mistakes here: training takes
-`--no_history`, scoring takes `--residual_no_history`.
+AF is **not** ranked against PPO-ROM or PPO-ID-FD on task error. They emit a
+bounded cylinder increment, AF emits the valve command; the quantity the policy
+chooses is not the same quantity.
 
 ## Trajectory shapes
 
@@ -100,15 +49,96 @@ The order is load-bearing: each environment is assigned
 `TRACKING_PATH_FAMILIES[(env_index + offset) % 11]`, so a run with eleven or
 more environments covers every family deterministically.
 
+## Payload
+
+`MULAG_PAYLOAD_RANGE="lo,hi"` sets the payload scale, valid over 1.0--5.0. Pin a
+single level with `X,X`. There is no `--payload` flag; it is an environment
+variable read by `PPO_AAM_FD/env_cfg.py`.
+
+The payload is drawn **at the start of the episode**, in
+`_latch_deployment_factors()` on reset. By default the draw is seeded without
+the reset index, so it is a fixed property of each environment and does not
+change between episodes; `MULAG_PAYLOAD_RESAMPLE=1` opts into a fresh draw each
+episode. It never changes *within* an episode -- RMA treats the context as
+constant for the episode.
+
+A mid-episode change is a different knob: `MULAG_MASS_STEP_TIME_S` with
+`MULAG_MASS_STEP_SCALE` makes the tool body `baseline * scale` from that instant
+onward, and `MULAG_MASS_STEP_JITTER_S` scatters the instant per environment so a
+non-adaptive arm cannot compensate on a timer.
+
+## Visualize
+
+`MESH`, `ENVS` and `STEPS` are environment variables, not flags.
+`--trajectory-shape` sets the cutter's white line, not the truck path.
+
+**AF frozen** -- the frozen base alone. This is the `af_base` arm of the Chapter 7
+runs:
+
+```bash
+cd ~/rrlab_mulag
+export MULAG_DIRECT_VALVE=1 MULAG_RMA_CONTEXT=1
+export MULAG_PAYLOAD_RANGE=1.0,1.0
+MESH=1337 ENVS=4 STEPS=960 PPO_AAM_FD/visualize.sh \
+  logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
+  --trajectory-shape double_s_curve
+```
+
+Sweep the payload one level per process, never in one run -- pinning it per
+process is what keeps the levels comparable:
+
+```bash
+for P in 1 3 4 5; do
+  export MULAG_DIRECT_VALVE=1 MULAG_RMA_CONTEXT=1
+  export MULAG_PAYLOAD_RANGE=${P}.0,${P}.0
+  MESH=1337 ENVS=4 STEPS=960 PPO_AAM_FD/visualize.sh \
+    logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
+    --trajectory-shape double_s_curve
+done
+```
+
+**AF adaptive** -- the `af_adaptive` arm adds the trained residual on top of the
+same base:
+
+```bash
+# NOT RUNNABLE IN THIS CHECKOUT -- recorded as it was run for Chapter 7.
+PPO_AAM_FD/visualize.sh logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
+  --residual_checkpoint logs/rsl_rl/ppo_id_aam_fd/rebal17_history/model_399.pt \
+  --residual_alpha 0.5 --residual_history 20
+```
+
+`--residual_checkpoint`, `--residual_alpha` and `--residual_history` are defined
+in no script in this tree: commit `d99f319` removed the residual and FiLM code.
+`outputs/ch7_pressure/ch7_pressure.sh`, which produced the AF arms figure, still
+passes them and will fail for the same reason. AF frozen above is unaffected.
+
+Close the Isaac window to stop.
+
+## Train
+
+Trains the RMA context channel from the frozen base; the base weights are held.
+
+```bash
+PY=~/miniconda3/envs/env_isaaclab/bin/python
+export MULAG_DIRECT_VALVE=1 MULAG_RMA_CONTEXT=1
+export MULAG_MASS_BIMODAL=1.0,3.0 MULAG_MASS_STEP_TIME_S=20.0 \
+       MULAG_MASS_STEP_JITTER_S=8.0 MULAG_MASS_STEP_SCALE=3.0
+
+$PY PPO_AAM_FD/scripts/train.py \
+  --resume logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
+  --train_context_only \
+  --num_envs 256 --stage_iterations 400 --seed 17 \
+  --lateral_tracking_std_m 0.09 --lateral_tracking_weight 4.0 \
+  --log_dir logs/rsl_rl/ppo_id_aam_fd/my_af_run --headless
+```
+
 ## Score
 
 ```bash
-python PPO_AAM_FD/scripts/evaluate_gates.py \
+$PY PPO_AAM_FD/scripts/evaluate_gates.py \
   logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
-  --residual_checkpoint logs/rsl_rl/ppo_id_aam_fd/rebal17_history/model_399.pt \
-  --residual_alpha 0.5 --residual_history 20 \
   --num_envs 176 --steps 900 --meshes 1337 --seed 17 \
-  --report outputs/rif_delay/rebal17_history_m1337.json
+  --report outputs/rif_delay/af_base_m1337.json
 ```
 
 Evaluations are serial: one at 176 environments holds about 17 GB, and two will
@@ -117,12 +147,11 @@ failures that appear late along the 26 m line.
 
 ## Verify without a simulator
 
-CPU-only. Checks causal warm-up, reset isolation, the bounded residual and the
-fallback path.
+CPU-only. Checks causal warm-up, reset isolation and the fallback path.
 
 ```bash
-python PPO_AAM_FD/scripts/preflight.py --num-envs 4 --device cpu
-python PPO_AAM_FD/scripts/minimum_online_adaptation_check.py --device cpu --num-envs 2 --ticks 72
+$PY PPO_AAM_FD/scripts/preflight.py --num-envs 4 --device cpu
+$PY PPO_AAM_FD/scripts/minimum_online_adaptation_check.py --device cpu --num-envs 2 --ticks 72
 ```
 
 ## Before trusting any result
@@ -136,4 +165,4 @@ bimodal path wins, and the mass never moves.
 
 Always confirm the plant did what you asked by reading `mass_scale_mean` from
 the trace before analysing. One dose-response reading was corrected for want of
-this check. See invariants 21 and 22 in `memory.md`.
+this check.
