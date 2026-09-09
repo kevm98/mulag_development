@@ -97,20 +97,31 @@ for P in 1 3 4 5; do
 done
 ```
 
-**AF adaptive** -- the `af_adaptive` arm adds the trained residual on top of the
-same base:
+**AF adaptive** -- the `af_adaptive` arm adds the trained history-conditioned
+residual on top of the same frozen base:
 
 ```bash
-# NOT RUNNABLE IN THIS CHECKOUT -- recorded as it was run for Chapter 7.
-PPO_AAM_FD/visualize.sh logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
+export MULAG_DIRECT_VALVE=1 MULAG_RMA_CONTEXT=1
+export MULAG_PAYLOAD_RANGE=1.0,1.0
+MESH=1337 ENVS=4 STEPS=960 PPO_AAM_FD/visualize.sh \
+  logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt \
   --residual_checkpoint logs/rsl_rl/ppo_id_aam_fd/rebal17_history/model_399.pt \
-  --residual_alpha 0.5 --residual_history 20
+  --residual_alpha 0.5 --residual_history 20 \
+  --trajectory-shape double_s_curve
 ```
 
-`--residual_checkpoint`, `--residual_alpha` and `--residual_history` are defined
-in no script in this tree: commit `d99f319` removed the residual and FiLM code.
-`outputs/ch7_pressure/ch7_pressure.sh`, which produced the AF arms figure, still
-passes them and will fail for the same reason. AF frozen above is unaffected.
+The capacity-matched control (`af_control`) is the same command against the
+no-history arm, with its history window zeroed:
+
+```bash
+  --residual_checkpoint logs/rsl_rl/ppo_id_aam_fd/rebal17_nohistory/model_399.pt \
+  --residual_no_history --residual_alpha 0.5 --residual_history 20
+```
+
+`--residual_alpha 0` recovers the frozen base exactly, which is what makes the
+control a single-variable comparison. The residual modules and both arm
+checkpoints were restored from `d99f319^` and `35b2e7f^`; `train_residual_adapter.py`
+was **not** restored, so these arms can be scored but no new arm can be trained.
 
 Close the Isaac window to stop.
 

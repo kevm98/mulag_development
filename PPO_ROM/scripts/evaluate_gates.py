@@ -374,6 +374,38 @@ p.add_argument(
     default="outputs/videos",
 )
 p.add_argument(
+    "--residual_checkpoint",
+    default=None,
+    help=(
+        "Score a frozen base policy plus a history-conditioned residual. The "
+        "residual lives in the actor's `mlp`, so this reuses roll_mesh and every "
+        "measurement convention in this file rather than reimplementing them -- "
+        "a standalone evaluator was written and got the frozen base 29x wrong "
+        "twice, first by mis-handling parked steps and then by omitting rsl_rl's "
+        "normaliser epsilon."
+    ),
+)
+p.add_argument(
+    "--residual_history",
+    type=int,
+    default=20,
+)
+p.add_argument(
+    "--residual_alpha",
+    type=float,
+    default=0.5,
+)
+p.add_argument(
+    "--residual_latent_dim",
+    type=int,
+    default=8,
+)
+p.add_argument(
+    "--residual_no_history",
+    action="store_true",
+    help="Zero the history: same capacity and weights, but cannot adapt online.",
+)
+p.add_argument(
     "--online_grad_lr",
     type=float,
     default=0.0,
@@ -838,6 +870,10 @@ if getattr(a, "video", False):
     a.enable_cameras = True
 launcher = AppLauncher(a)
 simulation_app = launcher.app
+
+# Base-observation columns the residual's history encoder read; filled in
+# when a residual policy is built, empty for non-residual arms.
+RESIDUAL_HISTORY_COLS: list[int] = []
 
 import gymnasium as gym  # noqa: E402
 import numpy as np  # noqa: E402
@@ -1323,6 +1359,103 @@ def _build_online_grad_policy(runner, raw, env_cfg):
 
 
 @torch.no_grad()
+def _build_residual_policy(runner, raw, env_cfg):
+    """Frozen base + history residual, scored through this file's own rollout.
+
+    The history is kept in this closure, which is correct HERE and would be
+    wrong in training: roll_mesh calls the policy exactly once per environment
+    step, whereas PPO calls the actor many times per update epoch and would
+    advance a closure-held buffer out of sync with the simulation.
+
+    rsl_rl's actor performs the observation normalisation, so this code never
+    touches it. That is deliberate: hand-rolling it produced a frozen base 29x
+    off the reference twice.
+    """
+    from tensordict import TensorDict
+
+    from verge_task.residual_adapter import ResidualMLP
+
+    payload = torch.load(a.residual_checkpoint, map_location=a.device, weights_only=False)
+    sd = payload["actor_state_dict"]
+    base_width = int(sd["mlp.base_mlp.0.weight"].shape[1])
+    action_dim = int(env_cfg.action_space)
+    base_dim = base_width - 4 if base_width in (70, 72) else base_width
+    history = int(a.residual_history)
+    # The column spec travels IN the checkpoint (ResidualMLP registers it as a
+    # buffer), so a starved-encoder residual is evaluated on exactly the columns
+    # it was trained on. Checkpoints written before that buffer existed read the
+    # full base observation, which is what they were trained on.
+    if "mlp.history_cols" in sd:
+        hist_cols = sd["mlp.history_cols"].to(a.device).long()
+    else:
+        hist_cols = torch.arange(base_dim, dtype=torch.long, device=a.device)
+    global RESIDUAL_HISTORY_COLS
+    RESIDUAL_HISTORY_COLS = [int(c) for c in hist_cols.tolist()]
+    feature = int(hist_cols.numel()) + action_dim
+    wide = base_width + history * feature
+
+    import torch.nn as nn
+    base_mlp = nn.Sequential(
+        nn.Linear(sd["mlp.base_mlp.0.weight"].shape[1], sd["mlp.base_mlp.0.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.2.weight"].shape[1], sd["mlp.base_mlp.2.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.4.weight"].shape[1], sd["mlp.base_mlp.4.weight"].shape[0]), nn.ELU(),
+        nn.Linear(sd["mlp.base_mlp.6.weight"].shape[1], sd["mlp.base_mlp.6.weight"].shape[0]),
+    ).to(a.device)
+    residual = ResidualMLP(
+        base_mlp, base_dim=base_dim, base_width=base_width, action_dim=action_dim,
+        history=history, latent_dim=int(a.residual_latent_dim),
+        alpha=float(a.residual_alpha), history_cols=hist_cols.cpu(),
+    ).to(a.device)
+
+    actor = runner.alg.actor
+    actor.mlp = residual
+    # Widen the actor's normaliser to the residual's observation and load the
+    # checkpoint's statistics, so rsl_rl normalises exactly as it did in training.
+    norm = actor.obs_normalizer
+    for name in ("_mean", "_var", "_std"):
+        if hasattr(norm, name):
+            src = sd[f"obs_normalizer.{name}"].to(a.device)
+            setattr(norm, name, src.clone())
+    missing, unexpected = actor.load_state_dict(sd, strict=False)
+    lost = [k for k in missing
+            if k.startswith("mlp.") and k != "mlp.history_cols"]
+    if lost:
+        raise RuntimeError(f"residual weights did not load: missing {lost[:4]}")
+    actor.eval()
+    print(
+        f"[PPO3-1-GATES] residual policy: base_width={base_width} history={history} "
+        f"alpha={a.residual_alpha} wide={wide} "
+        f"cols={feature - action_dim}+{action_dim}={feature}/step "
+        f"history={'ZEROED' if a.residual_no_history else 'live'}",
+        flush=True,
+    )
+
+    n = int(raw.num_envs)
+    state = {
+        "hist": torch.zeros((n, history, feature), device=a.device),
+        "prev": torch.zeros((n, action_dim), device=a.device),
+    }
+
+    def residual_policy(obs):
+        base = obs["policy"] if isinstance(obs, dict) else obs
+        step = torch.nan_to_num(
+            torch.cat((base[:, hist_cols], state["prev"]), dim=-1), nan=0.0,
+            posinf=0.0, neginf=0.0)
+        state["hist"] = torch.roll(state["hist"], shifts=-1, dims=1)
+        state["hist"][:, -1, :] = step
+        flat = state["hist"].flatten(1)
+        if a.residual_no_history:
+            flat = torch.zeros_like(flat)
+        td = TensorDict({"policy": torch.cat((base, flat), dim=-1)},
+                        batch_size=[base.shape[0]])
+        with torch.no_grad():
+            action = actor(td)
+        state["prev"] = torch.nan_to_num(action.detach().clone(), nan=0.0)
+        return action
+
+    return residual_policy
+
+
 def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> dict:
     """Actor-mean rollout on one held-out mesh, collecting the 8 gate metrics.
 
@@ -2349,6 +2482,22 @@ def main() -> None:
             )
             # A FiLM-trained checkpoint carries mlp.film / mlp.head / mlp.tail
             # instead of the plain mlp.N keys, so the actor must be wrapped
+            # BEFORE load or the state_dict does not match. Detected from the
+            # checkpoint itself rather than a flag, so a FiLM checkpoint cannot
+            # be scored as a plain one by forgetting to pass something.
+            _peek = torch.load(str(checkpoint_path), map_location="cpu",
+                               weights_only=False)
+            _sd = _peek.get("model_state_dict") or _peek.get("actor_state_dict") or {}
+            if any(k.startswith("mlp.film.") for k in _sd):
+                from verge_task.film_adapter import FiLMWrap
+
+                _nctx = int(env_cfg.observation_space) - 66
+                runner.alg.actor.mlp = FiLMWrap(
+                    runner.alg.actor.mlp, n_ctx=_nctx
+                ).to(a.device)
+                print(f"[PPO3-1-GATES] FiLM checkpoint detected: actor wrapped "
+                      f"before load, n_ctx={_nctx}", flush=True)
+            del _peek, _sd
             runner.load(
                 str(checkpoint_path),
                 load_cfg={
@@ -2360,7 +2509,9 @@ def main() -> None:
                 },
             )
             policy = runner.get_inference_policy(device=a.device)
-            if float(getattr(a, "valve_probe_amp", 0.0)) > 0.0:
+            if getattr(a, "residual_checkpoint", None):
+                policy = _build_residual_policy(runner, raw, env_cfg)
+            elif float(getattr(a, "valve_probe_amp", 0.0)) > 0.0:
                 policy = _build_probe_policy(runner, raw, env_cfg)
             elif abs(float(getattr(a, "online_grad_lr", 0.0))) > 0.0:
                 policy = _build_online_grad_policy(runner, raw, env_cfg)
@@ -2833,6 +2984,11 @@ def main() -> None:
         "online_aam_smoother_window": int(
             getattr(env_cfg, "online_aam_smoother_window", 0)
         ),
+        # Which base-observation columns the residual's history encoder read,
+        # recovered from the checkpoint. Records the starved-encoder arm in the
+        # artefact rather than only in the launch command.
+        "residual_checkpoint": str(getattr(a, "residual_checkpoint", "") or ""),
+        "residual_no_history": bool(getattr(a, "residual_no_history", False)),
         "online_grad_lr": float(getattr(a, "online_grad_lr", 0.0)),
         "online_grad_sham": bool(getattr(a, "online_grad_sham", False)),
         "online_grad_trust": float(getattr(a, "online_grad_trust", 0.0)),
@@ -2847,6 +3003,7 @@ def main() -> None:
             }
             if ONLINE_GRAD_STATS["steps"] else {}
         ),
+        "residual_history_cols": RESIDUAL_HISTORY_COLS,
         "deployment_factor_enabled": bool(
             getattr(env_cfg, "deployment_factor_enabled", False)
         ),
