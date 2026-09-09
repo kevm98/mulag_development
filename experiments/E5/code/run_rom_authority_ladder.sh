@@ -28,7 +28,7 @@
 #   FACTOR_DOMAIN  nominal|combined_test  (default nominal)
 set -uo pipefail
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
 cd "$ROOT"
 PY=${PY:-python3}
 

@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Train PPO for the standalone PPO_AAM_FD task.
 
 The implementation is shared with the other terrain pipelines, but this

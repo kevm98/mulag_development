@@ -35,7 +35,7 @@
 set -u
 
 cd "$(dirname "$0")/../.." || exit 1
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 OUT=${1:-verge_task/reports/stage6/teacher_probe}
 NUM_ENVS=${NUM_ENVS:-32}
 STEPS=${STEPS:-960}

@@ -9,7 +9,7 @@ PPO3: policy -> ROM-A -> PhysX
 PPO4: policy -> ID -> FD -> PhysX
 ```
 
-Run commands from `/home/rrlab/rrlab_mulag` with CUDA device `cuda:0`.
+Run commands from `~/rrlab_mulag` with CUDA device `cuda:0`.
 
 ## Experiments
 
@@ -23,7 +23,7 @@ raises the model-error history to depth 3, so its observation is 96 wide and
 the 66×5 checkpoint is not loadable into it directly. Migrate, do not force:
 
 ```bash
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 $PY verge_task/scripts/migrate_shared_policy.py \
   logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/model_migrated.pt \
   logs/rsl_rl/ppo3_sole_rom_contact_safe_v1/model_seed_96.pt \
@@ -52,7 +52,7 @@ historical 17-gate set so every stored report stays comparable.
 ## Commands
 
 ```bash
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 
 # Validate checkpoint structure
 $PY verge_task/scripts/check_ready.py

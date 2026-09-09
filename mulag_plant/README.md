@@ -42,7 +42,7 @@ named shape.
 Run the complete GUI workflow:
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 ./mulag_plant/visualize.sh
 ```
 
@@ -94,7 +94,7 @@ trajectory library, per-environment promotion probes, and automatic termination 
 the configured training limit or promotion criterion.
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 ./mulag_plant/train_large_v3.sh
 ```
 
@@ -121,8 +121,8 @@ reference reachable.
 ## Verify the V3 contract
 
 ```bash
-cd /home/rrlab/rrlab_mulag
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python -m pytest -q \
+cd ~/rrlab_mulag
+~/miniconda3/envs/env_isaaclab/bin/python -m pytest -q \
   mulag_plant/policy_4cyl/tests \
   mulag_plant/policy/tests \
   mulag_plant/tests \

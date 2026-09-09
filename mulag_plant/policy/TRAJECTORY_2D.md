@@ -7,7 +7,7 @@ line-trained checkpoints and the legacy 42-D policy task are unchanged.
 ## Teacher preview and checks
 
 ```bash
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 
 $PY verge_task/scripts/trajectory_2d_teacher.py \
   --output reports/trajectory_2d/teacher.svg \

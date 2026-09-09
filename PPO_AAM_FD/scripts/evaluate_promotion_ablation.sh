@@ -4,8 +4,8 @@ set -euo pipefail
 # Produce paired PPO reports for estimated, zero and shuffled z_hat. Every
 # mode uses the same checkpoint, mesh, speed, episode length and environment
 # count; promote_system.py rejects any contract mismatch.
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 CKPT=${1:?usage: evaluate_promotion_ablation.sh <checkpoint> [output_dir]}
 OUT=${2:-$ROOT/outputs/stage31_rom/promotion/ppo_ablation}
 MESHES=${PROMOTION_MESHES:-"1337 17 909"}

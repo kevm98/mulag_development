@@ -18,7 +18,7 @@ episode. `--trajectory-shape` sets the cutter's white line, not the truck path
 (11 shapes, listed in `PPO_ROM/path_shapes.py`); or `--trajectory-shapes all`.
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 PPO_ROM/visualize.sh logs/rsl_rl/ppo3_1_sole/speed_range_2_7_pathfix_v2_rom/model_promoted_2_7kmh.pt \
   --unimog_speed 7 --trajectory-shape double_s_curve --num-envs 4 --mesh 17 --steps 2808
 ```
@@ -29,7 +29,7 @@ lateral travel. Close the Isaac window to stop.
 ## Train
 
 ```bash
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 $PY PPO_ROM/scripts/train.py \
   --resume logs/rsl_rl/ppo3_1_sole/speed_range_2_7_pathfix_v2_rom/model_promoted_2_7kmh.pt \
   --stages 6 --stage-iterations 300 --num-envs 128 --trajectory-shapes all \

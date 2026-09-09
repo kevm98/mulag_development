@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Expand a validated 66-D ID-FD policy to the 68-D AAM observation contract."""
 
 from __future__ import annotations

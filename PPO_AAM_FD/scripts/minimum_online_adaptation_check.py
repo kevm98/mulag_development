@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Run the minimum CPU-only gates for the online AAM demonstration.
 
 This check deliberately does not launch Isaac Sim or PPO.  It verifies the

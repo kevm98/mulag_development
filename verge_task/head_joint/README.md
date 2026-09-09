@@ -32,7 +32,7 @@ actuator change was involved.**
 Reproduce with:
 
 ```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
+~/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
   --device cuda:0 --stage 5 --num_envs 128 --steps 960 --eval_terrain \
   --checkpoint logs/rsl_rl/ppo3_sole_terrain/lawn_rough_stage5_v5/model_best.pt
 ```

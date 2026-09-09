@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Restore provenance on an old RSL-RL interval checkpoint.
 
 New training runs wrap every save with provenance. This utility exists only

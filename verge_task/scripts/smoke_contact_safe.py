@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Integration smoke test for the contact-safe contract, both actuators.
 
 The fast pytest suite runs without Isaac Sim, so it can only check the state

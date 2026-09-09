@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """PPO4_1 preflight: the PPO3_1 checks, run against the ID/FD plant.
 
 Deliberately a thin wrapper rather than a copy. PPO3_1's preflight is the one

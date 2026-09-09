@@ -18,22 +18,22 @@ learned actuator model between the policy command and PhysX.
 ## Visualize the canonical policy
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 ./mulag_plant/visualize.sh
 ```
 
 ## Train the canonical V3 policy
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 ./mulag_plant/train_large_v3.sh
 ```
 
 ## Verify the four-cylinder contract
 
 ```bash
-cd /home/rrlab/rrlab_mulag
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python -m pytest -q \
+cd ~/rrlab_mulag
+~/miniconda3/envs/env_isaaclab/bin/python -m pytest -q \
   mulag_plant/policy_4cyl/tests/test_four_cylinder_contract.py
 ```
 

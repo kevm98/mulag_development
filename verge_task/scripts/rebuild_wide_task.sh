@@ -38,8 +38,8 @@
 # (measured at 11x the rate demand on offset_return).
 set -uo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 OUT=$ROOT/PPO_ROM/reports/wide
 SP=${SP:-/tmp/rrlab_scratch}
 MESHES_ALL=${MESHES_ALL:-"1337 17 2024 4242 555 909"}

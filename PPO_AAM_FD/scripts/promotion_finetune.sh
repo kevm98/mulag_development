@@ -4,8 +4,8 @@ set -euo pipefail
 # Long PPO continuation for the promoted 1 s causal CNN estimator.  This is
 # deliberately a fixed, reproducible fine-tune: the AAM/ID/FD artifacts are
 # frozen and only the PPO policy is updated.
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 CKPT=${1:-$ROOT/logs/rsl_rl/ppo_id_aam_fd/stage31_promotable_v2/model_375.pt}
 OUT=${2:-$ROOT/logs/rsl_rl/ppo_id_aam_fd/promotion_finetune_l20_cnn}
 ITERATIONS=${PPO_FINETUNE_ITERATIONS:-1500}

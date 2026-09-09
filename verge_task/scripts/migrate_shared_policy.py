@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Migrate PPO3/PPO4 checkpoint interfaces with explicit invariants.
 
 Three migrations live here:

@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Train the constrained four-cylinder Policy from model_249."""
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ simulation_app = launcher.app
 
 import gymnasium as gym
 import torch
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from rrlab_compat.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 
 import mulag_plant.tasks  # noqa: F401,E402

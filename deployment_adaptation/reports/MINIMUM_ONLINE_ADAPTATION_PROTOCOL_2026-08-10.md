@@ -61,8 +61,8 @@ only the minimum integration check.
 ## Commands
 
 ```bash
-cd /home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+cd ~/rrlab_mulag
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 
 # Minimum causal/safety/adaptation gate on the NVIDIA GPU.
 $PY PPO_AAM_FD/scripts/minimum_online_adaptation_check.py \

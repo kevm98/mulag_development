@@ -4,9 +4,9 @@ set -euo pipefail
 # Stage 25/26 causal-training sweep. This is intentionally separate from the
 # historical runners: it trains each declared lag with the adjacent-window
 # temporal-consistency objective, then evaluates only causal predictions.
-repo_root=/home/rrlab/rrlab_mulag
+repo_root=$HOME/rrlab_mulag
 aam_root="$repo_root/AAM_module"
-python_bin=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+python_bin=$HOME/miniconda3/envs/env_isaaclab/bin/python
 frozen="$aam_root/datasets/master_v3_stage22_wide_frozen"
 frozen_model="$repo_root/sd_model/stage23_frozen/dz2_nodp_holdq"
 out_root="$repo_root/outputs/aam_stage25_temporal"

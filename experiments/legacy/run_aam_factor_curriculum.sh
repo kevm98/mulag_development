@@ -21,8 +21,8 @@
 # 0.00515, so the AAM path starts ahead of its own base, not behind it.
 set -uo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 CAMPAIGN=${CAMPAIGN:-aam_factor_curriculum_v1}
 ITERS=${ITERS:-300}
 ENVS=${ENVS:-256}

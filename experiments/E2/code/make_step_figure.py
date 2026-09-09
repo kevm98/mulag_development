@@ -5,9 +5,9 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
-R = Path("/home/rrlab/rrlab_mulag/outputs/e2_refstep")
-J = Path("/home/rrlab/rrlab_mulag/experiments/E2/results/reference_step_response.json")
+OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
+R = Path(Path.home() / "rrlab_mulag/outputs/e2_refstep")
+J = Path(Path.home() / "rrlab_mulag/experiments/E2/results/reference_step_response.json")
 C_RED, C_AMBER, C_GRN = "#D31F26", "#C8860D", "#0F8A3C"
 STACKS = [("ppo_rom", "PPO-ROM", C_RED), ("ppo_id_fd", "PPO-ID-FD", C_AMBER),
           ("ppo_aam_id_fd", "PPO-(AAM)-ID-FD", C_GRN)]

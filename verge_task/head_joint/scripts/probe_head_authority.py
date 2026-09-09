@@ -6,7 +6,7 @@ A vacuous channel shows identical numbers for both signs.
 """
 import argparse, torch
 from isaaclab.app import AppLauncher
-import sys; sys.path.insert(0, "/home/rrlab/rrlab_mulag")
+import os, sys; sys.path.insert(0, os.path.expanduser("~/rrlab_mulag"))
 
 p = argparse.ArgumentParser()
 AppLauncher.add_app_launcher_args(p)

@@ -17,29 +17,41 @@ import os
 import statistics as st
 from pathlib import Path
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
+try:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+except ModuleNotFoundError:
+    mpl = plt = None
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "thesis/thesis/hydraulic_manipulator_thesis/images/ch7"
 OUT.mkdir(parents=True, exist_ok=True)
 
-C_BLUE, C_ORANGE, C_GREEN, C_PINK = "#0072B2", "#E69F00", "#009E73", "#CC79A7"
-C_GRAY = "#666666"
+if mpl is None:
+    from ch7_svg_fallback import render_kappa
+    dest = OUT / "ch7_kappa_stacks.pdf"
+    render_kappa(REPO, dest)
+    print(f"wrote {dest} (SVG fallback)")
+    raise SystemExit
+
+# Chapter 7 stack palette: R is red, IF is amber, and adaptation is green.
+# The frozen AF reference stays a quiet slate blue in both columns.
+C_RED, C_AMBER, C_GREEN, C_BLUE = "#C1272D", "#C8860D", "#1B843F", "#4E79A7"
+C_GRAY, C_GRID, C_SPINE = "#5A6B78", "#D5DADF", "#7C8791"
 
 mpl.rcParams.update({
-    "font.size": 9, "font.family": "serif",
+    "font.size": 10, "font.family": "serif",
     "font.serif": ["STIXGeneral", "Times New Roman", "DejaVu Serif"],
     "mathtext.fontset": "stix",
-    "axes.titlesize": 9, "axes.labelsize": 9, "legend.fontsize": 8,
-    "xtick.labelsize": 8, "ytick.labelsize": 8,
+    "axes.titlesize": 11, "axes.labelsize": 10, "legend.fontsize": 9,
+    "xtick.labelsize": 9, "ytick.labelsize": 9,
     "axes.spines.top": True, "axes.spines.right": True, "axes.linewidth": 0.6,
     "xtick.direction": "in", "ytick.direction": "in",
     "xtick.top": True, "ytick.right": True,
     "xtick.major.width": 0.6, "ytick.major.width": 0.6,
     "xtick.major.size": 3.0, "ytick.major.size": 3.0,
-    "grid.color": "#c8c8c8", "grid.linewidth": 0.4, "grid.alpha": 0.7,
-    "lines.linewidth": 1.3, "legend.frameon": False,
+    "grid.color": C_GRID, "grid.linewidth": 0.55, "grid.alpha": 0.75,
+    "lines.linewidth": 2.0, "legend.frameon": False,
     "pdf.fonttype": 42, "savefig.bbox": "tight",
 })
 
@@ -63,45 +75,65 @@ loaded = load("outputs/kappa_loaded")
 
 PANELS = [
     ("Nominal payload", nom,
-     [("R", C_GREEN, r"\textsf{R}" if False else "R"),
-      ("IF", C_BLUE, "IF"),
-      ("AFf", C_ORANGE, "AF frozen")]),
+     [("R", C_RED, "R (PPO-ROM)", "o", "-"),
+      ("IF", C_AMBER, "IF (PPO-ID-FD)", "s", "-"),
+      ("AFf", C_BLUE, "AF frozen", "D", "-")]),
     (r"$4.0\times$ payload", loaded,
-     [("AFfL", C_ORANGE, "AF frozen"),
-      ("AFaL", C_PINK, "AF adaptive")]),
+     [("AFfL", C_BLUE, "AF frozen", "D", "-"),
+      ("AFaL", C_GREEN, "AF adaptive", "^", "-")]),
 ]
 
-fig, axes = plt.subplots(2, 2, figsize=(7.0, 4.6), sharex=True)
+fig, axes = plt.subplots(4, 1, figsize=(6.3, 7.4), sharex=True)
+specs = [
+    ("(a) Nominal payload - lateral error", PANELS[0], 0,
+     "median lateral error (mm)", "lower is better"),
+    (r"(b) $4.0\times$ payload - lateral error", PANELS[1], 0,
+     "median lateral error (mm)", "lower is better"),
+    ("(c) Nominal payload - ground contact", PANELS[0], 1,
+     "worst-family ground contact", "higher is better"),
+    (r"(d) $4.0\times$ payload - ground contact", PANELS[1], 1,
+     "worst-family ground contact", "higher is better"),
+]
 
-for col, (title, data, series) in enumerate(PANELS):
-    for rowi, (idx, ylabel) in enumerate(((0, "median lateral error (mm)"),
-                                          (1, "worst-family ground contact"))):
-        ax = axes[rowi][col]
-        for arm, colr, label in series:
+for panel_i, (panel_title, (_, data, series), idx, ylabel, cue) in enumerate(specs):
+        ax = axes[panel_i]
+        for arm, colr, label, marker, linestyle in series:
             d = data.get(arm)
             if not d:
                 continue
             ks = sorted(d)
-            ax.plot(ks, [d[k][idx] for k in ks], marker="o", ms=3.0,
-                    color=colr, label=label)
+            ax.plot(ks, [d[k][idx] for k in ks], marker=marker, ms=5.2,
+                    color=colr, markeredgecolor="white", markeredgewidth=.65,
+                    linestyle=linestyle, linewidth=2.3, label=label, zorder=3)
         ax.set_xscale("log")
         ax.grid(True, which="major")
-        if rowi == 0:
-            ax.set_title(title)
-            ax.legend(loc="upper right")
-        else:
-            ax.set_xlabel(r"actuator authority $\kappa$")
-        if col == 0:
-            ax.set_ylabel(ylabel)
+        ax.set_axisbelow(True)
+        ax.set_xticks([.01, .03, .1, .3, 1.0])
+        ax.set_xticklabels(["0.01", "0.03", "0.1", "0.3", "1.0"])
+        ax.set_xlim(.008, 1.25)
+        for spine in ax.spines.values():
+            spine.set_color(C_SPINE)
+        ax.set_title(panel_title, loc="left", pad=8, fontweight="bold")
+        ax.text(.02, .94, cue, transform=ax.transAxes, va="top",
+                fontsize=8.2, color=C_GRAY)
+        ax.legend(loc="upper right", ncol=len(series), handlelength=2.0,
+                  borderaxespad=.45, columnspacing=1.2)
+        ax.set_xlabel(r"actuator authority $\kappa$ (fraction of nominal)")
+        if idx == 1:
+            ax.axhline(.70, color=C_GRAY, lw=1.0, ls=(0, (4, 2)), zorder=1)
+            ax.annotate("contact gate 0.70", xy=(.011, .70), xytext=(3, 4),
+                        textcoords="offset points", fontsize=7.8, color=C_GRAY,
+                        va="bottom")
+        ax.set_ylabel(ylabel)
 
-# Common y-limits per row so the two columns are directly comparable.
-for rowi in range(2):
-    lo = min(a.get_ylim()[0] for a in axes[rowi])
-    hi = max(a.get_ylim()[1] for a in axes[rowi])
-    for a in axes[rowi]:
-        a.set_ylim(lo, hi)
+# Common y-limits within each metric pair so payloads remain comparable.
+for first, second in ((0, 1), (2, 3)):
+    lo = min(axes[first].get_ylim()[0], axes[second].get_ylim()[0])
+    hi = max(axes[first].get_ylim()[1], axes[second].get_ylim()[1])
+    axes[first].set_ylim(lo, hi)
+    axes[second].set_ylim(lo, hi)
 
-fig.tight_layout(h_pad=0.8, w_pad=1.2)
+fig.subplots_adjust(left=.145, right=.985, top=.97, bottom=.065, hspace=.72)
 dest = OUT / "ch7_kappa_stacks.pdf"
 fig.savefig(dest)
 print(f"wrote {dest}")

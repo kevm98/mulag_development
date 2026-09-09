@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Stage 31 preflight for the causal AAM -> ID adapter -> FD pipeline.
 
 This is intentionally fast and headless.  It validates artifact contracts,

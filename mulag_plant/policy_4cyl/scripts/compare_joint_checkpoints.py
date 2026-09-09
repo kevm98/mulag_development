@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Compare joint four-cylinder checkpoints with matched per-environment probes."""
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ launcher = AppLauncher(a)
 simulation_app = launcher.app
 
 import gymnasium as gym
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from rrlab_compat.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 
 import mulag_plant.tasks  # noqa: F401,E402

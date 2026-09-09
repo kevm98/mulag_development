@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """CPU-only contract stress test for direct Messerkopf control.
 
 Checks both USDs, the q5/down-axis kinematic invariant, twin-sensor plane
@@ -22,9 +22,7 @@ import torch
 try:
     from pxr import Usd, UsdPhysics
 except ModuleNotFoundError:
-    standalone_usd = Path(
-        "/home/rrlab/tools/blender/4.2/python/lib/python3.11/site-packages"
-    )
+    standalone_usd = Path.home() / "tools/blender/4.2/python/lib/python3.11/site-packages"
     if not (standalone_usd / "pxr").is_dir():
         raise RuntimeError(
             "CPU USD bindings are unavailable; expected pxr in the Python "

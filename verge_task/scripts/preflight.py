@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Preflight: prove the whole pipeline runs BEFORE committing hours to it.
 
 Every long run in this work so far has been killed part-way by a defect that a

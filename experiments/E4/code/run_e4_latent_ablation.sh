@@ -37,9 +37,9 @@ set -uo pipefail
 # FACTOR_DOMAIN=combined_test is mandatory. Under `nominal` the plant does not
 # vary, the latent is constant, and every arm collapses to the same thing.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 
 OUT=${OUT:-$ROOT/outputs/e4_latent_ablation}
 export MESHES=${MESHES:-"1337 17 909"}

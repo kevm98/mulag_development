@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 export TASK="${TASK:-RRLAB-Mulag-Verge-ID-AAM-FD-v0}"
 export MESHES="${MESHES:-1337 17 2024 4242 555 909}"
 export REQUIRED_MESHES="${REQUIRED_MESHES:-6}"

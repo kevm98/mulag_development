@@ -9,8 +9,8 @@ changed while their page whitespace is removed.
 
 Run from the repository root with the thesis figure environment::
 
-    /home/rrlab/miniconda3/envs/thesis_figures/bin/python \
-      "thesis /thesis/hydraulic_manipulator_thesis/scripts/\
+    ~/miniconda3/envs/thesis_figures/bin/python \
+      "thesis/thesis/hydraulic_manipulator_thesis/scripts/\
       make_thesis_replacement_figures.py"
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ import numpy as np
 from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
 from PIL import Image
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis")
 IMG = BASE / "images"
 DRAWIO = BASE / "drawio"
 IMG.mkdir(parents=True, exist_ok=True)

@@ -30,7 +30,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 
 ACTUATOR=${1:-rom}
 case "$ACTUATOR" in

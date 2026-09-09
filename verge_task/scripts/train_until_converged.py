@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Persistently train PPO3 with 512 envs and gate on held-out terrain.
 
 Training and held-out validation use separate Isaac Sim processes because the
@@ -37,7 +37,7 @@ from verge_task.terrain_convergence import (
 )
 
 
-DEFAULT_PYTHON = Path("/home/rrlab/miniconda3/envs/env_isaaclab/bin/python")
+DEFAULT_PYTHON = Path(Path.home() / "miniconda3/envs/env_isaaclab/bin/python")
 DEFAULT_RUN_DIR = ROOT / "logs/rsl_rl/ppo3_sole_terrain/heldout_convergence"
 
 

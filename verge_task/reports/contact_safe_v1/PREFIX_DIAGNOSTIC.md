@@ -7,7 +7,7 @@ named next to it.
 **Reproducer**
 
 ```bash
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=~/miniconda3/envs/env_isaaclab/bin/python
 $PY verge_task/scripts/probe_contact_loss.py \
   --checkpoint logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/model_migrated.pt \
   --actuator rom --headless --device cuda:0 \

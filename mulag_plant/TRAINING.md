@@ -3,7 +3,7 @@
 PPO2_A is the chosen nominal ROM workflow. The only maintained training launcher is:
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 ./mulag_plant/train_large_v3.sh
 ```
 

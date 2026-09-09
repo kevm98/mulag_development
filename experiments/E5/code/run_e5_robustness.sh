@@ -16,7 +16,7 @@ set -uo pipefail
 # the absolute values are therefore not comparable with the three-mesh tables
 # elsewhere in the chapter.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
 OUT=${OUT:-$ROOT/outputs/e5_robustness}
 export MESHES=${MESHES:-1337}

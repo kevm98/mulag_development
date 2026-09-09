@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=/home/rrlab/rrlab_mulag
-python_bin=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+repo_root=$HOME/rrlab_mulag
+python_bin=$HOME/miniconda3/envs/env_isaaclab/bin/python
 dataset="$repo_root/AAM_module/datasets/master_v2_frozen"
 v5_root="$repo_root/outputs/sd_z_stage22_v5"
 none_dir="$v5_root/none_nodp_holdq"

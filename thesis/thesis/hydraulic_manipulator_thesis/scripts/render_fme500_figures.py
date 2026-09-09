@@ -19,7 +19,7 @@ import bpy
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
-BASE = "/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images/"
+BASE = os.path.expanduser("~/rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images/")
 LINKS = BASE + "links/"
 os.makedirs(LINKS, exist_ok=True)
 

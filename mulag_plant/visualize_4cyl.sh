@@ -4,7 +4,7 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python \
+$HOME/miniconda3/envs/env_isaaclab/bin/python \
   mulag_plant/policy/scripts/stop_and_work.py \
   --device cuda:0 \
   --checkpoint \

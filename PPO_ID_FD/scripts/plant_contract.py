@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Check that ROM and ID-FD share the same physical task plant."""
 
 from __future__ import annotations

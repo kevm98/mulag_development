@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Build a measured-model-gated cyclic circle command candidate.
 
 The tool geometry is never changed. Candidate cylinder commands are obtained by

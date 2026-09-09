@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
-PY=${PY:-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
+PY=${PY:-$HOME/miniconda3/envs/env_isaaclab/bin/python}
 OUT=${REPORT_ROOT:-$ROOT/PPO_ROM/reports/final}
 NAME=${1:?usage: score_per_mesh.sh <name> <ckpt|--teacher|--null> [steps] [envs]}
 SUBJECT=${2:?}

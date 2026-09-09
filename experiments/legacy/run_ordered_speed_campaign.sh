@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 CAMPAIGN=${CAMPAIGN:-speed_range_2_7_pathfix_v2}
 OUT="$ROOT/experiments/$CAMPAIGN"
 MESHES=${MESHES:-"1337 17 909"}

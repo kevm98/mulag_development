@@ -19,8 +19,8 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-REPO = Path("/home/rrlab/rrlab_mulag")
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
+REPO = Path(Path.home() / "rrlab_mulag")
+OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
 TR = REPO / "outputs/e1_traces"
 C_BLUE, C_ORANGE, C_GREEN, C_PINK = "#0072B2", "#E69F00", "#009E73", "#CC79A7"
 C_GRAY = "#666666"

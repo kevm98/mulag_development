@@ -18,7 +18,7 @@ except ImportError:
 # still the same PhysX backend either way.
 from mulag_plant.runtime.physx_compat import PHYSX_FIELD as _PHYSX_FIELD
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from rrlab_compat.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 from mulag_plant.runtime.sim_memory import apply_kevin_sim_memory_optimizations
 from mulag_plant.runtime.rrlab_reference_conventions import (
     OBSTACLE_ARM_JOINT_NAMES,

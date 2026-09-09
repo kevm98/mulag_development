@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 CHECKPOINT="$ROOT/logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/model_migrated.pt"
 RUN_DIR="$ROOT/logs/rsl_rl/ppo3_sole_terrain/shared_v2_rom/production"
 

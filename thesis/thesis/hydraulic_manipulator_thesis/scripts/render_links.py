@@ -8,13 +8,13 @@ rendered on a transparent background with the Workbench engine (matte,
 no cinematic effects) per AGENTS.publication-figures.md.
 """
 import math
+import os
 
 import bpy
 from mathutils import Vector
 
-OUT = "/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images/links/"
+OUT = os.path.expanduser("~/rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images/links/")
 
-import os
 os.makedirs(OUT, exist_ok=True)
 
 scene = bpy.context.scene

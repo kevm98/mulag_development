@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Show the newest PPO_AAM_FD TensorBoard/checkpoint run."""
 
 from __future__ import annotations

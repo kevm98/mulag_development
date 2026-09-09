@@ -7,7 +7,7 @@ trajectory supervisor, and park-work-relocate runtime used by the canonical
 The maintained user commands are:
 
 ```bash
-cd /home/rrlab/rrlab_mulag
+cd ~/rrlab_mulag
 
 # Train PPO2-ROM-PhysX V3.
 ./mulag_plant/train_large_v3.sh

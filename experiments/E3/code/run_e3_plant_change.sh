@@ -39,9 +39,9 @@ set -uo pipefail
 # step; PPO-ROM's actuator is the command ROM and takes a ROM factor step. The
 # rows are matched on task and schedule, not on the physical parameter changed.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 
 OUT=${OUT:-$ROOT/outputs/e3_plant_change}
 export MESHES=${MESHES:-"1337 17 909"}

@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Retiming only: keep the exact circle and cylinder path, vary speed locally."""
 
 from __future__ import annotations

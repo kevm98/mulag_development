@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Is the head controller BLIND to the axis it fails on?
 
 The hypothesis, from the stage-6 failure and the repository's own notes:
@@ -64,7 +64,7 @@ simulation_app = launcher.app
 
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
+from rrlab_compat.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 

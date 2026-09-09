@@ -27,10 +27,10 @@ import os
 import bpy
 import mathutils
 
-ASSET = ("/home/rrlab/rrlab_mulag/extensions/rrlab_assets/data/Robots/"
-         "unimog_mulag_fme500_cylinder_as_actuator.usd")
-OUT = ("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/"
-       "images/")
+ASSET = os.path.expanduser("~/rrlab_mulag/extensions/rrlab_assets/data/Robots/"
+                           "unimog_mulag_fme500_cylinder_as_actuator.usd")
+OUT = os.path.expanduser("~/rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/"
+                         "images/")
 os.makedirs(OUT, exist_ok=True)
 
 # Publication palette: a real-machine industrial finish with strong visual

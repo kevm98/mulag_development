@@ -14,7 +14,7 @@ The layout uses a short main signal path and a separate adaptation lane so no
 connector crosses a block.  Secondary notes live in the thesis caption rather
 than inside the figure.
 
-Run:  /home/rrlab/miniconda3/envs/thesis_figures/bin/python \
+Run:  ~/miniconda3/envs/thesis_figures/bin/python \
           scripts/make_ch6_aam_stack.py
 """
 from pathlib import Path

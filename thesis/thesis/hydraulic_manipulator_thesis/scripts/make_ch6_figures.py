@@ -13,7 +13,7 @@ The first three are hand-built SVG in the house idiom of
 ``make_ch4_architecture.py``; the fourth plots the stored distillation
 record and fabricates nothing.
 
-Run:  /home/rrlab/miniconda3/envs/thesis_figures/bin/python \
+Run:  ~/miniconda3/envs/thesis_figures/bin/python \
           scripts/make_ch6_figures.py
 """
 from pathlib import Path

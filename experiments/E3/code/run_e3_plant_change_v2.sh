@@ -48,7 +48,7 @@ set -uo pipefail
 #   nobody degrades                                     -> too weak, raise it
 #   everyone terminates                                 -> too strong, lower it
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
 cd "$ROOT"
 EXP=${EXP:-A}
 OUT=${OUT:-$ROOT/outputs/e3_plant_change_v2_${EXP}}

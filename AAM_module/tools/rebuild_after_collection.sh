@@ -14,7 +14,7 @@
 set -euo pipefail
 
 AAM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 
 SRC_COLLECT=/tmp/master_v2
 SRC_EXISTING="$AAM_ROOT/datasets/master_v1"

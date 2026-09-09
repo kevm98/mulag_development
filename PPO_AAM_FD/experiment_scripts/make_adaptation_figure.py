@@ -15,34 +15,46 @@ import random
 import statistics as st
 from pathlib import Path
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
+try:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    import numpy as np
+except ModuleNotFoundError:
+    mpl = plt = np = None
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "outputs/final"
 OUT = REPO / "thesis/thesis/hydraulic_manipulator_thesis/images/ch7"
 OUT.mkdir(parents=True, exist_ok=True)
 
+if mpl is None:
+    from ch7_svg_fallback import render_adaptation
+    dest = OUT / "ch7_adaptation_forest.pdf"
+    render_adaptation(REPO, dest)
+    print(f"wrote {dest} (SVG fallback)")
+    raise SystemExit
+
 B = 20000
 SEEDS = ("17", "23", "101")
 MASSES = ("3.0", "4.0", "5.0")
 
-# Okabe-Ito subset, CVD-safe, matching Chapters 5 and 6.
-C_BLUE, C_ORANGE, C_GREEN, C_PINK = "#0072B2", "#E69F00", "#009E73", "#CC79A7"
-C_GRAY = "#666666"
+# Chapter 7 comparison palette: frozen in blue, adaptive in golden yellow.
+C_BLUE, C_GOLD = "#4E79A7", "#C8860D"
+C_SEED, C_DARK = "#71808C", "#26343F"
+C_GRID, C_SPINE = "#D5DADF", "#7C8791"
 
 mpl.rcParams.update({
-    "font.size": 9, "font.family": "serif",
+    "font.size": 10, "font.family": "serif",
     "font.serif": ["STIXGeneral", "Times New Roman", "DejaVu Serif"],
     "mathtext.fontset": "stix",
-    "axes.titlesize": 9, "axes.labelsize": 9, "legend.fontsize": 8,
-    "xtick.labelsize": 8, "ytick.labelsize": 8,
+    "axes.titlesize": 10.5, "axes.labelsize": 9.5, "legend.fontsize": 8.5,
+    "xtick.labelsize": 8.5, "ytick.labelsize": 9,
     "axes.spines.top": True, "axes.spines.right": True, "axes.linewidth": 0.6,
     "xtick.direction": "in", "ytick.direction": "in",
     "xtick.top": True, "ytick.right": True,
     "xtick.major.width": 0.6, "ytick.major.width": 0.6,
     "xtick.major.size": 3.0, "ytick.major.size": 3.0,
-    "grid.color": "#c8c8c8", "grid.linewidth": 0.4, "grid.alpha": 0.7,
+    "grid.color": C_GRID, "grid.linewidth": 0.5, "grid.alpha": 0.75,
     "lines.linewidth": 1.2, "legend.frameon": False,
     "pdf.fonttype": 42, "savefig.bbox": "tight",
 })
@@ -73,64 +85,68 @@ CHANNELS = (
     ("per_env_contact_fraction", "Ground contact", "fraction", 1.0, True),
 )
 
-fig, axes = plt.subplots(1, 3, figsize=(7.4, 3.5))
-
-labels = []
-for m in MASSES:
-    for s in SEEDS:
-        labels.append(rf"${m}\times$  s{s}")
-    labels.append(rf"${m}\times$  pooled")
+fig, axes = plt.subplots(1, 3, figsize=(7.35, 3.75))
+x = np.arange(len(MASSES))
+width = .34
 
 for ax, (key, title, unit_name, unit, hb) in zip(axes, CHANNELS):
-    ys, meds, los, his, kinds = [], [], [], [], []
-    y = 0
+    frozen_vals, adaptive_vals, ci_low, ci_high = [], [], [], []
     for m in MASSES:
         frozen = row(f"frozen_p{m}.json")
+        frozen_median = st.median(v * unit for v in frozen[key])
         pool = []
         for s in SEEDS:
-            med, lo, hi, d = paired(frozen, row(f"adaptive_s{s}_p{m}.json"),
-                                    key, unit, hb)
+            _, _, _, d = paired(
+                frozen, row(f"adaptive_s{s}_p{m}.json"), key, unit, hb)
             pool += d
-            ys.append(y); meds.append(med); los.append(lo); his.append(hi)
-            kinds.append("seed")
-            y += 1
         random.seed(0)
         n = len(pool)
         boot = sorted(st.median([pool[random.randrange(n)] for _ in range(n)])
                       for _ in range(B))
-        ys.append(y); meds.append(st.median(pool))
-        los.append(boot[int(0.025 * B)]); his.append(boot[int(0.975 * B)])
-        kinds.append("pool")
-        y += 1
+        effect = st.median(pool)
+        lo, hi = boot[int(.025 * B)], boot[int(.975 * B)]
+        adaptive = frozen_median + effect if hb else frozen_median - effect
+        absolute_lo, absolute_hi = ((frozen_median + lo, frozen_median + hi)
+                                    if hb else
+                                    (frozen_median - hi, frozen_median - lo))
+        frozen_vals.append(frozen_median)
+        adaptive_vals.append(adaptive)
+        ci_low.append(adaptive - absolute_lo)
+        ci_high.append(absolute_hi - adaptive)
 
-    ax.axvline(0.0, color=C_GRAY, lw=0.8, zorder=1)
-    for yy, md, lo, hi, kind in zip(ys, meds, los, his, kinds):
-        sig = lo > 0 or hi < 0
-        if kind == "pool":
-            col, marker, ms = "black", "D", 4.0
-        else:
-            col = C_BLUE if md > 0 else C_ORANGE
-            marker, ms = "o", 4.5
-        ax.plot([lo, hi], [yy, yy], color=col,
-                lw=1.9 if kind == "pool" else 1.2, solid_capstyle="round",
-                zorder=2)
-        ax.plot([md], [yy], marker=marker, ms=ms, color=col, zorder=3,
-                markerfacecolor=col if sig else "white",
-                markeredgecolor=col, markeredgewidth=1.0)
+    frozen_bars = ax.bar(x - width / 2, frozen_vals, width, color=C_BLUE,
+                         label="Frozen", zorder=3)
+    adaptive_bars = ax.bar(x + width / 2, adaptive_vals, width, color=C_GOLD,
+                           label="Adaptive", zorder=3,
+                           yerr=np.array([ci_low, ci_high]), capsize=3,
+                           error_kw=dict(ecolor=C_DARK, lw=1.0, capthick=1.0))
+    fmt = (lambda v: f"{v:.0f}") if unit_name == "mm" else (lambda v: f"{v:.2f}")
+    for bars in (frozen_bars, adaptive_bars):
+        for bar in bars:
+            ax.annotate(fmt(bar.get_height()),
+                        (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                        xytext=(0, 4), textcoords="offset points", ha="center",
+                        va="bottom", fontsize=7.6, fontweight="bold")
+    cue = "lower is better" if unit_name == "mm" else "higher is better"
+    ylabel = f"{title.lower()} ({unit_name})" if unit_name == "mm" else "contact fraction"
+    ax.set_title(title, fontweight="bold", pad=16)
+    ax.text(.5, 1.01, cue, transform=ax.transAxes, ha="center", va="bottom",
+            fontsize=8.2, color=C_SEED)
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(x)
+    ax.set_xticklabels([rf"${m}\times$" for m in MASSES])
+    ax.set_xlabel("payload")
+    ax.set_ylim(0, max(frozen_vals + adaptive_vals +
+                       [a + b for a, b in zip(adaptive_vals, ci_high)]) * 1.22)
+    ax.grid(axis="y", zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_color(C_SPINE)
 
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels if ax is axes[0] else [])
-    ax.invert_yaxis()
-    ax.set_ylim(len(labels) - 0.4, -0.6)
-    for b in (3.5, 7.5):
-        ax.axhline(b, color="#c8c8c8", lw=0.5, zorder=0)
-    ax.set_title(title)
-    ax.set_xlabel(f"paired median difference ({unit_name})")
-    ax.grid(axis="x", zorder=0)
-
-axes[0].set_ylabel("payload and seed")
-fig.text(0.5, -0.035, r"adaptive better $\rightarrow$", ha="center", fontsize=8)
-fig.tight_layout(w_pad=1.4)
+h, l = axes[0].get_legend_handles_labels()
+fig.legend(h, l, ncol=2, loc="upper center", bbox_to_anchor=(.5, 1.0),
+           columnspacing=2.0)
+fig.subplots_adjust(left=.08, right=.99, top=.79, bottom=.16, wspace=.34)
 dest = OUT / "ch7_adaptation_forest.pdf"
 fig.savefig(dest)
 print(f"wrote {dest}")

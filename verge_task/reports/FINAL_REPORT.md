@@ -96,14 +96,14 @@ open.
 
 Live viewer (4 envs, road scenery):
 ```bash
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
+~/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
   --device cuda:0 --stage 5 --num_envs 4 --steps 960 --eval_terrain --road_scene \
   --checkpoint logs/rsl_rl/ppo3_sole_terrain/lawn_rough_stage5_v5/model_best.pt
 ```
 
 Zero-action comparison (what the terrain alone does, arm commanded still):
 ```bash
-cd /home/rrlab/rrlab_mulag && /home/rrlab/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
+cd ~/rrlab_mulag && ~/miniconda3/envs/env_isaaclab/bin/python verge_task/scripts/evaluate.py \
   --device cuda:0 --stage 5 --num_envs 4 --steps 960 --eval_terrain --road_scene
 ```
 

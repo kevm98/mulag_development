@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Check that a PPO3 checkpoint matches the shared 66x5 ROM contract."""
 
 from __future__ import annotations

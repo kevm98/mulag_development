@@ -11,8 +11,8 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-REPO = Path("/home/rrlab/rrlab_mulag")
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
+REPO = Path(Path.home() / "rrlab_mulag")
+OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
 V = REPO / "outputs/e3_verify"
 C_RED, C_BLUE, C_GRAY = "#D31F26", "#0072B2", "#666666"
 mpl.rcParams.update({

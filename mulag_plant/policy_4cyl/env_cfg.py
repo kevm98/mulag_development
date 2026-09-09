@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
+from rrlab_compat.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from mulag_plant.policy.env_cfg import ResidualPolicyEnvCfg
 from mulag_plant.policy.observations import FOUR_CYLINDER_RESIDUAL_OBS_DIM, residual_observation_dim

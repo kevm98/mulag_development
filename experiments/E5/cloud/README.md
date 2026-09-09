@@ -60,10 +60,10 @@ All are written to be **no-ops on the Legion box**, so nothing regresses there.
 * `PPO_ROM/scripts/{score_per_mesh,supervise_training,select_checkpoint}.sh` —
   `ROOT`/`PY` made `${VAR:-default}` overridable instead of hardcoded.
 * `PPO_ROM/scripts/{preflight,training_status,train,evaluate_gates}.py` —
-  shebang `/home/rrlab/miniconda3/...` -> `/usr/bin/env python3`. Inert either
+  shebang `~/miniconda3/...` -> `/usr/bin/env python3`. Inert either
   way, since these are invoked through `$PY`.
 * `experiments/E5/code/make_e5_figure.py` — output path had a stray space
-  (`"thesis /thesis/..."`); now derived from `$ROOT`.
+  (`"thesis/thesis/..."`); now derived from `$ROOT`.
 * `mulag_plant/runtime/physx_compat.py` (new) + an import in
   `mulag_upper_level_env_cfg.py` — restores `cfg.sim.physx` on builds that
   renamed it. Self-disabling where the field already exists.

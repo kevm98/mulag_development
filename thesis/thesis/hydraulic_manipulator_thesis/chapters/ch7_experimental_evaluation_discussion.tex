@@ -355,12 +355,12 @@ individual factor parameterisations.
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_kappa_stacks}
   \caption{Lateral tracking and ground contact as actuator authority
-  $\kappa$ is reduced, on mesh $1337$ at $4.0$\,km/h. Left: nominal payload,
-  where every stack degrades as authority is withdrawn. Right: $4.0\times$
-  payload, where the frozen controller is \emph{worst at full authority} and
-  improves as authority is cut, while the payload-conditioned arm is flat and
-  already near the frozen controller's best point. Rows share a vertical scale
-  so the two payloads are directly comparable.}
+  $\kappa$ is reduced, on mesh $1337$ at $4.0$\,km/h. Panels (a) and (c) show
+  nominal payload, where every stack degrades as authority is withdrawn.
+  Panels (b) and (d) show $4.0\times$ payload, where the frozen controller is
+  \emph{worst at full authority} and improves as authority is cut, while the
+  payload-conditioned arm is flat and already near the frozen controller's
+  best point. Corresponding metric panels share a vertical scale.}
   \label{fig:eval:kappa-stacks}
 \end{figure}
 
@@ -543,14 +543,13 @@ Table~\ref{tab:eval:adaptation} gives the pooled estimates.
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\textwidth]{images/ch7/ch7_adaptation_forest}
-  \caption{Online payload conditioning against the frozen policy, paired per
-  environment on held-out mesh 3141. Small markers show the three training-seed
-  medians; diamonds and bars show the across-seed pooled median and its $95\,\%$
-  percentile-bootstrap interval over $B=20000$. The shaded left half means
-  adaptation is worse and the shaded right half means it is better. The sign turns with payload: at
-  $3.0\times$ the frozen policy still holds ground contact and the conditioning
-  only costs, while at $4.0\times$ and $5.0\times$ cut height, lateral error and
-  ground contact improve together.}
+  \caption{Frozen and adaptive performance on held-out mesh 3141. Each payload
+  group places the frozen baseline beside the adaptive result; values are shown
+  directly above the bars. Adaptive bars apply the across-seed pooled paired
+  median change to the frozen baseline, and their whiskers show the corresponding
+  $95\,\%$ percentile-bootstrap interval over $B=20000$. Lower is better for the
+  two error panels and higher is better for ground contact. Adaptation costs at
+  $3.0\times$, but at $4.0\times$ and $5.0\times$ it improves all three metrics.}
   \label{fig:eval:forest}
 \end{figure}
 

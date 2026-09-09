@@ -10,13 +10,13 @@ picture.
 House idiom follows make_ch6_aam_stack.py: a 1000 px canvas included at
 \\textwidth, so no font falls below 17 px.
 
-Run:  /home/rrlab/miniconda3/envs/thesis_figures/bin/python scripts/make_nn_blocks.py
+Run:  ~/miniconda3/envs/thesis_figures/bin/python scripts/make_nn_blocks.py
 """
 from pathlib import Path
 
 import cairosvg
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis")
 IMG = BASE / "images"
 
 INK, MUTED, RULE = "#1F2933", "#66727E", "#B9C2C9"

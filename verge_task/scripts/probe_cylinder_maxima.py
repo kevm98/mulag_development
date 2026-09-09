@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Measure each cylinder's MAXIMUM, twice: through the pipeline and bypassing it.
 
 The question this answers is "where does the arm's authority actually go".

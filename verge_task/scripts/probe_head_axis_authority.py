@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Measure which cylinders can steer the cutter head's world-down axis.
 
 The stage-5 collapses are all X-axis head excursions (``max_abs_head_axis_x``

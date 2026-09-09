@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Collapse a strict-gate matrix into one promotion verdict per checkpoint.
 
 Reads the JSON reports written by ``run_contact_safe_gates.sh``. A checkpoint

@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Aggregate contact-loss probe or evaluation reports into one comparison table.
 
 Pure JSON in, Markdown/JSON out -- no Isaac Sim, no GPU. Kept as a script

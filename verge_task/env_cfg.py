@@ -11,7 +11,7 @@ rather than anything inside a scored episode.
 from __future__ import annotations
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
+from rrlab_compat.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from mulag_plant.policy.env_cfg import (
     ResidualPolicyEnvCfg,

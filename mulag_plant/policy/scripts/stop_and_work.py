@@ -245,7 +245,7 @@ simulation_app = launcher.app
 import gymnasium as gym
 import torch
 from isaaclab.utils.math import quat_apply
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from rrlab_compat.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 
 importlib.import_module(str(a.task_module))

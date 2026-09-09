@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Evaluate a standalone 45-D PPO trajectory-2D checkpoint in PhysX."""
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ simulation_app = launcher.app
 import gymnasium as gym
 import numpy as np
 import torch
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from rrlab_compat.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 
 import mulag_plant.tasks  # noqa: F401,E402

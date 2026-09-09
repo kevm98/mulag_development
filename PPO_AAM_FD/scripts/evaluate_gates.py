@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Score a PPO_AAM_FD checkpoint on the shared eight-gate contract."""
 
 from __future__ import annotations

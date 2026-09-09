@@ -5,7 +5,7 @@
 # evaluators, and trainers that would contend for the same GPU.
 set -u
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 LOG=${AAM_BLOCK_LOG:-/tmp/rrlab-aam-blocker.log}
 
 args_for() {

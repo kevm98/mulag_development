@@ -7,7 +7,7 @@ cd "$ROOT"
 echo "[PPO2_A V3] Each shape is a short PPO phase; ETA is phase-local."
 echo "[PPO2_A V3] Finite safety events remain logged/penalized; resets occur at episode timeout."
 
-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python -u \
+$HOME/miniconda3/envs/env_isaaclab/bin/python -u \
   mulag_plant/policy_4cyl/scripts/train.py \
   --headless --device cuda:0 --num_envs 128 --seed 17 \
   --joint_finetune \

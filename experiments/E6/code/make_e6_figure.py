@@ -13,8 +13,8 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
-ROOT = Path("/home/rrlab/rrlab_mulag/outputs/e6_latent_bandwidth")
+OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
+ROOT = Path(Path.home() / "rrlab_mulag/outputs/e6_latent_bandwidth")
 MESHES = ["1337", "17", "909"]
 LPF = [("bw_lpf_5p0", 0.032), ("bw_lpf_1p0", 0.159), ("bw_lpf_0p64", 0.250),
        ("bw_lpf_0p32", 0.500), ("bw_lpf_0p2", 0.796), ("bw_lpf_0p04", 3.979)]

@@ -9,7 +9,7 @@ Run:  python3 scripts/make_ch5_rom_pipeline.py
 from pathlib import Path
 import cairosvg
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis")
 IMG, DRAWIO = BASE / "images", BASE / "drawio"
 DRAWIO.mkdir(exist_ok=True)
 ORANGE, BLUE, TEAL, PURPLE, RED, GRAY = (

@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Render clean, high-resolution thesis views of the verge-following task.
 
 The output is captured from Isaac Sim's RTX viewport rather than from the UI,

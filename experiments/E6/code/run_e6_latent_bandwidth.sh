@@ -51,7 +51,7 @@ set -uo pipefail
 #   at once, which is exactly what this experiment is built to avoid. E4 already
 #   reports it.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
 
 OUT=${OUT:-$ROOT/outputs/e6_latent_bandwidth}

@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 import os
 
-REPO_ROOT = Path(os.environ.get("ROOT", "/home/rrlab/rrlab_mulag"))
+REPO_ROOT = Path(os.environ.get("ROOT", Path.home() / "rrlab_mulag"))
 OUT = REPO_ROOT / "thesis/thesis/hydraulic_manipulator_thesis/images"
 ROOT = REPO_ROOT / "outputs/e5_robustness"
 STACKS = [("ppo_rom", "PPO-ROM", "#D31F26"),

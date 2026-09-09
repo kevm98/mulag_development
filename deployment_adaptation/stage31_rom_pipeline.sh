@@ -7,7 +7,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 aam_root="$repo_root/AAM_module"
-python_bin="/home/rrlab/miniconda3/envs/env_isaaclab/bin/python"
+python_bin="$HOME/miniconda3/envs/env_isaaclab/bin/python"
 manifest="$aam_root/results/stage22_wide_manifest.csv"
 
 raw="$aam_root/datasets/rom_deployment_stage31_v1"

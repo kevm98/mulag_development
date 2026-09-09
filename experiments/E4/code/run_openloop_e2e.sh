@@ -29,7 +29,7 @@ set -euo pipefail
 # Usage:  experiments/E4/code/run_openloop_e2e.sh [raw_dataset_dir]
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-py="/home/rrlab/miniconda3/envs/env_isaaclab/bin/python"
+py="$HOME/miniconda3/envs/env_isaaclab/bin/python"
 aam="$repo/AAM_module"
 
 raw="${1:-$aam/datasets/rom_openloop_v1}"

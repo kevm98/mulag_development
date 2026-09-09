@@ -13,8 +13,8 @@
 # script's stdout being read.
 set -uo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT=$HOME/rrlab_mulag
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 SP=/tmp/rrlab_scratch
 OUT=$ROOT/PPO_ROM/reports/frontier
 SUMMARY=$ROOT/reports/OVERNIGHT_SUMMARY.md
@@ -74,7 +74,7 @@ import json, sys
 from pathlib import Path
 
 out = Path(sys.argv[1])
-OUT = Path("/home/rrlab/rrlab_mulag/PPO_ROM/reports/frontier")
+OUT = Path.home() / "rrlab_mulag/PPO_ROM/reports/frontier"
 ARMS = [
     ("teacher (privileged DLS)", "teacherv3_gates.json"),
     ("ROM   distilled v3",       "romv3_gates.json"),

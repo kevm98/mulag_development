@@ -21,9 +21,9 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-REPO = Path("/home/rrlab/rrlab_mulag")
+REPO = Path(Path.home() / "rrlab_mulag")
 SRC = REPO / "outputs/stage31_openloop"
-OUT = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis/images")
+OUT = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis/images")
 OUT.mkdir(parents=True, exist_ok=True)
 
 # Okabe-Ito subset, CVD-safe, matching Chapters 5 and 6.

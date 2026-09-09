@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="/home/rrlab/miniconda3/envs/env_isaaclab/bin/python"
+PY="$HOME/miniconda3/envs/env_isaaclab/bin/python"
 OUT="$ROOT/experiments/three_pipeline_tracking"
 TRACE="$OUT/traces"
 REPORT="$OUT/reports"

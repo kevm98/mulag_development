@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Grounding probe: is the truck really driving on the terrain?
 
 Answers the three physical questions that have to be true before any arm task

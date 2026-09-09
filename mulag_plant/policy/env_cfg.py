@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
+from rrlab_compat.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from mulag_plant.tasks.env_cfg import PPO2ROMPhysXEnvCfg
 from mulag_plant.runtime.mulag_upper_level_env_cfg import (

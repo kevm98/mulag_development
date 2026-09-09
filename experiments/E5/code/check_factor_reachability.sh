@@ -24,7 +24,7 @@ set -uo pipefail
 # Expected: IF and AIF identical, R different. Anything else means the static
 # reading is wrong and the sweep below must not be interpreted until it is.
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
 cd "$ROOT"
 OUT=${OUT:-$ROOT/outputs/e5_reachability}
 export MESHES=${MESHES:-1337}

@@ -16,7 +16,7 @@ set -uo pipefail
 # not thrash the 12 cores.
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-py="/home/rrlab/miniconda3/envs/env_isaaclab/bin/python"
+py="$HOME/miniconda3/envs/env_isaaclab/bin/python"
 aam="$repo/AAM_module"
 frozen="$aam/datasets/rom_openloop_v1_frozen"
 out="$repo/outputs/stage31_openloop/seeds"

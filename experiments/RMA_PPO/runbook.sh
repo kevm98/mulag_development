@@ -2,8 +2,8 @@
 # GPU-only execution runbook. Preparation in this repository never invokes it.
 set -euo pipefail
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
-PY=${PY:-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
+PY=${PY:-$HOME/miniconda3/envs/env_isaaclab/bin/python}
 SOURCE=${SOURCE:-$ROOT/logs/rsl_rl/ppo4_1_sole/speed_range_2_7_pathfix_v2_idfd/model_promoted_2_7kmh.pt}
 PHASE1=${PHASE1:-$ROOT/experiments/RMA_PPO/phase1_privileged_init.pt}
 PHASE2=${PHASE2:-$ROOT/experiments/RMA_PPO/on_policy_history}

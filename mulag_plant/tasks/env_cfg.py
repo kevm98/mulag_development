@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
+from rrlab_compat.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from mulag_plant.models import COMMAND_ROM_CHECKPOINT
 from mulag_plant.mdp.ee_observations import EE_TRACKING_OBS_DIM

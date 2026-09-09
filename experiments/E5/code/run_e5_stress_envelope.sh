@@ -54,7 +54,7 @@ set -uo pipefail
 #                         or ground contact >= 5 percentage points below it
 #   functional breakdown: ground contact < 0.700, or safety termination > 0.080
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
 cd "$ROOT"
 STAGE_E5=${STAGE_E5:-0}
 OUT=${OUT:-$ROOT/outputs/e5_authority_stage${STAGE_E5}}

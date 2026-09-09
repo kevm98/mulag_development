@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=/home/rrlab/rrlab_mulag
+repo_root=$HOME/rrlab_mulag
 aam_root="$repo_root/AAM_module"
-python_bin=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+python_bin=$HOME/miniconda3/envs/env_isaaclab/bin/python
 manifest="$aam_root/results/stage22_wide_manifest.csv"
 collected="$aam_root/datasets/master_v3_stage22_wide"
 frozen="$aam_root/datasets/master_v3_stage22_wide_frozen"

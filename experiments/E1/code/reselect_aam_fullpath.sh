@@ -17,7 +17,7 @@ set -uo pipefail
 # into the same directory without colliding. A fourth pass then sees all three
 # meshes present, skips every report and only runs the ranking.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
 RUN=${RUN:-$ROOT/logs/rsl_rl/ppo_id_aam_fd/stage31_promotable_v2}
 OUT=${OUT:-$ROOT/outputs/aam_reselect_fullpath}

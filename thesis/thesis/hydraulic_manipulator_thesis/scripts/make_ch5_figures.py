@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-REPO = Path("/home/rrlab/rrlab_mulag")
+REPO = Path(Path.home() / "rrlab_mulag")
 # Resolved from this file, not hardcoded: the tree moves between machines.
 OUT = Path(__file__).resolve().parents[1] / "images" / "ch5"
 OUT.mkdir(parents=True, exist_ok=True)

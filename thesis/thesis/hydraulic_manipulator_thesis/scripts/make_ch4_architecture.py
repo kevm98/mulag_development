@@ -9,7 +9,7 @@ Run:  python3 scripts/make_ch4_architecture.py
 from pathlib import Path
 import cairosvg
 
-BASE = Path("/home/rrlab/rrlab_mulag/thesis /thesis/hydraulic_manipulator_thesis")
+BASE = Path(Path.home() / "rrlab_mulag/thesis/thesis/hydraulic_manipulator_thesis")
 IMG = BASE / "images"
 DRAWIO = BASE / "drawio"
 DRAWIO.mkdir(exist_ok=True)

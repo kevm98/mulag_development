@@ -1,4 +1,4 @@
-#!/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+#!/usr/bin/env python3
 """Construct and step the standalone PPO_AAM_FD PhysX task."""
 
 from __future__ import annotations

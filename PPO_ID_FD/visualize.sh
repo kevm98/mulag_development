@@ -2,8 +2,8 @@
 # Visualize the standalone PPO_ID_FD task in Isaac Sim.
 set -euo pipefail
 
-ROOT=/home/rrlab/rrlab_mulag
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$HOME/miniconda3/envs/env_isaaclab/bin/python"
 DEFAULT_CHECKPOINT="$ROOT/logs/rsl_rl/ppo4_1_sole/speed_range_2_7_pathfix_v2_idfd/model_promoted_2_7kmh.pt"
 SUBJECT="$DEFAULT_CHECKPOINT"
 MESH=${MESH:-1337}

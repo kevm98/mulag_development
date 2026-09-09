@@ -30,9 +30,9 @@ set -uo pipefail
 # to the other two. Evaluation conditions are identical for all three; the
 # training asymmetry is reported as a limitation, not hidden.
 
-ROOT=/home/rrlab/rrlab_mulag
+ROOT=$HOME/rrlab_mulag
 cd "$ROOT"
-PY=/home/rrlab/miniconda3/envs/env_isaaclab/bin/python
+PY=$HOME/miniconda3/envs/env_isaaclab/bin/python
 
 OUT=${OUT:-$ROOT/outputs/e1_tracking}
 export MESHES=${MESHES:-"1337 17 909"}

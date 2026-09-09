@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ROOT=${ROOT:-/home/rrlab/rrlab_mulag}
-PY=${PY:-/home/rrlab/miniconda3/envs/env_isaaclab/bin/python}
+ROOT=${ROOT:-$HOME/rrlab_mulag}
+PY=${PY:-$HOME/miniconda3/envs/env_isaaclab/bin/python}
 RUN_DIR=${LOG_DIR:-$ROOT/logs/rsl_rl/ppo3_1_sole/warmup_prod}
 STALL_SECONDS=${STALL_SECONDS:-420}
 MAX_RESTARTS=${MAX_RESTARTS:-6}
