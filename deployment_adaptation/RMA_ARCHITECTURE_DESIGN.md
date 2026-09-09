@@ -14,7 +14,7 @@ design:
 
 1. **The latent is a seal latent.** Linear decoding from `z_hat` gives
    seal $0.956$, compliance $0.448$, flow $0.114$, pressure $0.081$,
-   com_z $0.056$, mass $-0.008$ (`experiments/E3_mid_episode_plant_change/README.md`).
+   com_z $0.056$, mass $-0.008$ (`archive/experiments_stale_2026-09-09/E3_mid_episode_plant_change/README.md`).
 2. **Seal is inert on the plant AIF runs.**
    `CylinderFDRuntime.step(valve_cmd, extension, extension_velocity, dP, force)`
    takes no factor argument (`mulag_plant/runtime/cylinder_models_runtime.py:320`).

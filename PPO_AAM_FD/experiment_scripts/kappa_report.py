@@ -1,7 +1,7 @@
 """kappa -> performance, and kappa_crit per stack.
 
 Thresholds are E5's, declared before any curve was seen
-(experiments/E5_plant_robustness_envelope/README.md):
+(archive/experiments_stale_2026-09-09/E5_plant_robustness_envelope/README.md):
 
   functional breakdown : ground contact < 0.700  OR  safety termination > 0.080
   degradation onset    : median lateral >= 1.5x its own kappa=1.0 value

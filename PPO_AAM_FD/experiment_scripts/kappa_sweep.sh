@@ -6,7 +6,7 @@
 # Applied at the SAME boundary on every stack (after the actuator model, before
 # the PhysX target), so all four receive an identical physical stress. This is
 # the axis the deployment factors could not provide: they are inert on the FD
-# plant and clamped on the ROM (experiments/E5_plant_robustness_envelope/README.md).
+# plant and clamped on the ROM (archive/experiments_stale_2026-09-09/E5_plant_robustness_envelope/README.md).
 #
 # Stacks:  R   command ROM
 #          IF  ID->FD
