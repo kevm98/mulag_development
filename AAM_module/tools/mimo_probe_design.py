@@ -40,7 +40,7 @@ if str(ROOT) not in sys.path:
 AAM_ROOT = Path(__file__).resolve().parents[1]
 if str(AAM_ROOT) not in sys.path:
     sys.path.insert(0, str(AAM_ROOT))
-sys.path.insert(0, str(ROOT / "rom_model"))
+sys.path.insert(0, str(ROOT / "learned_models/rom_model"))
 
 from ROM_pipeline.models import load_checkpoint  # noqa: E402
 
@@ -152,7 +152,7 @@ def main() -> None:
     p.add_argument(
         "--checkpoint",
         default=str(
-            ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+            ROOT / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
         ),
     )
     p.add_argument("--device", default="cpu")

@@ -19,7 +19,7 @@ $E_{\text{eff}}(p) = (1/E_f + \alpha/p)^{-1}$, orifice flow depending on spool
 position and $\sqrt{\Delta p}$, spool lag $\dot{x}_v = (u - x_v)/\tau_v$, and
 piston force $F_h = p_1A_1 - p_2A_2 - F_{\text{fric}}(\dot{x})$.
 
-`rom_model/ROM_pipeline/models/hydraulic_rom.py` implements that structure
+`learned_models/rom_model/ROM_pipeline/models/hydraulic_rom.py` implements that structure
 directly, at lines 216--234:
 
 ```python

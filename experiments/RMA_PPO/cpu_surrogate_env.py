@@ -28,7 +28,7 @@ if str(AAM_ROOT) not in sys.path:
 
 from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime  # noqa: E402
 from PPO_AAM_FD.rma_adaptation.core import ActuationConfig, DeploymentActuation  # noqa: E402
-from sd_model.training.train_sd_z import BeliefEncoder, SDz, causal_windows_np  # noqa: E402
+from learned_models.sd_model.training.train_sd_z import BeliefEncoder, SDz, causal_windows_np  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,7 @@ class CpuSDTrackingEnv:
         device: str | torch.device = "cpu",
         model_dir: str | Path = ROOT / "outputs/stage31_rom/sd_none",
         dataset_root: str | Path = ROOT / "AAM_module/datasets/rom_deployment_stage31_v1_frozen",
-        id_checkpoint: str | Path = ROOT / "id_fd_model/best_id_cylinder_control.pt",
+        id_checkpoint: str | Path = ROOT / "learned_models/id_fd_model/best_id_cylinder_control.pt",
     ) -> None:
         self.device = torch.device(device)
         if self.device.type != "cpu":
@@ -167,7 +167,7 @@ class CpuSDTrackingEnv:
         self.belief.eval()
         self.sd.eval()
         self.id_runtime = CylinderIDRuntime(
-            models_root=ROOT / "id_fd_model/vendor_models",
+            models_root=ROOT / "learned_models/id_fd_model/vendor_models",
             checkpoint=Path(id_checkpoint), num_envs=self.num_envs, device=self.device,
         )
         self.actuation = DeploymentActuation(

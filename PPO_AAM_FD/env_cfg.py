@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # loaded by accident.  Override the lag only for a declared ablation.
 AAM_HISTORY_LAG = int(os.environ.get("MULAG_AAM_HISTORY_LAG", "20"))
 AAM_MODEL = ROOT / f"outputs/stage31_rom/aam_cnn/L{AAM_HISTORY_LAG}_d64"
-TRUE_LATENT_MODEL = ROOT / "sd_model/stage31_frozen/z2_rom"
+TRUE_LATENT_MODEL = ROOT / "learned_models/sd_model/stage31_frozen/z2_rom"
 # The adapter is trained against the same latent map and history length as the
 # selected AAM.  Keep an explicit override for declared legacy ablations, but
 # do not silently pair the L20 CNN with the old L5 adapter.
@@ -277,7 +277,7 @@ class PpoIDAAMFDEnvCfg(Ppo41IDFDEnvCfg):
             # A payload draw is only in the observation if the factor path runs.
             self.deployment_factor_enabled = True
         if self.mixed_plant_enabled:
-            available_rom = ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+            available_rom = ROOT / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
             if not Path(self.command_rom_checkpoint).is_file() and available_rom.is_file():
                 self.command_rom_checkpoint = str(available_rom)
         if not self.online_aam_policy_observation:

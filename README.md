@@ -54,9 +54,12 @@ cd thesis/thesis/hydraulic_manipulator_thesis && latexmk -pdf main.tex
     PPO_ROM/ PPO_ID_FD/ PPO_AAM_FD/   the three stacks
     verge_task/ mulag_plant/          terrain, environment, DLS teacher
     rrlab_compat/                     RSL-RL config classes
-    rom_model/ id_fd_model/           actuator models used by the stacks
-    sd_model/                         state dynamics. Not in the thesis.
-    experiments/ reports/ outputs/    E1-E6, pre-registrations, scored reports
+    learned_models/                   the learned actuator models
+      rom_model/                        command ROM        -> PPO_ROM
+      id_fd_model/                      inverse + forward  -> PPO_ID_FD, PPO_AAM_FD
+      sd_model/                         state dynamics. Not in the thesis.
+    experiments/                      one folder per Chapter 7 section
+    reports/ outputs/                 pre-registrations, scored reports
     AAM_module/                       datasets; results use the _frozen copies
     logs/rsl_rl/                      runs and checkpoints
     thesis/                           sources and figure scripts

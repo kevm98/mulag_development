@@ -26,7 +26,7 @@ if str(AAM_ROOT) not in sys.path:
 
 from tools.train_stage31_aam import AAM  # noqa: E402
 from tools.train_stage29_latent_adapter import ResidualAdapter  # noqa: E402
-from sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
+from learned_models.sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
 
 
 class OnlineAAMIDFDController:

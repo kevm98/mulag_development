@@ -190,9 +190,9 @@ def aggregate(records: list[dict[str, Any]], path: tuple[str, ...]) -> dict[str,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=str(AAM_ROOT / "datasets/master_v3_stage22_wide_frozen"))
-    parser.add_argument("--models-root", default=str(TOOL_ROOT / "id_fd_model/vendor_models"))
-    parser.add_argument("--id-checkpoint", default=str(TOOL_ROOT / "id_fd_model/best_id_cylinder_control.pt"))
-    parser.add_argument("--fd-checkpoint", default=str(TOOL_ROOT / "id_fd_model/best_fd_cylinder_strict.pt"))
+    parser.add_argument("--models-root", default=str(TOOL_ROOT / "learned_models/id_fd_model/vendor_models"))
+    parser.add_argument("--id-checkpoint", default=str(TOOL_ROOT / "learned_models/id_fd_model/best_id_cylinder_control.pt"))
+    parser.add_argument("--fd-checkpoint", default=str(TOOL_ROOT / "learned_models/id_fd_model/best_fd_cylinder_strict.pt"))
     parser.add_argument("--jacobian", default=str(TOOL_ROOT / "mulag_plant/models/ee_jacobian_ground_truck3x4.json"))
     parser.add_argument("--device", default="auto")
     parser.add_argument("--out", default=str(TOOL_ROOT / "outputs/stage28_id_transfer"))

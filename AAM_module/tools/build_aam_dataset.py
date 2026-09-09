@@ -31,7 +31,7 @@ Layout (mirrors the SD derived dataset):
 
 Usage:
     python build_aam_dataset.py --root datasets/master_v3_stage22_wide_frozen \\
-        --model-dir ../sd_model/stage23_frozen/dz2_nodp_holdq
+        --model-dir ../learned_models/sd_model/stage23_frozen/dz2_nodp_holdq
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ from aam_data import (  # noqa: E402
 )
 from aam_data.frozen import CHECKSUM_FILE  # noqa: E402
 from aam_data.sd import FACTOR_KEYS  # noqa: E402
-from sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
+from learned_models.sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
 
 
 def load_frozen_encoder(model_dir: Path) -> tuple[torch.nn.Module, dict]:
@@ -108,7 +108,7 @@ def main() -> None:
     )
     p.add_argument(
         "--model-dir",
-        default=str(AAM_ROOT.parent / "sd_model/stage23_frozen/dz2_nodp_holdq"),
+        default=str(AAM_ROOT.parent / "learned_models/sd_model/stage23_frozen/dz2_nodp_holdq"),
         help="frozen Stage 23 model dir (encoder.pt + metrics.json)",
     )
     p.add_argument(

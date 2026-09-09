@@ -1,0 +1,89 @@
+{
+  "stage": "25",
+  "rule": "select the SHORTEST candidate lag whose per-run validation downstream score (mean ext/vel H20 rollout RMSE) is within a paired bootstrap 95% CI of the best lag; test split unused",
+  "horizon_ticks": 20,
+  "candidate_lags": [
+    5,
+    10,
+    20,
+    40
+  ],
+  "best_lag_by_mean": 20,
+  "selected_lag": 5,
+  "selected_seconds": 0.25,
+  "per_lag": {
+    "5": {
+      "mean_score": 0.014788475234282769,
+      "n_val_runs": 20,
+      "paired_vs_best": {
+        "mean_diff_candidate_minus_best": 5.612574364770042e-05,
+        "bootstrap_95ci": [
+          -6.961347254622188e-05,
+          0.00019801398372891493
+        ],
+        "acceptable_within_uncertainty": true
+      },
+      "per_channel_mean": {
+        "extension": 0.002882561443861657,
+        "velocity": 0.02669438902470388,
+        "dP": 5931897.489577701,
+        "all": 3424782.612412951
+      }
+    },
+    "10": {
+      "mean_score": 0.014740625453878702,
+      "n_val_runs": 20,
+      "paired_vs_best": {
+        "mean_diff_candidate_minus_best": 8.275963243635975e-06,
+        "bootstrap_95ci": [
+          -9.90990550599249e-05,
+          0.00010554136829760415
+        ],
+        "acceptable_within_uncertainty": true
+      },
+      "per_channel_mean": {
+        "extension": 0.0028365746245780626,
+        "velocity": 0.026644676283179347,
+        "dP": 5923988.874591114,
+        "all": 3420216.571421528
+      }
+    },
+    "20": {
+      "mean_score": 0.014732349490635066,
+      "n_val_runs": 20,
+      "paired_vs_best": {
+        "mean_diff_candidate_minus_best": 0.0,
+        "bootstrap_95ci": [
+          0.0,
+          0.0
+        ],
+        "acceptable_within_uncertainty": true
+      },
+      "per_channel_mean": {
+        "extension": 0.0028172776170877537,
+        "velocity": 0.026647421364182383,
+        "dP": 5886308.870086485,
+        "all": 3398462.010677714
+      }
+    },
+    "40": {
+      "mean_score": 0.015346278102044444,
+      "n_val_runs": 20,
+      "paired_vs_best": {
+        "mean_diff_candidate_minus_best": 0.0006139286114093749,
+        "bootstrap_95ci": [
+          0.00030430365255057983,
+          0.0009618543856580018
+        ],
+        "acceptable_within_uncertainty": false
+      },
+      "per_channel_mean": {
+        "extension": 0.0031419881698138675,
+        "velocity": 0.027550568034275014,
+        "dP": 6119882.787713908,
+        "all": 3533315.9748955825
+      }
+    }
+  },
+  "selected_because": "shortest acceptable lag (acceptable = CI of candidate-best contains 0); acceptable set [5, 10, 20]"
+}

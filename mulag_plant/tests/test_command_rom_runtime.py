@@ -5,7 +5,7 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ROM_ROOT = ROOT / "rom_model"
+ROM_ROOT = ROOT / "learned_models/rom_model"
 sys.path.insert(0, str(ROM_ROOT))
 
 from ROM_pipeline.models import HydraulicROM, save_checkpoint  # noqa: E402

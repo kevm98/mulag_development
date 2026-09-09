@@ -315,7 +315,7 @@ class TerrainSolePolicyEnvCfg(SolePolicyEnvCfg):
     # override this, but omitting a flag must never silently select command_run_001.
     command_rom_checkpoint: str = str(
         Path(__file__).resolve().parents[1]
-        / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+        / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
     )
 
     # --- Vehicle ---

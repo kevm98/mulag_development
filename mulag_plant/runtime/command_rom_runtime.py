@@ -10,7 +10,7 @@ import torch
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_ROM_ROOT = _REPO_ROOT / "rom_model"  # ROM_pipeline model defs + checkpoints live here
+_ROM_ROOT = _REPO_ROOT / "learned_models/rom_model"  # ROM_pipeline model defs + checkpoints live here
 if str(_ROM_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROM_ROOT))
 

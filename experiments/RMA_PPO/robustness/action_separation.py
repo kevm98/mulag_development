@@ -166,7 +166,7 @@ def id_jacobian(sample: dict[str, torch.Tensor], eps: float = 0.05) -> torch.Ten
     s, u_prev = sample["s"], sample["u_prev"]
     n = s.shape[0]
     runtime = CylinderIDRuntime(
-        models_root=REPO / "id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
+        models_root=REPO / "learned_models/id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
         num_envs=n, device=torch.device("cpu"),
     )
 
@@ -206,7 +206,7 @@ def main() -> int:
 
     from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime
     limits = CylinderIDRuntime(
-        models_root=REPO / "id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
+        models_root=REPO / "learned_models/id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
         num_envs=1, device=torch.device("cpu"),
     ).command_limits.reshape(1, 4)
     print(f"ID command limits: {limits.flatten().tolist()}")

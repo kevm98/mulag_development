@@ -5,7 +5,7 @@ The question this bench answers
 -------------------------------
 On a plant whose dependence on the hydraulic factor vector ``e`` is analytic,
 strong and known -- the ``system_factors`` branch of ``HydraulicROM.forward``
-(``rom_model/ROM_pipeline/models/hydraulic_rom.py``) -- does a controller that
+(``learned_models/rom_model/ROM_pipeline/models/hydraulic_rom.py``) -- does a controller that
 is TOLD the true ``e`` track better than one that is not?
 
 Why this is worth running before any Simscape collection
@@ -73,14 +73,14 @@ from torch import nn
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "rom_model"))
+sys.path.insert(0, str(ROOT / "learned_models/rom_model"))
 sys.path.insert(0, str(ROOT / "AAM_module"))
 
 from ROM_pipeline.models import load_checkpoint  # noqa: E402
 from aam_data.master_schema import HYDRAULIC_DIMS, RANGES  # noqa: E402
 
 
-DEFAULT_CHECKPOINT = ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+DEFAULT_CHECKPOINT = ROOT / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
 DT = 0.05
 
 # Authoritative operating box, from the checkpoint's own training metadata

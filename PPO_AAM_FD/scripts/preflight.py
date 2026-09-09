@@ -23,8 +23,8 @@ from PPO_AAM_FD.online_runtime import OnlineAAMIDFDController
 
 DEFAULT_AAM_MODEL = ROOT / "outputs/stage31_rom/aam_cnn/L20_d64"
 DEFAULT_ADAPTER_MODEL = ROOT / "outputs/stage31_rom/id_adapter_cnn_l20_s5/zhat_adapter.pt"
-DEFAULT_ID_CHECKPOINT = ROOT / "id_fd_model/best_id_cylinder_control.pt"
-DEFAULT_FD_CHECKPOINT = ROOT / "id_fd_model/best_fd_cylinder_strict.pt"
+DEFAULT_ID_CHECKPOINT = ROOT / "learned_models/id_fd_model/best_id_cylinder_control.pt"
+DEFAULT_FD_CHECKPOINT = ROOT / "learned_models/id_fd_model/best_fd_cylinder_strict.pt"
 
 
 def main() -> None:

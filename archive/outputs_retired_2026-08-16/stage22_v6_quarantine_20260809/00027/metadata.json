@@ -1,0 +1,210 @@
+{
+  "applied_com_z": 0.0,
+  "applied_mass_scale": 1.0,
+  "applied_system_factors": [
+    -0.123319,
+    0.195273,
+    0.13684,
+    0.372236,
+    0.372236,
+    0.372236,
+    0.372236
+  ],
+  "availability": {
+    "applied_valve_cmd": false,
+    "command_after_limits": true,
+    "command_before_limits": true,
+    "command_saturation_flag": true,
+    "contact_force": false,
+    "contact_state": false,
+    "controller_output": true,
+    "cylinder_extension": true,
+    "cylinder_limit_flag": true,
+    "cylinder_pos_target": true,
+    "cylinder_velocity": true,
+    "dP": true,
+    "delta_extension_per_step": true,
+    "delta_isaac": true,
+    "desired_cylinder_position": true,
+    "desired_cylinder_velocity": true,
+    "desired_delta_extension": true,
+    "desired_delta_extension_velocity": true,
+    "dls_condition_number": false,
+    "dls_damping": false,
+    "ee_ang_vel_w": true,
+    "ee_lin_vel_w": true,
+    "ee_pos_local": true,
+    "ee_pos_w": true,
+    "ee_quat_w": true,
+    "invalid_physics_flag": true,
+    "joint_position": true,
+    "joint_velocity": true,
+    "probe_excitation": true,
+    "requested_valve_cmd": true,
+    "rom_effective_actuation": true,
+    "rom_predicted_valve_cmd": true,
+    "rom_tick": true,
+    "valve_saturation_flag": true
+  },
+  "com_z": 0.0,
+  "compliance": -0.123319,
+  "control_dt": 0.016666666666666666,
+  "controller_gains": {
+    "action_scale": 0.02,
+    "command_rom_dp_abs_limit_pa": 150000000.0,
+    "cylinder_neutral_hold_deadband_m": 1e-05,
+    "cylinder_rom_delta_clip_m": 0.02,
+    "cylinder_target_integrates_from_previous_target": true,
+    "cylinder_target_leak": 0.0,
+    "cylinder_target_max_lead_m": 0.025,
+    "low_level_servo_mode": "none",
+    "max_abs_valve": 1.0,
+    "ppo_neutral_action_deadband": 1e-06
+  },
+  "dls_parameters": {
+    "action_smoothing": 0.2,
+    "error_gain": 0.18,
+    "invert_learned_pipeline": false,
+    "max_action": 1.0,
+    "max_desired_delta_m": 0.004,
+    "velocity_damping": 0.0,
+    "velocity_feedforward": 1.0
+  },
+  "domain": "hydraulic",
+  "end_time": "2026-08-09T11:42:38.290891+00:00",
+  "excitation_config": {
+    "factor_profile": "stage22_wide",
+    "id_s": 30.0,
+    "matched_reset_seed": true,
+    "name": "run_structure",
+    "posture_ramp_s": 3.0,
+    "probe": "prbs",
+    "probe_amplitude": 0.02,
+    "probe_hold_steps": 10,
+    "probe_seed": 20260812,
+    "probe_segment_seeds": [
+      20260812,
+      20260813,
+      20260814
+    ],
+    "segments": 11,
+    "settle_s": 2.0,
+    "stow_s": 4.0,
+    "total_steps": 11304,
+    "trajectory_stride": 1
+  },
+  "factor_profile": "stage22_wide",
+  "flow": 0.195273,
+  "hydraulic_draw": {
+    "compliance": -0.123319,
+    "flow": 0.195273,
+    "pressure": 0.13684,
+    "seal": 0.372236
+  },
+  "mass_scale": 1.0,
+  "mechanical_draw": {
+    "com_z": 0.0,
+    "mass_scale": 1.0
+  },
+  "num_control_steps": 11304,
+  "physics_dt": 0.008333333333333333,
+  "pressure": 0.13684,
+  "random_seed": 20260808,
+  "rom_checkpoint": "/home/rrlab/rrlab_mulag/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt",
+  "rom_dt": 0.05,
+  "run_id": 27,
+  "schema_version": "master_v1",
+  "seal": 0.372236,
+  "segment_ids": [
+    {
+      "end_step": 120,
+      "kind": "settle",
+      "name": "settle",
+      "start_step": 0
+    },
+    {
+      "end_step": 180,
+      "kind": "dls_posture",
+      "name": "dls_to_A",
+      "start_step": 120
+    },
+    {
+      "end_step": 1980,
+      "kind": "id_excitation",
+      "name": "id_A",
+      "start_step": 180
+    },
+    {
+      "end_step": 3195,
+      "kind": "dls_trajectory",
+      "name": "dls_workspace",
+      "start_step": 1980
+    },
+    {
+      "end_step": 3375,
+      "kind": "dls_posture",
+      "name": "dls_to_B",
+      "start_step": 3195
+    },
+    {
+      "end_step": 5175,
+      "kind": "id_excitation",
+      "name": "id_B",
+      "start_step": 3375
+    },
+    {
+      "end_step": 6655,
+      "kind": "dls_trajectory",
+      "name": "dls_coupled",
+      "start_step": 5175
+    },
+    {
+      "end_step": 6835,
+      "kind": "dls_posture",
+      "name": "dls_to_C",
+      "start_step": 6655
+    },
+    {
+      "end_step": 8635,
+      "kind": "id_excitation",
+      "name": "id_C",
+      "start_step": 6835
+    },
+    {
+      "end_step": 11064,
+      "kind": "dls_trajectory",
+      "name": "reach_and_return",
+      "start_step": 8635
+    },
+    {
+      "end_step": 11304,
+      "kind": "stow",
+      "name": "safe_stow",
+      "start_step": 11064
+    }
+  ],
+  "split": "train",
+  "start_time": "2026-08-09T11:39:05.720201+00:00",
+  "task_name": "RRLAB-Mulag-PPO2-ROM-PhysX-CylinderSpace-v0",
+  "trajectory_schedule": {
+    "factor_profile": "stage22_wide",
+    "id_s": 30.0,
+    "matched_reset_seed": true,
+    "name": "run_structure",
+    "posture_ramp_s": 3.0,
+    "probe": "prbs",
+    "probe_amplitude": 0.02,
+    "probe_hold_steps": 10,
+    "probe_seed": 20260812,
+    "probe_segment_seeds": [
+      20260812,
+      20260813,
+      20260814
+    ],
+    "segments": 11,
+    "settle_s": 2.0,
+    "stow_s": 4.0,
+    "total_steps": 11304,
+    "trajectory_stride": 1
+  }
+}

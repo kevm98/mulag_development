@@ -54,7 +54,7 @@ Status: Stage 31 implementation.
 
 The active ROM, DLS, PPO-ROM, PPO-ID-FD, logging and model paths were separated
 from legacy/superseded code. The selected command ROM checkpoint is
-`rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt`.
+`learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt`.
 
 ## Stage 1 — Verify the ROM deployment interface
 

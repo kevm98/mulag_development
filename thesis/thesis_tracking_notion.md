@@ -33,7 +33,7 @@
 | 2.1 | Hydraulic actuation & excavator arm kinematics | Not started | 0 | 600 | 0 |  | [`verge_task/actuators.py`](../verge_task/actuators.py) | Cylinder model, kinematics |
 | 2.2 | Simulation (Isaac Lab) & sim-to-real transfer | Not started | 0 | 600 | 0 |  |  | Physics sim, domain randomization |
 | 2.3 | Reinforcement learning (PPO) | Not started | 0 | 600 | 0 |  |  | Policy gradient, curriculum |
-| 2.4 | System identification — inverse/forward dynamics (ID/FD) & reduced-order models (ROM) | Not started | 0 | 600 | 0 |  | [`id_fd_model/README.md`](../id_fd_model/README.md) | Paired ID/FD residual pipeline |
+| 2.4 | System identification — inverse/forward dynamics (ID/FD) & reduced-order models (ROM) | Not started | 0 | 600 | 0 |  | [`learned_models/id_fd_model/README.md`](../learned_models/id_fd_model/README.md) | Paired ID/FD residual pipeline |
 | 2.5 | Domain adaptation / learned adaptation modules (AAM) | Not started | 0 | 600 | 0 |  | [`AAM_module/stage20_system_factor_encoder.md`](../AAM_module/stage20_system_factor_encoder.md) | Latent system-factor encoding |
 | 3 | **System & Simulation Setup** | Not started | 0 | 2500 | 0 |  |  |  |
 | 3.1 | MULAG plant & USD assets | Not started | 0 | 500 | 0 |  | [`extensions/rrlab_assets/rrlab_assets/mulag.py`](../extensions/rrlab_assets/rrlab_assets/mulag.py) |  |

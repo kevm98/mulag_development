@@ -56,7 +56,7 @@ class PPO2ROMPhysXEnvCfg(MulagUpperLevelEnvCfg):
     rom_cylinder_checkpoint = "disabled"
     base_rom_checkpoint = str(
         Path(__file__).resolve().parents[2]
-        / "rom_model/base_run_001/best_base_rom.pt"
+        / "learned_models/rom_model/base_run_001/best_base_rom.pt"
     )
     command_rom_checkpoint = str(COMMAND_ROM_CHECKPOINT)
     low_level_servo_mode = "none"

@@ -122,7 +122,7 @@ def main() -> int:
 
     from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime
     limits = CylinderIDRuntime(
-        models_root=REPO / "id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
+        models_root=REPO / "learned_models/id_fd_model/vendor_models", checkpoint=ID_CHECKPOINT,
         num_envs=1, device=torch.device("cpu"),
     ).command_limits.reshape(1, 4)
 

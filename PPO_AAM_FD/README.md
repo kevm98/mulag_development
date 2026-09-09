@@ -20,7 +20,7 @@ Frozen base policy, the subject of every run here:
 
 ```text
 logs/rsl_rl/ppo_id_aam_fd/distilled_v1/phase1_init_70.pt
-id_fd_model/best_fd_cylinder_strict.pt                     forward model
+learned_models/id_fd_model/best_fd_cylinder_strict.pt                     forward model
 ```
 
 AF is **not** ranked against PPO-ROM or PPO-ID-FD on task error. They emit a

@@ -30,8 +30,8 @@ def main() -> None:
     parser.add_argument("--root", required=True)
     parser.add_argument("--zhat", required=True)
     parser.add_argument("--adapter", required=True)
-    parser.add_argument("--models-root", default=str(ROOT / "id_fd_model/vendor_models"))
-    parser.add_argument("--id-checkpoint", default=str(ROOT / "id_fd_model/best_id_cylinder_control.pt"))
+    parser.add_argument("--models-root", default=str(ROOT / "learned_models/id_fd_model/vendor_models"))
+    parser.add_argument("--id-checkpoint", default=str(ROOT / "learned_models/id_fd_model/best_id_cylinder_control.pt"))
     parser.add_argument("--lag", type=int, default=5)
     parser.add_argument("--smoothing-window", type=int, default=None,
                         help="override the adapter checkpoint's causal latent window")

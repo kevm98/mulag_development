@@ -1,0 +1,771 @@
+env:
+  viewer:
+    eye:
+    - 7.5
+    - 7.5
+    - 7.5
+    lookat:
+    - 0.0
+    - 0.0
+    - 0.0
+    cam_prim_path: /OmniverseKit_Persp
+    resolution:
+    - 1280
+    - 720
+    origin_type: world
+    env_index: 0
+    asset_name: null
+    body_name: null
+  sim:
+    physics_prim_path: /physicsScene
+    device: cuda:0
+    dt: 0.01
+    render_interval: 2
+    gravity:
+    - 0.0
+    - 0.0
+    - -9.81
+    enable_scene_query_support: false
+    use_fabric: true
+    physx:
+      solver_type: 1
+      solve_articulation_contact_last: false
+      min_position_iteration_count: 1
+      max_position_iteration_count: 255
+      min_velocity_iteration_count: 0
+      max_velocity_iteration_count: 255
+      enable_ccd: false
+      enable_stabilization: false
+      enable_external_forces_every_iteration: false
+      enable_enhanced_determinism: false
+      bounce_threshold_velocity: 0.5
+      friction_offset_threshold: 0.04
+      friction_correlation_distance: 0.025
+      gpu_max_rigid_contact_count: 65536
+      gpu_max_rigid_patch_count: 163840
+      gpu_found_lost_pairs_capacity: 65536
+      gpu_found_lost_aggregate_pairs_capacity: 33554432
+      gpu_total_aggregate_pairs_capacity: 65536
+      gpu_collision_stack_size: 1048576
+      gpu_heap_capacity: 4194304
+      gpu_temp_buffer_capacity: 1048576
+      gpu_max_num_partitions: 8
+      gpu_max_soft_body_contacts: 1048576
+      gpu_max_particle_contacts: 1048576
+    physics_material:
+      func: isaaclab.sim.spawners.materials.physics_materials:spawn_rigid_body_material
+      static_friction: 0.5
+      dynamic_friction: 0.5
+      restitution: 0.0
+      friction_combine_mode: average
+      restitution_combine_mode: average
+      compliant_contact_stiffness: 0.0
+      compliant_contact_damping: 0.0
+    render:
+      enable_translucency: null
+      enable_reflections: null
+      enable_global_illumination: null
+      antialiasing_mode: null
+      enable_dlssg: null
+      enable_dl_denoiser: null
+      dlss_mode: null
+      enable_direct_lighting: null
+      samples_per_pixel: null
+      enable_shadows: null
+      enable_ambient_occlusion: null
+      dome_light_upper_lower_strategy: null
+      carb_settings: null
+      rendering_mode: null
+    create_stage_in_memory: false
+    logging_level: WARNING
+    save_logs_to_file: true
+    log_dir: null
+  ui_window_class_type: isaaclab.envs.ui.base_env_window:BaseEnvWindow
+  seed: null
+  decimation: 1
+  is_finite_horizon: false
+  episode_length_s: 20.0
+  scene:
+    num_envs: 1
+    env_spacing: 20.0
+    lazy_sensor_update: true
+    replicate_physics: false
+    filter_collisions: true
+    clone_in_fabric: false
+  events: null
+  observation_space: '{"type": "python", "space": "Box", "value": 46}'
+  num_observations: null
+  state_space: '{"type": "python", "space": "Box", "value": 0}'
+  num_states: null
+  observation_noise_model: null
+  action_space: '{"type": "python", "space": "Box", "value": 4}'
+  num_actions: null
+  action_noise_model: null
+  rerender_on_reset: false
+  num_rerenders_on_reset: 0
+  wait_for_textures: true
+  xr: null
+  log_dir: null
+  robot_cfg:
+    class_type: isaaclab.assets.articulation.articulation:Articulation
+    prim_path: /World/envs/env_.*/Robot
+    spawn:
+      func: isaaclab.sim.spawners.from_files.from_files:spawn_from_usd
+      visible: true
+      semantic_tags: null
+      copy_from_source: true
+      mass_props: null
+      deformable_props: null
+      rigid_props:
+        rigid_body_enabled: null
+        kinematic_enabled: null
+        disable_gravity: false
+        linear_damping: null
+        angular_damping: null
+        max_linear_velocity: null
+        max_angular_velocity: null
+        max_depenetration_velocity: 5.0
+        max_contact_impulse: null
+        enable_gyroscopic_forces: null
+        retain_accelerations: null
+        solver_position_iteration_count: null
+        solver_velocity_iteration_count: null
+        sleep_threshold: null
+        stabilization_threshold: null
+      collision_props: null
+      activate_contact_sensors: true
+      scale: null
+      articulation_props:
+        articulation_enabled: null
+        enabled_self_collisions: true
+        solver_position_iteration_count: 8
+        solver_velocity_iteration_count: 0
+        sleep_threshold: null
+        stabilization_threshold: null
+        fix_root_link: null
+      fixed_tendons_props: null
+      spatial_tendons_props: null
+      joint_drive_props: null
+      visual_material_path: material
+      visual_material: null
+      usd_path: /home/rrlab/rrlab_mulag/extensions/rrlab_assets/data/Robots/unimog_mulag_fme500_cylinder_as_actuator.usd
+      variants: null
+    init_state:
+      pos:
+      - -25.4
+      - 4.3
+      - 1.11
+      rot:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      lin_vel:
+      - 0.0
+      - 0.0
+      - 0.0
+      ang_vel:
+      - 0.0
+      - 0.0
+      - 0.0
+      joint_pos:
+        .*: 0.0
+      joint_vel:
+        .*: 0.0
+    collision_group: 0
+    debug_vis: false
+    articulation_root_prim_path: null
+    soft_joint_pos_limit_factor: 1.0
+    actuators:
+      all_joints:
+        class_type: isaaclab.actuators.actuator_pd:ImplicitActuator
+        joint_names_expr:
+        - Drehzapfen_joint
+        - Ausleger_I_joint
+        - Ausleger_II_joint
+        - Messerkopf_Schwenk_joint
+        - Messerkopf_joint
+        - Wheel_Front_Left_joint
+        - Wheel_Front_Right_joint
+        - Wheel_Rear_Left_joint
+        - Wheel_Rear_Right_joint
+        - Wheel_Front_Left_Steering_joint
+        - Wheel_Front_Right_Steering_joint
+        effort_limit: null
+        velocity_limit: null
+        effort_limit_sim: null
+        velocity_limit_sim: null
+        stiffness: null
+        damping: null
+        armature: null
+        friction: null
+        dynamic_friction: null
+        viscous_friction: null
+    actuator_value_resolution_debug_print: false
+  action_scale: 1.0
+  task_space_observation_space: 46
+  control_mode: rl_task_space_tracking
+  low_level_control_mode: position_delta
+  position_delta_source: id_valve
+  use_sd_observer: false
+  use_sd_feedback: false
+  sd_observer_log: true
+  sd_feedback_beta: 0.01
+  use_sd_feedback_blend: true
+  use_sd_feedback_rate_limit: true
+  use_fd_effort: false
+  use_fd_model: true
+  use_fd_as_observer: true
+  use_fd_in_policy_observation: true
+  use_fd_safety_limits: true
+  use_fd_auxiliary_reward: true
+  use_fd_effort_actuation: false
+  use_aam_adaptation: false
+  use_sd_model: false
+  fd_torque_soft_limit: fd_output_std
+  fd_torque_hard_limit: fd_output_3std
+  rew_fd_load: 0.01
+  position_scale: 0.003
+  action_to_qddot_scale: id_qddot_std
+  qddot_cmd_clip: id_qddot_std
+  torque_ramp_steps: 1000
+  torque_safety_scale: 1.0
+  log_full_pipeline_debug: true
+  debug_reward_terms: true
+  asset_preflight_settle_steps: 300
+  asset_preflight_max_pulse_root_z_motion_m: 0.02
+  asset_preflight_max_pulse_roll_pitch_motion_rad: 0.03490658503988659
+  asset_preflight_max_pre_pulse_root_vertical_velocity_mps: 0.05
+  models_dir: /home/rrlab/rrlab_mulag/kevin_integration/models
+  fallback_window: 10
+  max_abs_valve: 1.0
+  torque_adapter_mode: scale_bias
+  torque_adapter_preset: conservative
+  torque_adapter_scale:
+  - 0.0001
+  - 0.001
+  - 0.0005
+  - 0.0001
+  torque_adapter_bias:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  fd_torque_scale: 1000000.0
+  use_fd_residual_alpha: true
+  fd_residual_alpha: 0.002
+  max_abs_torque: 5.0
+  torque_rate_limit: 1.0
+  torque_lowpass_alpha: 0.2
+  use_torque_rate_limit: true
+  use_torque_lowpass: true
+  max_abs_pressure_delta: 10000000.0
+  sd_max_abs_pressure_delta: 250000000.0
+  max_abs_fnet: 10000000.0
+  sd_dP_rate_limit: 100000.0
+  sd_fnet_rate_limit: 10000.0
+  sd_output_mode: state
+  sd_nan_guard: true
+  sd_clamp_outputs: true
+  pressure_noise_std: 0.0
+  use_reduced_hydraulic_rom: false
+  use_final_causal_cylinder_rom: false
+  final_causal_rom_export_dir: /home/rrlab/rrlab_mulag/kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom
+  final_causal_rom_checkpoint: /home/rrlab/rrlab_mulag/kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom/best_valve_conditioned_causal_rom.pth
+  final_causal_rom_scaler: /home/rrlab/rrlab_mulag/kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom/best_valve_conditioned_causal_rom_scaler.pth
+  final_causal_rom_metadata: /home/rrlab/rrlab_mulag/kevin_integration/rom_cylinders/exported_valve_conditioned_causal_rom/best_valve_conditioned_causal_rom_metadata.json
+  final_causal_rom_update_period: 0.05
+  final_causal_rom_multirate_ratio: 5
+  final_causal_rom_target_clamp: true
+  final_causal_rom_debug: true
+  final_causal_rom_extension_delta_clamp: 0.04
+  final_causal_rom_applied_delta_clamp: 0.008
+  final_causal_rom_valve_feedforward_gain: 0.65
+  final_causal_rom_pressure_source: sd_observer
+  final_causal_rom_pressure_clamp: 250000000.0
+  cylinder_coordinate_mapping: /home/rrlab/rrlab_mulag/kevin_integration/rom_cylinders/cylinder_coordinate_mapping.json
+  cylinder_coordinate_mapping_mode: nominal_sign_offset
+  allow_provisional_range_mapping: false
+  allow_provisional_nominal_reference: true
+  rom_output_mode: velocity_to_position_target
+  rom_use_sd_feedback: false
+  rom_use_id_valve_cmd: false
+  rom_dt: 0.01
+  rom_nan_guard: true
+  rom_clamp_outputs: true
+  rom_debug_log: true
+  rom_Abar:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  rom_Vt:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  rom_E:
+  - 100000000.0
+  - 100000000.0
+  - 100000000.0
+  - 100000000.0
+  rom_Kq:
+  - 1.0e-08
+  - 1.0e-08
+  - 1.0e-08
+  - 1.0e-08
+  rom_CL:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  rom_mu:
+  - 10.0
+  - 10.0
+  - 10.0
+  - 10.0
+  rom_Fs:
+  - 10.0
+  - 10.0
+  - 10.0
+  - 10.0
+  rom_kf:
+  - 100.0
+  - 100.0
+  - 100.0
+  - 100.0
+  rom_Pmax:
+  - 10000000.0
+  - 10000000.0
+  - 10000000.0
+  - 10000000.0
+  rom_xdot_max:
+  - 0.8
+  - 0.8
+  - 0.8
+  - 0.8
+  rom_dx_max:
+  - 0.0005
+  - 0.0005
+  - 0.0005
+  - 0.0005
+  rom_delay_steps:
+  - 0
+  - 0
+  - 0
+  - 0
+  rom_udz_pos:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  rom_udz_neg:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  rom_velocity_gain:
+  - 0.02
+  - 0.02
+  - 0.02
+  - 0.02
+  rom_force_scale:
+  - 1000.0
+  - 1000.0
+  - 1000.0
+  - 1000.0
+  channel4_velocity_damping_gain: 0.0
+  enable_automatic_curriculum: false
+  enable_goal_difficulty_curriculum: true
+  goal_curriculum_min_completed_episodes: 256
+  goal_curriculum_advance_success_rate: 0.2
+  goal_curriculum_advance_near_pose_low_speed_rate: 0.1
+  goal_curriculum_advance_mean_max_hold_steps: 10.0
+  goal_curriculum_hysteresis_windows: 2
+  goal_curriculum_stage_scales:
+  - 0.1
+  - 0.25
+  - 0.6
+  - 1.0
+  curriculum_stage_steps:
+  - 0
+  - 50000
+  - 150000
+  - 300000
+  curriculum_episode_length_s:
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  curriculum_action_authority:
+  - 0.25
+  - 0.5
+  - 0.75
+  - 1.0
+  curriculum_vehicle_speed_min_kmh:
+  - 3.0
+  - 3.0
+  - 3.0
+  - 3.0
+  curriculum_vehicle_speed_max_kmh:
+  - 8.0
+  - 8.0
+  - 8.0
+  - 8.0
+  curriculum_vehicle_stationary_stages: 0
+  curriculum_command_x_range:
+  - - 6.8
+    - 7.2
+  - - 6.6
+    - 7.4
+  - - 6.5
+    - 7.5
+  - - 6.5
+    - 7.5
+  curriculum_command_y_range:
+  - - 1.2
+    - 1.8
+  - - 1.0
+    - 2.0
+  - - 0.8
+    - 2.2
+  - - 0.7
+    - 2.2
+  curriculum_command_z_range:
+  - - 0.5
+    - 0.5
+  - - 0.5
+    - 0.5
+  - - 0.5
+    - 0.5
+  - - 0.5
+    - 0.5
+  curriculum_orientation_enabled:
+  - false
+  - false
+  - true
+  - true
+  curriculum_min_completed_episodes_per_env: 5.0
+  curriculum_max_mean_position_error: 0.5
+  curriculum_max_velocity_termination_rate: 0.1
+  curriculum_max_other_unsafe_rate: 0.01
+  curriculum_min_timeout_rate: 0.8
+  curriculum_advance_min_success_rate: 0.05
+  unsafe_terminal_penalty: -5.0
+  kevin_fixed_pose_contract_version: kevin_fixed_pose_task_space_v2
+  reward_contract_version: task_space_reward_balance_v2
+  rew_task_pos_tracking: 1.0
+  position_tracking_reward_weight: 1.0
+  position_tracking_exponential_scale: 2.0
+  rew_task_orient_tracking: 0.2
+  rew_task_progress: 1.0
+  rew_task_progress_clip: 0.2
+  taskspace_progress_position_scale_m: 1.0
+  taskspace_progress_orientation_scale_rad: 3.141592653589793
+  taskspace_progress_position_weight: 1.0
+  taskspace_progress_orientation_weight: 0.25
+  taskspace_progress_gamma: 1.0
+  rew_final_pose_linear_velocity: 0.15
+  rew_final_pose_angular_velocity: 0.08
+  rew_final_pose_settling: 0.2
+  rew_near_target_linear_settling: 1.0
+  rew_near_target_angular_settling: 0.35
+  rew_final_pose_hold_progress: 1.0
+  rew_clamp_outward: 0.25
+  rom_clamp_documented_increment_scale: 0.008
+  valve_saturation_start: 0.9
+  rew_valve_saturation_soft: 0.15
+  fd_load_soft_threshold: 1.0
+  final_pose_position_tolerance_m: 0.05
+  final_pose_orientation_tolerance_rad: 0.0872664626
+  final_pose_linear_speed_tolerance_mps: 0.05
+  final_pose_angular_speed_tolerance_radps: 0.1
+  final_pose_success_hold_steps: 50
+  final_pose_success_bonus_value: 10.0
+  mechanical_joint_names:
+  - Drehzapfen_joint
+  - Ausleger_I_joint
+  - Ausleger_II_joint
+  - Messerkopf_Schwenk_joint
+  - Messerkopf_joint
+  mechanical_joint_position_units:
+  - rad
+  - rad
+  - rad
+  - rad
+  - rad
+  mechanical_joint_velocity_units:
+  - rad/s
+  - rad/s
+  - rad/s
+  - rad/s
+  - rad/s
+  mechanical_joint_types:
+  - revolute
+  - revolute
+  - revolute
+  - revolute
+  - revolute_follower
+  cylinder_joint_names:
+  - Drehzapfen_joint
+  - Ausleger_I_joint
+  - Ausleger_II_joint
+  - Messerkopf_Schwenk_joint
+  cylinder_joint_position_units:
+  - m
+  - m
+  - m
+  - m
+  cylinder_joint_velocity_units:
+  - m/s
+  - m/s
+  - m/s
+  - m/s
+  state_joint_names:
+  - Drehzapfen_joint
+  - Ausleger_I_joint
+  - Ausleger_II_joint
+  - Messerkopf_Schwenk_joint
+  - Messerkopf_joint
+  command_joint_names:
+  - Drehzapfen_joint
+  - Ausleger_I_joint
+  - Ausleger_II_joint
+  - Messerkopf_Schwenk_joint
+  enable_scripted_vehicle_motion: true
+  vehicle_speed_min_kmh: 3.0
+  vehicle_speed_max_kmh: 8.0
+  vehicle_command_mode: rrlab_obstacle_scripted_wheel_velocity
+  vehicle_wheel_joint_names:
+  - Wheel_Front_Left_joint
+  - Wheel_Front_Right_joint
+  - Wheel_Rear_Left_joint
+  - Wheel_Rear_Right_joint
+  vehicle_speed_range_kmh:
+  - 3.0
+  - 8.0
+  vehicle_wheel_radius_m: 0.575
+  vehicle_speed_update_interval_s: 0.1
+  vehicle_speed_resample_step_threshold: 10
+  reference_mode: rl_task_space_tracking
+  task_space_ee_body_name: Messerkopf
+  target_joint_range:
+  - 0.35
+  - 0.35
+  - 0.35
+  - 0.3
+  - 0.25
+  use_q_ref_ramp: true
+  q_ref_ramp_time_s: 2.0
+  q_ref_ramp_profile: smoothstep
+  use_q_ref_curriculum: true
+  q_ref_target_scale_initial: 0.25
+  q_ref_target_scale_final: 1.0
+  q_ref_curriculum_steps: 20000
+  q_ref_target_amplitude:
+  - 0.08
+  - 0.08
+  - 0.08
+  - 0.05
+  - 0.0
+  q_ref_sample_relative_to_current: true
+  use_joint5_coupling: true
+  joint5_coupling_source_joint: 3
+  joint5_coupling_target_joint: 4
+  joint5_coupling_gain: 1.0
+  joint5_coupling_bias: 0.0
+  q_tracking_reward_joint_weights:
+  - 1.5
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  q_tracking_debug_joint_weights:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  q_tracking_joint_weights:
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  target_change_threshold: 1.0e-05
+  q_ref_jump_warning_threshold: 0.02
+  reference_marker_debug_vis: false
+  reference_marker_base_offset:
+  - 4.0
+  - 1.5
+  - 2.0
+  reference_marker_joint_scale:
+  - 4.0
+  - 4.0
+  - 4.0
+  scripted_reference_amplitude:
+  - 0.08
+  - 0.075
+  - 0.07
+  - 0.045
+  - 0.0
+  scripted_reference_frequency_hz:
+  - 0.105
+  - 0.091
+  - 0.112
+  - 0.137
+  - 0.137
+  scripted_reference_phase_rad:
+  - 0.0
+  - 1.1
+  - 2.2
+  - 0.6
+  - 0.6
+  scripted_reference_kp:
+  - 30.0
+  - 22.0
+  - 85.0
+  - 160.0
+  scripted_reference_kd:
+  - 8.0
+  - 7.0
+  - 18.0
+  - 24.0
+  scripted_reference_action_clip: 0.85
+  scripted_reference_reset_phase_randomization: true
+  scripted_demo_settle_time_s: 1.0
+  scripted_demo_control_ramp_time_s: 2.0
+  scripted_demo_disable_safety_termination: true
+  verbose_reset_logging: false
+  reset_diagnostic_log_limit: 8
+  print_reset_telemetry: false
+  joint_limit_margin: 0.02
+  unvalidated_velocity_diagnostic_threshold: 6.0
+  enable_validated_hydraulic_velocity_termination: true
+  hydraulic_soft_velocity_limits_mps:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  hydraulic_hard_velocity_limits_mps:
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  hydraulic_velocity_persistence_steps: 3
+  hydraulic_velocity_limits_source: conservative_rom_operating_range_0p5_mps
+  enable_validated_mechanical_velocity_termination: true
+  mechanical_soft_velocity_limits:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  mechanical_hard_velocity_limits:
+  - 3.0
+  - 3.0
+  - 3.0
+  - 3.0
+  - 3.0
+  mechanical_velocity_limits_source: working_collision_task_has_no_arm_hard_velocity_termination
+  final_pose_linear_shaping_scale_mps: 0.05
+  final_pose_angular_shaping_scale_radps: 0.1
+  final_pose_linear_settling_scale_mps: 0.08
+  final_pose_angular_settling_scale_radps: 0.1
+  near_target_linear_settling_position_gate_scale: 3.0
+  near_target_linear_settling_orientation_gate_scale: 3.0
+  near_target_linear_settling_speed_margin_mps: 0.015
+  near_target_linear_settling_sharpness: 1.5
+  near_target_angular_settling_position_gate_scale: 3.0
+  near_target_angular_settling_orientation_gate_scale: 3.0
+  near_target_angular_settling_speed_margin_radps: 0.08
+  rew_q_tracking: 0.0
+  rew_qdot: 0.25
+  rew_progress: 2.0
+  progress_ema_alpha: 0.1
+  use_settle_tracking_reward: false
+  settle_ramp_progress_threshold: 0.95
+  rew_settle_tracking: 2.0
+  use_joint1_settle_tracking_reward: false
+  rew_joint1_settle_tracking: 0.0
+  joint1_settle_error_deadband: 0.005
+  rew_action_smoothness: 0.0
+  rew_action_rate: 0.05
+  rew_action_magnitude: 0.02
+  rew_action_saturation: 0.5
+  action_saturation_threshold: 0.9
+  rew_valve_effort: 0.01
+  rew_torque_effort: 0.0
+  rew_alive: 0.1
+  rew_termination: 5.0
+  taskspace_unsafe_penalty_weight: 5.0
+agent:
+  seed: 42
+  device: cuda:0
+  num_steps_per_env: 128
+  max_iterations: 2000
+  empirical_normalization: true
+  obs_groups:
+    actor:
+    - policy
+    critic:
+    - policy
+  clip_actions: null
+  check_for_nan: true
+  save_interval: 100
+  experiment_name: id_fd_flat_ee_tracking
+  run_name: ''
+  logger: tensorboard
+  neptune_project: isaaclab
+  wandb_project: isaaclab
+  resume: false
+  load_run: .*
+  load_checkpoint: model_.*.pt
+  class_name: OnPolicyRunner
+  actor:
+    class_name: MLPModel
+    hidden_dims:
+    - 128
+    - 128
+    activation: elu
+    obs_normalization: true
+    distribution_cfg:
+      class_name: GaussianDistribution
+      init_std: 0.2
+      std_type: scalar
+  critic:
+    class_name: MLPModel
+    hidden_dims:
+    - 128
+    - 128
+    activation: elu
+    obs_normalization: true
+    distribution_cfg: null
+  algorithm:
+    class_name: PPO
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    learning_rate: 0.0003
+    schedule: adaptive
+    gamma: 0.99
+    lam: 0.95
+    entropy_coef: 0.005
+    desired_kl: 0.03
+    max_grad_norm: 1.0
+    optimizer: adam
+    value_loss_coef: 1.0
+    use_clipped_value_loss: true
+    clip_param: 0.2
+    normalize_advantage_per_mini_batch: false
+    share_cnn_encoders: false
+    rnd_cfg: null
+    symmetry_cfg: null
+  policy: {}
+  enable_action_std_hold_schedule: true
+  action_std_schedule_start_hold_fraction: 0.5
+  action_std_schedule_end_hold_fraction: 0.98
+  action_std_schedule_min_std: 0.05
+  action_std_schedule_max_std_initial: 0.55
+  action_std_schedule_max_std_final: 0.15
+  action_std_schedule_entropy_final: 0.0005
+  adaptive_lr_max: 0.001

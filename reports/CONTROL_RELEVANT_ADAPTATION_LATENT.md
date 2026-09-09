@@ -13,8 +13,8 @@ The earlier direct-factor work established that seal was observable, but the sea
 | item | file/function |
 |---|---|
 | rollout evaluator | `AAM_module/tools/evaluate_stage29_latent_adapter.py:63-219` (same frozen-ID/FD mechanics reproduced for scalar-free privileged context evaluation) |
-| frozen ID | `mulag_plant/runtime/cylinder_models_runtime.py:CylinderIDRuntime`; `id_fd_model/best_id_cylinder_control.pt` |
-| frozen FD | `CylinderFDRuntime`; `id_fd_model/best_fd_cylinder_strict.pt` |
+| frozen ID | `mulag_plant/runtime/cylinder_models_runtime.py:CylinderIDRuntime`; `learned_models/id_fd_model/best_id_cylinder_control.pt` |
+| frozen FD | `CylinderFDRuntime`; `learned_models/id_fd_model/best_fd_cylinder_strict.pt` |
 | target data | `AAM_module/datasets/master_v3_stage22_wide_frozen/raw` recorded cylinder state/reference transitions |
 | context input | adapter feature row after 28 dynamic/base-ID features |
 | horizons | H20 = 1 s, H100 = 5 s, H400 = 20 s at 20 Hz |

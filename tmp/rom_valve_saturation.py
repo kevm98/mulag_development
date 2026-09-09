@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "rom_model"))
+sys.path.insert(0, str(ROOT / "learned_models/rom_model"))
 sys.path.insert(0, str(ROOT / "AAM_module"))
 sys.path.insert(0, str(ROOT / "AAM_module/tools"))
 

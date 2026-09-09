@@ -18,8 +18,8 @@ overwritten.
 
 | Model | Inputs | Outputs | dt | Recursive? | Context/factors supported |
 |---|---|---|---:|---|---|
-| `rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt` | 6x24 hydraulic history + 8-D desired cylinder command | valve, extension/velocity increments, pressure increment | 50 ms | Yes | old hydraulic `system_factors` option; no mass, q, EE, or contact |
-| `sd_model/stage31_frozen/z2_rom` | 12-D hydraulic state, 8-D previous/current valve, 10-D q, causal GRU belief, old 6-factor encoder latent | delta hydraulic state (extension, velocity, dP) | 50 ms | Yes | old factor latent; q is held-start in leakage-free rollout; no learned q/EE/contact dynamics |
+| `learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt` | 6x24 hydraulic history + 8-D desired cylinder command | valve, extension/velocity increments, pressure increment | 50 ms | Yes | old hydraulic `system_factors` option; no mass, q, EE, or contact |
+| `learned_models/sd_model/stage31_frozen/z2_rom` | 12-D hydraulic state, 8-D previous/current valve, 10-D q, causal GRU belief, old 6-factor encoder latent | delta hydraulic state (extension, velocity, dP) | 50 ms | Yes | old factor latent; q is held-start in leakage-free rollout; no learned q/EE/contact dynamics |
 | `outputs/stage31_rom/sd_none` (selected) | same state/action/q/belief contract, no latent | delta hydraulic state | 50 ms | Yes | no latent; suitable for external authority/lag/delay only; mass is not represented |
 | frozen ID | hydraulic state, target motion, previous valve | valve command | — | No | command mapping only; not an environment by itself |
 

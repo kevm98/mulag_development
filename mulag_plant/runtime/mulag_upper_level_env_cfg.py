@@ -101,7 +101,7 @@ class MulagUpperLevelEnvCfg(DirectRLEnvCfg):
     base_rom_checkpoint = "disabled"
     command_rom_checkpoint = str(
         Path(__file__).resolve().parents[2]
-        / "rom_model/command_run_001/best_rom.pt"
+        / "learned_models/rom_model/command_run_001/best_rom.pt"
     )
     fd_cylinder_checkpoint = "disabled"
     cylinder_dynamics_model = "command_rom"

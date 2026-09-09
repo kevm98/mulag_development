@@ -94,7 +94,7 @@ def main() -> None:
         ROOT / "mulag_plant/models/plant_reachable_trajectory_library_v3_large.json"
     )
     cfg.command_rom_checkpoint = str(
-        ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+        ROOT / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
     )
 
     print("[THESIS-RENDER] Building the production verge scene...", flush=True)

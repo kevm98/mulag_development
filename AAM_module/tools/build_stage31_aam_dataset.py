@@ -27,7 +27,7 @@ from aam_data.rom_stage31 import (  # noqa: E402
     AAM_FEATURE_GROUPS,
     causal_stack,
 )
-from sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
+from learned_models.sd_model.training.train_sd_z import FactorEncoder  # noqa: E402
 
 
 def load_factor_track(

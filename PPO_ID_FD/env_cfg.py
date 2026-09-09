@@ -48,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # ID/FD pipeline needs from PPO1, so they live with the other runtime assets and
 # PPO1 itself is archived. Copied, not moved from a live tree, so the paths
 # cannot silently resolve to a stale training directory.
-ASSETS = REPO_ROOT / "id_fd_model"
+ASSETS = REPO_ROOT / "learned_models/id_fd_model"
 
 # The canonical pair from PPO1's README. The control ID is the deployed one; the
 # STRICT FD is the rank-promoted retrain -- the earlier FD was rank ~2 and

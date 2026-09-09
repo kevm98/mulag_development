@@ -1,0 +1,56 @@
+{
+  "status": "no_dynamically_holdable_points",
+  "workspace_type": "dynamic_hold",
+  "lowlevel_actuator_backend": "explicit_effort_pid_bias",
+  "hold_criteria": {
+    "hold_seconds": 1.0,
+    "calibration_timeout_s": 5.0,
+    "post_calibration_settle_steps": 10,
+    "hold_cyl_err_max": 0.01,
+    "hold_tool_drift_max": 0.05,
+    "hold_min_tool_clearance": 0.0,
+    "hold_min_arm_clearance": 0.0
+  },
+  "samples_requested": 8,
+  "samples_evaluated": 8,
+  "accepted_points_count": 0,
+  "acceptance_rate": 0.0,
+  "reject_counts": {
+    "nonfinite": 0,
+    "huge_transform": 0,
+    "reset_during_trial": 0,
+    "calibration_timeout": 0,
+    "cylinder_limit_hit": 4,
+    "cylinder_error": 4,
+    "tool_drift": 0,
+    "tool_clearance": 0,
+    "arm_clearance": 0,
+    "outside_workspace": 0
+  },
+  "controller_params": {
+    "explicit_pid_kp_scale": 1.0,
+    "explicit_pid_kd_scale": 1.0,
+    "explicit_pid_effort_scale": 1.0,
+    "bias_runtime_ki_scale": 0.0,
+    "explicit_force_rate_limit_fraction": 0.01,
+    "explicit_pid_kp_per_cylinder": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "explicit_pid_kd_per_cylinder": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "explicit_force_rate_limit_per_cylinder": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "hint": "No candidate pose survived the dynamic hold test. Loosen hold thresholds, retune explicit PID/bias gains (--pid_kp_scale/--pid_kd_scale/--mode sweep), or increase --samples."
+}

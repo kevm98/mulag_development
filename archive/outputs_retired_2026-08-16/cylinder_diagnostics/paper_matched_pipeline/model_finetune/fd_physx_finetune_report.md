@@ -1,0 +1,12 @@
+# FD PhysX Fine-Tuning Report
+- dataset: outputs/cylinder_diagnostics/paper_matched_pipeline/model_finetune/fd_physx_dynamic_dataset.npz
+- samples: 62400
+- train/val: 49920/12480
+- epochs: 200, lr: 5e-05
+- best_val_mse: 0.000000
+- final_mse: 0.000000
+- sign_accuracy per cylinder: [0.47060897435897436, 0.5930769230769231, 0.5979967948717949, 0.5520352564102564]
+- MAE per cylinder: [0.00050337537, 0.0005196122, 0.00034631958, 0.00070141786]
+- RMSE per cylinder: [0.0005167926, 0.00056668057, 0.0003543833, 0.0007165738]
+- delta_pred mean abs: [0.00049623 0.0005857  0.00040159 0.00068695]
+- delta_true mean abs: [6.5453321e-05 1.8386265e-04 9.3396629e-05 9.2875081e-05]

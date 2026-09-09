@@ -15,7 +15,7 @@ frozen="$aam_root/datasets/rom_deployment_stage31_v1_frozen"
 out_root="$repo_root/outputs/stage31_rom"
 none_dir="$out_root/sd_none"
 candidate_dir="$out_root/sd_z2"
-frozen_sd="$repo_root/sd_model/stage31_frozen/z2_rom"
+frozen_sd="$repo_root/learned_models/sd_model/stage31_frozen/z2_rom"
 aam_rows="$frozen/aam/rom_rows"
 aam_data="$frozen/aam/dataset"
 aam_dir="$out_root/aam_cnn/L20_d64"
@@ -24,9 +24,9 @@ adapter_dir="$out_root/id_adapter_cnn_l20_s5"
 adapter="$adapter_dir/zhat_adapter.pt"
 eval_dir="$out_root/deployment_eval"
 
-id_checkpoint="$repo_root/id_fd_model/best_id_cylinder_control.pt"
-fd_checkpoint="$repo_root/id_fd_model/best_fd_cylinder_strict.pt"
-models_root="$repo_root/id_fd_model/vendor_models"
+id_checkpoint="$repo_root/learned_models/id_fd_model/best_id_cylinder_control.pt"
+fd_checkpoint="$repo_root/learned_models/id_fd_model/best_fd_cylinder_strict.pt"
+models_root="$repo_root/learned_models/id_fd_model/vendor_models"
 
 resume=0
 force=0
@@ -82,25 +82,25 @@ train_sd() {
         --seed 20260820
     )
     if [[ ! -e "$none_dir" || "$force" -eq 1 ]]; then
-        "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
+        "$python_bin" "$repo_root/learned_models/sd_model/training/train_sd_z.py" \
             "${train_common[@]}" --latent-source none --out "$none_dir"
     fi
-    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/learned_models/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$none_dir" --latent-mode zero \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$none_dir/rollout_hold-start.json"
 
     if [[ ! -e "$candidate_dir" || "$force" -eq 1 ]]; then
-        "$python_bin" "$repo_root/sd_model/training/train_sd_z.py" \
+        "$python_bin" "$repo_root/learned_models/sd_model/training/train_sd_z.py" \
             "${train_common[@]}" --latent-source encoder --latent-dim 2 \
             --out "$candidate_dir"
     fi
-    "$python_bin" "$repo_root/sd_model/evaluation/evaluate_sd_z_rollout.py" \
+    "$python_bin" "$repo_root/learned_models/sd_model/evaluation/evaluate_sd_z_rollout.py" \
         --root "$frozen" --model-dir "$candidate_dir" \
         --latent-mode true zero shuffled random mean nominal \
         --horizons 1 5 10 20 --q-rollout hold-start \
         --out "$candidate_dir/rollout_gate.json"
-    "$python_bin" "$repo_root/sd_model/evaluation/gate_stage31_sd.py" \
+    "$python_bin" "$repo_root/learned_models/sd_model/evaluation/gate_stage31_sd.py" \
         --rollout "$candidate_dir/rollout_gate.json" \
         --metrics "$candidate_dir/metrics.json" \
         --horizon 20 --out "$candidate_dir/gate_verdict.json"
@@ -110,7 +110,7 @@ freeze_sd() {
     require_file "$candidate_dir/gate_verdict.json"
     require_file "$none_dir/rollout_hold-start.json"
     if [[ "$force" -eq 1 ]]; then freeze_sd_force=(--force); else freeze_sd_force=(); fi
-    "$python_bin" "$repo_root/sd_model/freezing/freeze_stage31_sd.py" \
+    "$python_bin" "$repo_root/learned_models/sd_model/freezing/freeze_stage31_sd.py" \
         --src "$candidate_dir" --out "$frozen_sd" \
         --dataset-root "$frozen" \
         "${freeze_sd_force[@]}"

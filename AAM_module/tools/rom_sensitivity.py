@@ -21,7 +21,7 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "rom_model"))
+sys.path.insert(0, str(ROOT / "learned_models/rom_model"))
 
 from ROM_pipeline.models import load_checkpoint  # noqa: E402
 
@@ -93,7 +93,7 @@ def peak_rel(sig_nom, sig_pert):
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", default=str(ROOT / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"))
+    p.add_argument("--checkpoint", default=str(ROOT / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"))
     p.add_argument("--ticks", type=int, default=80)
     p.add_argument("--device", default="cpu")
     args = p.parse_args()

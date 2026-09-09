@@ -29,14 +29,14 @@ for extra in (REPO, REPO / "AAM_module"):
         sys.path.insert(0, str(extra))
 
 from mulag_plant.runtime.cylinder_models_runtime import CylinderIDRuntime  # noqa: E402
-from sd_model.training.train_sd_z import BeliefEncoder, SDz  # noqa: E402
+from learned_models.sd_model.training.train_sd_z import BeliefEncoder, SDz  # noqa: E402
 
 from observation import VergeObservationAdapter  # noqa: E402
 from stress import Stress, StressedActuation  # noqa: E402
 
 MODEL_DIR = REPO / "outputs/stage31_rom/sd_none"
 DATASET_ROOT = REPO / "AAM_module/datasets/rom_deployment_stage31_v1_frozen"
-ID_CHECKPOINT = REPO / "id_fd_model/best_id_cylinder_control.pt"
+ID_CHECKPOINT = REPO / "learned_models/id_fd_model/best_id_cylinder_control.pt"
 
 DT_S = 0.05
 HISTORY_LAG = 6
@@ -91,7 +91,7 @@ class RobustnessEnv:
         self.sd.eval()
 
         self.id_runtime = CylinderIDRuntime(
-            models_root=REPO / "id_fd_model/vendor_models",
+            models_root=REPO / "learned_models/id_fd_model/vendor_models",
             checkpoint=ID_CHECKPOINT, num_envs=self.num_envs, device=torch.device("cpu"),
         )
         self.actuation = StressedActuation(dt_s=DT_S, action_dim=4, max_delay_steps=MAX_DELAY_STEPS)

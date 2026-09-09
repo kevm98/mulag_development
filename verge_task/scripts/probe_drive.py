@@ -165,7 +165,7 @@ def main() -> None:
     )
     cfg.command_rom_checkpoint = str(
         ROOT
-        / "rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
+        / "learned_models/rom_model/plant_reachable_v1_finetune_blend25/best_rom.pt"
     )
     if a.deployment_correction_steps is not None:
         cfg.terrain_deployment_correction_steps = int(a.deployment_correction_steps)

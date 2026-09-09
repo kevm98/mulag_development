@@ -39,7 +39,7 @@ Verified against the repo, not inferred:
   **not** evidence that no headroom exists on the task. Any thesis sentence
   claiming the latter must be corrected.
 - **`mu` cannot encode terrain or truck speed.**
-  `sd_model/stage23_frozen/dz2_nodp_holdq/protocol.json` gives
+  `learned_models/sd_model/stage23_frozen/dz2_nodp_holdq/protocol.json` gives
   `factor_keys = [flow, compliance, seal, pressure, mass_scale, com_z]` and
   `z = mu(e)` is a 6->2 bottleneck on that vector alone. The real
   representation problem is *within* those six: `SD_z`'s objective keeps
@@ -159,7 +159,7 @@ latent_source='true'`. Set it explicitly:
 export MULAG_AAM_ADAPTER_MODEL=outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt
 ```
 
-Note that `TRUE_LATENT_MODEL` (`sd_model/stage31_frozen/z2_rom`) is a different
+Note that `TRUE_LATENT_MODEL` (`learned_models/sd_model/stage31_frozen/z2_rom`) is a different
 artifact — the frozen encoder that computes `z` from `e`, needing `encoder.pt`
 and `metrics.json` in that directory. Both are present on the VM. The adapter
 and the encoder are both required for `latent_mode='true'`; supplying one is
@@ -297,8 +297,8 @@ mean-only table would have read as a success.
 
 ## VM prerequisites beyond the E5 set
 
-The E5 handover pushed the ROM and ID/AIF checkpoints, `id_fd_model/`,
-`sd_model/` and the USD assets. This plan additionally needs, and `.gitignore`
+The E5 handover pushed the ROM and ID/AIF checkpoints, `learned_models/id_fd_model/`,
+`learned_models/sd_model/` and the USD assets. This plan additionally needs, and `.gitignore`
 excludes all of them (`outputs/`, `logs/`, `datasets/`, `*.pt`):
 
 ```
@@ -309,7 +309,7 @@ outputs/stage31_rom/id_adapter_cnn_l20_s5_true/true_adapter.pt
                                                    + manifest.json  true adapter (Gate 1)
 AAM_module/datasets/rom_deployment_stage31_v1_frozen/raw/manifest.csv
                                                    7.9 KB, factor draws
-sd_model/stage31_frozen/z2_rom/                                     frozen encoder
+learned_models/sd_model/stage31_frozen/z2_rom/                                     frozen encoder
 logs/rsl_rl/ppo_id_aam_fd/headroom_priced_v1/model_299.pt           Gate 0 subject
 ```
 
