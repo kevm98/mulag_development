@@ -1707,7 +1707,7 @@ def roll_mesh(raw, policy, steps: int, mesh: int, *, teacher: bool = False) -> d
                 )
         # Command reversal rate, the second mechanism variable. A reversal is a
         # sign change of the commanded increment, counted per axis per step and
-        # scaled to the control rate, matching experiments/E1 control effort.
+        # scaled to the control rate, matching experiments/E1_tracking_and_control_effort control effort.
         u_now = getattr(raw, '_current_valve_cmd', None)
         if isinstance(u_now, torch.Tensor):
             u_now = u_now.detach()

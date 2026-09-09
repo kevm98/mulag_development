@@ -1,7 +1,7 @@
 # Result — common robustness-boundary sweep (actuator authority kappa)
 
 Run 2026-09-02. 48 evaluations, mesh 1337, 176 envs, 900 steps, seed 17.
-Design: `experiments/E5/README.md`. Thresholds pre-declared there before any curve existed.
+Design: `experiments/E5_plant_robustness_envelope/README.md`. Thresholds pre-declared there before any curve existed.
 
 `Delta_x_applied = kappa * Delta_x_actuator`, applied at the same boundary on every
 stack (after the actuator model, before the PhysX target).

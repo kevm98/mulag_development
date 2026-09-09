@@ -1,7 +1,7 @@
 # AAM repair plan — rebuild in RMA order
 
 Written 2026-08-28. **Do not start until the E5 ROM degradation curve is
-complete, committed and pushed** (`experiments/E5/HANDOVER_GCP_SWEEP.md`). E5
+complete, committed and pushed** (`experiments/E5_plant_robustness_envelope/HANDOVER_GCP_SWEEP.md`). E5
 and this plan both want the L4 and the budget; running them concurrently
 doubles the burn rate and mixes two sets of results on one disk.
 
@@ -177,7 +177,7 @@ separates, the run is telling you so while it is cheap to stop.
 
 Score `true` vs `mean` vs `zero` on the **same 33-cell panel and the same
 metrics** as E4, so the numbers are directly comparable to
-`experiments/E4/results/e4_summary.json`.
+`experiments/E4_latent_ablation/results/e4_summary.json`.
 
 - **Pass:** `true` beats `mean` on mean absolute lateral error with a bootstrap
   95% CI **excluding zero**, and beats it in a clear majority of the 33 cells.

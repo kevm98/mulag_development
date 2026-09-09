@@ -12,12 +12,12 @@ Stack abbreviations: **R** = PPO-ROM · **IF** = PPO-ID-FD · **AF** = PPO-AAM-F
 
 | | Question it answers | Stacks | Defends | In the thesis |
 |---|---|---|---|---|
-| [E1](E1/) | How well does each stack track the verge under nominal conditions? | R · IF | Control | §7.2, §7.3.5 |
-| [E2](E2/) | How much dead time does the actuation chain carry, and is the plant identifiable from the data it produces? | plant property | Hydraulic Manipulator | §7.3.1 |
-| [E3](E3/) | Does a history-conditioned residual improve control when the load changes mid-episode, and is the improvement adaptation? | AF, within-stack | Online Adaptation | §7.5 |
-| [E4](E4/) | Does what occupies the latent slot change the closed loop? | AF, one checkpoint | Online Adaptation | Appendix E only |
-| [E5](E5/) | How far can the plant be degraded before a stack fails its acceptance gates? | R (ladder) · R · IF (audit) | Hydraulic Manipulator | §7.4, §7.4.1 |
-| [E6](E6/) | Is the latent's harm its time-variation or its content? | AF, one checkpoint | Online Adaptation | not cited |
+| [E1](E1_tracking_and_control_effort/) | How well does each stack track the verge under nominal conditions? | R · IF | Control | §7.2, §7.3.5 |
+| [E2](E2_transport_delay_and_identifiability/) | How much dead time does the actuation chain carry, and is the plant identifiable from the data it produces? | plant property | Hydraulic Manipulator | §7.3.1 |
+| [E3](E3_mid_episode_plant_change/) | Does a history-conditioned residual improve control when the load changes mid-episode, and is the improvement adaptation? | AF, within-stack | Online Adaptation | §7.5 |
+| [E4](E4_latent_ablation/) | Does what occupies the latent slot change the closed loop? | AF, one checkpoint | Online Adaptation | Appendix E only |
+| [E5](E5_plant_robustness_envelope/) | How far can the plant be degraded before a stack fails its acceptance gates? | R (ladder) · R · IF (audit) | Hydraulic Manipulator | §7.4, §7.4.1 |
+| [E6](E6_latent_bandwidth_sweep/) | Is the latent's harm its time-variation or its content? | AF, one checkpoint | Online Adaptation | not cited |
 
 ## Status
 

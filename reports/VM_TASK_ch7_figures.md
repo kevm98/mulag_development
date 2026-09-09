@@ -7,7 +7,7 @@ Seeds are deliberately excluded. Nothing here trains anything; all runs are
 evaluation only.
 
 Why this is needed: every figure artifact in the repo dates from **2026-08-18**
-(`outputs/stage31_openloop`, `experiments/E1/results`, `experiments/E2/results`,
+(`outputs/stage31_openloop`, `experiments/E1_tracking_and_control_effort/results`, `experiments/E2_transport_delay_and_identifiability/results`,
 `outputs/e1_traces`). The AF command path was rebuilt after that, so the stored
 adaptive traces describe the retired architecture and cannot be replotted into
 anything truthful.
@@ -84,11 +84,11 @@ The tracking, gate, chain, step and effort figures are currently two-stack (R
 and IF) because the stored AF numbers describe the retired path. To restore AF
 to them, re-score it on the E1 protocol:
 
-* `experiments/E1/code/run_e1_tracking.sh`, replacing the third row's checkpoint
+* `experiments/E1_tracking_and_control_effort/code/run_e1_tracking.sh`, replacing the third row's checkpoint
   and task with the rebuilt stack (base + `rebal17_history` residual, direct
   valve), leaving R and IF rows untouched
 * **Deliver:** `outputs/e1_tracking/` refreshed, and
-  `experiments/E1/results/control_effort.json`
+  `experiments/E1_tracking_and_control_effort/results/control_effort.json`
 
 Note this is a genuinely different comparison from before: AF no longer shares
 the action contract with R and IF, so it should be reported as its own condition
